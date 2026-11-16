@@ -1564,6 +1564,13 @@ pub enum DbEvent {
     CancelRefused {
         id: u64,
     },
+    /// A cancel the user asked was sent, but the server did not confirm it (it did not close the
+    /// cancel's connection) within `waited`: it may still stop whatever runs next in this
+    /// session, an open transaction included, which then fails as the server says. Nothing else
+    /// changes: the run it was for answered as it did, and the session goes on.
+    CancelUnconfirmed {
+        waited: Duration,
+    },
     /// The answer to [`DbCommand::Export`] `id`: what it read, or why it stopped (a cancel is
     /// `cancelled`, with the error the server gave).
     Exported {

@@ -37,6 +37,14 @@ impl App {
             }
             return;
         }
+        // A cancel the server did not confirm may still stop what runs next: said in the Messages
+        // of the run it was for (the last one), whatever that run answered.
+        if let DbEvent::CancelUnconfirmed { .. } = ev {
+            if let Some(t) = self.tabs.get_mut(id) {
+                t.exec.run.notes.push(Notice::new(Label::QueryCancelUnconfirmed, Level::Warning));
+            }
+            return;
+        }
         // A session that failed or was lost is no server session of the tab's any more.
         if matches!(ev, DbEvent::Lost { .. } | DbEvent::ConnectFailed { .. })
             && let Some(t) = self.tabs.get_mut(id)
@@ -349,6 +357,7 @@ impl App {
             | DbEvent::TextStyle(_)
             | DbEvent::Stopping { .. }
             | DbEvent::CancelRefused { .. }
+            | DbEvent::CancelUnconfirmed { .. }
             | DbEvent::ValuesNotKnown { .. } => None,
             // A monitor session's own.
             DbEvent::Monitor(_)

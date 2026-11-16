@@ -91,19 +91,10 @@ pub struct InnerClient {
 
     /// A buffer to use when writing out postgres commands.
     buffer: Mutex<BytesMut>,
-
-    /// datarig: once set and true, no request is handed to the connection any more
-    /// ([`Client::refuse_sends_when`]).
-    refuse: std::sync::OnceLock<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl InnerClient {
     pub fn send(&self, messages: RequestMessages) -> Result<Responses, Error> {
-        // datarig: refused before it reaches the connection, as on a closed one; the answers of
-        // requests sent before are still read.
-        if self.refuse.get().is_some_and(|r| r.load(std::sync::atomic::Ordering::SeqCst)) {
-            return Err(Error::closed());
-        }
         let (sender, receiver) = mpsc::channel(1);
         let request = Request { messages, sender };
         self.sender
@@ -219,7 +210,6 @@ impl Client {
                 sender,
                 cached_typeinfo: Default::default(),
                 buffer: Default::default(),
-                refuse: Default::default(),
             }),
             #[cfg(feature = "runtime")]
             socket_config: None,
@@ -880,14 +870,6 @@ impl Client {
     /// to flush the local cache and allow the new, updated definitions to be loaded.
     pub fn clear_type_cache(&self) {
         self.inner().clear_type_cache();
-    }
-
-    /// datarig: from the moment `refuse` is true, every request of this client (a type lookup
-    /// in the middle of a preparation included) fails as on a closed connection before it is
-    /// handed to the connection; the answers of requests already sent are still read. Set once;
-    /// later calls are ignored.
-    pub fn refuse_sends_when(&self, refuse: Arc<std::sync::atomic::AtomicBool>) {
-        let _ = self.inner.refuse.set(refuse);
     }
 
     /// Determines if the connection to the server has already closed.

@@ -274,28 +274,18 @@ pub(super) async fn apply(
             }
             answer(Ok(done));
         }
-        Mode::Own => match link.guard(None, client.command_tag("COMMIT")).await {
-            // Sent, and given up on (a cancel of the user's stayed unconfirmed meanwhile): whether
-            // it committed is not known, and the session ends.
-            Err(Closed::AnswerLost(settle)) => {
+        Mode::Own => match link.guard(None, client.command_tag("COMMIT")).await? {
+            Ok(tag) if tag == "COMMIT" => answer(Ok(done)),
+            // The block was aborted after all: the server rolled it back.
+            Ok(_) => answer(Err(fail(None, DbError::NoResult))),
+            // The connection ended (a server error that ends the session is a `FATAL` one):
+            // whether the server committed is not known.
+            Err(e) if e.as_db_error().is_none_or(|d| matches!(d.severity(), "FATAL" | "PANIC")) => {
                 tx.unsure = true;
                 answer(Err(fail(None, DbError::CommitUnknown)));
-                return Ok(Some(DbError::CancelNotTaken(datarig_core::driver::CancelFailure::StopPending(settle))));
             }
-            Err(closed) => return Err(closed),
-            Ok(committed) => match committed {
-                Ok(tag) if tag == "COMMIT" => answer(Ok(done)),
-                // The block was aborted after all: the server rolled it back.
-                Ok(_) => answer(Err(fail(None, DbError::NoResult))),
-                // The connection ended (a server error that ends the session is a `FATAL` one):
-                // whether the server committed is not known.
-                Err(e) if e.as_db_error().is_none_or(|d| matches!(d.severity(), "FATAL" | "PANIC")) => {
-                    tx.unsure = true;
-                    answer(Err(fail(None, DbError::CommitUnknown)));
-                }
-                // Refused (a deferred constraint): the server rolled back and ended the block.
-                Err(e) => answer(Err(fail(None, db_error(&e)))),
-            },
+            // Refused (a deferred constraint): the server rolled back and ended the block.
+            Err(e) => answer(Err(fail(None, db_error(&e)))),
         },
         Mode::Keep(idle) => {
             (tx.block, tx.aborted, tx.first_pending) = (true, false, false);

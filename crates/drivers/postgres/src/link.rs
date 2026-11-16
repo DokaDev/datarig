@@ -29,14 +29,6 @@ pub(crate) enum Closed {
     /// A cancel of the running statement could not reach the server (the reason): the
     /// connection was closed.
     CancelNotSent(DbError),
-    /// A user's cancel was sent and the server was not seen to take it in within this time: it
-    /// may still land on whatever the session sends, so the connection was closed before the
-    /// request went out (nothing of it ran; an open transaction is rolled back).
-    CancelPending(Duration),
-    /// The request had gone out when such a cancel was noted, and no answer came within the
-    /// bound for it (`CANCEL_ANSWER_WAIT`): the connection was closed, and what the request did
-    /// is not known.
-    AnswerLost(Duration),
 }
 
 pub(crate) struct Link {
@@ -111,10 +103,7 @@ impl Link {
     /// to its end (and commit outside a transaction block); the server rolls an open block back
     /// once it notices the closed connection. Closing the session does so when its own cancel
     /// does not go out; a request of the statement `cancel` stops comes back with
-    /// `Closed::CancelNotSent` when the user's cancel could not be sent. A request about to go out
-    /// comes back with `Closed::CancelPending`, unsent and the connection closed, once a user's
-    /// cancel was sent that the server was not seen to take in: it could still land on it. One
-    /// on its way then is still read to its answer, within a bound (`Closed::AnswerLost`).
+    /// `Closed::CancelNotSent` when the user's cancel could not be sent.
     pub(crate) async fn guard<T>(
         &mut self,
         cancel: Option<&Cancel>,
@@ -129,34 +118,6 @@ impl Link {
             }
         };
         tokio::pin!(not_sent);
-        // Checked for every request, whatever `cancel` says, before it goes out: a cancel the
-        // server was not seen to take in may land on any of them. One already on its way is
-        // answered (what it did, a `COMMIT` above all, is told as the server tells it).
-        if let Some(pending) = self.unsent.as_ref().and_then(|u| *u.pending.borrow()) {
-            self.conn.abort();
-            return Err(Closed::CancelPending(pending.settle));
-        }
-        // One on its way when such a cancel is noted is waited for within a bound of its own.
-        let watched = self.unsent.as_ref().map(|u| u.pending.subscribe());
-        let given_up = async {
-            match watched {
-                Some(mut watched) => {
-                    let pending = match watched.wait_for(Option::is_some).await {
-                        Ok(noted) => *noted,
-                        Err(_) => None,
-                    };
-                    match pending {
-                        Some(pending) => {
-                            tokio::time::sleep(pending.wait).await;
-                            pending.settle
-                        }
-                        None => std::future::pending().await,
-                    }
-                }
-                None => std::future::pending().await,
-            }
-        };
-        tokio::pin!(given_up);
         loop {
             // What is watched beside the request is polled first: a request may be ready poll
             // after poll while its answer streams in, and the close or the failed cancel must
@@ -177,10 +138,6 @@ impl Link {
                 why = &mut not_sent => {
                     self.conn.abort();
                     return Err(Closed::CancelNotSent(why));
-                }
-                settle = &mut given_up => {
-                    self.conn.abort();
-                    return Err(Closed::AnswerLost(settle));
                 }
                 out = &mut request => return Ok(out),
             }

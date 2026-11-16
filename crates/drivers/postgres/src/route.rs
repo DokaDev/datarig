@@ -6,12 +6,13 @@
 
 use crate::connect::db_error;
 use crate::tls::PgTls;
-use datarig_core::driver::DbError;
+use datarig_core::driver::{DbError, DbEvent};
 use datarig_core::fault::Fault;
 use datarig_core::transport::{BoxedStream, DialError, DialerRef};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
+use tokio::sync::mpsc::WeakUnboundedSender;
 use tokio::sync::watch;
 use tokio_postgres::config::Host;
 use tokio_postgres::{CancelToken, Config, Settled};
@@ -76,17 +77,11 @@ pub const CANCEL_DIAL: Duration = Duration::from_secs(10);
 
 /// How long the server is given to close a user's cancel's connection once the request is sent
 /// (it does so once it has passed the cancel on to the session): until then [`Hold::hold`]
-/// waits, so a cancel on its way does not land on what the session runs next. One still not
-/// taken in by then (or whose connection failed) may land on anything the session sends later:
-/// the session sends nothing more (a request on its way is still answered) and closes
-/// ([`Unsent::pending`]).
+/// waits, so a cancel on its way does not land on what the session runs next. Past it, the
+/// session goes on, and says the cancel was not confirmed ([`DbEvent::CancelUnconfirmed`]): it
+/// may still stop what runs next, which then fails as the server says (an undo of a savepoint
+/// of the session's own is sent again).
 pub(crate) const CANCEL_SETTLE: Duration = Duration::from_secs(10);
-
-/// How long a request already on its way is still waited for once a user's cancel stayed
-/// unconfirmed ([`CANCEL_SETTLE`]): its answer tells what it did (a `COMMIT` above all), but one
-/// that never comes must not hold the session for good. Then the connection is closed and the
-/// request's outcome is not known. Of the order of the app's own limit for a cancel to end a run.
-pub(crate) const CANCEL_ANSWER_WAIT: Duration = Duration::from_secs(60);
 
 /// What a session needs to ask the server to cancel its running statement.
 #[derive(Clone)]
@@ -101,8 +96,9 @@ pub(crate) struct Cancel {
     pub(crate) hold: Arc<Hold>,
     /// How long the server is given to take a user's cancel in ([`CANCEL_SETTLE`]).
     pub(crate) settle: Duration,
-    /// How long a request on its way is waited for after that ([`CANCEL_ANSWER_WAIT`]).
-    pub(crate) answer_wait: Duration,
+    /// Where the session's events go: told when a user's cancel was not confirmed. Weak: the
+    /// canceller outlives the session, whose channel must close with it.
+    pub(crate) events: Option<WeakUnboundedSender<DbEvent>>,
 }
 
 /// Holds the user's cancels back while the session runs statements a cancel must not land on:
@@ -191,15 +187,7 @@ impl Drop for Held<'_> {
 
 impl Cancel {
     pub(crate) fn new(token: CancelToken, route: Option<Route>, tls: PgTls) -> Self {
-        Self {
-            token,
-            route,
-            tls,
-            unsent: Unsent::default(),
-            hold: Arc::default(),
-            settle: CANCEL_SETTLE,
-            answer_wait: CANCEL_ANSWER_WAIT,
-        }
+        Self { token, route, tls, unsent: Unsent::default(), hold: Arc::default(), settle: CANCEL_SETTLE, events: None }
     }
 
     /// Send a cancel request (directly, or through the route), within [`CANCEL_DIAL`]; why it
@@ -256,8 +244,8 @@ impl Cancel {
     /// The user's cancel ([`Cancel::send`]), asked during the session's request `request`
     /// ([`Unsent::request`], taken when the user asked). One that could not be sent is noted for
     /// that request ([`Unsent`]): the session must not wait for a statement it cannot stop. One
-    /// the server was not seen to take in ([`Cancel::settle`]) is noted for the session
-    /// ([`Unsent::pending`]): it may land on whatever the session sends next.
+    /// the server was not seen to take in ([`Cancel::settle`]) is said
+    /// ([`DbEvent::CancelUnconfirmed`]): it may still stop what the session runs next.
     /// `still`: whether the run it is for is still the one at the server.
     /// While cancels are held ([`Hold`]) it is not sent.
     pub(crate) async fn ask(&self, request: u64, still: impl Fn() -> bool) {
@@ -268,10 +256,11 @@ impl Cancel {
         let hold = self.hold.clone();
         match self.send_if(|| still() && !hold.held(), true).await {
             Ok(Settled::Closed) => {}
-            // It may still land on anything: the session sends nothing more.
+            // It may still stop what runs next: said, and the session goes on.
             Ok(Settled::Unknown) => {
-                self.unsent.refuse.store(true, Ordering::SeqCst);
-                self.unsent.pending.send_replace(Some(Pending { settle: self.settle, wait: self.answer_wait }));
+                if let Some(events) = self.events.as_ref().and_then(WeakUnboundedSender::upgrade) {
+                    let _ = events.send(DbEvent::CancelUnconfirmed { waited: self.settle });
+                }
             }
             Err(why) => self.unsent.note(request, why),
         }
@@ -286,32 +275,11 @@ impl Cancel {
 pub(crate) struct Unsent {
     request: Arc<AtomicU64>,
     noted: Arc<watch::Sender<Option<(u64, DbError)>>>,
-    /// A user's cancel was sent and the server was not seen to take it in ([`Pending`]): it may
-    /// still land on anything the session sends, whatever request it was asked during.
-    pub(crate) pending: Arc<watch::Sender<Option<Pending>>>,
-    /// Set with [`Unsent::pending`]: the session's client hands no request to its connection
-    /// any more (`Client::refuse_sends_when`), a type lookup in the middle of a preparation
-    /// included.
-    pub(crate) refuse: Arc<AtomicBool>,
-}
-
-/// A user's cancel the server was not seen to take in ([`Unsent::pending`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Pending {
-    /// How long the server was given to take it in.
-    pub(crate) settle: Duration,
-    /// How long a request on its way is still waited for.
-    pub(crate) wait: Duration,
 }
 
 impl Default for Unsent {
     fn default() -> Self {
-        Self {
-            request: Arc::default(),
-            noted: Arc::new(watch::channel(None).0),
-            pending: Arc::new(watch::channel(None).0),
-            refuse: Arc::default(),
-        }
+        Self { request: Arc::default(), noted: Arc::new(watch::channel(None).0) }
     }
 }
 
@@ -377,7 +345,6 @@ pub(crate) mod tests {
         wrote: Arc<AtomicU64>,
         open: Arc<AtomicBool>,
         waker: Arc<std::sync::Mutex<Option<std::task::Waker>>>,
-        swallow: Arc<AtomicBool>,
     }
 
     impl tokio::io::AsyncRead for Gated {
@@ -402,11 +369,6 @@ pub(crate) mod tests {
             cx: &mut std::task::Context<'_>,
             buf: &[u8],
         ) -> std::task::Poll<std::io::Result<usize>> {
-            // A cancel request (16 bytes in one write) never reaches the server.
-            if self.swallow.load(Ordering::SeqCst) && buf.len() >= 16 {
-                self.wrote.fetch_add(buf.len() as u64, Ordering::SeqCst);
-                return std::task::Poll::Ready(Ok(buf.len()));
-            }
             let wrote = std::pin::Pin::new(&mut self.inner).poll_write(cx, buf);
             if let std::task::Poll::Ready(Ok(n)) = &wrote {
                 self.wrote.fetch_add(*n as u64, Ordering::SeqCst);
@@ -435,8 +397,6 @@ pub(crate) mod tests {
         pub(crate) wrote: Arc<AtomicU64>,
         open: Arc<AtomicBool>,
         waker: Arc<std::sync::Mutex<Option<std::task::Waker>>>,
-        /// Cancel requests are taken as written and never reach the server.
-        pub(crate) swallow: Arc<AtomicBool>,
     }
 
     impl GatedDialer {
@@ -455,8 +415,7 @@ pub(crate) mod tests {
                 let inner = tokio::net::TcpStream::connect((host.as_str(), port))
                     .await
                     .map_err(|e| DialError::Failed(Fault::other(e.to_string())))?;
-                let stream =
-                    Gated { inner, wrote: gate.wrote, open: gate.open, waker: gate.waker, swallow: gate.swallow };
+                let stream = Gated { inner, wrote: gate.wrote, open: gate.open, waker: gate.waker };
                 Ok(Box::new(stream) as BoxedStream)
             })
         }

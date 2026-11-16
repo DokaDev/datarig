@@ -30,6 +30,7 @@ impl App {
             | DbEvent::Released { .. }
             | DbEvent::Stopping { .. }
             | DbEvent::CancelRefused { .. }
+            | DbEvent::CancelUnconfirmed { .. }
             | DbEvent::Done { .. }
             | DbEvent::Failed { .. }
             | DbEvent::TxOpen(_)

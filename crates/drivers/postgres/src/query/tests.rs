@@ -481,85 +481,9 @@ mod terminal {
         let route = crate::route::route(&cfg, dial).unwrap();
         let mut cancel = crate::route::Cancel::new(s.client.cancel_token(), Some(route), tls);
         cancel.unsent = s.token.unsent.clone();
+        cancel.events = s.token.events.clone();
         s.token = cancel;
         dialer
-    }
-
-    /// The session's cancels from now on are taken as sent and never reach the server, which so
-    /// never takes them in: each is unconfirmed once `settle` ran out.
-    fn unconfirmed(s: &mut Session, url: &str, settle: std::time::Duration) {
-        let dialer = gated(s, url);
-        dialer.swallow.store(true, Ordering::SeqCst);
-        s.token.settle = settle;
-    }
-
-    /// A schema of the test's own (`zz_commit_{name}_{pid}`) holding table `t` (`id`, `v`; row
-    /// 1 is `a`) whose writes make a `COMMIT` wait on advisory lock `key` (a deferred
-    /// constraint trigger takes it), and the lock, held by a connection of its own (returned).
-    async fn commit_waits(url: &str, name: &str, key: i64) -> (String, SchemaGuard, Client) {
-        commit_waits_then(url, name, key, "").await
-    }
-
-    /// [`commit_waits`], the trigger running `then` once it has the lock (`RAISE` fails the
-    /// `COMMIT`).
-    async fn commit_waits_then(url: &str, name: &str, key: i64, then: &str) -> (String, SchemaGuard, Client) {
-        let schema = format!("zz_commit_{name}_{}", std::process::id());
-        let guard = SchemaGuard(url.to_string(), schema.clone());
-        let (c, ..) = connect(url).await;
-        c.batch_execute(&format!(
-            "DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema}; \
-             CREATE TABLE {schema}.t (id int PRIMARY KEY, v text); INSERT INTO {schema}.t VALUES (1, 'a'); \
-             CREATE FUNCTION {schema}.wait() RETURNS trigger LANGUAGE plpgsql AS \
-             $$ BEGIN PERFORM pg_catalog.pg_advisory_xact_lock({key}); {then} RETURN NULL; END $$; \
-             CREATE CONSTRAINT TRIGGER wait AFTER INSERT OR UPDATE ON {schema}.t \
-             DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION {schema}.wait()"
-        ))
-        .await
-        .unwrap();
-        let (side, ..) = connect(url).await;
-        side.query("SELECT pg_advisory_lock($1)", &[&key]).await.unwrap();
-        (schema, guard, side)
-    }
-
-    /// Once a `COMMIT` waits on advisory lock `key` (held by `side`), a cancel of the user's (of
-    /// run `run`, when it is one) goes out, unconfirmed once its settle ran out; then the lock
-    /// goes and the `COMMIT` ends.
-    fn cancel_while_committing(s: &Session, side: Client, key: i64, run: Option<u64>) -> tokio::task::JoinHandle<()> {
-        let held = cancel_while_committing_held(s, side, key, run, false);
-        tokio::spawn(async move {
-            held.await.expect("the cancel was asked");
-        })
-    }
-
-    /// [`cancel_while_committing`], the lock kept (`keep`) by the connection the task hands back
-    /// rather than let go.
-    fn cancel_while_committing_held(
-        s: &Session,
-        side: Client,
-        key: i64,
-        run: Option<u64>,
-        keep: bool,
-    ) -> tokio::task::JoinHandle<Option<Client>> {
-        let (flag, token) = (s.cancel.clone(), s.token.clone());
-        tokio::spawn(async move {
-            let waits = "SELECT count(*) FROM pg_catalog.pg_locks WHERE locktype = 'advisory' AND NOT granted \
-                         AND classid = ($1::bigint >> 32)::oid AND objid = ($1::bigint & 4294967295)::oid";
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            while side.query_one(waits, &[&key]).await.unwrap().get::<_, i64>(0) == 0 {
-                assert!(std::time::Instant::now() < deadline, "the commit never waited");
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            }
-            if let Some(run) = run {
-                assert!(flag.ask(run), "the run asked");
-            }
-            token.ask(token.unsent.request(), || true).await;
-            assert!(token.unsent.pending.borrow().is_some(), "the cancel is unconfirmed");
-            if keep {
-                return Some(side);
-            }
-            side.query("SELECT pg_advisory_unlock($1)", &[&key]).await.unwrap();
-            None
-        })
     }
 
     /// Manual commit on a session whose search path is set in each transaction (as behind a
@@ -783,19 +707,19 @@ mod terminal {
         async fn open(url: &str) -> Self {
             let (client, ended, conn, params) = connect(url).await;
             let (cmds, cmd_rx) = unbounded_channel();
-            let (events, mut rx) = unbounded_channel();
+            let (raw, mut rx) = unbounded_channel();
             // The settings as the session connected: said once, as the session's loop does,
             // so a run's events show only a change.
-            let events = super::super::style::Events::new(events, params, false);
+            let events = super::super::style::Events::new(raw.clone(), params, false);
             events.report();
             while rx.try_recv().is_ok() {}
-            let token = crate::route::Cancel::new(
+            let mut token = crate::route::Cancel::new(
                 client.cancel_token(),
                 None,
                 crate::tls::PgTls::new(datarig_core::tls::TlsSettings::plain()),
             );
+            token.events = Some(raw.downgrade());
             let link = Link::new(cmd_rx, ended, conn, Some(token.unsent.clone()));
-            client.refuse_sends_when(token.unsent.refuse.clone());
             Self {
                 client,
                 link,
@@ -877,8 +801,7 @@ mod terminal {
                 undo_lost: false,
                 before_release: None,
             };
-            let mut told = false;
-            let ended = end_tx(&self.client, &mut self.link, &env, &mut self.tx, self.id, commit, &mut told);
+            let ended = end_tx(&self.client, &mut self.link, &env, &mut self.tx, self.id, commit);
             tokio::time::timeout(std::time::Duration::from_secs(20), ended).await.expect("it returns").ok();
             let mut events = Vec::new();
             while let Ok(ev) = self.rx.try_recv() {
@@ -1512,10 +1435,7 @@ mod terminal {
 
     mod apply {
         use super::super::super::apply::{Hooks, apply};
-        use super::{
-            Session, TableGuard, cancel_while_committing, cancel_while_committing_held, commit_waits, connect, manual,
-            pg_url, unconfirmed,
-        };
+        use super::{Session, TableGuard, connect, manual, pg_url};
         use datarig_core::driver::{ApplyError, ApplyFailure, ApplyTx, DbError, DbEvent, TxStep};
         use datarig_core::edit::{Expect, Origin, Step};
 
@@ -1810,58 +1730,13 @@ mod terminal {
             assert_eq!(rows[0].get::<_, String>(0), "a,earlier", "the earlier write stands");
             s.client.batch_execute("ROLLBACK").await.unwrap();
         }
-
-        /// An Apply whose `COMMIT` went out and never answered once a cancel of the user's stayed
-        /// unconfirmed is given up on within its bound: it is answered as not known whether it
-        /// committed, never as cancelled with nothing applied, and the session ends.
-        #[tokio::test(flavor = "multi_thread")]
-        async fn an_apply_whose_commit_never_answers_is_commit_unknown() {
-            let name = "an_apply_whose_commit_never_answers_is_commit_unknown";
-            let Some(url) = pg_url(name) else { return };
-            let key = ((0x2369_0102_i64) << 32) + i64::from(std::process::id());
-            let (schema, _g, side) = commit_waits(&url, "apply_lost", key).await;
-            let table = format!("{schema}.t");
-            let mut s = Session::open(&url).await;
-            unconfirmed(&mut s, &url, std::time::Duration::from_millis(300));
-            s.token.answer_wait = std::time::Duration::from_millis(500);
-            let asker = cancel_while_committing_held(&s, side, key, Some(s.runs + 1), true);
-            let (events, ends) = s.apply_ending(&steps(&table), ApplyTx::Commit, &Hooks::default()).await;
-            let side = asker.await.expect("the cancel was asked");
-            assert_eq!(answer(&events), Err(ApplyFailure { step: None, why: ApplyError::Db(DbError::CommitUnknown) }));
-            use datarig_core::driver::CancelFailure;
-            assert!(matches!(ends, Some(DbError::CancelNotTaken(CancelFailure::StopPending(_)))), "{ends:?}");
-            drop(side);
-        }
-
-        /// An Apply whose `COMMIT` went out is answered as the server answers it, even when a
-        /// cancel of the user's goes unconfirmed meanwhile (the server never takes it in): the
-        /// `COMMIT` on its way is not cut off, so the Apply is not said cancelled and nothing
-        /// applied while it may have committed. Here it commits.
-        #[tokio::test(flavor = "multi_thread")]
-        async fn an_apply_whose_commit_went_out_is_answered_as_the_server_answers_it() {
-            let name = "an_apply_whose_commit_went_out_is_answered_as_the_server_answers_it";
-            let Some(url) = pg_url(name) else { return };
-            let key = ((0x2369_0101_i64) << 32) + i64::from(std::process::id());
-            let (schema, _g, side) = commit_waits(&url, "apply", key).await;
-            let table = format!("{schema}.t");
-            let mut s = Session::open(&url).await;
-            unconfirmed(&mut s, &url, std::time::Duration::from_millis(300));
-            let asker = cancel_while_committing(&s, side, key, Some(s.runs + 1));
-            let events = s.apply(&steps(&table), ApplyTx::Commit, &Hooks::default()).await;
-            asker.await.expect("the cancel was asked");
-            assert_eq!(answer(&events), Ok(()));
-            assert_eq!(committed(&url, &table).await, "applied");
-        }
     }
 
     // ── a read's start inside the user's block, a cancel asked while it runs ──────────────
 
     mod reads {
         use super::super::super::{Env, Stop, command, count_savepoint};
-        use super::{
-            SchemaGuard, Session, TableGuard, cancel_while_committing, cancel_while_committing_held, commit_waits,
-            commit_waits_then, connect, gated, manual, pg_url, unconfirmed,
-        };
+        use super::{Session, TableGuard, connect, gated, manual, pg_url};
         use crate::link::Next;
         use datarig_core::driver::{DbCommand, DbError, DbEvent, ExportBatch, ExportGuard, PagingMode, TxStep};
 
@@ -2276,37 +2151,6 @@ mod terminal {
             block_as_it_was(&mut s, &table).await;
         }
 
-        /// A user's cancel that was sent but that the server was not seen to take in (its
-        /// connection not closed within the bound) may still land on whatever the session sends:
-        /// the session sends nothing more. The count it was held back for answers cancelled,
-        /// once, and the session ends saying a stop may still be carried out.
-        #[tokio::test(flavor = "multi_thread")]
-        async fn a_cancel_the_server_was_not_seen_to_take_in_ends_the_session() {
-            let name = "a_cancel_the_server_was_not_seen_to_take_in_ends_the_session";
-            let Some(url) = pg_url(name) else { return };
-            let (table, _g) = table(&url, "unsettled").await;
-            let mut s = Session::open(&url).await;
-            earlier_write(&mut s, &table).await;
-            // Its cancels go through a stream that never lets the server's close through.
-            let dialer = gated(&mut s, &url);
-            s.token.settle = std::time::Duration::from_millis(300);
-            let token = s.token.clone();
-            let asked = tokio::spawn(async move { token.ask(token.unsent.request(), || true).await });
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            while dialer.wrote.load(std::sync::atomic::Ordering::SeqCst) < 16 {
-                assert!(std::time::Instant::now() < deadline, "the cancel was never written");
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            }
-            let (events, stop) = s.command_stop(DbCommand::Count { id: 113, sql: count_of(&table), limit: None }).await;
-            asked.await.expect("asked");
-            assert_eq!(counted(&events), Err(DbError::Cancelled));
-            use datarig_core::driver::CancelFailure;
-            assert!(
-                matches!(stop, Some(Stop::Lost(DbError::CancelNotTaken(CancelFailure::StopPending(_))))),
-                "the session ends"
-            );
-        }
-
         /// A `Resume` whose read fails in the user's block undoes its savepoint only once no
         /// cancel of the user's is on its way: one sent right before the read (whose server's
         /// close is held back here) is waited for, so it cannot land on the undo. The block
@@ -2360,172 +2204,46 @@ mod terminal {
             block_as_it_was(&mut s, &table).await;
         }
 
-        /// The user's `COMMIT` that went out is answered as the server answers it, once, even
-        /// when an earlier cancel of the user's goes unconfirmed meanwhile: it is not cut off.
+        /// A cancel the server does not confirm (it never closes the cancel's connection here)
+        /// is said, once its bound ran out: the count it stopped answers cancelled, once, the
+        /// session is not closed, and the next command runs in the user's block as before.
         #[tokio::test(flavor = "multi_thread")]
-        async fn a_commit_that_went_out_is_answered_as_the_server_answers_it() {
-            let name = "a_commit_that_went_out_is_answered_as_the_server_answers_it";
+        async fn a_cancel_the_server_does_not_confirm_is_said_and_the_session_goes_on() {
+            let name = "a_cancel_the_server_does_not_confirm_is_said_and_the_session_goes_on";
             let Some(url) = pg_url(name) else { return };
-            let (schema, _g, side) = commit_waits(&url, "end", key(8)).await;
-            let mut s = Session::open(&url).await;
-            earlier_write(&mut s, &format!("{schema}.t")).await;
-            unconfirmed(&mut s, &url, std::time::Duration::from_millis(300));
-            let asker = cancel_while_committing(&s, side, key(8), None);
-            let (events, stop) = s.command_stop(DbCommand::EndTx { id: 115, commit: true }).await;
-            asker.await.expect("the cancel was asked");
-            let ended = one(&events, |e| match e {
-                DbEvent::TxEnded { outcome, .. } => Some(Ok(*outcome)),
-                DbEvent::Failed { error, .. } => Some(Err(error.clone())),
-                _ => None,
-            });
-            assert_eq!(ended, Ok(datarig_core::driver::TxOutcome::Committed));
-            assert!(stop.is_none(), "answered as it ended");
-            let (c, ..) = connect(&url).await;
-            let rows = c.query(&format!("SELECT count(*) FROM {schema}.t"), &[]).await.unwrap();
-            assert_eq!(rows[0].get::<_, i64>(0), 2, "committed");
-        }
-
-        /// A `COMMIT` of the user's that is not sent because a cancel of the user's is
-        /// unconfirmed (it could land on it) is still answered, once, before the session ends:
-        /// nothing was committed.
-        #[tokio::test(flavor = "multi_thread")]
-        async fn a_commit_not_sent_for_an_unconfirmed_cancel_is_answered_once() {
-            let name = "a_commit_not_sent_for_an_unconfirmed_cancel_is_answered_once";
-            let Some(url) = pg_url(name) else { return };
-            let (table, _g) = table(&url, "end_unsent").await;
+            let (locked, _l) = table(&url, "unconfirmed_lock").await;
+            let (table, _g) = table(&url, "unconfirmed").await;
             let mut s = Session::open(&url).await;
             earlier_write(&mut s, &table).await;
-            unconfirmed(&mut s, &url, std::time::Duration::from_millis(300));
-            let token = s.token.clone();
-            token.ask(token.unsent.request(), || true).await;
-            assert!(token.unsent.pending.borrow().is_some(), "the cancel is unconfirmed");
-            let (events, stop) = s.command_stop(DbCommand::EndTx { id: 116, commit: true }).await;
-            use datarig_core::driver::CancelFailure;
-            let failed = one(&events, |e| match e {
-                DbEvent::TxEnded { .. } => Some(None),
-                DbEvent::Failed { error, cancelled, .. } => Some(Some((error.clone(), *cancelled))),
-                _ => None,
-            });
-            assert!(
-                matches!(failed, Some((DbError::CancelNotTaken(CancelFailure::StopPending(_)), false))),
-                "{events:?}"
-            );
-            assert!(
-                matches!(stop, Some(Stop::Lost(DbError::CancelNotTaken(CancelFailure::StopPending(_))))),
-                "the session ends"
-            );
-            let (c, ..) = connect(&url).await;
-            let rows = c.query(&format!("SELECT count(*) FROM {table}"), &[]).await.unwrap();
-            assert_eq!(rows[0].get::<_, i64>(0), 1, "nothing committed");
-        }
-
-        /// A user's `COMMIT` that fails once a cancel of the user's stayed unconfirmed is
-        /// answered once, with its failure: the session then ends without a second answer.
-        #[tokio::test(flavor = "multi_thread")]
-        async fn a_commit_failing_after_an_unconfirmed_cancel_is_answered_once() {
-            let name = "a_commit_failing_after_an_unconfirmed_cancel_is_answered_once";
-            let Some(url) = pg_url(name) else { return };
-            let then = "RAISE EXCEPTION 'refused at commit';";
-            let (schema, _g, side) = commit_waits_then(&url, "end_fails", key(9), then).await;
-            let mut s = Session::open(&url).await;
-            earlier_write(&mut s, &format!("{schema}.t")).await;
-            unconfirmed(&mut s, &url, std::time::Duration::from_millis(300));
-            let asker = cancel_while_committing(&s, side, key(9), None);
-            let (events, stop) = s.command_stop(DbCommand::EndTx { id: 117, commit: true }).await;
-            asker.await.expect("the cancel was asked");
-            let failed = one(&events, |e| match e {
-                DbEvent::TxEnded { .. } => Some(None),
-                DbEvent::Failed { error, .. } => Some(Some(error.clone())),
-                _ => None,
-            });
-            assert!(matches!(failed, Some(DbError::Server(_))), "{events:?}");
-            use datarig_core::driver::CancelFailure;
-            assert!(
-                matches!(stop, Some(Stop::Lost(DbError::CancelNotTaken(CancelFailure::StopPending(_))))),
-                "the session ends"
-            );
-        }
-
-        /// A user's `COMMIT` that went out and never answered once a cancel of the user's stayed
-        /// unconfirmed is given up on within its bound: answered once as not known whether it
-        /// committed, then the session ends.
-        #[tokio::test(flavor = "multi_thread")]
-        async fn a_commit_that_never_answers_after_an_unconfirmed_cancel_is_unknown() {
-            let name = "a_commit_that_never_answers_after_an_unconfirmed_cancel_is_unknown";
-            let Some(url) = pg_url(name) else { return };
-            let (schema, _g, side) = commit_waits(&url, "end_lost", key(10)).await;
-            let mut s = Session::open(&url).await;
-            earlier_write(&mut s, &format!("{schema}.t")).await;
-            unconfirmed(&mut s, &url, std::time::Duration::from_millis(300));
-            s.token.answer_wait = std::time::Duration::from_millis(500);
-            let asker = cancel_while_committing_held(&s, side, key(10), None, true);
-            let (events, stop) = s.command_stop(DbCommand::EndTx { id: 118, commit: true }).await;
-            let side = asker.await.expect("the cancel was asked");
-            let failed = one(&events, |e| match e {
-                DbEvent::TxEnded { .. } => Some(None),
-                DbEvent::Failed { error, .. } => Some(Some(error.clone())),
-                _ => None,
-            });
-            assert_eq!(failed, Some(DbError::CommitUnknown), "{events:?}");
-            use datarig_core::driver::CancelFailure;
-            assert!(
-                matches!(stop, Some(Stop::Lost(DbError::CancelNotTaken(CancelFailure::StopPending(_))))),
-                "the session ends"
-            );
-            drop(side);
-        }
-
-        /// Once a cancel of the user's stayed unconfirmed, no new request leaves for the server,
-        /// not even one a request on its way sends in the middle (the type lookups of a
-        /// preparation whose answer came after): the run fails and the session ends. The
-        /// preparation is kept waiting on a lock of its table, and its column's type (an enum)
-        /// is new to the session.
-        #[tokio::test(flavor = "multi_thread")]
-        async fn no_type_lookup_leaves_once_a_cancel_stayed_unconfirmed() {
-            let name = "no_type_lookup_leaves_once_a_cancel_stayed_unconfirmed";
-            let Some(url) = pg_url(name) else { return };
-            let schema = format!("zz_lookup_{}", std::process::id());
-            let _g = SchemaGuard(url.clone(), schema.clone());
-            let (c, ..) = connect(&url).await;
-            c.batch_execute(&format!(
-                "DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema}; \
-                 CREATE TYPE {schema}.mood AS ENUM ('ok'); CREATE TABLE {schema}.t (e {schema}.mood); \
-                 INSERT INTO {schema}.t VALUES ('ok')"
-            ))
-            .await
-            .unwrap();
+            let _dialer = gated(&mut s, &url);
+            s.token.settle = std::time::Duration::from_millis(300);
+            // The count waits on a lock of its table; then the user cancels it.
             let (side, ..) = connect(&url).await;
-            side.batch_execute(&format!("BEGIN; LOCK TABLE {schema}.t IN ACCESS EXCLUSIVE MODE")).await.unwrap();
-            let mut s = Session::open(&url).await;
-            unconfirmed(&mut s, &url, std::time::Duration::from_millis(300));
-            let (token, table) = (s.token.clone(), format!("{schema}.t"));
+            side.batch_execute(&format!("BEGIN; LOCK TABLE {locked} IN ACCESS EXCLUSIVE MODE")).await.unwrap();
+            let (flag, run, token, waited) = (s.cancel.clone(), s.runs + 1, s.token.clone(), locked.clone());
             let asker = tokio::spawn(async move {
                 let waits =
                     "SELECT count(*) FROM pg_catalog.pg_locks WHERE relation = $1::text::regclass AND NOT granted";
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-                while side.query_one(waits, &[&table]).await.unwrap().get::<_, i64>(0) == 0 {
-                    assert!(std::time::Instant::now() < deadline, "the preparation never waited");
+                while side.query_one(waits, &[&waited]).await.unwrap().get::<_, i64>(0) == 0 {
+                    assert!(std::time::Instant::now() < deadline, "the count never waited");
                     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                 }
-                token.ask(token.unsent.request(), || true).await;
-                assert!(token.unsent.pending.borrow().is_some(), "the cancel is unconfirmed");
+                assert!(flag.ask(run), "the count is the run asked");
+                let request = token.unsent.request();
+                let mark = flag.clone();
+                token.ask(request, move || mark.stands(run)).await;
                 side.batch_execute("COMMIT").await.unwrap();
             });
-            let statements = vec![format!("SELECT e FROM {schema}.t")];
-            let run = DbCommand::Execute {
-                id: 119,
-                statements,
-                paging: PagingMode::Hold,
-                tx: datarig_core::driver::TxRule::Auto,
-                max_rows: None,
-            };
-            let (events, stop) = s.command_stop(run).await;
+            let events = s.command(DbCommand::Count { id: 120, sql: count_of(&locked), limit: None }).await;
             asker.await.expect("the cancel was asked");
-            // The preparation itself fails, its lookup refused as on a closed connection (not the
-            // run's next request, refused before it went out, which ends it cancelled).
-            let end = terminal(&events);
-            assert!(matches!(end, DbEvent::Failed { error: DbError::Closed, cancelled: false, .. }), "{events:?}");
-            assert!(matches!(stop, Some(Stop::Lost(_))), "the session ends");
+            assert_eq!(counted(&events), Err(DbError::Cancelled));
+            let notes = events.iter().filter(|e| matches!(e, DbEvent::CancelUnconfirmed { .. })).count();
+            assert_eq!(notes, 1, "said once: {events:?}");
+            // The session goes on: the next command runs, in the block as it was.
+            let next = s.command(DbCommand::Count { id: 121, sql: count_of(&table), limit: None }).await;
+            assert_eq!(counted(&next), Ok(2));
+            block_as_it_was(&mut s, &table).await;
         }
 
         /// The app's count of the values of `v` in `table`.
