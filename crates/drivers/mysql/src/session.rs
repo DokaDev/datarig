@@ -496,7 +496,11 @@ pub(crate) fn ask_read_only(server: &Server) -> String {
 }
 
 /// Why the session is not read-only, with the values the server reported and answered.
-pub(crate) fn not_read_only(server: &Server, reported: Option<&str>, (session, super_ro, innodb_ro): &ReadOnlyAsked) -> String {
+pub(crate) fn not_read_only(
+    server: &Server,
+    reported: Option<&str>,
+    (session, super_ro, innodb_ro): &ReadOnlyAsked,
+) -> String {
     let ro = server.read_only_var();
     let v = |v: Option<&str>| v.unwrap_or("NULL").to_string();
     let mut asked = vec![format!("{ro} {}", v(session.as_deref()))];
@@ -521,6 +525,10 @@ pub(crate) struct Opened {
     pub(crate) tracked: Tracked,
     /// The connection's id on the server (what `KILL QUERY` names).
     pub(crate) id: u64,
+    /// A metadata or monitor session whose read-only the server did not keep: what it reported
+    /// and answered ([`not_read_only`]). Such a session opens anyway, as it sends only the app's
+    /// own fixed reads.
+    pub(crate) read_only_unconfirmed: Option<String>,
 }
 
 /// Open a connection to `target` over a stream of `route` with `opts`, check the server's
@@ -583,15 +591,23 @@ pub(crate) async fn open(
         }
     }
     // What the server reported is not trusted to say no: a value that is missing or not on is
-    // asked on the connection itself, and only the answer decides.
+    // asked on the connection itself, and only the answer decides. A query session of a
+    // read-only profile is refused when the answer is not on; a metadata or monitor session
+    // opens anyway and says what the server answered (a reader that does not keep the setting
+    // would otherwise never connect).
+    let mut read_only_unconfirmed = None;
     if read_only && tracked.read_only != Some(true) {
-        let asked: Option<ReadOnlyAsked> = conn.query_first(ask_read_only(&server)).await.map_err(|e| (my_error(&e), false))?;
+        let asked: Option<ReadOnlyAsked> =
+            conn.query_first(ask_read_only(&server)).await.map_err(|e| (my_error(&e), false))?;
         let asked = asked.unwrap_or_default();
         tracked.read_only = Some(asked.0.as_deref().is_some_and(on));
         if tracked.read_only != Some(true) {
-            quit(conn).await;
             let detail = not_read_only(&server, tracked.read_only_reported.as_deref(), &asked);
-            return Err((DbError::Connection(Fault::other(detail)), false));
+            if settings.role == SessionRole::Query {
+                quit(conn).await;
+                return Err((DbError::Connection(Fault::other(detail)), false));
+            }
+            read_only_unconfirmed = Some(detail);
         }
     }
     // The handshake has the id's lower 32 bits: MySQL's ids have no more, MariaDB's may.
@@ -603,7 +619,7 @@ pub(crate) async fn open(
             id.unwrap_or(u64::from(conn.id()))
         }
     };
-    Ok(Opened { conn, wire, encryption, server, tracked, id })
+    Ok(Opened { conn, wire, encryption, server, tracked, id, read_only_unconfirmed })
 }
 
 /// The handshake and login over `stream` of `route`, through a [`Wire`]: encrypted as the

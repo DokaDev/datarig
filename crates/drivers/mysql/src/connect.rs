@@ -226,7 +226,7 @@ async fn run_session(
             return;
         }
     };
-    let Opened { conn, wire, encryption, server, tracked, id } = opened;
+    let Opened { conn, wire, encryption, server, tracked, id, read_only_unconfirmed } = opened;
     // The cancel logs in as the session does, without a database (one could be dropped since).
     let kill_opts = target.opts(None, &opts.application_name, &route);
     let killer = Killer::new(route, kill_opts, id);
@@ -235,6 +235,10 @@ async fn run_session(
     }
     connected.store(true, Ordering::SeqCst);
     let _ = events.send(DbEvent::Encryption(encryption));
+    // A metadata or monitor session whose read-only the server did not keep, with its values.
+    if let Some(detail) = read_only_unconfirmed {
+        let _ = events.send(DbEvent::ReadOnlyUnconfirmed(detail));
+    }
     // What decides whether a query session's reads lock rows, as its start-up statements left
     // it, before it says it is connected: the app checks a statement against it before sending
     // it, and takes `Connected` as the session's state being known. The level its transactions

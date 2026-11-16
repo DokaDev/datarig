@@ -5,7 +5,7 @@
 
 use super::{Notice, TabId};
 use crate::widgets::tree::Tree;
-use datarig_core::driver::{KeyCatalog, KeyMarks, Session};
+use datarig_core::driver::{KeyCatalog, KeyMarks, Session, SessionRole};
 use datarig_core::profile::{ConnectionConfig, ProfileId};
 use datarig_core::sql::complete::Catalog;
 use datarig_core::sql::values::CheckValues;
@@ -178,6 +178,10 @@ pub struct ProfileConn {
     /// How the current attempt's metadata session's traffic goes (`DbEvent::Encryption`, sent
     /// right before `Connected`); `None` until it says.
     pub encryption: Option<datarig_core::tls::Encryption>,
+    /// The last metadata or monitor session of the current attempt that opened although the
+    /// server did not keep it read-only (`DbEvent::ReadOnlyUnconfirmed`): its role and what the
+    /// server reported and answered, for the session view.
+    pub read_only_unconfirmed: Option<(SessionRole, String)>,
     /// When a session of the profile was last used (a run, an explorer read, an answer of any
     /// of its sessions), by the app's clock and the wall clock: idle since
     /// ([`super::idle`]).
@@ -220,6 +224,7 @@ impl ProfileConn {
             explain: None,
             edit: None,
             encryption: None,
+            read_only_unconfirmed: None,
             used: None,
             idle_closed: None,
         }
@@ -315,6 +320,7 @@ impl ConnectionManager {
         let c = self.entry(id);
         c.generation = generation;
         c.encryption = None;
+        c.read_only_unconfirmed = None;
         c.explain = None;
         c.edit = None;
         generation

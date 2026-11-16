@@ -1206,6 +1206,12 @@ impl App {
                 return self.monitor_action_done(id, request, outcome, now);
             }
             DbEvent::MonitorFollowUp { request, result } => return self.monitor_followed(id, request, result),
+            DbEvent::ReadOnlyUnconfirmed(detail) => {
+                if let Some(p) = self.tabs.get(id).and_then(|t| t.profile) {
+                    self.read_only_unconfirmed(p, SessionRole::Monitor, detail);
+                }
+                return;
+            }
             ev => ev,
         };
         let error_text = match &ev {

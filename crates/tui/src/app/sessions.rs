@@ -253,10 +253,10 @@ impl App {
     ///
     /// [`SessionView`]: super::overlay::SessionView
     pub(super) fn session_view(&mut self) {
-        let Some(cfg) = self.action_profile().and_then(|p| self.profile(p)).cloned() else {
+        let Some((p, cfg)) = self.action_profile().and_then(|p| Some((p, self.profile(p)?.clone()))) else {
             return self.session_view_without_profile();
         };
-        self.open_session_view(&cfg, false, None);
+        self.open_session_view(&cfg, false, None, Some(p));
     }
 
     /// `:session` with no profile to show: the view opens and says so (a status line that
@@ -291,13 +291,21 @@ impl App {
         });
         // The environment the form makes when it is saved has its rules there only.
         let made = f.made_environment().map(|e| e.policy.clone());
-        self.open_session_view(&cfg, unsaved, made);
+        self.open_session_view(&cfg, unsaved, made, None);
     }
 
     /// The session view of `cfg` (`unsaved`: a form's values the file does not have yet; `made`:
     /// the rules of the environment that form makes), made now: it does not follow later
     /// changes. An environment that is not defined says what the connect refuses with.
-    fn open_session_view(&mut self, cfg: &ConnectionConfig, unsaved: bool, made: Option<datarig_core::policy::Policy>) {
+    /// `profile`: the saved profile it shows, whose connection says whether a metadata or
+    /// monitor session runs although the server did not keep it read-only.
+    fn open_session_view(
+        &mut self,
+        cfg: &ConnectionConfig,
+        unsaved: bool,
+        made: Option<datarig_core::policy::Policy>,
+        profile: Option<ProfileId>,
+    ) {
         use super::overlay::{SessionLine, Tone};
         use datarig_core::profile::session::{Intent, Planned, Wait};
         let label = |l: Label| self.i18n.label(l).to_string();
@@ -318,6 +326,13 @@ impl App {
         let mut head = vec![SessionLine::Text(who.join(" · "), Tone::Strong)];
         if rules.as_ref().is_ok_and(|r| r.read_only) {
             head.push(SessionLine::Text(label(Label::SessionViewReadOnly), Tone::Warning));
+        }
+        if let Some((role, detail)) = profile.and_then(|p| self.conns.get(p)?.read_only_unconfirmed.clone()) {
+            let m = match role {
+                SessionRole::Monitor => Msg::SessionViewReadOnlyUnconfirmedMonitor { detail },
+                SessionRole::Meta | SessionRole::Query => Msg::SessionViewReadOnlyUnconfirmedMeta { detail },
+            };
+            head.push(SessionLine::Text(self.i18n.msg(&m).to_string(), Tone::Warning));
         }
         let mut lines = Vec::new();
         let defaults = Defaults { lock_wait: self.prefs.lock_wait, idle_disconnect: self.prefs.idle_disconnect };

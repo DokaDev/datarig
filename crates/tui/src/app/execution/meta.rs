@@ -145,6 +145,7 @@ impl App {
             }
             DbEvent::Keys(Ok(keys)) => a.keys = Keys::Loaded(keys),
             DbEvent::Keys(Err(_)) => a.keys = Keys::Failed(text),
+            DbEvent::ReadOnlyUnconfirmed(detail) => self.read_only_unconfirmed(profile, SessionRole::Meta, detail),
             _ => {}
         }
     }
@@ -159,11 +160,22 @@ impl App {
         }
     }
 
+    /// A metadata or monitor session (`role`) of profile `id` opened although the server did not
+    /// keep it read-only (`detail`: what the server reported and answered): one line in the
+    /// error log for each such session, and the profile's session view says it.
+    pub(in crate::app) fn read_only_unconfirmed(&mut self, id: ProfileId, role: SessionRole, detail: String) {
+        let session = if role == SessionRole::Monitor { "monitor" } else { "metadata" };
+        let fault = datarig_core::fault::Fault::other(format!("{session} session: {detail}"));
+        ErrorLog::new(self.paths.errors_log()).record("db.read_only_unconfirmed", &fault);
+        self.conns.entry(id).read_only_unconfirmed = Some((role, detail));
+    }
+
     pub(super) fn meta_event(&mut self, id: ProfileId, ev: DbEvent) {
         let Some(name) = self.profile(id).map(|p| p.name.clone()) else { return };
         let text = self.event_error_text(&ev);
         match ev {
             DbEvent::Encryption(e) => self.conns.entry(id).encryption = Some(e),
+            DbEvent::ReadOnlyUnconfirmed(detail) => self.read_only_unconfirmed(id, SessionRole::Meta, detail),
             DbEvent::Connected => self.on_connected(id),
             // The profile's sessions are read-only per transaction only: said once it connected.
             DbEvent::ReadOnlyPerTransaction => {

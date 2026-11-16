@@ -1734,3 +1734,32 @@ fn form_saves_leave_the_rest_of_the_file_as_written() {
     let a2 = profile(1, "a", "# its preset\nstartup = \"x\"\n") + "startup_sql = [\"SET work_mem = '2MB'\"]\n";
     assert_eq!(dir.text(), format!("{head}{a2}\n{b2}\n{presets}"));
 }
+
+/// A metadata session that opened although the server did not keep it read-only writes one
+/// line to the error log with what the server reported and answered, and `:session` says it.
+#[test]
+fn a_metadata_session_the_server_did_not_keep_read_only_is_logged_and_shown() {
+    let state = std::env::temp_dir().join(format!("datarig-read-only-unconfirmed-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&state);
+    std::fs::create_dir_all(&state).unwrap();
+    let mut h = Harness::with_config(&test_db_config(), Lang::En);
+    h.app.set_paths(datarig_core::paths::Paths { data: None, state: Some(state.clone()) });
+    let detail = "the server did not make the session read-only (reported transaction_read_only: OFF; \
+                  asked: transaction_read_only 0, super_read_only 0, innodb_read_only 1)";
+    h.db(DbEvent::ReadOnlyUnconfirmed(detail.into()));
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["public".into()])));
+    let log = std::fs::read_to_string(state.join("errors.log")).expect("logged");
+    let lines: Vec<&str> = log.lines().collect();
+    assert_eq!(lines.len(), 1, "{log}");
+    assert!(lines[0].ends_with(&format!(" db.read_only_unconfirmed: Other: metadata session: {detail}")), "{log}");
+    h.command("session");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::SessionView));
+    let screen = h.screen(240, 40);
+    assert!(
+        screen.contains("The metadata session runs although the server did not keep it read-only (it sends only"),
+        "{screen}"
+    );
+    assert!(screen.contains("innodb_read_only 1)"), "{screen}");
+    let _ = std::fs::remove_dir_all(&state);
+}

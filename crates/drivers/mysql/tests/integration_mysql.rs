@@ -7980,6 +7980,12 @@ const REPORTED: [(&[u8], &[u8]); 2] = [
     (b"\x0ctx_read_only\x02ON", b"\x0ctx_read_only\x02NO"),
 ];
 
+/// What an [`unkept`](MisreportDialer::unkept) stream looks for in what the client sends: the
+/// set-up's read-only (by either name), and what it sends instead (off, the same length, so the
+/// packet's header stays right).
+const UNKEPT: [(&[u8], &[u8]); 2] =
+    [(b"transaction_read_only = ON", b"transaction_read_only = 0 "), (b"tx_read_only = ON", b"tx_read_only = 0 ")];
+
 /// A dialer whose streams change every read-only the server reports as on into a value that is
 /// not on, as a server (or something in front of it) that reports it otherwise would. It counts
 /// what it changed.
@@ -7987,6 +7993,9 @@ const REPORTED: [(&[u8], &[u8]); 2] = [
 struct MisreportDialer {
     dialer: TcpDialer,
     changed: Arc<std::sync::atomic::AtomicUsize>,
+    /// Its streams also change the set-up's read-only to off before the server gets it ([`UNKEPT`]),
+    /// as a server that takes the setting but does not keep it would leave the session.
+    unkept: bool,
 }
 
 /// A stream that hands the server's answers on in whole packets (however the reads split them),
@@ -7998,6 +8007,8 @@ struct Misreport {
     pending: Vec<u8>,
     /// Whole packets, changed, not yet handed on.
     ready: std::collections::VecDeque<u8>,
+    /// What the client sends is changed as [`UNKEPT`] says.
+    unkept: bool,
 }
 
 impl Misreport {
@@ -8007,7 +8018,10 @@ impl Misreport {
             if self.pending.len() < 4 {
                 return;
             }
-            let len = 4 + usize::from(self.pending[0]) + (usize::from(self.pending[1]) << 8) + (usize::from(self.pending[2]) << 16);
+            let len = 4
+                + usize::from(self.pending[0])
+                + (usize::from(self.pending[1]) << 8)
+                + (usize::from(self.pending[2]) << 16);
             if self.pending.len() < len {
                 return;
             }
@@ -8062,7 +8076,22 @@ impl tokio::io::AsyncWrite for Misreport {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<std::io::Result<usize>> {
-        std::pin::Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+        let me = self.get_mut();
+        if !me.unkept {
+            return std::pin::Pin::new(&mut me.inner).poll_write(cx, buf);
+        }
+        // Changed in place, the same length: what was written of it is what was written of `buf`.
+        let mut out = buf.to_vec();
+        for (from, to) in UNKEPT {
+            let mut at = 0;
+            while let Some(i) = out[at..].windows(from.len()).position(|w| w == from) {
+                let i = at + i;
+                out[i..i + from.len()].copy_from_slice(to);
+                me.changed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                at = i + from.len();
+            }
+        }
+        std::pin::Pin::new(&mut me.inner).poll_write(cx, &out)
     }
 
     fn poll_flush(
@@ -8089,11 +8118,11 @@ impl Dialer for MisreportDialer {
         'static,
         Result<datarig_core::transport::BoxedStream, datarig_core::transport::DialError>,
     > {
-        let (dial, changed) = (self.dialer.dial(host, port), self.changed.clone());
+        let (dial, changed, unkept) = (self.dialer.dial(host, port), self.changed.clone(), self.unkept);
         Box::pin(async move {
             let inner = dial.await?;
             let (pending, ready) = (Vec::new(), std::collections::VecDeque::new());
-            Ok(Box::new(Misreport { inner, changed, pending, ready }) as datarig_core::transport::BoxedStream)
+            Ok(Box::new(Misreport { inner, changed, pending, ready, unkept }) as datarig_core::transport::BoxedStream)
         })
     }
 }
@@ -8113,7 +8142,9 @@ async fn a_read_only_session_reported_otherwise_is_asked_before_it_is_refused() 
     for (role, read_only) in [(SessionRole::Meta, false), (SessionRole::Monitor, false), (SessionRole::Query, true)] {
         let d = Arc::new(MisreportDialer::default());
         let changed = d.changed.clone();
-        let o = ConnectOptions::new(PAGE, role, &tag(test)).read_only(read_only).dialer(Some(DialerRef(d as Arc<dyn Dialer>)));
+        let o = ConnectOptions::new(PAGE, role, &tag(test))
+            .read_only(read_only)
+            .dialer(Some(DialerRef(d as Arc<dyn Dialer>)));
         let (tx, mut rx) = unbounded_channel();
         let session = MyDriver.connect(&profile(&url), role, o, tx);
         let opened = loop {
@@ -8148,4 +8179,58 @@ async fn a_session_left_writable_is_refused_with_the_servers_values() {
     assert!(text.contains(&format!("_read_only {off}, ")), "{text}");
     assert!(text.ends_with(&format!("innodb_read_only {off})")), "{text}");
     assert_eq!(text.contains("super_read_only 0"), !mariadb, "{text}");
+}
+
+/// A session that must be read-only, whose server does not keep the setting (it reads back
+/// off): the metadata and monitor sessions open anyway and say what the server reported and
+/// answered, as they send only the app's own fixed reads; a read-only profile's query session
+/// is still refused, with the same values.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_only_the_server_does_not_keep_is_said_by_metadata_and_monitor_and_refused_to_queries() {
+    let test = "a_read_only_the_server_does_not_keep";
+    let Some((url, admin)) = urls(test) else { return };
+    // Over TLS the bytes cannot be changed.
+    if std::env::var("DATARIG_TEST_MYSQL_SSLMODE").is_ok_and(|m| !m.eq_ignore_ascii_case("DISABLED")) {
+        return;
+    }
+    let mut admin = side(&admin).await;
+    let mariadb = is_mariadb(&mut admin).await;
+    // As the server writes them: MySQL `0`, MariaDB `OFF`.
+    let off = if mariadb { "OFF" } else { "0" };
+    for (role, read_only) in [(SessionRole::Meta, false), (SessionRole::Monitor, false), (SessionRole::Query, true)] {
+        let d = Arc::new(MisreportDialer { unkept: true, ..MisreportDialer::default() });
+        let changed = d.changed.clone();
+        let o = ConnectOptions::new(PAGE, role, &tag(test))
+            .read_only(read_only)
+            .dialer(Some(DialerRef(d as Arc<dyn Dialer>)));
+        let (tx, mut rx) = unbounded_channel();
+        let session = MyDriver.connect(&profile(&url), role, o, tx);
+        let mut unconfirmed = Vec::new();
+        let opened = loop {
+            match tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.expect("an answer") {
+                Some(DbEvent::Connected) => break Ok(()),
+                Some(DbEvent::ConnectFailed { error, .. }) => break Err(error),
+                Some(DbEvent::ReadOnlyUnconfirmed(detail)) => unconfirmed.push(detail),
+                Some(_) => {}
+                None => panic!("closed"),
+            }
+        };
+        assert!(changed.load(std::sync::atomic::Ordering::SeqCst) > 0, "{role:?}: the set-up was not changed");
+        let text = match (role, opened) {
+            (SessionRole::Query, Err(DbError::Connection(fault))) => {
+                assert!(unconfirmed.is_empty(), "{unconfirmed:?}");
+                fault.to_string()
+            }
+            (SessionRole::Query, other) => panic!("the query session must be refused: {other:?}"),
+            (_, Ok(())) => {
+                assert_eq!(unconfirmed.len(), 1, "{role:?}: {unconfirmed:?}");
+                unconfirmed.remove(0)
+            }
+            (_, Err(e)) => panic!("{role:?} must open: {e:?}"),
+        };
+        assert!(text.starts_with("the server did not make the session read-only (reported "), "{role:?}: {text}");
+        assert!(text.contains("; asked: ") && text.contains(&format!("_read_only {off}, ")), "{role:?}: {text}");
+        assert_eq!(text.contains("super_read_only "), !mariadb, "{role:?}: {text}");
+        drop(session);
+    }
 }
