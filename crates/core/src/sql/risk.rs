@@ -811,8 +811,9 @@ impl Prepared {
     /// statement with them may run a function the planner folds (an immutable or stable one
     /// called with constants): when the statement may run code the text does not show, the
     /// prepared names are forgotten, as for a plain `EXPLAIN` of a query that calls such a
-    /// function. The built-ins of [`SERVER_FILES`], [`SERVER_ACTIONS`] and those that run a
-    /// query given as text are volatile, which the planner never folds.
+    /// function, and a read-only policy refuses it when that function is not a built-in
+    /// ([`Risk::unchecked_call`]). The built-ins of [`SERVER_FILES`], [`SERVER_ACTIONS`] and
+    /// those that run a query given as text are volatile, which the planner never folds.
     fn plans(&mut self, query: &Value) -> Risk {
         let mut executes = Vec::new();
         let mut visit = |o: &serde_json::Map<String, Value>| executes.extend(o.get("ExecuteStmt").cloned());
@@ -824,6 +825,8 @@ impl Prepared {
         for e in executes {
             let prepared = text(&e["name"]).and_then(|name| self.0.get(name));
             risk.runs_code |= prepared.is_some_and(|p| p.runs_code);
+            // A function that is not a built-in, which the planner may run.
+            risk.unchecked_call = risk.unchecked_call.or_else(|| prepared.and_then(|p| p.unchecked_call.clone()));
             risk = self.runs_now(&e["params"], risk);
         }
         risk

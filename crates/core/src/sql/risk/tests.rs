@@ -438,6 +438,13 @@ fn read_only_refuses_calls_of_functions_that_are_not_built_ins() {
     let mut prepared = Prepared::default();
     assert_eq!(prepared.classify("PREPARE p AS SELECT f()").read_only(), Ok(()), "preparing runs nothing");
     assert_eq!(prepared.classify("EXECUTE p").read_only(), Err(ReadOnlyBlock::UnknownFunction("f".into())));
+    // Every replay of a prepared statement that calls one: the planner may run it too.
+    let mut prepared = Prepared::default();
+    prepared.classify("PREPARE p AS SELECT app.f()");
+    for sql in ["EXPLAIN EXECUTE p", "EXPLAIN ANALYZE EXECUTE p", "CREATE TABLE t2 AS EXECUTE p", "EXECUTE p"] {
+        let why = prepared.clone().classify(sql).read_only();
+        assert!(matches!(&why, Err(ReadOnlyBlock::UnknownFunction(f)) if f == "app.f"), "{sql}: {why:?}");
+    }
 }
 
 #[test]
