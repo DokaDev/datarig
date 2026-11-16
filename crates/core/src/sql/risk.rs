@@ -1106,11 +1106,12 @@ fn depth_of(sql: &str, tokens: &[super::lexer::Token]) -> usize {
 /// in its first piece's state and keeps no prefix of its own.
 fn non_conforming(sql: &str) -> Option<String> {
     // The quote of token `i` when it is a plain or national string: 0 or 1 (after its `N`). The
-    // string of `U&'…'` (`U` and `&` right before it) is neither: a server with the setting off
-    // rejects it whatever it holds.
+    // string of `U&'…'` (`U` and `&` right before its quote) is neither: a server with the
+    // setting off rejects it whatever it holds. `u&N'…'` is `u & N'…'`.
     let quote_at = |toks: &[super::lexer::Token], i: usize| {
         let t = &toks[i];
         let unicode = i >= 2
+            && t.text(sql).starts_with('\'')
             && toks[i - 1].end == t.start
             && toks[i - 1].text(sql) == "&"
             && toks[i - 2].end == toks[i - 1].start
@@ -1128,16 +1129,20 @@ fn non_conforming(sql: &str) -> Option<String> {
     }
     let toks = lex_backslash_strings(sql);
     let mut out = String::with_capacity(sql.len() + 8);
-    // Where the last string ended, while only blanks and comments follow it.
-    let mut last_string: Option<usize> = None;
+    // Whether only blanks and comments followed the last string, and whether they hold a line
+    // break: each byte of the text is looked at once.
+    let (mut after_string, mut line_break) = (false, false);
+    let mut seen = 0;
     for (i, t) in toks.iter().enumerate() {
         let mut s = t.text(sql);
-        let continues = last_string.is_some_and(|end| sql[end..t.start].contains(['\n', '\r']));
-        last_string = match t.kind {
-            Tok::Str => Some(t.end),
-            _ if t.is_trivia() => last_string,
-            _ => None,
-        };
+        line_break |= has_line_break(&sql[seen..t.start]);
+        let continues = after_string && line_break;
+        match t.kind {
+            Tok::Str => (after_string, line_break) = (true, false),
+            _ if t.is_trivia() => line_break |= has_line_break(s),
+            _ => after_string = false,
+        }
+        seen = t.end;
         if let Some(at) = quote_at(&toks, i)
             && !(at == 0 && continues)
         {
@@ -1151,6 +1156,19 @@ fn non_conforming(sql: &str) -> Option<String> {
         out.push_str(s);
     }
     Some(out)
+}
+
+/// Whether `s` holds a line break, for [`non_conforming`]. Tests count the bytes it looks at.
+fn has_line_break(s: &str) -> bool {
+    #[cfg(test)]
+    LINE_BREAK_SCANNED.with(|n| n.set(n.get() + s.len()));
+    s.contains(['\n', '\r'])
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The bytes [`has_line_break`] looked at on this thread.
+    static LINE_BREAK_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The kind and body of a parse-tree `Node` (`{"node": {"<Kind>": body}}`) or of the tagged

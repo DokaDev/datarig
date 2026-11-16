@@ -598,6 +598,31 @@ fn adversarial_texts_do_not_hide_or_invent_statements() {
     assert_eq!(danger("CREATE RULE r AS ON INSERT TO t DO INSTEAD (DELETE FROM u)"), None);
 }
 
+/// Telling a continuing piece looks at each byte of the text once, however many comments
+/// follow a string; the reading is the same as before.
+#[test]
+fn telling_a_continued_string_is_linear() {
+    let sql = format!("SELECT 'a\\b'{}\n'c'", " /**/".repeat(50_000));
+    assert!(sql.len() < MAX_BYTES);
+    LINE_BREAK_SCANNED.with(|n| n.set(0));
+    let other = non_conforming(&sql).expect("a plain string with a backslash");
+    assert!(LINE_BREAK_SCANNED.with(|n| n.get()) <= sql.len());
+    assert_eq!(other, format!("SELECT E'a\\b'{}\n'c'", " /**/".repeat(50_000)), "only the first piece");
+    // A block comment does not join two pieces of a string (the parser says so): two strings
+    // side by side do not parse, either way.
+    assert_eq!(classify(&sql).read_only(), Err(ReadOnlyBlock::Unparsed));
+}
+
+/// `u&N'…'` is `u & N'…'`, not a Unicode escape string: the national string is read with
+/// `standard_conforming_strings` off too, and the call it hides is seen.
+#[test]
+fn a_national_string_after_u_and_is_read_both_ways() {
+    for u in ["u", "U"] {
+        let sql = format!("SELECT {u}&N'\\', N' || pg_read_file($p$f$p$) --'");
+        assert_eq!(classify(&sql).read_only(), Err(ReadOnlyBlock::ServerFile), "{sql}");
+    }
+}
+
 /// A piece continuing a string (after blanks with a line break) is read in its first piece's
 /// state: the reading with `standard_conforming_strings` off rewrites only the first piece, so
 /// the text still parses.
