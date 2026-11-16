@@ -251,6 +251,13 @@ pub enum DbError {
     /// what it does); the user's open transaction is rolled back once the server ends the
     /// session.
     CancelNotTaken(CancelFailure),
+    /// MySQL: a request to stop the session's statement was not sent, as the server the
+    /// connection to send it on reached could not confirm that the id it would name is this
+    /// session's own (by the marker each of the driver's connections carries): the
+    /// `performance_schema` is off or not readable (MariaDB's default is off), the marker was not
+    /// recorded, the two connections are seen as from different client addresses, or the route
+    /// goes through a proxy or a load balancer. Comes as [`CancelFailure::NotSent`]'s reason.
+    CancelUnconfirmed,
     /// [`DbCommand::EndTx`] found no transaction block open on the session: nothing was sent.
     NoTransaction,
     /// The server answered the transaction the driver opened for a statement
@@ -429,6 +436,7 @@ impl DbError {
             | DbError::NotAPlainRead
             | DbError::NextTransactionSet
             | DbError::LockingRead
+            | DbError::CancelUnconfirmed
             | DbError::CancelNotTaken(
                 CancelFailure::Refused
                 | CancelFailure::KeptSending

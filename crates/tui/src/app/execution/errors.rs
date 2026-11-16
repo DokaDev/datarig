@@ -121,6 +121,7 @@ impl App {
                 return self.i18n.msg(&Msg::DbCancelNotSent { reason: self.db_error_text(why) }).to_string();
             }
             DbError::CancelNotTaken(CancelFailure::KeptSending) => Label::DbCancelKeptSending,
+            DbError::CancelUnconfirmed => Label::DbCancelUnconfirmed,
             DbError::CancelNotTaken(CancelFailure::NotAnswered(d)) => {
                 return self.i18n.msg(&Msg::DbCancelNotAnswered { elapsed: *d }).to_string();
             }

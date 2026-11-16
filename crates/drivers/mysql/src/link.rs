@@ -443,6 +443,7 @@ mod tests {
             Route::new("127.0.0.1", 1, None),
             mysql_async::Opts::from_url("mysql://datarig@127.0.0.1:1/").unwrap(),
             7,
+            None,
         );
         killer.record(kill, || true);
         let (tx, events) = unbounded_channel();

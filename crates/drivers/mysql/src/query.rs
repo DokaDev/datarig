@@ -184,8 +184,8 @@ async fn own_session(conn: &mut Conn, link: &mut Link, env: &Env<'_>, s: &State,
 
 struct Env<'a> {
     events: &'a UnboundedSender<DbEvent>,
-    /// Whether the handshake's connection id is the server's own, once asked
-    /// ([`DbCommand::ServerSession`]).
+    /// Whether the handshake's connection id is the server's own: read as the session opened,
+    /// else once asked ([`DbCommand::ServerSession`]).
     own: &'a OnceLock<bool>,
     killer: &'a Killer,
     /// The UI asked to cancel this run: a run of several statements stops
@@ -453,9 +453,11 @@ pub(crate) async fn query_loop(
     server: Server,
     tracked: Tracked,
     select_limit: Option<u64>,
+    own: Option<bool>,
 ) {
     let failed = AtomicBool::new(false);
-    let own = OnceLock::new();
+    // Known from the open's own read, else read when first asked.
+    let own = own.map_or_else(OnceLock::new, OnceLock::from);
     let env = Env {
         events: &events,
         own: &own,
@@ -1021,6 +1023,17 @@ async fn statement<'a>(
     // session, which is asked instead.
     let mut stopped = false;
     env.busy.store(true, Ordering::SeqCst);
+    // Cancelled while the session set the statement up (its limit, a savepoint), when a cancel
+    // only marks the run: the statement is not sent. Asked after `busy`, so a cancel that came
+    // later found the statement busy and is sent to the server.
+    if env.asked.asked() {
+        idle(env, link).await;
+        if let Some(u) = &undo {
+            halt!(undone(conn, link, u).await, Some(reply));
+        }
+        reply.fail(DbError::Cancelled, true);
+        return Ok(None);
+    }
     // Only what is sent may set the next transaction's own settings: a statement refused before
     // it was sent sets nothing.
     s.sets_next = sets_next_transaction(sql, s.mode);

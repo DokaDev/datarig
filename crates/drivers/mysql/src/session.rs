@@ -135,6 +135,122 @@ impl Target {
 /// than the server's `max_allowed_packet` never comes).
 const MAX_PACKET: usize = 1 << 30;
 
+/// The connection attribute each connection the driver opens for a session carries (the
+/// session's own and each one a cancel opens): a token of its own, fresh per connection
+/// ([`token`]), which the server keeps for the connection's life (a `SQL SECURITY DEFINER`
+/// routine does not change it) and shows the account's sessions in
+/// `performance_schema.session_account_connect_attrs`. A cancel's connection reads it there to
+/// confirm that the id it would name is the session's own ([`Killer`]).
+const MARKER: &str = "datarig_session";
+
+/// A fresh token for [`MARKER`]: 32 lowercase hex digits (128 random bits).
+pub(crate) fn token() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
+/// Whether `t` is a token as [`token`] makes it: only those are written into a statement.
+fn is_token(t: &str) -> bool {
+    t.len() == 32 && t.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// `opts` with the connection attribute [`MARKER`] set to `token` (the others kept).
+pub(crate) fn marked(opts: &Opts, token: &str) -> Opts {
+    let mut attrs = opts.connect_attributes().cloned().unwrap_or_default();
+    attrs.insert(MARKER.to_string(), token.to_string());
+    OptsBuilder::from_opts(opts.clone()).connect_attributes(attrs).into()
+}
+
+/// The lower 32 bits of a connection id: all a handshake carries (MySQL's ids have no more,
+/// MariaDB's may).
+fn low32(id: u64) -> u32 {
+    (id & u64::from(u32::MAX)) as u32
+}
+
+/// The statement a session's connection reads its own id with, right after it opened: the id
+/// (`CONNECTION_ID()`), and the id of the one connection carrying the marker `token` as the
+/// server lists it (`NULL`: none listed, or more than one). The `LIMIT 1`: a `sql_select_limit`
+/// of 0 does not empty it.
+fn own_sql(token: &str) -> String {
+    format!("SELECT CONNECTION_ID(), {} LIMIT 1", marked_once(token))
+}
+
+/// A subquery: the id of the one connection the server lists with the marker `token`, `NULL`
+/// when it lists none or more than one.
+pub(crate) fn marked_once(token: &str) -> String {
+    format!(
+        "(SELECT IF(COUNT(*) = 1, MIN(PROCESSLIST_ID), NULL) FROM performance_schema.session_account_connect_attrs \
+         WHERE ATTR_NAME = '{MARKER}' AND ATTR_VALUE = '{token}')"
+    )
+}
+
+/// Whether a session's connection is confirmed as the server's own connection `id`, from what
+/// it answered to [`own_sql`]: the server lists its marker on `id` (`marker`), and `id`'s lower
+/// 32 bits are the handshake's (`handshake`): no proxy gave an id of its own.
+pub(crate) fn own_verdict(handshake: u32, id: u64, marker: Option<u64>) -> bool {
+    marker == Some(id) && low32(id) == handshake
+}
+
+/// The statement a cancel's connection reads, before it sends anything: its own id, how many
+/// connections carry the session's marker `session` and the lowest id among them, and the id
+/// of the one connection carrying its own marker `side` (`NULL`: none, or more than one), as the
+/// server it reached lists them.
+fn side_sql(session: &str, side: &str) -> String {
+    let attrs = "FROM performance_schema.session_account_connect_attrs WHERE ATTR_NAME";
+    format!(
+        "SELECT CONNECTION_ID(), \
+         (SELECT COUNT(*) {attrs} = '{MARKER}' AND ATTR_VALUE = '{session}'), \
+         (SELECT MIN(PROCESSLIST_ID) {attrs} = '{MARKER}' AND ATTR_VALUE = '{session}'), \
+         {} LIMIT 1",
+        marked_once(side)
+    )
+}
+
+/// What a cancel's connection read with [`side_sql`]: its own id, the count and the lowest id
+/// of the connections carrying the session's marker, the id of the one carrying its own.
+pub(crate) type SideAnswer = (u64, u64, Option<u64>, Option<u64>);
+
+/// Why a cancel's connection may not send the session's kill ([`side_verdict`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Unconfirmed {
+    /// No answer (no row).
+    NoAnswer,
+    /// The server lists this many connections with the session's marker, not one: none on a
+    /// server the connection is not the session's, or none readable.
+    Marked(u64),
+    /// The session's marker is on another id than the session's.
+    OtherId(Option<u64>),
+    /// The server does not list the connection's own marker on its id.
+    SideUnmarked,
+    /// The connection's id is not the one its handshake gave: something in between answered.
+    SideNotDirect,
+}
+
+/// Whether a cancel's connection whose handshake gave id `side_handshake` may send `KILL QUERY`
+/// of `session_id`, from what it read ([`side_sql`]): the server it reached lists the session's
+/// marker on exactly one connection, `session_id` (so it is the session's server and the id is
+/// the session's, wherever the name led), and its own marker on its own id, which is the
+/// handshake's (so it reached that server directly, and the kill goes where the read went).
+pub(crate) fn side_verdict(
+    session_id: u64,
+    side_handshake: u32,
+    answer: Option<SideAnswer>,
+) -> Result<(), Unconfirmed> {
+    let (side_id, marked, session, side) = answer.ok_or(Unconfirmed::NoAnswer)?;
+    if marked != 1 {
+        return Err(Unconfirmed::Marked(marked));
+    }
+    if session != Some(session_id) {
+        return Err(Unconfirmed::OtherId(session));
+    }
+    if side != Some(side_id) {
+        return Err(Unconfirmed::SideUnmarked);
+    }
+    if low32(side_id) != side_handshake {
+        return Err(Unconfirmed::SideNotDirect);
+    }
+    Ok(())
+}
+
 /// The server, as its handshake says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Server {
@@ -539,12 +655,19 @@ pub(crate) struct Opened {
     pub(crate) encryption: Encryption,
     pub(crate) server: Server,
     pub(crate) tracked: Tracked,
-    /// The connection's id on the server (what `KILL QUERY` names).
+    /// The connection's id on the server (what `KILL QUERY` names): `CONNECTION_ID()`, else the
+    /// handshake's when that could not be read.
     pub(crate) id: u64,
     /// A metadata or monitor session whose read-only the server did not keep: what it reported
     /// and answered ([`not_read_only`]). Such a session opens anyway, as it sends only the app's
     /// own fixed reads.
     pub(crate) read_only_unconfirmed: Option<String>,
+    /// The connection's marker ([`MARKER`]), when the server confirmed it on `id`
+    /// ([`own_verdict`]); `None`: not confirmed, and the session is never cancelled from a
+    /// connection of its own.
+    pub(crate) token: Option<String>,
+    /// Whether `CONNECTION_ID()` is the handshake's id (lower 32 bits); `None`: not read.
+    pub(crate) own: Option<bool>,
 }
 
 /// Open a connection to `target` over a stream of `route` with `opts`, check the server's
@@ -555,12 +678,18 @@ pub(crate) struct Opened {
 /// [`datarig_core::driver::ConnectOptions::session_sql`]) before the read-only check, which so
 /// also catches one that turned read-only off; a statement the server refuses fails the open
 /// ([`DbError::SessionSql`]).
+///
+/// The connection carries a marker of its own ([`MARKER`]), and reads its id and where the
+/// server lists the marker in one statement last ([`own_sql`]); a failure of that read leaves
+/// the session unconfirmed ([`Opened::token`]), never fails the open.
 pub(crate) async fn open(
     route: &Route,
     opts: Opts,
     settings: Settings,
     session_sql: &[String],
 ) -> Result<Opened, (DbError, bool)> {
+    let token = token();
+    let opts = marked(&opts, &token);
     let stream = route.dial(DIAL_TIMEOUT).await.map_err(|e| (e, false))?;
     let (wire, conn, encryption) = login(route, stream, opts).await;
     let mut conn = conn.map_err(|e| connect_error(&e))?;
@@ -637,15 +766,13 @@ pub(crate) async fn open(
         }
     }
     // The handshake has the id's lower 32 bits: MySQL's ids have no more, MariaDB's may.
-    let id = match server.mariadb {
-        false => u64::from(conn.id()),
-        true => {
-            let id: Option<u64> =
-                conn.query_first("SELECT CONNECTION_ID()").await.map_err(|e| (my_error(&e), false))?;
-            id.unwrap_or(u64::from(conn.id()))
-        }
+    let handshake = conn.id();
+    let answer: Option<(u64, Option<u64>)> = conn.query_first(own_sql(&token)).await.ok().flatten();
+    let (id, token, own) = match answer {
+        Some((id, marker)) => (id, own_verdict(handshake, id, marker).then_some(token), Some(low32(id) == handshake)),
+        None => (u64::from(handshake), None, None),
     };
-    Ok(Opened { conn, wire, encryption, server, tracked, id, read_only_unconfirmed })
+    Ok(Opened { conn, wire, encryption, server, tracked, id, read_only_unconfirmed, token, own })
 }
 
 /// The handshake and login over `stream` of `route`, through a [`Wire`]: encrypted as the
@@ -882,15 +1009,42 @@ impl Gate {
     }
 }
 
+/// The wire of a cancel's connection ([`Killer::side`]), kept for [`cut`].
+type Held = std::sync::Mutex<Option<Wire>>;
+
+/// Cut the wire `held` keeps, once its connection is done with (quit, failed or given up on): a
+/// connection dropped unquit closes itself on a task of its own, which nothing would time on a
+/// stalled route; on a cut wire it ends at once.
+fn cut(held: &Held) {
+    if let Some(wire) = held.lock().ok().and_then(|mut h| h.take()) {
+        wire.cut();
+    }
+}
+
 /// What a cancel needs: a connection of its own over the session's route, as the session's
 /// user, that runs `KILL QUERY` of the session's connection id. It stops the statement the
-/// session runs, never the session itself, and never another session. What became of the kill
-/// is kept for the session ([`Kill`]), which does not read on after one that did not take.
+/// session runs, never the session itself. The route's name may lead to another server than
+/// the session's (a balanced name, a proxy), where the id is another session's: the kill (and
+/// the read of whether the statement is still there) is sent only once the server that
+/// connection reached confirmed, in the same connection, that the session's marker is on that
+/// id and on no other, and that the connection's own marker is on its own id, the handshake's
+/// ([`side_verdict`]). Not confirmed (the session's own marker was never confirmed, the
+/// `performance_schema` is off or not readable, the marker was not recorded (the server's limits
+/// on connection attributes), the connections are seen as from different client addresses, a
+/// proxy, or on MariaDB an id past 2147483647, which its `PROCESSLIST_ID` there, a signed `INT`,
+/// cannot hold): nothing is sent, and the kill is
+/// [`KillFailure::NotSent`] for [`DbError::CancelUnconfirmed`]. A proxy that passes markers
+/// through and shares the server's connections among its clients cannot be told apart this
+/// way. What became of the kill is kept for the session ([`Kill`]), which does not read on
+/// after one that did not take.
 #[derive(Clone)]
 pub(crate) struct Killer {
     route: Route,
     opts: Opts,
     id: u64,
+    /// The session's marker, when the server confirmed it on `id` ([`Opened::token`]); `None`:
+    /// no kill is ever sent.
+    token: Option<Arc<str>>,
     kill: Arc<watch::Sender<Kill>>,
     /// What the user's kills are sent under ([`Killer::kill_query_if`]), for the session's whole
     /// life: it is never closed, the session waits on it whenever its statement ends
@@ -907,11 +1061,14 @@ impl Killer {
         self.id
     }
 
-    pub(crate) fn new(route: Route, opts: Opts, id: u64) -> Self {
+    /// The killer of connection `id`, whose confirmed marker is `token` (`None`: none, or not
+    /// confirmed: it never sends a kill).
+    pub(crate) fn new(route: Route, opts: Opts, id: u64, token: Option<String>) -> Self {
         Self {
             route,
             opts,
             id,
+            token: token.filter(|t| is_token(t)).map(Arc::from),
             kill: Arc::new(watch::Sender::new(Kill::None)),
             sent: Gate::new(),
             unsent: Arc::default(),
@@ -932,6 +1089,32 @@ impl Killer {
     pub(crate) fn not_sent(&self) -> CancelFailure {
         let why = self.unsent.lock().ok().and_then(|w| w.clone());
         CancelFailure::NotSent(Box::new(why.unwrap_or(DbError::NoAnswer(KILL_TIMEOUT))))
+    }
+
+    /// A connection of the cancel's own, logged in with a marker of its own (returned too). Its
+    /// wire is kept in `held` for [`cut`], once the caller is done with it.
+    async fn side(&self, held: &Held) -> Result<(Conn, String), DbError> {
+        let token = token();
+        let stream = self.route.dial(DIAL_TIMEOUT).await?;
+        let (wire, conn, _) = login(&self.route, stream, marked(&self.opts, &token)).await;
+        if let Ok(mut h) = held.lock() {
+            *h = Some(wire);
+        }
+        let conn = conn.map_err(|e| connect_error(&e).0)?;
+        Ok((conn, token))
+    }
+
+    /// Whether the server `conn` reached confirms that the session's id is the session's and
+    /// that `conn` reached it directly ([`side_verdict`]); `conn` carries the marker `side`.
+    /// Why not otherwise: [`DbError::CancelUnconfirmed`], or the connection's failure.
+    async fn confirm(&self, conn: &mut Conn, side: &str) -> Result<(), DbError> {
+        let Some(session) = self.token.as_deref() else { return Err(DbError::CancelUnconfirmed) };
+        let answer = match conn.query_first::<SideAnswer, _>(side_sql(session, side)).await {
+            Ok(answer) => answer,
+            Err(mysql_async::Error::Server(_)) => None,
+            Err(e) => return Err(my_error(&e)),
+        };
+        side_verdict(self.id, conn.id(), answer).map_err(|_| DbError::CancelUnconfirmed)
     }
 
     /// Ask the server to stop what the session runs. What became of it is kept ([`Kill`]).
@@ -965,10 +1148,19 @@ impl Killer {
                 *w = Some(e);
             }
         };
+        let held = Held::default();
         let kill = async {
-            let stream = self.route.dial(DIAL_TIMEOUT).await.map_err(&why).ok()?;
-            let (_wire, conn, _) = login(&self.route, stream, self.opts.clone()).await;
-            let mut conn = conn.map_err(|e| why(connect_error(&e).0)).ok()?;
+            // Never confirmed: nothing to dial for.
+            if self.token.is_none() {
+                why(DbError::CancelUnconfirmed);
+                return None;
+            }
+            let (mut conn, side) = self.side(&held).await.map_err(&why).ok()?;
+            if let Err(e) = self.confirm(&mut conn, &side).await {
+                why(e);
+                quit(conn).await;
+                return None;
+            }
             let mut sent = None;
             for n in 0..KILL_TRIES {
                 if n > 0 {
@@ -1003,7 +1195,9 @@ impl Killer {
             quit(conn).await;
             Some(sent)
         };
-        let kill = match tokio::time::timeout(KILL_TIMEOUT, kill).await {
+        let ran = tokio::time::timeout(KILL_TIMEOUT, kill).await;
+        cut(&held);
+        let kill = match ran {
             // Not sent: the statement it was for ended.
             Ok(Some(None)) => return,
             Ok(Some(Some(kill))) => kill,
@@ -1024,17 +1218,22 @@ impl Killer {
 
     /// Send the kill again, on a task of its own, after the server refused it: kept only if the
     /// server takes it now (a statement that ran as another account only for a moment), never a
-    /// worse answer. It is sent only while `gate` is open, under its lock ([`Gate`]).
+    /// worse answer. It is sent only while `gate` is open, under its lock ([`Gate`]), and only
+    /// once the server confirmed it as the first one is ([`Killer`]).
     pub(crate) fn try_again(&self, gate: &Arc<Gate>) {
+        if self.token.is_none() {
+            return;
+        }
         let (killer, gate) = (self.clone(), gate.clone());
         tokio::spawn(async move {
+            let held = Held::default();
             let again = async {
-                let stream = killer.route.dial(DIAL_TIMEOUT).await.ok()?;
-                let (_wire, conn, _) = login(&killer.route, stream, killer.opts.clone()).await;
-                let mut conn = conn.ok()?;
-                {
+                let (mut conn, side) = killer.side(&held).await.ok()?;
+                if gate.is_open() {
                     let _sending = gate.sending.lock().await;
-                    if gate.is_open() {
+                    // Confirmed under the lock, right before the kill: another one sent meanwhile
+                    // may have taken its time.
+                    if gate.is_open() && killer.confirm(&mut conn, &side).await.is_ok() {
                         // Set until the answer comes: a kill given up on halfway stays so.
                         let before = gate.unanswered.swap(true, Ordering::SeqCst);
                         let taken = conn.query_drop(format!("KILL QUERY {}", killer.id)).await.is_ok();
@@ -1048,6 +1247,7 @@ impl Killer {
                 Some(())
             };
             let _ = tokio::time::timeout(KILL_TIMEOUT, again).await;
+            cut(&held);
         });
     }
 
@@ -1064,13 +1264,20 @@ impl Killer {
     }
 
     /// Whether the server still has the session's connection running a statement, asked on a
-    /// connection of its own (a user sees their own threads): `false` when it does not, or does
-    /// not answer within [`STILL_THERE_WAIT`].
+    /// connection of its own (a user sees their own threads): `false` when it does not, does
+    /// not answer within [`STILL_THERE_WAIT`], or cannot confirm the id as the session's
+    /// ([`Killer`]).
     pub(crate) async fn still_there(&self) -> bool {
+        if self.token.is_none() {
+            return false;
+        }
+        let held = Held::default();
         let ask = async {
-            let stream = self.route.dial(DIAL_TIMEOUT).await.ok()?;
-            let (_wire, conn, _) = login(&self.route, stream, self.opts.clone()).await;
-            let mut conn = conn.ok()?;
+            let (mut conn, side) = self.side(&held).await.ok()?;
+            if self.confirm(&mut conn, &side).await.is_err() {
+                quit(conn).await;
+                return Some(false);
+            }
             let sql = format!(
                 "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID = {} AND COMMAND = 'Query'",
                 self.id
@@ -1079,7 +1286,9 @@ impl Killer {
             quit(conn).await;
             Some(n == Some(1))
         };
-        matches!(tokio::time::timeout(STILL_THERE_WAIT, ask).await, Ok(Some(true)))
+        let there = matches!(tokio::time::timeout(STILL_THERE_WAIT, ask).await, Ok(Some(true)));
+        cut(&held);
+        there
     }
 
     /// Forget what became of the kills sent so far: a new run, or a kill of the session's own,

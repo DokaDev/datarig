@@ -944,13 +944,16 @@ async fn a_session_is_set_up_in_one_statement() {
         assert!(ran[0].starts_with("SET NAMES utf8mb4, SESSION session_track_system_variables"), "{ran:?}");
         assert!(ran[1..].iter().all(|s| !s.contains("@@SESSION")), "{role:?}: {ran:?}");
         if role == SessionRole::Query {
-            // MariaDB's connection ids are wider than its handshake's 32 bits: the session asks
-            // for its own once, after the `SET`.
-            if is_mariadb(&mut admin).await {
-                assert_eq!(ran[1..], ["SELECT CONNECTION_ID()"], "{ran:?}");
-            } else {
-                assert_eq!(ran.len(), 1, "{ran:?}");
-            }
+            // The session reads its own id and where the server lists its marker once, after
+            // the `SET` (MariaDB's ids are wider than its handshake's 32 bits).
+            assert_eq!(ran.len(), 2, "{ran:?}");
+            assert!(
+                ran[1].starts_with(
+                    "SELECT CONNECTION_ID(), (SELECT IF(COUNT(*) = 1, MIN(PROCESSLIST_ID), NULL) \
+                     FROM performance_schema.session_account_connect_attrs"
+                ),
+                "{ran:?}"
+            );
         }
     }
     admin.disconnect().await.unwrap();
@@ -6724,7 +6727,8 @@ async fn a_cancel_while_a_read_is_admitted_stops_it_unsent() {
     let limit = Some(Duration::from_secs(30));
     let count = |id| DbCommand::Count { id, sql: counted.clone(), limit };
     let plan = |id| DbCommand::Estimate { id, sql: rows.clone() };
-    let not_sent = |written: &str| !written.contains("COUNT(*)") && !written.contains("EXPLAIN");
+    // (The kill's connection reads a `COUNT(*)` of its own first.)
+    let not_sent = |written: &str| !written.contains("COUNT(*) FROM (") && !written.contains("EXPLAIN");
     // MariaDB gives no estimate: refused at once, nothing written.
     let my = mariadb(&url).await;
     if my {

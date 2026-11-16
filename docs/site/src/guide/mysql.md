@@ -40,6 +40,15 @@ A MySQL profile has `driver = "mysql"`, and a URL starts with `mysql://` (or `ma
 stopped returns 1. A cancel the server takes is waited for, however
 long the statement then takes to roll back.
 
+Each of datarig's connections carries a marker of its own (the `datarig_session` connection
+attribute). The cancel's connection sends `KILL QUERY` only once the server it reached lists the
+tab's marker on the id it would stop, and its own marker on its own id, in
+`performance_schema.session_account_connect_attrs`, so a host name that leads to several servers
+does not make it stop another client's statement. A proxy that passes the marker on and shares
+the server's connections among its clients cannot be told apart this way. Where that cannot be
+confirmed (`performance_schema` off, which is MariaDB's default, or not readable; some proxies and
+load balancers), no cancel is sent, and the tab's connection is closed instead.
+
 A statement that runs as another account (in a `SQL SECURITY DEFINER` routine; stopping it
 needs `CONNECTION_ADMIN`) refuses the cancel. If it sends no rows it runs on to its end whatever
 datarig does, and the tab says so and keeps waiting (ask a DBA or the routine's owner to `KILL`
@@ -48,6 +57,7 @@ when:
 
 - the server refuses the cancel and the statement keeps sending rows;
 - the cancel cannot reach the server (its connection does not open);
+- the cancel cannot be confirmed to reach the tab's own session (see above);
 - the server takes the cancel and the statement still sends rows more than 10 seconds later.
 
 Whether the statement then stops is the server's: it may run on, and outside a transaction
