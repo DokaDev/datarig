@@ -34,9 +34,11 @@ pub fn path_names(sql: &str) -> Option<Vec<String>> {
 }
 
 fn visit(o: &serde_json::Map<String, Value>, found: &mut Vec<String>) {
-    // A cast's or a column's type is a field of its own (`type_name`), not a node.
-    if let Some(t) = o.get("type_name") {
-        one_part("type", &t["names"], found);
+    // A cast's, a column's, a parameter's or a result's type is a field of its own, not a node.
+    for key in ["type_name", "arg_type", "return_type", "of_typename"] {
+        if let Some(t) = o.get(key) {
+            one_part("type", &t["names"], found);
+        }
     }
     let Some((kind, body)) = o.iter().next().filter(|_| o.len() == 1) else { return };
     let (label, names) = match kind.as_str() {
@@ -50,6 +52,7 @@ fn visit(o: &serde_json::Map<String, Value>, found: &mut Vec<String>) {
         "FuncCall" => ("function", &body["funcname"]),
         "TypeName" => ("type", &body["names"]),
         "CollateClause" => ("collation", &body["collname"]),
+        "RangeTableSample" => ("function", &body["method"]),
         // `ORDER BY x USING <`.
         "SortBy" => ("operator", &body["use_op"]),
         // `JOIN … USING (c)` and `NATURAL JOIN` compare the columns with an `=` found by name.

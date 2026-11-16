@@ -46,6 +46,10 @@ fn every_kind_left_to_the_path_is_listed() {
         ("SELECT 1 FROM a NATURAL JOIN b", "operator = (JOIN USING)"),
         ("SELECT (1, 2) = (SELECT 1, 2)", "operator ="),
         ("CREATE TABLE t (a text)", "type text"),
+        ("CREATE FUNCTION f(x pg_catalog.int4) RETURNS text LANGUAGE sql AS 'SELECT 1'", "type text"),
+        ("CREATE FUNCTION f(x text) RETURNS pg_catalog.int4 LANGUAGE sql AS 'SELECT 1'", "type text"),
+        ("CREATE TABLE t OF mytype", "type mytype"),
+        ("SELECT 1 FROM pg_catalog.pg_class TABLESAMPLE sampler(1)", "function sampler"),
     ];
     for (sql, name) in cases {
         assert!(names(sql).contains(&name.to_string()), "{sql}: {:?}", names(sql));

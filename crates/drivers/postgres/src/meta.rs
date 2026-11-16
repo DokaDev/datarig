@@ -158,14 +158,13 @@ macro_rules! hidden_schemas {
 /// match of the argument types among all the schemas of the path, so an operator of another
 /// schema that matches the types exactly (`oid >= integer`) would be chosen over the server's
 /// own wherever the path lists that schema. The path itself stays the session's, with
-/// `pg_catalog` first and `pg_temp` last (a relation or type of the session's temporary schema,
-/// searched first while it is not listed, never stands for one of the catalog's): what
-/// `format_type` and `regclass` show as visible is what the session sees. All of this ends with
+/// `pg_catalog` put first: what `format_type` and `regclass` show as visible, and which object a
+/// name the user typed stands for, is what the session sees. All of this ends with
 /// the transaction, so nothing is left on a server connection a pooler hands to another client.
 pub const BEGIN_READ: &str = "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY; SET LOCAL lock_timeout = '2s'; \
      SELECT pg_catalog.set_config('search_path', \
-       CASE WHEN pg_catalog.current_setting('search_path') OPERATOR(pg_catalog.=) '' THEN 'pg_catalog, pg_temp' \
-       ELSE pg_catalog.concat('pg_catalog, ', pg_catalog.current_setting('search_path'), ', pg_temp') END, true); \
+       CASE WHEN pg_catalog.current_setting('search_path') OPERATOR(pg_catalog.=) '' THEN 'pg_catalog' \
+       ELSE pg_catalog.concat('pg_catalog, ', pg_catalog.current_setting('search_path')) END, true); \
      SELECT pg_catalog.set_config('jit', 'off', true) \
      WHERE pg_catalog.current_setting('server_version_num')::int OPERATOR(pg_catalog.>=) 110000";
 

@@ -6887,7 +6887,7 @@ async fn a_catalog_read_puts_pg_catalog_first_on_the_path() {
     begin(&mut c).await;
     assert_eq!(first_cell(&mut c, 100, "SELECT 1 = 1").await.as_deref(), Some("true"), "`pg_catalog` answers");
     let path = first_cell(&mut c, 101, "SELECT pg_catalog.current_setting('search_path')").await;
-    assert_eq!(path, Some(format!("pg_catalog, {schema}, pg_catalog, pg_temp")));
+    assert_eq!(path, Some(format!("pg_catalog, {schema}, pg_catalog")));
     c.run(102, "ROLLBACK").await;
     assert_eq!(first_cell(&mut c, 103, "SELECT 1 = 1").await.as_deref(), Some("false"), "gone with the transaction");
 
@@ -6895,7 +6895,7 @@ async fn a_catalog_read_puts_pg_catalog_first_on_the_path() {
     c.run(104, "SELECT pg_catalog.set_config('search_path', '', false)").await;
     begin(&mut c).await;
     let path = first_cell(&mut c, 105, "SELECT pg_catalog.current_setting('search_path')").await;
-    assert_eq!(path.as_deref(), Some("pg_catalog, pg_temp"));
+    assert_eq!(path.as_deref(), Some("pg_catalog"));
     c.run(106, "ROLLBACK").await;
 }
 

@@ -11,7 +11,13 @@
 mod pg_clean;
 
 use datarig_core::driver::ddl::DdlObject;
-use datarig_core::driver::{ConnectOptions, DbCommand, DbEvent, Driver, Session, SessionContext, SessionRole};
+use datarig_core::driver::ddl::DdlSource;
+use datarig_core::driver::keys::{KeyCatalog, OrderKeys};
+use datarig_core::driver::structure::TableStructure;
+use datarig_core::driver::{
+    ConnectOptions, DbCommand, DbError, DbEvent, Driver, PagingMode, SchemaObjects, Session, SessionContext,
+    SessionRole, TxRule,
+};
 use datarig_core::profile::ConnectionConfig;
 use datarig_driver_postgres::PgDriver;
 use std::io::Write;
@@ -72,25 +78,95 @@ struct Meta {
 }
 
 impl Meta {
-    /// Every event until the first one `pred` matches, that one included.
-    async fn until(&mut self, pred: impl Fn(&DbEvent) -> bool) -> Vec<DbEvent> {
+    /// A metadata session in `schema` (the profile's schema: first on the path after the
+    /// implicit `pg_catalog`).
+    fn open(url: &str, schema: &str, tag: &str) -> Meta {
+        let cfg = ConnectionConfig { name: "it".into(), dsn: Some(url.to_string()), ..ConnectionConfig::test_db() };
+        let context = SessionContext { database: None, schema: Some(schema.to_string()) };
+        let (tx, rx) = unbounded_channel();
+        let opts = ConnectOptions::new(500, SessionRole::Meta, tag).context(context);
+        Meta { session: PgDriver.connect(&cfg, SessionRole::Meta, opts, tx), rx }
+    }
+
+    /// The first event `pick` takes, every other one dropped.
+    async fn next<T>(&mut self, pick: impl Fn(DbEvent) -> Option<T>) -> T {
         let deadline = Instant::now() + Duration::from_secs(30);
-        let mut seen = Vec::new();
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
             match tokio::time::timeout(left, self.rx.recv()).await {
+                Ok(Some(DbEvent::ConnectFailed { error, .. })) => panic!("connect failed: {error:?}"),
                 Ok(Some(ev)) => {
-                    let done = pred(&ev) || matches!(ev, DbEvent::ConnectFailed { .. });
-                    seen.push(ev);
-                    if done {
-                        return seen;
+                    if let Some(t) = pick(ev) {
+                        return t;
                     }
                 }
-                Ok(None) => panic!("event channel closed: {seen:?}"),
-                Err(_) => panic!("timed out: {seen:?}"),
+                Ok(None) => panic!("event channel closed"),
+                Err(_) => panic!("timed out"),
             }
         }
     }
+}
+
+/// What one read answered: a value to compare, or the failure as text.
+#[derive(Debug, PartialEq)]
+enum Answer {
+    Text(String),
+    Keys(KeyCatalog),
+    Objects(SchemaObjects),
+    Structure(Box<TableStructure>),
+    OrderKeys(OrderKeys),
+    Ddl(DdlSource),
+    Failed(String),
+}
+
+fn answer<T>(result: Result<T, DbError>, ok: impl FnOnce(T) -> Answer) -> Answer {
+    result.map_or_else(|e| Answer::Failed(format!("{e:?}")), ok)
+}
+
+/// Every read of the metadata session on the test's schema, in order.
+async fn read_all(url: &str, s: &str, tag: &str) -> Vec<(&'static str, Answer)> {
+    let mut meta = Meta::open(url, s, tag);
+    let text = |r: Result<String, DbError>| answer(r, Answer::Text);
+    let mut out = Vec::new();
+    let schemas = meta.next(|e| if let DbEvent::Schemas(r) = e { Some(r) } else { None }).await;
+    out.push(("schemas", text(schemas.map(|v| format!("{v:?}")))));
+    let catalog = meta.next(|e| if let DbEvent::Catalog(r) = e { Some(r) } else { None }).await;
+    out.push(("catalog", text(catalog.map(|c| format!("{c:?}")))));
+    let keys = meta.next(|e| if let DbEvent::Keys(r) = e { Some(r) } else { None }).await;
+    out.push(("keys", answer(keys, Answer::Keys)));
+    meta.session.send(DbCommand::LoadDatabases);
+    let databases = meta.next(|e| if let DbEvent::Databases(r) = e { Some(r) } else { None }).await;
+    out.push(("databases", text(databases.map(|v| format!("{v:?}")))));
+    meta.session.send(DbCommand::LoadObjects { schema: s.to_string() });
+    let objects = meta.next(|e| if let DbEvent::Objects { result, .. } = e { Some(result) } else { None }).await;
+    out.push(("objects", answer(objects, Answer::Objects)));
+    meta.session.send(DbCommand::LoadStructure { schema: s.to_string(), table: "t".into() });
+    let structure = meta.next(|e| if let DbEvent::Structure { result, .. } = e { Some(result) } else { None }).await;
+    out.push(("structure", answer(structure, Answer::Structure)));
+    meta.session.send(DbCommand::LoadTableKeys { id: 2, schema: s.to_string(), table: "t".into() });
+    let order = meta.next(|e| if let DbEvent::TableKeys { result, .. } = e { Some(result) } else { None }).await;
+    out.push(("order keys", answer(order, Answer::OrderKeys)));
+    let ddl = [
+        ("ddl relation", DdlObject::Relation { schema: s.to_string(), name: "t".into() }),
+        ("ddl index", DdlObject::Index { schema: s.to_string(), name: "t_v".into() }),
+        ("ddl trigger", DdlObject::Trigger { schema: s.to_string(), table: "t".into(), name: "t_touch".into() }),
+        (
+            "ddl trigger function",
+            DdlObject::TriggerFunction { schema: s.to_string(), table: "t".into(), trigger: "t_touch".into() },
+        ),
+        ("ddl named relation", DdlObject::Named { name: "child".into(), schema: Some(s.to_string()) }),
+        ("ddl named function", DdlObject::Named { name: "touch()".into(), schema: Some(s.to_string()) }),
+    ];
+    for (i, (what, object)) in ddl.into_iter().enumerate() {
+        let id = 10 + i as u64;
+        meta.session.send(DbCommand::LoadDdl { id, object });
+        let r = meta.next(|e| match e {
+            DbEvent::Ddl { id: d, result } if d == id => Some(result),
+            _ => None,
+        });
+        out.push((what, answer(r.await, Answer::Ddl)));
+    }
+    out
 }
 
 /// The operators of the schema: `(name, left, right)`, each for the comparison or the
@@ -139,40 +215,39 @@ async fn no_operator_of_a_schema_on_the_path_runs_in_a_catalogue_read() {
             "CREATE OPERATOR {s}.{op} (LEFTARG = {left}, RIGHTARG = {right}, FUNCTION = {s}.planted{i})"
         ));
     }
-    for sql in &setup {
+    let (objects, operators) = setup.split_at(setup.len() - 2 * PLANTED.len());
+    for sql in objects {
         pg_clean::run_fresh(&url, sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
     }
+    let tag = format!("catnames{}", std::process::id());
+    let before = read_all(&url, &s, &tag).await;
+    let failed: Vec<_> = before.iter().filter(|(_, a)| matches!(a, Answer::Failed(_))).collect();
+    assert!(failed.is_empty(), "reads that failed without the operators: {failed:?}");
 
-    // The profile's schema is the session's: first on the path after the implicit `pg_catalog`.
+    for sql in operators {
+        pg_clean::run_fresh(&url, sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    // The operators are live where the schema is on the path: the user's own SQL resolves
+    // through it, as with any client.
     let cfg = ConnectionConfig { name: "it".into(), dsn: Some(url.clone()), ..ConnectionConfig::test_db() };
     let context = SessionContext { database: None, schema: Some(s.clone()) };
-    let tag = format!("catnames{}", std::process::id());
-    let (tx, rx) = unbounded_channel();
-    let opts = ConnectOptions::new(500, SessionRole::Meta, &tag).context(context.clone());
-    let session = PgDriver.connect(&cfg, SessionRole::Meta, opts, tx);
-    // A query session in the same schema: the operators are live there (the user's own SQL
-    // resolves through the path, as with any client).
     let (qtx, mut qrx) = unbounded_channel();
-    let qopts = ConnectOptions::new(500, SessionRole::Query, &tag).context(context);
-    let query = PgDriver.connect(&cfg, SessionRole::Query, qopts, qtx);
-    let mut meta = Meta { session, rx };
-    loop {
-        match tokio::time::timeout(Duration::from_secs(30), qrx.recv()).await {
-            Ok(Some(DbEvent::Connected)) => break,
-            Ok(Some(DbEvent::ConnectFailed { error, .. })) => panic!("{error:?}"),
-            Ok(Some(_)) => {}
-            other => panic!("{other:?}"),
-        }
-    }
+    let query = PgDriver.connect(
+        &cfg,
+        SessionRole::Query,
+        ConnectOptions::new(500, SessionRole::Query, &tag).context(context),
+        qtx,
+    );
     query.send(DbCommand::Execute {
         id: 1,
         statements: vec!["SELECT 1::oid <> 0".into()],
-        paging: datarig_core::driver::PagingMode::Hold,
-        tx: datarig_core::driver::TxRule::Auto,
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
         max_rows: None,
     });
     let live = loop {
         match tokio::time::timeout(Duration::from_secs(30), qrx.recv()).await {
+            Ok(Some(DbEvent::ConnectFailed { error, .. })) => panic!("{error:?}"),
             Ok(Some(ev @ (DbEvent::Failed { .. } | DbEvent::Page { .. }))) => break ev,
             Ok(Some(_)) => {}
             other => panic!("{other:?}"),
@@ -180,45 +255,10 @@ async fn no_operator_of_a_schema_on_the_path_runs_in_a_catalogue_read() {
     };
     assert!(format!("{live:?}").contains("zz_catnames planted"), "the schema's operators are live: {live:?}");
 
-    let mut events = meta.until(|e| matches!(e, DbEvent::Keys(_))).await;
-    meta.session.send(DbCommand::LoadDatabases);
-    events.extend(meta.until(|e| matches!(e, DbEvent::Databases(_))).await);
-    meta.session.send(DbCommand::LoadObjects { schema: s.clone() });
-    events.extend(meta.until(|e| matches!(e, DbEvent::Objects { .. })).await);
-    meta.session.send(DbCommand::LoadStructure { schema: s.clone(), table: "t".into() });
-    events.extend(meta.until(|e| matches!(e, DbEvent::Structure { .. })).await);
-    meta.session.send(DbCommand::LoadTableKeys { id: 2, schema: s.clone(), table: "t".into() });
-    events.extend(meta.until(|e| matches!(e, DbEvent::TableKeys { .. })).await);
-    let ddl = [
-        DdlObject::Relation { schema: s.clone(), name: "t".into() },
-        DdlObject::Index { schema: s.clone(), name: "t_v".into() },
-        DdlObject::Trigger { schema: s.clone(), table: "t".into(), name: "t_touch".into() },
-        DdlObject::TriggerFunction { schema: s.clone(), table: "t".into(), trigger: "t_touch".into() },
-        DdlObject::Named { name: "child".into(), schema: Some(s.clone()) },
-        DdlObject::Named { name: "touch()".into(), schema: Some(s.clone()) },
-    ];
-    for (i, object) in ddl.into_iter().enumerate() {
-        let id = 10 + i as u64;
-        meta.session.send(DbCommand::LoadDdl { id, object });
-        events.extend(meta.until(|e| matches!(e, DbEvent::Ddl { id: d, .. } if *d == id)).await);
+    // Every read answers what it answered without them.
+    let after = read_all(&url, &s, &tag).await;
+    for ((what, a), (_, b)) in before.iter().zip(&after) {
+        assert_eq!(a, b, "{what}");
     }
-
-    let failed: Vec<String> = events
-        .iter()
-        .map(|e| format!("{e:?}"))
-        .filter(|e| e.contains("zz_catnames planted") || e.contains("Err(") || e.contains("ConnectFailed"))
-        .collect();
-    assert!(failed.is_empty(), "reads that failed:\n{}", failed.join("\n"));
-    let objects = events.iter().find_map(|e| match e {
-        DbEvent::Objects { result: Ok(o), .. } => Some(o),
-        _ => None,
-    });
-    let objects = objects.expect("the schema's objects");
-    assert_eq!(objects.tables, ["child", "t"]);
-    assert_eq!(objects.stats["t"].rows, Some(20), "the estimates are read");
-    let schemas = events.iter().find_map(|e| match e {
-        DbEvent::Schemas(Ok(list)) => Some(list.clone()),
-        _ => None,
-    });
-    assert!(schemas.expect("the schemas").contains(&s), "the schema is listed");
+    assert!(matches!(&before[4].1, Answer::Objects(o) if o.stats["t"].rows == Some(20)), "the estimates are read");
 }
