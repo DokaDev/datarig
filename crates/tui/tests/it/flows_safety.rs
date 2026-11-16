@@ -65,7 +65,11 @@ fn a_read_only_policy_refuses_what_may_write_and_sends_nothing() {
         ("BEGIN READ WRITE", "this statement asks for a read-write transaction"),
         (
             "SET app.tenant = '1'",
-            "this statement sets app.tenant, a setting of an extension or a custom one: on a read-only profile set it in the profile's Startup SQL",
+            "this statement changes app.tenant, a setting of an extension or a custom one: on a read-only profile only the profile's Startup SQL sets it",
+        ),
+        (
+            "RESET ALL",
+            "this statement resets every setting, those of extensions and custom ones too, which on a read-only profile only the profile's Startup SQL sets",
         ),
         ("SET session_replication_role = replica", "this setting is not on the read-only allowlist"),
     ] {

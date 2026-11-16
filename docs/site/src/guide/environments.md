@@ -13,8 +13,10 @@
   not a read, transaction control or a safe session setting, and any call of a function by a
   name that is not a built-in's, naming the function. On PostgreSQL a typed setting of an
   extension or a custom one (a name with a `.`: `SET app.tenant = '1'`, `SET LOCAL pgaudit.log =
-  'none'`, `set_config()` of one) is refused too; set it in the profile's [Startup
-  SQL](startup-sql.md), where it is allowed. `set_config()` follows the same list of safe
+  'none'`, `RESET pgaudit.log`, `set_config()` of one) is refused too, and so are `RESET ALL`
+  and `DISCARD ALL`, which would reset such settings as well; set such a setting in the
+  profile's [Startup SQL](startup-sql.md), where it is allowed. A `set_config()` whose setting
+  is not named with a constant asks before it runs. `set_config()` follows the same list of safe
   settings as `SET`. Every transaction of a read-only profile is opened `READ ONLY`, so the
   server refuses the session's own changes to data in the database, also those of a function the
   check does not see (one reached through a view, a trigger, an operator, a cast or attribute

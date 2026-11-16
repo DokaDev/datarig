@@ -358,6 +358,7 @@ pub fn blocked_msg(why: &ReadOnlyBlock) -> Msg {
         ReadOnlyBlock::UnknownFunction(function) => {
             return Msg::SafetyBlockedUnknownFunction { function: function.clone() };
         }
+        ReadOnlyBlock::ResetAll => Label::SafetyBlockedResetAll,
         ReadOnlyBlock::CustomSetting(setting) => {
             return Msg::SafetyBlockedCustomSetting { setting: setting.clone() };
         }

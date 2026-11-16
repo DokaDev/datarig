@@ -128,7 +128,8 @@ an error shows the words its connect would refuse with.
   several statements in one item. In a read-only environment only the settings a read-only
   session may change at all, and on PostgreSQL a setting of an extension or a custom one (a
   name with a `.`, such as `SET app.tenant = '1'` for row-level security policies): a read-only
-  profile refuses that one typed, so the Startup SQL is where it goes.
+  profile refuses that one typed (set or reset, and `RESET ALL` or `DISCARD ALL` too), so the
+  Startup SQL is where it goes.
 - **Not datarig's own settings.** What datarig manages itself is refused, with why and where to
   set it instead:
   - MySQL's `interactive_timeout`: it has no effect on an open session; set `wait_timeout`

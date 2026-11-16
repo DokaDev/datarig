@@ -364,9 +364,8 @@ fn read_only_verdicts() {
         "SET TIME ZONE 'UTC'",
         "SET SCHEMA 'shop'",
         "SET ROLE reader",
-        "RESET ALL",
         "RESET search_path",
-        "DISCARD ALL",
+        "DISCARD PLANS",
         "SET default_transaction_read_only = on",
         "SET transaction_read_only TO true",
         "SHOW default_transaction_read_only",
@@ -444,8 +443,42 @@ fn read_only_refuses_custom_settings_and_set_config_off_the_allowlist() {
     assert_eq!(ok("SELECT set_config('synchronous_commit', 'off', true)"), Err(ReadOnlyBlock::Setting));
     assert!(ok("SELECT set_config(current_user, 'x', false)").is_err());
     assert!(ok("SELECT set_config(name, 'x', false) FROM t").is_err());
-    // `RESET` of one goes back to its default.
-    assert_eq!(ok("RESET app.tenant"), Ok(()));
+    // Reset, set to its default or from the current value: what the profile's Startup SQL set
+    // would not hold either.
+    for (sql, name) in [
+        ("RESET app.tenant", "app.tenant"),
+        ("RESET pgaudit.log", "pgaudit.log"),
+        ("SET app.x TO DEFAULT", "app.x"),
+        ("SET LOCAL app.x = DEFAULT", "app.x"),
+        ("SET app.x FROM CURRENT", "app.x"),
+    ] {
+        assert_eq!(ok(sql), Err(ReadOnlyBlock::CustomSetting(name.into())), "{sql}");
+    }
+    // As does a reset of every setting.
+    for sql in ["RESET ALL", "DISCARD ALL"] {
+        assert_eq!(ok(sql), Err(ReadOnlyBlock::ResetAll), "{sql}");
+        assert_eq!(classify(sql).confirm(false), None, "typed it does not ask: {sql}");
+    }
+    assert_eq!(ok("RESET work_mem"), Ok(()));
+}
+
+/// `set_config()` of a setting it names through a cast reads the name; one whose name is not a
+/// constant may be any setting, so it asks.
+#[test]
+fn set_config_names_through_casts_and_asks_when_unnamed() {
+    for sql in [
+        "SELECT set_config('session_replication_role'::text, 'replica', false)",
+        "SELECT set_config(CAST('session_replication_role' AS pg_catalog.text), 'replica', true)",
+        "SELECT set_config(current_user, 'x', false)",
+        "SELECT set_config(name, 'x', true) FROM t",
+    ] {
+        assert_eq!(classify(sql).confirm(false), Some(Why::Danger(Danger::Setting)), "{sql}");
+        assert!(classify(sql).read_only().is_err(), "{sql}");
+    }
+    // A safe setting through a cast: as before, it does not ask (read-only refuses it, as the
+    // read-only settings' check does not read through casts).
+    let r = classify("SELECT set_config('work_mem'::text, '1MB', true)");
+    assert_eq!((r.confirm(false), r.read_only()), (None, Err(ReadOnlyBlock::ReadWrite)));
 }
 
 #[test]
@@ -1714,7 +1747,7 @@ fn what_cannot_run_in_a_transaction_block() {
     // Only the flag: the rest of the verdict is as before.
     assert_eq!(classify("VACUUM t").class, Class::Maintenance);
     assert_eq!(classify("DROP INDEX CONCURRENTLY i").danger, Some(Danger::Drop));
-    assert_eq!(classify("DISCARD ALL").read_only(), Ok(()));
+    assert_eq!(classify("DISCARD ALL").read_only(), Err(ReadOnlyBlock::ResetAll));
     assert_eq!(classify("COMMIT PREPARED 'x'").read_only(), Err(ReadOnlyBlock::ReadWrite));
 }
 
