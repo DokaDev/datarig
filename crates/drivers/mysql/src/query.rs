@@ -2336,6 +2336,28 @@ fn keeps_next(s: &State, open: bool) -> Result<(), DbError> {
     if !open && s.tracked.next_once { Err(DbError::NextTransactionSet) } else { Ok(()) }
 }
 
+/// Refused ([`DbError::LockingRead`]) when a read of the app's own would lock the rows it reads:
+/// it runs in the user's transaction (one open before it, `was_open`, or open now) whose level
+/// is `SERIALIZABLE` or not known (InnoDB reads every row of such a transaction with a shared
+/// lock). With autocommit off and none open it runs in a transaction of its own at `REPEATABLE
+/// READ` ([`read_own_as`]), which reads without locks.
+fn no_locking_read(s: &State, was_open: bool) -> Result<(), DbError> {
+    let in_tx = was_open || s.tx.open;
+    let plain = matches!(
+        s.tracked.isolation(),
+        Some(Isolation::ReadUncommitted | Isolation::ReadCommitted | Isolation::RepeatableRead)
+    );
+    if in_tx && !plain { Err(DbError::LockingRead) } else { Ok(()) }
+}
+
+/// Whether a read of the app's own in the user's transaction reads its snapshot: one is open
+/// and the server says its level is `REPEATABLE READ` (InnoDB's consistent read for the whole
+/// transaction). `READ COMMITTED` reads the latest committed rows at each statement, and
+/// `SERIALIZABLE` is refused before ([`no_locking_read`]).
+fn in_snapshot(s: &State, asked: &Asked) -> bool {
+    s.tx.open && asked.isolation == "REPEATABLE-READ"
+}
+
 /// Whether a transaction is open on the session before a read of the app's own: the user's
 /// tracked transaction, or one the server says is open (the status flags of its last answer, or
 /// of a `COM_PING` when there is none). Open when the server cannot say: the read then keeps to
@@ -2391,8 +2413,10 @@ async fn begin_own(
 
 /// Count with `sql` (the app's `SELECT COUNT(*) FROM (…) AS datarig_count` of a statement on the
 /// allowlist, checked again here): one statement, after the allowlist's question. Inside the
-/// user's transaction at `REPEATABLE READ` or `SERIALIZABLE` it counts in the transaction's
-/// snapshot (InnoDB's consistent read), which the answer says. Outside it, with autocommit the
+/// user's transaction at `REPEATABLE READ` it counts in the transaction's snapshot (InnoDB's
+/// consistent read), which the answer says ([`in_snapshot`]); at `SERIALIZABLE` or a level not
+/// known it would lock every row it reads until the user ends the transaction, so it is refused
+/// unsent ([`no_locking_read`]). Outside it, with autocommit the
 /// statement is a consistent read of its own; without autocommit it would open a transaction
 /// (locking every row it reads at `SERIALIZABLE`) and leave it open, so when no transaction was
 /// open before ([`open_before`]) it counts in a read-only one of its own ([`begin_own`]) that it
@@ -2413,11 +2437,14 @@ async fn count(
     if let Err(why) = keeps_next(s, was_open) {
         return Ok((Err(why), false));
     }
+    if let Err(why) = no_locking_read(s, was_open) {
+        return Ok((Err(why), false));
+    }
     let asked = match asked_server(conn, link, env, s, sql).await? {
         Ok(asked) => asked,
         Err(why) => return Ok((Err(why), false)),
     };
-    let snapshot = s.tx.open && matches!(asked.isolation.as_str(), "REPEATABLE-READ" | "SERIALIZABLE");
+    let snapshot = in_snapshot(s, &asked);
     let bounded = limit.and_then(|l| bounded_select(sql, l, &asked, env.server.mariadb, ""));
     let (text, applied) = match &bounded {
         Some((text, applied)) => (text.as_str(), Some(*applied)),
