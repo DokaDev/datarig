@@ -8,9 +8,10 @@
 //! them, and every later statement on that table waits behind the `ALTER`). So the last
 //! statement of a run runs with `sql_select_limit` at a page and one row more: the server stops
 //! the result there, the statement ends, and with it every lock it took; the extra row says that
-//! more follow (`DbEvent::Released` comes before such a page). The limit never changes what a
-//! write does (it applies to a `SELECT`'s own result only, not to subqueries, `INSERT … SELECT` or
-//! stored routines), and a `LIMIT` of the user's own wins. A result the limit does not stop
+//! more follow (`DbEvent::Released` comes before such a page). The limit applies to a `SELECT`'s
+//! own result only (not to subqueries, `INSERT … SELECT` or stored routines), but it does cut what
+//! a top-level `SELECT` does row by row (`INTO OUTFILE`, a stored function that writes): only a
+//! plain read gets it, anything else is read to its end. A `LIMIT` of the user's own wins. A result the limit does not stop
 //! (`SHOW`, a procedure's, a larger `LIMIT`) is read to its end and only its first page kept. Past
 //! the first page the app can only run the statement again (`Resume`: the limit then covers the
 //! rows it has too, which are read and dropped). The limit is the session's, set only when the
@@ -105,7 +106,7 @@ use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_core::sql::lexer::{Tok, Token, lex_in};
 use datarig_core::sql::risk::mysql as risk;
 use datarig_core::sql::risk::repeat::NotRepeatable;
-use datarig_core::sql::risk::{Class, Danger};
+use datarig_core::sql::risk::{Class, Danger, Risk};
 use futures::future::BoxFuture;
 use mysql_async::consts::StatusFlags;
 use mysql_async::prelude::Queryable;
@@ -951,10 +952,16 @@ async fn statement<'a>(
         }
     }
     // The result is held: the user's transaction, a held last statement, a listing the app
-    // cannot read on by running it again (`SHOW`, `DESCRIBE`), or a locking read (the limit
-    // would lock fewer rows than asked, and its next page would lock them again): read to its
-    // end.
-    let held = step.last && (step.hold || s.tx.open || lists(sql, s.mode) || locking(sql, s.mode));
+    // cannot read on by running it again (`SHOW`, `DESCRIBE`), a locking read (the limit
+    // would lock fewer rows than asked, and its next page would lock them again), or a query
+    // the limit applies to that is not a plain read ([`pages_plainly`]: the limit would cut
+    // what it does, not only what it shows): read to its end.
+    let held = step.last
+        && (step.hold
+            || s.tx.open
+            || lists(sql, s.mode)
+            || locking(sql, s.mode)
+            || (limit_applies(sql, s.mode) && !pages_plainly(&risk, sql, s.mode)));
     // The limit: a page and one row more (within the result's cap: [`page_want`]), and the rows
     // a `Resume` skips, for a last statement not held; the cap (and the rows skipped) for a held
     // one that has one, so the server reads no row past it either; else the user's own. Never
@@ -1920,6 +1927,21 @@ fn reads_outcome(sql: &str, mode: MySqlMode) -> bool {
             && matches!(w[0].text(sql).to_ascii_uppercase().as_str(), "ROW_COUNT" | "FOUND_ROWS")
             && w[1].kind == Tok::LParen
     })
+}
+
+/// Whether the paging limit (`sql_select_limit` at a page and one row more) only cuts what `sql`
+/// shows: a plain read, as the classifier reads it (`risk`). Not one that writes (`SELECT … INTO
+/// OUTFILE` or `DUMPFILE`, whose file the limit would cut while the run says it succeeded), sets
+/// variables (`SELECT … INTO @v`), runs code the text does not show (a stored or loadable
+/// function, which would run for the rows up to the limit only, an `EXECUTE`, an executable
+/// comment), or that the classifier cannot read: such a statement runs without the app's limit
+/// and its result is read to its end.
+fn pages_plainly(r: &Risk, sql: &str, mode: MySqlMode) -> bool {
+    r.class == Class::Read
+        && !r.writes
+        && !r.read_write
+        && r.read_only().is_ok()
+        && !runs_server_code(sql, mode, r.runs_code)
 }
 
 /// Whether `sql` reads with a locking clause (`FOR UPDATE`, `FOR SHARE`, `LOCK IN SHARE MODE`).

@@ -342,3 +342,35 @@ fn mariadbs_bounded_read_fits_its_version_and_the_sessions_own_limits() {
     assert_eq!(text, "SET STATEMENT max_statement_time = 0.0005, lock_wait_timeout = 1 FOR SELECT 1");
     assert_eq!(applied, tiny);
 }
+
+#[test]
+fn only_plain_reads_get_the_paging_limit() {
+    for mode in [MODE, MySqlMode { mariadb: true, ..MODE }] {
+        for sql in [
+            "SELECT * FROM t",
+            "select id, upper(name) from t where id > 3 order by id",
+            "WITH x AS (SELECT 1 AS a) SELECT * FROM x",
+            "TABLE t",
+            "VALUES ROW(1), ROW(2)",
+            "(SELECT 1) UNION (SELECT 2)",
+        ] {
+            assert!(pages_plainly(&risk::classify(sql, mode), sql, mode), "{sql}");
+        }
+        for sql in [
+            // The limit would cut the file the server writes.
+            "SELECT * FROM t INTO OUTFILE '/tmp/t.csv'",
+            "SELECT * FROM t INTO DUMPFILE '/tmp/t.bin'",
+            "TABLE t INTO OUTFILE '/tmp/t.csv'",
+            "SELECT * INTO OUTFILE '/tmp/t.csv' FROM t",
+            // Sets the session's variables.
+            "SELECT id INTO @v FROM t LIMIT 1",
+            // A function the text does not show would run for the rows up to the limit only.
+            "SELECT shop.process(id) FROM t",
+            "SELECT id FROM t WHERE zz_f(id) > 0",
+            // Code the classifier does not read.
+            "/*!80000 SELECT zz_f(id) FROM t */",
+        ] {
+            assert!(!pages_plainly(&risk::classify(sql, mode), sql, mode), "{sql}");
+        }
+    }
+}
