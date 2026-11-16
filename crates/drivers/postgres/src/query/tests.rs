@@ -1244,6 +1244,52 @@ mod terminal {
         );
     }
 
+    /// Extension types' columns (`citext`, `hstore`) hold no dates, as the server's kinds of
+    /// them say (base types), and are read as plain text; a composite with a date field holds
+    /// dates the driver does not tell apart. Makes database `zz_ext_<pid>` and drops it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn extension_types_hold_no_dates_and_a_composite_with_one_is_not_known() {
+        use datarig_core::driver::Dated;
+        let Some(url) = pg_url("extension_types_hold_no_dates_and_a_composite_with_one_is_not_known") else { return };
+        let db = format!("zz_ext_{}", std::process::id());
+        struct DropDb(String, String);
+        impl Drop for DropDb {
+            fn drop(&mut self) {
+                let (url, db) = (self.0.clone(), self.1.clone());
+                let _ = std::thread::spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                    rt.block_on(async {
+                        let (c, ..) = connect(&url).await;
+                        let _ = c.batch_execute(&format!("DROP DATABASE IF EXISTS {db} WITH (FORCE)")).await;
+                    });
+                })
+                .join();
+            }
+        }
+        let _guard = DropDb(url.clone(), db.clone());
+        let (c, ..) = connect(&url).await;
+        c.batch_execute(&format!("CREATE DATABASE {db}")).await.expect("database");
+        let in_db = format!("{}/{db}", url.rsplit_once('/').map_or(url.as_str(), |(base, _)| base));
+        let (c, ..) = connect(&in_db).await;
+        c.batch_execute("CREATE EXTENSION citext; CREATE EXTENSION hstore; CREATE TYPE zz_stay AS (night date)")
+            .await
+            .expect("setup");
+        drop(c);
+        let mut s = Session::open(&in_db).await;
+        let sql = "SELECT 'a'::citext, 'a=>1'::hstore, ARRAY['b'::citext], ROW('2026-01-02')::zz_stay";
+        let events = s.run_all(&[sql], None).await;
+        let cols = events.iter().find_map(|e| match e {
+            DbEvent::Page { columns: Some(cols), .. } => Some(cols.clone()),
+            _ => None,
+        });
+        let cols = cols.unwrap_or_else(|| panic!("no rows: {events:?}"));
+        for c in &cols[..3] {
+            assert_eq!((c.dated, c.styled), (Dated::No, false), "{}", c.type_name);
+        }
+        assert_eq!((cols[3].dated, cols[3].styled), (Dated::Unknown, true), "{}", cols[3].type_name);
+        drop(s);
+    }
+
     /// A run that ends without its terminal event (a bug) still answers: the dropped `Reply`
     /// sends `NoResult`, and a debug build says so loudly.
     #[test]

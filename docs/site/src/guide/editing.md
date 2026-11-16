@@ -477,8 +477,14 @@ form the server reads the same whatever its `DateStyle`, `TimeZone` and `Interva
 statement runs: dates as `2026-01-02`, times with a time zone with their offset
 (`2026-01-02 10:00:00+09`), intervals in ISO 8601 (`P1DT2H`); `infinity` and `empty` are fine.
 Other text is kept, marked invalid with the form to use, and not applied. A column of a type
-whose dates the app cannot tell (a composite holding one, an extension's type) takes no
-text from here.
+whose dates the app cannot tell (a composite holding one, a pseudo-type) takes no text from
+here; base types that hold no dates (`citext`, `hstore`, `ltree`, PostGIS geometry) are edited
+as before.
+
+Text put into such a column of a result read in other settings than the session's now (or in
+settings not known), by any path (typed, pasted from the clipboard or the grid, cloned), is
+refused: the cell's text, which the change is compared with, may be the same bytes for another
+value. Both in ISO is fine. Run the query again first.
 
 A time with a time zone (a `timestamptz` or `timetz` in a range, an array or a composite, or a
 type the driver cannot tell) written in a `DateStyle` other than ISO carries the zone's

@@ -27,3 +27,6 @@
   intervals), since a trigger may change them while the changes are applied; other text is
   marked invalid, saying which form to use. A type whose dates the app cannot tell takes no
   text from the grid.
+- PostgreSQL: columns of base types that hold no dates (`citext`, `hstore`, `ltree`, geometry)
+  stay editable; text typed or pasted from the clipboard into a date column of a result read
+  in other settings than the session's now is refused, as a paste from the grid is.

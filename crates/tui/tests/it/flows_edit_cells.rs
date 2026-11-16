@@ -2061,7 +2061,11 @@ fn a_pg_row_cloned_as_read_keeps_the_settings_of_its_result() {
         h.key(KeyCode::Esc);
         h.keys("O");
         h.app.transient = None;
-        let id = edits(&h).batch.drafts().first().map(|d| d.id).expect("a new row");
+        let Some(id) = edits(&h).batch.drafts().first().map(|d| d.id) else {
+            // Read in settings not known: the clone itself is refused.
+            assert!(!valid && read.is_none(), "{read:?}");
+            continue;
+        };
         let invalid = |h: &Harness| h.app.shown_invalid().is_some_and(|i| i.cells.contains_key(&(RowAt::New(id), 2)));
         assert_eq!(!invalid(&h), valid, "{read:?}");
         h.db(DbEvent::TextStyle(Some(pg_style("SQL, MDY"))));
@@ -2254,12 +2258,95 @@ fn a_pg_value_of_a_column_holding_dates_is_applied_only_in_a_form_read_the_same_
             wrong.push(format!("{ty} {value} {into:?}: sent {sent}, {why:?}"));
         }
     }
-    // A type whose dates the driver cannot tell (an extension's): none applied from here.
-    let (why, sent) = pg_applies("hstore", ValueKind::Other, Dated::Unknown, "a=>1", Into::Typed);
+    // A type whose dates the driver cannot tell (a composite with a date field): none applied
+    // from here.
+    let (why, sent) = pg_applies("zz_stay", ValueKind::Other, Dated::Unknown, "(2026-01-02)", Into::Typed);
     if sent
         || !why.as_ref().is_some_and(|w| w.contains("a type whose text may hold dates or times the app cannot check"))
     {
-        wrong.push(format!("hstore a=>1: sent {sent}, {why:?}"));
+        wrong.push(format!("zz_stay (2026-01-02): sent {sent}, {why:?}"));
     }
     assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// Columns of an extension's base types (`citext`, `hstore`), which hold no dates, take any
+/// text, typed or pasted, as before.
+#[test]
+fn a_pg_extension_type_holding_no_dates_stays_editable() {
+    use datarig_core::driver::Dated;
+    for (ty, value, into) in [
+        ("citext", "Ann Lee", Into::Typed),
+        ("citext", "02/01/2026", Into::Pasted),
+        ("hstore", "a=>1", Into::Typed),
+        ("hstore", "b=>2", Into::Pasted),
+    ] {
+        let (why, sent) = pg_applies(ty, ValueKind::Other, Dated::No, value, into);
+        assert_eq!((why, sent), (None, true), "{ty} {value} {into:?}");
+    }
+}
+
+/// A result read in `SQL, MDY`, its range pending as an ISO value typed then; the session reads
+/// `SQL, DMY` now. Text put into the cell by any path is compared with the cell's text as read
+/// to tell whether it changes anything, so the same bytes meant as other dates are refused.
+fn pg_read_in_mdy_with_an_iso_edit() -> Harness {
+    use datarig_core::driver::{DatePart, Dated};
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    h.db(DbEvent::TextStyle(Some(pg_style("SQL, MDY"))));
+    let mut columns = users_columns();
+    columns[2] = ColumnMeta {
+        kind: ValueKind::Other,
+        styled: true,
+        dated: Dated::Of(DatePart::Date),
+        ..meta_from("nickname", "daterange", false, USERS, 4)
+    };
+    let rows = vec![vec![s("1"), s("a@x"), s("[02/01/2026,05/01/2026)")]];
+    answer(&mut h, "SELECT id, email, nickname FROM shop.users", columns, rows);
+    if let Some(id) = h.sent().into_iter().find_map(|c| match c {
+        DbCommand::CheckRepeat { id, .. } => Some(id),
+        _ => None,
+    }) {
+        h.db(DbEvent::RepeatChecked { id, result: Ok(()) });
+    }
+    let mut st = users_structure();
+    st.columns[3].type_name = "daterange".into();
+    h.keys("lle");
+    structure(&mut h, Ok(st));
+    for _ in 0.."[02/01/2026,05/01/2026)".len() {
+        h.key(KeyCode::Backspace);
+    }
+    h.type_text("[2026-03-01,2026-03-02)");
+    h.key(KeyCode::Enter);
+    assert_eq!(value(&h, 0, 2), Some(Value::Text("[2026-03-01,2026-03-02)".into())));
+    h.db(DbEvent::TextStyle(Some(pg_style("SQL, DMY"))));
+    h.app.transient = None;
+    h
+}
+
+const READ_ELSEWHERE: &str = "column \u{201C}nickname\u{201D} of this result was read in DateStyle SQL, MDY, IntervalStyle \
+                              postgres, TimeZone UTC, and the session now reads such text in DateStyle SQL, DMY, \
+                              IntervalStyle postgres, TimeZone UTC: run the query again first";
+
+#[test]
+fn a_pg_clipboard_paste_into_a_result_read_in_other_settings_is_refused() {
+    let mut h = pg_read_in_mdy_with_an_iso_edit();
+    h.event(Event::Paste("[02/01/2026,05/01/2026)".to_string()));
+    h.keys("1");
+    let said = said_text(&mut h);
+    assert!(said.contains(READ_ELSEWHERE), "{said}");
+    assert_eq!(value(&h, 0, 2), Some(Value::Text("[2026-03-01,2026-03-02)".into())), "the edit stays");
+}
+
+#[test]
+fn a_pg_value_typed_into_a_result_read_in_other_settings_is_refused() {
+    let mut h = pg_read_in_mdy_with_an_iso_edit();
+    h.keys("e");
+    for _ in 0.."[2026-03-01,2026-03-02)".len() {
+        h.key(KeyCode::Backspace);
+    }
+    h.type_text("[02/01/2026,05/01/2026)");
+    h.key(KeyCode::Enter);
+    let said = said_text(&mut h);
+    assert!(said.contains(READ_ELSEWHERE), "{said}");
+    assert_eq!(value(&h, 0, 2), Some(Value::Text("[2026-03-01,2026-03-02)".into())), "the edit stays");
 }

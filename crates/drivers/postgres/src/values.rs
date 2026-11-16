@@ -173,6 +173,7 @@ pub fn dated(ty: &Type) -> datarig_core::driver::Dated {
         Type::TIME => Dated::Of(DatePart::Time),
         Type::TIMETZ => Dated::Of(DatePart::TimeTz),
         Type::INTERVAL => Dated::Of(DatePart::Interval),
+        // A pseudo-type, or a kind not known here.
         _ => Dated::Unknown,
     }
 }
@@ -195,81 +196,25 @@ fn zoned_text(ty: &Type) -> bool {
 
 /// Whether PostgreSQL's text output of `ty` may depend on `DateStyle`, `IntervalStyle` or
 /// `TimeZone`: a date, time, timestamp or interval, a range, multirange, array or domain of
-/// one, a composite with such a field. A built-in type known to hold none (numbers, text,
-/// geometry, network addresses, ranges of numbers), and an enum (its labels), do not; any other
-/// type (a pseudo-type such as an anonymous `record`, an extension's type, one not known here)
-/// may, as far as this code can tell.
+/// one, a composite with such a field. Any other base type (numbers, text, geometry, network
+/// addresses, an extension's `citext` or `hstore`, the database's own), a range of one and an
+/// enum (its labels) do not; a pseudo-type (an anonymous `record`) and a kind not known here may,
+/// as far as this code can tell. The kinds come with the column's type, which the connection
+/// looks up once per type and keeps (no round trip of its own).
 fn styled_text(ty: &Type) -> bool {
     match ty.kind() {
-        Kind::Array(inner) | Kind::Range(inner) | Kind::Multirange(inner) | Kind::Domain(inner) => {
-            return styled_text(inner);
+        Kind::Array(inner) | Kind::Range(inner) | Kind::Multirange(inner) | Kind::Domain(inner) => styled_text(inner),
+        Kind::Composite(fields) => fields.iter().any(|f| styled_text(f.type_())),
+        Kind::Enum(_) => false,
+        // A base type (the server's `typtype` `b`, built-in, an extension's such as `citext`,
+        // `hstore`, `ltree`, or the database's own): only the server's dates and times hold
+        // them; any other base type's text is its own.
+        Kind::Simple => {
+            matches!(*ty, Type::DATE | Type::TIME | Type::TIMETZ | Type::TIMESTAMP | Type::TIMESTAMPTZ | Type::INTERVAL)
         }
-        Kind::Composite(fields) => return fields.iter().any(|f| styled_text(f.type_())),
-        Kind::Enum(_) => return false,
-        _ => {}
+        // A pseudo-type (an anonymous `record`), and any kind not known here.
+        _ => true,
     }
-    !matches!(
-        *ty,
-        Type::BOOL
-            | Type::BYTEA
-            | Type::CHAR
-            | Type::NAME
-            | Type::INT8
-            | Type::INT2
-            | Type::INT2_VECTOR
-            | Type::INT4
-            | Type::REGPROC
-            | Type::TEXT
-            | Type::OID
-            | Type::TID
-            | Type::XID
-            | Type::CID
-            | Type::OID_VECTOR
-            | Type::JSON
-            | Type::XML
-            | Type::POINT
-            | Type::LSEG
-            | Type::PATH
-            | Type::BOX
-            | Type::POLYGON
-            | Type::LINE
-            | Type::CIDR
-            | Type::FLOAT4
-            | Type::FLOAT8
-            | Type::UNKNOWN
-            | Type::CIRCLE
-            | Type::MACADDR8
-            | Type::MONEY
-            | Type::MACADDR
-            | Type::INET
-            | Type::ACLITEM
-            | Type::BPCHAR
-            | Type::VARCHAR
-            | Type::BIT
-            | Type::VARBIT
-            | Type::NUMERIC
-            | Type::REGPROCEDURE
-            | Type::REGOPER
-            | Type::REGOPERATOR
-            | Type::REGCLASS
-            | Type::REGTYPE
-            | Type::VOID
-            | Type::UUID
-            | Type::TXID_SNAPSHOT
-            | Type::PG_LSN
-            | Type::TS_VECTOR
-            | Type::TSQUERY
-            | Type::GTS_VECTOR
-            | Type::REGCONFIG
-            | Type::REGDICTIONARY
-            | Type::JSONB
-            | Type::JSONPATH
-            | Type::REGNAMESPACE
-            | Type::REGROLE
-            | Type::REGCOLLATION
-            | Type::PG_SNAPSHOT
-            | Type::XID8
-    )
 }
 
 pub fn type_display(ty: &Type) -> String {

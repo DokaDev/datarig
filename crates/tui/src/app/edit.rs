@@ -1199,6 +1199,10 @@ impl App {
             Err(why) => return self.say_not(why),
         };
         let col = self.tab().grid.col;
+        let texts = cells.iter().enumerate().filter(|(_, (v, _))| matches!(v, Value::Text(_))).map(|(c, _)| c);
+        if let Some(why) = self.target_style_refusal(texts.collect::<Vec<_>>()) {
+            return self.say_refused(why);
+        }
         let Some(rs) = rows_of_mut(self.tabs.active_mut()) else { return };
         let (cells, written): (Vec<Value>, Vec<Written>) = cells.into_iter().unzip();
         let id = rs.edit.batch.add(usize::MAX, next_to, cells);
@@ -1401,6 +1405,11 @@ impl App {
     /// Set `cells` (rows of one column, in order: rows read, or new rows) of the active tab's
     /// shown result to `v`, as one change.
     fn edit_write_cells(&mut self, cells: &[(RowAt, usize)], v: Value) {
+        if matches!(v, Value::Text(_))
+            && let Some(why) = self.target_style_refusal(cells.iter().map(|&(_, c)| c))
+        {
+            return self.say_refused(why);
+        }
         let Some(rs) = rows_of_mut(self.tabs.active_mut()) else { return };
         let new: Vec<(u64, usize)> = cells
             .iter()
@@ -1513,7 +1522,9 @@ impl App {
         };
         let text = self.tab().cell_edit.as_ref().map(CellEdit::text).unwrap_or_default();
         let d = self.tab_dialect(self.tab().id);
-        if let Err(reason) = self.typed_whole(d, &text).and_then(|_| self.typed_ok(d, &c, &text)) {
+        let target = self.target_style_refusal(cells.iter().map(|&(_, c)| c)).map(|m| self.i18n.msg(&m).to_string());
+        let checked = self.typed_whole(d, &text).and_then(|_| self.typed_ok(d, &c, &text));
+        if let Err(reason) = target.map_or(checked, Err) {
             if let Some(e) = self.tabs.active_mut().cell_edit.as_mut() {
                 e.error = Some(reason.clone());
                 e.invalid = false;

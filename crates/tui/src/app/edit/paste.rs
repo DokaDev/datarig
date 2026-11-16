@@ -673,10 +673,11 @@ impl App {
         let t = self.tab();
         let Some(rs) = rows_of(t) else { return };
         let (tab, result, revision) = (t.id, rs.id, rs.edit.batch.revision());
-        let refused = copy.and_then(|c| {
-            self.copy_zone_refused(c, &plan)
-                .or_else(|| self.target_style_refused(c, &plan))
-                .or_else(|| self.copy_style_refused(c, &plan))
+        let target = self.target_style_refusal(plan.map.iter().map(|&(_, c)| c));
+        let refused = copy.and_then(|c| self.copy_zone_refused(c, &plan)).or_else(|| {
+            target
+                .map(|m| self.i18n.msg(&m).to_string())
+                .or_else(|| copy.and_then(|c| self.copy_style_refused(c, &plan)))
         });
         let mut plan = plan;
         if let Some(c) = copy {
@@ -997,19 +998,19 @@ impl App {
         })
     }
 
-    /// Why text copied in a grid is not pasted as `plan` lays it into a `styled` column of the
-    /// active tab's shown result: the result was read in other settings than the session's now,
-    /// or either is not known (its cells' text, compared with what is pasted to tell what
-    /// changes, may be the same bytes for another value). Both in ISO is the same, and the same
-    /// settings are, but for a column whose text may hold a time with a zone.
-    fn target_style_refused(&self, copy: &GridCopy, plan: &PastePlan) -> Option<String> {
+    /// Why text is not put into the `styled` columns `cols` of the active tab's shown result
+    /// (by any path: a paste of any kind, the cell editor, a clone): the result was read in
+    /// other settings than the session's now, or either is not known. Its cells' text, which a
+    /// change is compared with to tell whether it changes anything, may then be the same bytes
+    /// as text meant as another value. Both in ISO is the same, and the same settings are, but
+    /// for a column whose text may hold a time with a zone.
+    pub(super) fn target_style_refusal(&self, cols: impl IntoIterator<Item = usize>) -> Option<Msg> {
         let t = self.tab();
         let rs = rows_of(t)?;
         let (read, now) = (rs.text_in.as_ref(), t.exec.text.as_ref());
-        plan.map.iter().find_map(|&(j, c)| {
+        cols.into_iter().find_map(|c| {
             let target = &rs.columns.get(c)?.meta;
-            let valued = copy.rows.iter().any(|r| matches!(r.get(j), Some(Value::Text(_))));
-            if !target.styled || !valued {
+            if !target.styled {
                 return None;
             }
             let same = match (read, now) {
@@ -1020,7 +1021,7 @@ impl App {
                 return None;
             }
             let (column, from, to) = (target.name.clone(), self.style_words(read), self.style_words(now));
-            Some(self.i18n.msg(&Msg::EditPasteRegisterTargetStyle { column, from, to }).to_string())
+            Some(Msg::EditPasteRegisterTargetStyle { column, from, to })
         })
     }
 
