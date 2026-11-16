@@ -265,8 +265,13 @@ fn packet(seq: u8, payload: &[u8]) -> Vec<u8> {
 
 /// The client's next packet (`None`: it closed the connection instead).
 async fn read_packet(server: &mut tokio::io::DuplexStream) -> Option<Vec<u8>> {
+    read_packet_within(server, std::time::Duration::from_secs(5)).await
+}
+
+/// [`read_packet`], waited for up to `wait`.
+async fn read_packet_within(server: &mut tokio::io::DuplexStream, wait: std::time::Duration) -> Option<Vec<u8>> {
     let mut header = [0u8; 4];
-    let read = tokio::time::timeout(std::time::Duration::from_secs(5), server.read_exact(&mut header)).await;
+    let read = tokio::time::timeout(wait, server.read_exact(&mut header)).await;
     read.expect("the client neither answers nor closes").ok()?;
     let len = usize::from(header[0]) | usize::from(header[1]) << 8 | usize::from(header[2]) << 16;
     let mut payload = vec![0; len];
@@ -718,7 +723,8 @@ fn text_row(values: &[Option<&str>]) -> Vec<u8> {
 /// The cancel's connection reads whether the server it reached confirms the session (it has
 /// connection 7, as the cancel's own connection does on these fake servers): answered so.
 async fn confirmed(server: &mut tokio::io::DuplexStream) {
-    let check = read_packet(server).await.expect("the check");
+    // A kill sent again is checked under its gate's lock: after another kill's turn.
+    let check = read_packet_within(server, KILL_TIMEOUT * 3).await.expect("the check");
     assert!(check.starts_with(b"\x03SELECT CONNECTION_ID(), "), "{:?}", String::from_utf8_lossy(&check));
     server.write_all(&text_row(&[Some("7"), Some("1"), Some("7"), Some("7")])).await.unwrap();
 }
@@ -2363,4 +2369,71 @@ async fn a_cancel_is_sent_only_with_the_marker_the_server_lists_on_the_session()
     assert!(!matches!(slept, Ok(Some(0))), "stopped: {slept:?}");
     assert!(t0.elapsed() < std::time::Duration::from_millis(2900), "{:?}", t0.elapsed());
     quit(conn).await;
+}
+
+/// A cancel asked while the session sets its statement up (here its `sql_select_limit`), when
+/// nothing runs for a kill to stop: the statement is never sent, and the run ends cancelled.
+#[tokio::test]
+async fn a_cancel_while_the_statement_is_set_up_sends_no_statement() {
+    use datarig_core::driver::{DbCommand, DbEvent, PagingMode, TxRule};
+    let Faked { mut server, asked, commands, mut events, session, kills, .. } = faked().await;
+    let select = "SELECT v FROM shop.t";
+    commands
+        .send(DbCommand::Execute {
+            max_rows: None,
+            id: 1,
+            statements: vec![select.into()],
+            paging: PagingMode::NoHold,
+            tx: TxRule::Auto,
+        })
+        .unwrap();
+    let set = read_packet(&mut server).await.expect("the limit");
+    let set = String::from_utf8_lossy(&set[1..]).into_owned();
+    assert!(set.starts_with("SET SESSION sql_select_limit"), "{set}");
+    // The user cancels while the limit is set: the run is marked, no kill is sent.
+    asked.ask(1);
+    server.write_all(&ok_packet(0x0002)).await.unwrap();
+    let evs = events_until(&mut events, |e| matches!(e, DbEvent::Failed { .. })).await;
+    assert!(
+        matches!(evs.last(), Some(DbEvent::Failed { id: 1, error: DbError::Cancelled, cancelled: true })),
+        "{evs:?}"
+    );
+    let mut buf = [0u8; 256];
+    let after = tokio::time::timeout(std::time::Duration::from_millis(500), server.read(&mut buf)).await;
+    if let Ok(Ok(n)) = after {
+        assert!(!String::from_utf8_lossy(&buf[..n]).contains(select), "the statement was sent");
+    }
+    drop(commands);
+    drop(server);
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), session).await;
+    kills.abort();
+}
+
+/// A marker the server lists on two connections confirms neither (a proxy that copies
+/// attributes, a token seen and reused): only one connection with it is the session.
+#[test]
+fn a_marker_listed_twice_confirms_nothing() {
+    let t = "0123456789abcdef0123456789abcdef";
+    for sql in [own_sql(t), side_sql(t, t)] {
+        assert!(sql.contains(&marked_once(t)), "{sql}");
+        assert!(sql.ends_with(" LIMIT 1"), "{sql}");
+    }
+    assert!(marked_once(t).starts_with("(SELECT IF(COUNT(*) = 1, MIN(PROCESSLIST_ID), NULL) FROM"));
+}
+
+/// The same, on the server: two connections carrying one marker read no id for it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_marker_on_two_connections_is_not_confirmed_live() {
+    let Some(url) = live_url("a_marker_on_two_connections_is_not_confirmed_live") else { return };
+    let t = token();
+    let opts = marked(&Opts::from_url(&url).unwrap(), &t);
+    let mut a = Conn::new(opts.clone()).await.unwrap();
+    let (id, marker): (u64, Option<u64>) = a.query_first(own_sql(&t)).await.unwrap().unwrap();
+    assert_eq!(marker, Some(id), "one connection with it: its id");
+    let b = Conn::new(opts).await.unwrap();
+    let (id, marker): (u64, Option<u64>) = a.query_first(own_sql(&t)).await.unwrap().unwrap();
+    assert_eq!(marker, None, "two connections with it: none");
+    assert!(!own_verdict(low32(id), id, marker));
+    quit(a).await;
+    quit(b).await;
 }

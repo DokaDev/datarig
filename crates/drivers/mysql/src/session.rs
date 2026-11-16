@@ -167,12 +167,19 @@ fn low32(id: u64) -> u32 {
 }
 
 /// The statement a session's connection reads its own id with, right after it opened: the id
-/// (`CONNECTION_ID()`), and the id of the connection carrying the marker `token` as the server
-/// lists it (`NULL`: none listed). The `LIMIT 1`s: a `sql_select_limit` of 0 empties neither.
+/// (`CONNECTION_ID()`), and the id of the one connection carrying the marker `token` as the
+/// server lists it (`NULL`: none listed, or more than one). The `LIMIT 1`: a `sql_select_limit`
+/// of 0 does not empty it.
 fn own_sql(token: &str) -> String {
+    format!("SELECT CONNECTION_ID(), {} LIMIT 1", marked_once(token))
+}
+
+/// A subquery: the id of the one connection the server lists with the marker `token`, `NULL`
+/// when it lists none or more than one.
+pub(crate) fn marked_once(token: &str) -> String {
     format!(
-        "SELECT CONNECTION_ID(), (SELECT PROCESSLIST_ID FROM performance_schema.session_account_connect_attrs \
-         WHERE ATTR_NAME = '{MARKER}' AND ATTR_VALUE = '{token}' LIMIT 1) LIMIT 1"
+        "(SELECT IF(COUNT(*) = 1, MIN(PROCESSLIST_ID), NULL) FROM performance_schema.session_account_connect_attrs \
+         WHERE ATTR_NAME = '{MARKER}' AND ATTR_VALUE = '{token}')"
     )
 }
 
@@ -185,14 +192,16 @@ pub(crate) fn own_verdict(handshake: u32, id: u64, marker: Option<u64>) -> bool 
 
 /// The statement a cancel's connection reads, before it sends anything: its own id, how many
 /// connections carry the session's marker `session` and the lowest id among them, and the id
-/// of the connection carrying its own marker `side`, as the server it reached lists them.
+/// of the one connection carrying its own marker `side` (`NULL`: none, or more than one), as the
+/// server it reached lists them.
 fn side_sql(session: &str, side: &str) -> String {
     let attrs = "FROM performance_schema.session_account_connect_attrs WHERE ATTR_NAME";
     format!(
         "SELECT CONNECTION_ID(), \
          (SELECT COUNT(*) {attrs} = '{MARKER}' AND ATTR_VALUE = '{session}'), \
          (SELECT MIN(PROCESSLIST_ID) {attrs} = '{MARKER}' AND ATTR_VALUE = '{session}'), \
-         (SELECT MIN(PROCESSLIST_ID) {attrs} = '{MARKER}' AND ATTR_VALUE = '{side}') LIMIT 1"
+         {} LIMIT 1",
+        marked_once(side)
     )
 }
 
@@ -1000,6 +1009,18 @@ impl Gate {
     }
 }
 
+/// The wire of a cancel's connection ([`Killer::side`]), kept for [`cut`].
+type Held = std::sync::Mutex<Option<Wire>>;
+
+/// Cut the wire `held` keeps, once its connection is done with (quit, failed or given up on): a
+/// connection dropped unquit closes itself on a task of its own, which nothing would time on a
+/// stalled route; on a cut wire it ends at once.
+fn cut(held: &Held) {
+    if let Some(wire) = held.lock().ok().and_then(|mut h| h.take()) {
+        wire.cut();
+    }
+}
+
 /// What a cancel needs: a connection of its own over the session's route, as the session's
 /// user, that runs `KILL QUERY` of the session's connection id. It stops the statement the
 /// session runs, never the session itself. The route's name may lead to another server than
@@ -1070,11 +1091,15 @@ impl Killer {
         CancelFailure::NotSent(Box::new(why.unwrap_or(DbError::NoAnswer(KILL_TIMEOUT))))
     }
 
-    /// A connection of the cancel's own, logged in with a marker of its own (returned too).
-    async fn side(&self) -> Result<(Conn, String), DbError> {
+    /// A connection of the cancel's own, logged in with a marker of its own (returned too). Its
+    /// wire is kept in `held` for [`cut`], once the caller is done with it.
+    async fn side(&self, held: &Held) -> Result<(Conn, String), DbError> {
         let token = token();
         let stream = self.route.dial(DIAL_TIMEOUT).await?;
-        let (_wire, conn, _) = login(&self.route, stream, marked(&self.opts, &token)).await;
+        let (wire, conn, _) = login(&self.route, stream, marked(&self.opts, &token)).await;
+        if let Ok(mut h) = held.lock() {
+            *h = Some(wire);
+        }
         let conn = conn.map_err(|e| connect_error(&e).0)?;
         Ok((conn, token))
     }
@@ -1123,13 +1148,14 @@ impl Killer {
                 *w = Some(e);
             }
         };
+        let held = Held::default();
         let kill = async {
             // Never confirmed: nothing to dial for.
             if self.token.is_none() {
                 why(DbError::CancelUnconfirmed);
                 return None;
             }
-            let (mut conn, side) = self.side().await.map_err(&why).ok()?;
+            let (mut conn, side) = self.side(&held).await.map_err(&why).ok()?;
             if let Err(e) = self.confirm(&mut conn, &side).await {
                 why(e);
                 quit(conn).await;
@@ -1169,7 +1195,9 @@ impl Killer {
             quit(conn).await;
             Some(sent)
         };
-        let kill = match tokio::time::timeout(KILL_TIMEOUT, kill).await {
+        let ran = tokio::time::timeout(KILL_TIMEOUT, kill).await;
+        cut(&held);
+        let kill = match ran {
             // Not sent: the statement it was for ended.
             Ok(Some(None)) => return,
             Ok(Some(Some(kill))) => kill,
@@ -1198,11 +1226,14 @@ impl Killer {
         }
         let (killer, gate) = (self.clone(), gate.clone());
         tokio::spawn(async move {
+            let held = Held::default();
             let again = async {
-                let (mut conn, side) = killer.side().await.ok()?;
-                if gate.is_open() && killer.confirm(&mut conn, &side).await.is_ok() {
+                let (mut conn, side) = killer.side(&held).await.ok()?;
+                if gate.is_open() {
                     let _sending = gate.sending.lock().await;
-                    if gate.is_open() {
+                    // Confirmed under the lock, right before the kill: another one sent meanwhile
+                    // may have taken its time.
+                    if gate.is_open() && killer.confirm(&mut conn, &side).await.is_ok() {
                         // Set until the answer comes: a kill given up on halfway stays so.
                         let before = gate.unanswered.swap(true, Ordering::SeqCst);
                         let taken = conn.query_drop(format!("KILL QUERY {}", killer.id)).await.is_ok();
@@ -1216,6 +1247,7 @@ impl Killer {
                 Some(())
             };
             let _ = tokio::time::timeout(KILL_TIMEOUT, again).await;
+            cut(&held);
         });
     }
 
@@ -1239,8 +1271,9 @@ impl Killer {
         if self.token.is_none() {
             return false;
         }
+        let held = Held::default();
         let ask = async {
-            let (mut conn, side) = self.side().await.ok()?;
+            let (mut conn, side) = self.side(&held).await.ok()?;
             if self.confirm(&mut conn, &side).await.is_err() {
                 quit(conn).await;
                 return Some(false);
@@ -1253,7 +1286,9 @@ impl Killer {
             quit(conn).await;
             Some(n == Some(1))
         };
-        matches!(tokio::time::timeout(STILL_THERE_WAIT, ask).await, Ok(Some(true)))
+        let there = matches!(tokio::time::timeout(STILL_THERE_WAIT, ask).await, Ok(Some(true)));
+        cut(&held);
+        there
     }
 
     /// Forget what became of the kills sent so far: a new run, or a kill of the session's own,

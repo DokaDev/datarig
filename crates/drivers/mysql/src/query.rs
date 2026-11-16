@@ -1023,6 +1023,17 @@ async fn statement<'a>(
     // session, which is asked instead.
     let mut stopped = false;
     env.busy.store(true, Ordering::SeqCst);
+    // Cancelled while the session set the statement up (its limit, a savepoint), when a cancel
+    // only marks the run: the statement is not sent. Asked after `busy`, so a cancel that came
+    // later found the statement busy and is sent to the server.
+    if env.asked.asked() {
+        idle(env, link).await;
+        if let Some(u) = &undo {
+            halt!(undone(conn, link, u).await, Some(reply));
+        }
+        reply.fail(DbError::Cancelled, true);
+        return Ok(None);
+    }
     // Only what is sent may set the next transaction's own settings: a statement refused before
     // it was sent sets nothing.
     s.sets_next = sets_next_transaction(sql, s.mode);

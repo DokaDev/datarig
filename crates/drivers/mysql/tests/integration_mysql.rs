@@ -949,7 +949,8 @@ async fn a_session_is_set_up_in_one_statement() {
             assert_eq!(ran.len(), 2, "{ran:?}");
             assert!(
                 ran[1].starts_with(
-                    "SELECT CONNECTION_ID(), (SELECT PROCESSLIST_ID FROM performance_schema.session_account_connect_attrs"
+                    "SELECT CONNECTION_ID(), (SELECT IF(COUNT(*) = 1, MIN(PROCESSLIST_ID), NULL) \
+                     FROM performance_schema.session_account_connect_attrs"
                 ),
                 "{ran:?}"
             );

@@ -96,6 +96,12 @@ pub(super) async fn export(
         return Ok((Err(my_error(&e)), false));
     }
     env.busy.store(true, Ordering::SeqCst);
+    // Cancelled while the export was set up (a cancel then only marks the run): not sent.
+    if env.asked.asked() {
+        idle(env, link).await;
+        let _ = end_own(conn, link, own, false).await?;
+        return Ok((Err(DbError::Cancelled), true));
+    }
     let sent = link.guard(Some(env.killer), conn.query_iter(sql)).await?;
     let mut qr = match sent {
         Ok(qr) => qr,
