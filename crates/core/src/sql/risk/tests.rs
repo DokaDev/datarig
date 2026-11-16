@@ -445,6 +445,15 @@ fn read_only_refuses_calls_of_functions_that_are_not_built_ins() {
         let why = prepared.clone().classify(sql).read_only();
         assert!(matches!(&why, Err(ReadOnlyBlock::UnknownFunction(f)) if f == "app.f"), "{sql}: {why:?}");
     }
+    // A built-in that may run code forgets the names: what the statement calls is unknown
+    // then, so a plain `EXPLAIN` of its `EXECUTE` is refused as the `EXECUTE` is.
+    let mut prepared = Prepared::default();
+    assert_eq!(prepared.classify("PREPARE p AS SELECT my_func()").read_only(), Ok(()));
+    assert_eq!(prepared.classify("SELECT pg_input_is_valid('1','int4')").read_only(), Ok(()));
+    assert!(!prepared.knows("p"));
+    assert_eq!(prepared.clone().classify("EXECUTE p").read_only(), Err(ReadOnlyBlock::Class(Class::Unknown)));
+    let r = prepared.clone().classify("EXPLAIN EXECUTE p");
+    assert_eq!((r.explain, r.read_only()), (Explain::Plan, Err(ReadOnlyBlock::Class(Class::Unknown))));
 }
 
 #[test]
