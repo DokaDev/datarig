@@ -7971,6 +7971,7 @@ async fn a_select_that_runs_code_is_never_cut_at_a_page() {
     c.ok(4, &format!("SELECT MAX(id) INTO @zz_max FROM {}", t.q())).await;
     let evs = c.run(5, &["SELECT @zz_max"]).await;
     assert_eq!(page_of(&evs).1[0][0].as_deref(), Some("600"));
+}
 
 /// What a [`Misreport`] stream looks for in the server's answers: the session's read-only as its
 /// session state tracking reports it (`ON`, by either name), and what it puts there instead
