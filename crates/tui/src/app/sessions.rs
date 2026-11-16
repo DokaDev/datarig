@@ -195,7 +195,7 @@ impl App {
             SessionError::ReadOnly { source, index, statement, block } => Msg::SessionReadOnly {
                 name,
                 statement: self.statement_of(source, *index),
-                what: self.i18n.label(super::safety::blocked_label(*block)).to_string(),
+                what: self.i18n.msg(&super::safety::blocked_msg(block)).to_string(),
                 sql: sql(statement),
             },
             SessionError::Driver(driver) => Msg::SessionDriver { name, driver: driver.clone() },

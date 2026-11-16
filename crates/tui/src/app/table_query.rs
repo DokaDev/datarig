@@ -530,7 +530,7 @@ pub(super) fn refusal_why(i18n: &I18n, r: &BarRefusal) -> String {
             i18n.msg(&Msg::TableFilterWhyUncheckedCalls { names: names.join(", ") }).to_string()
         }
         BarRefusal::ReadOnly(why) => {
-            let what = label(super::safety::blocked_label(*why));
+            let what = i18n.msg(&super::safety::blocked_msg(why)).to_string();
             i18n.msg(&Msg::TableFilterWhyReadOnly { what }).to_string()
         }
     }

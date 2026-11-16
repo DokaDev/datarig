@@ -405,6 +405,42 @@ fn read_only_verdicts() {
 }
 
 #[test]
+fn read_only_refuses_calls_of_functions_that_are_not_built_ins() {
+    let ok = |sql: &str| classify(sql).read_only();
+    for (blocked, function) in [
+        ("SELECT f()", "f"),
+        ("SELECT s.f(1)", "s.f"),
+        ("SELECT * FROM s.f()", "s.f"),
+        ("SELECT lower('a') WHERE g() > 0", "g"),
+        ("SELECT \"Lower\"('a')", "Lower"),
+        ("SELECT public.query_to_xml('SELECT 1', true, false, '')", "public.query_to_xml"),
+        // The planner may run it.
+        ("EXPLAIN SELECT f()", "f"),
+    ] {
+        assert_eq!(classify(blocked).unchecked_call.as_deref(), Some(function), "{blocked}");
+        assert_eq!(ok(blocked), Err(ReadOnlyBlock::UnknownFunction(function.into())), "{blocked}");
+    }
+    for allowed in [
+        "SELECT lower('a')",
+        "SELECT pg_catalog.lower('a')",
+        "SELECT now()",
+        // Built-ins that run a query given as text: the text is classified instead.
+        "SELECT query_to_xml('select 1', true, false, '')",
+        "SELECT pg_input_is_valid('42', 'integer')",
+    ] {
+        assert_eq!(classify(allowed).unchecked_call, None, "{allowed}");
+        assert_eq!(ok(allowed), Ok(()), "{allowed}");
+    }
+    // DDL only stores what it calls: refused for its class.
+    let view = classify("CREATE VIEW v AS SELECT f()");
+    assert_eq!((view.read_only(), view.unchecked_call), (Err(ReadOnlyBlock::Class(Class::Ddl)), None));
+    // An `EXECUTE` carries the risk of the statement prepared.
+    let mut prepared = Prepared::default();
+    assert_eq!(prepared.classify("PREPARE p AS SELECT f()").read_only(), Ok(()), "preparing runs nothing");
+    assert_eq!(prepared.classify("EXECUTE p").read_only(), Err(ReadOnlyBlock::UnknownFunction("f".into())));
+}
+
+#[test]
 fn confirmations() {
     let destructive = |sql: &str| classify(sql).confirm(false);
     let writes = |sql: &str| classify(sql).confirm(true);
@@ -1670,10 +1706,10 @@ fn where_a_statement_runs_by_risk() {
         (of(Class::Read), true, true, Opens),
         (of(Class::Read), false, false, Opens),
         (Risk { runs_code: true, ..of(Class::Read) }, true, false, Opens),
-        (Risk { unchecked_call: true, ..of(Class::Read) }, true, false, Opens),
+        (Risk { unchecked_call: Some("f".into()), ..of(Class::Read) }, true, false, Opens),
         (Risk::danger(Class::Read, Danger::ServerAction), true, false, Opens),
         (Risk { read_write: true, ..of(Class::Read) }, true, false, Opens),
-        (Risk { unchecked_call: true, ..of(Class::Session) }, false, false, Opens),
+        (Risk { unchecked_call: Some("f".into()), ..of(Class::Session) }, false, false, Opens),
         (Risk { runs_code: true, ..of(Class::Session) }, false, false, Opens),
         (Risk::writing(Class::Write, None), true, false, Opens),
         (of(Class::Write), true, false, Opens),

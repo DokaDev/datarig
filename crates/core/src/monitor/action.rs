@@ -307,7 +307,7 @@ fn plain_read(text: &str) -> bool {
     risk.class == Class::Read
         && risk.danger.is_none()
         && !risk.writes
-        && !risk.unchecked_call
+        && risk.unchecked_call.is_none()
         && !risk.runs_code
         && risk.explain != Explain::Analyze
 }

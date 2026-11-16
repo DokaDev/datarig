@@ -281,7 +281,7 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                 .map(|i| match list.note(i) {
                     Some(Note::Refused(p)) => Some((app.set_problem_text(p), Level::Error)),
                     Some(Note::ReadOnly(b)) if f.is_session() => {
-                        let what = i18n.label(crate::app::safety::blocked_label(*b)).to_string();
+                        let what = i18n.msg(&crate::app::safety::blocked_msg(b)).to_string();
                         Some((i18n.msg(&Msg::FormStatementReadOnly { what }).to_string(), Level::Warning))
                     }
                     _ => None,

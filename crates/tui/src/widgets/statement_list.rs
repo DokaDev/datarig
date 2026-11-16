@@ -160,7 +160,7 @@ impl StatementList {
     /// The first statement a read-only environment refuses (`index` from 1).
     pub fn read_only_refused(&self) -> Option<(usize, ReadOnlyBlock)> {
         self.numbered().find_map(|(n, i)| match self.note(i) {
-            Some(Note::ReadOnly(b)) => Some((n, *b)),
+            Some(Note::ReadOnly(b)) => Some((n, b.clone())),
             _ => None,
         })
     }

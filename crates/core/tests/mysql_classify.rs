@@ -256,7 +256,7 @@ fn every_built_in_is_a_function_of_the_server() {
     // MySQL's own functions are built-ins to the read check, whatever MariaDB has.
     for name in NOT_ON_MARIADB.lines() {
         let risk = Classifier::classify_once(MY, &format!("SELECT {name}()"));
-        assert!(!risk.unchecked_call, "{name}");
+        assert!(risk.unchecked_call.is_none(), "{name}");
     }
 }
 
@@ -275,7 +275,7 @@ fn functions_mariadb_does_not_provide(unknown: &[&str]) {
     let session = Language::Sql(Dialect::MySql(MySqlMode { mariadb: true, ..MODE }));
     for name in &listed {
         let risk = Classifier::classify_once(session, &format!("SELECT {name}()"));
-        assert!(risk.unchecked_call && risk.read_only().is_err(), "{name}");
+        assert!(risk.unchecked_call.is_some() && risk.read_only().is_err(), "{name}");
     }
 }
 
@@ -300,6 +300,6 @@ fn geometry_constructors_on_mariadb(client: &[String]) {
     for (i, (sql, native)) in texts.iter().enumerate() {
         assert_eq!(errors.get(&i) != Some(&1305), *native, "{sql}: {:?}", errors.get(&i));
         let risk = Classifier::classify_once(session, sql);
-        assert_eq!(risk.unchecked_call, !native, "{sql}");
+        assert_eq!(risk.unchecked_call.is_some(), !native, "{sql}");
     }
 }

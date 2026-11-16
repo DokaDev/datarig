@@ -109,7 +109,7 @@ impl App {
         let mut classifier = self.classifier(tab);
         statements.iter().find_map(|sql| {
             let why = classifier.classify(sql).read_only().err()?;
-            let what = self.i18n.label(blocked_label(why)).to_string();
+            let what = self.i18n.msg(&blocked_msg(&why)).to_string();
             let sql = super::runlog::excerpt(sql, 60);
             Some(Notice::new(Msg::SafetyReadOnlyBlocked { environment: environment.clone(), what, sql }, Level::Error))
         })
@@ -344,8 +344,8 @@ fn risk_text(i18n: &I18n, d: &Dangerous, why: Why) -> String {
 }
 
 /// What a read-only environment says about a statement it refuses.
-pub fn blocked_label(why: ReadOnlyBlock) -> Label {
-    match why {
+pub fn blocked_msg(why: &ReadOnlyBlock) -> Msg {
+    let label = match why {
         ReadOnlyBlock::ReadWrite => Label::SafetyBlockedReadWrite,
         ReadOnlyBlock::Setting => Label::SafetyBlockedSetting,
         ReadOnlyBlock::Unparsed => Label::SafetyBlockedUnparsed,
@@ -355,7 +355,9 @@ pub fn blocked_label(why: ReadOnlyBlock) -> Label {
         ReadOnlyBlock::RunsQueryText => Label::SafetyBlockedRunsQueryText,
         ReadOnlyBlock::ExecutableComment => Label::SafetyBlockedExecComment,
         ReadOnlyBlock::Unrecognized => Label::SafetyBlockedUnrecognized,
-        ReadOnlyBlock::UnknownFunction => Label::SafetyBlockedUnknownFunction,
+        ReadOnlyBlock::UnknownFunction(function) => {
+            return Msg::SafetyBlockedUnknownFunction { function: function.clone() };
+        }
         ReadOnlyBlock::DynamicSql => Label::SafetyBlockedDynamicSql,
         ReadOnlyBlock::ServerCommand => Label::SafetyBlockedServerCommand,
         ReadOnlyBlock::Locks => Label::SafetyBlockedLocks,
@@ -365,5 +367,6 @@ pub fn blocked_label(why: ReadOnlyBlock) -> Label {
         ReadOnlyBlock::Class(Class::Maintenance) => Label::SafetyBlockedMaintenance,
         ReadOnlyBlock::Class(Class::Procedural) => Label::SafetyBlockedProcedural,
         ReadOnlyBlock::Class(_) => Label::SafetyBlockedUnknown,
-    }
+    };
+    Msg::Label(label)
 }

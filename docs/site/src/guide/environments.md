@@ -9,19 +9,21 @@
   updates or deletes, `DO` and `CALL`, `COPY` to or from server files or programs, server-side
   built-ins that act on files or other backends, and any text the parser rejects. An
   environment with `confirm = "writes"` asks before every write too.
-- **What is refused.** A read-only profile refuses anything that is not a read, transaction
-  control or a safe session setting before sending it, and the server refuses the rest:
-  every transaction of a read-only profile is opened `READ ONLY`, so even a function called
-  from a `SELECT` cannot write. (MySQL works differently; see
-  [MySQL](mysql.md#read-only-profiles).)
+- **What is refused.** Before sending a statement, a read-only profile refuses anything that
+  is not a read, transaction control or a safe session setting, and any call of a function by
+  a name that is not a built-in's, naming the function. The server refuses the rest: every
+  transaction of a read-only profile is opened `READ ONLY`, so a function the check does not
+  see cannot write either (one reached through a view, a trigger, an operator, a cast or
+  attribute notation such as `t.f`, or one that shares a built-in's name in another schema of
+  the search path). (MySQL works differently; see [MySQL](mysql.md#read-only-profiles).)
 - **Editing data.** A read-only environment refuses [editing a result](editing.md) ("Read-only:
   the connection's environment is read-only"), and so does a tab whose session opened while it
   was. With `confirm = "writes"` an Apply shows its statements in the Apply dialog before
   `y` applies them (elsewhere it asks on the status line); that dialog is the confirmation, no
   second one opens.
 - **What it is not.** The confirmation is a guardrail against mistakes in what the text shows.
-  Functions called from a query, triggers, views and rules are not inspected; a read-only
-  environment is the guarantee.
+  Functions called from a query are not asked about, and triggers, views and rules are not
+  inspected; a read-only environment is the guarantee.
 - **Paging leaves nothing open by default**: datarig keeps no transaction, lock or snapshot
   open while you read a result, unless your environment asks for it (see
   [Paging and locks](#paging-and-locks)).
