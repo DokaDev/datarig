@@ -472,8 +472,8 @@ async fn a_level_set_in_a_transaction_is_the_next_ones() {
 
 /// A count keeps the session's transaction state as it was: with no transaction open it reads in
 /// one of its own that it ends, so a level the session sets afterwards is known at once; inside an
-/// open transaction it reads there, and that transaction keeps the level it started in until it
-/// ends. After a level set for the next transaction only, a count with no transaction open is
+/// open `SERIALIZABLE` transaction it is refused, and that transaction keeps the level it started
+/// in until it ends. After a level set for the next transaction only, a count with no transaction open is
 /// refused (it would use that level up), and the level is not said as known until a
 /// transaction ends.
 #[tokio::test(flavor = "multi_thread")]
@@ -491,10 +491,11 @@ async fn a_count_leaves_the_transactions_level_as_it_was() {
     assert_eq!(count(&mut c, 3, counted.clone()).await.0, Ok(10));
     let evs = c.run(4, &["SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED"]).await;
     assert_eq!(isolation_of(&evs), Some(Some(Isolation::ReadCommitted)), "no transaction is open: {evs:?}");
-    // Inside an open transaction: the count reads there and the transaction keeps its level.
+    // Inside an open transaction at SERIALIZABLE: the count is refused (its read would lock
+    // every row), and the transaction keeps its level.
     c.ok(5, "SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE").await;
     c.ok(6, "START TRANSACTION").await;
-    assert_eq!(count(&mut c, 7, counted.clone()).await.0, Ok(10));
+    assert_eq!(count(&mut c, 7, counted.clone()).await.0, Err(DbError::LockingRead));
     let evs = c.run(8, &["SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED"]).await;
     assert_eq!(isolation_of(&evs), None, "the open transaction stays SERIALIZABLE: {evs:?}");
     let evs = c.run(9, &["COMMIT"]).await;

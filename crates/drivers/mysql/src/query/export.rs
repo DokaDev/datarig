@@ -7,7 +7,9 @@
 //! transaction in a `START TRANSACTION READ ONLY` of its own at `REPEATABLE READ` whatever the
 //! session's level (a stored function that writes fails, and every row comes from one snapshot
 //! read without row locks), inside it in the user's transaction and its
-//! snapshot (a failed read does not end a MySQL transaction). A cancel is the session's `KILL QUERY`;
+//! snapshot (a failed read does not end a MySQL transaction). Inside a transaction whose level
+//! is `SERIALIZABLE` or not known it is refused unsent: InnoDB would read every row with a shared
+//! lock, held until the user ends the transaction. A cancel is the session's `KILL QUERY`;
 //! when nobody reads the channel any more (the file failed) the result is stopped the same way
 //! and the answer says it was not read to its end.
 //!
@@ -17,7 +19,7 @@
 
 use super::{
     Closed, Env, Link, State, Stop, after, asked_server, begin_own, cells, failure, idle, keeps_next, limit_applies,
-    open_before, rest, runs_server_code, stop_result,
+    no_locking_read, open_before, rest, runs_server_code, stop_result,
 };
 use crate::session::my_error;
 use crate::values::column_meta;
@@ -59,6 +61,11 @@ pub(super) async fn export(
     // out) is read in, never ended.
     let was_open = open_before(conn, link, s).await?;
     if let Err(why) = keeps_next(s, was_open) {
+        return Ok((Err(why), false));
+    }
+    // Inside the user's transaction at `SERIALIZABLE` (or a level not known) InnoDB would read
+    // every row with a shared lock, held until the user ends it: refused unsent.
+    if let Err(why) = no_locking_read(s, was_open) {
         return Ok((Err(why), false));
     }
     if guard == ExportGuard::Repeatable {

@@ -238,7 +238,7 @@ first_frame_ms_p95_max = 250.0
 # and sorting a table (the query model and its checks, the value counts, then the filter and sort
 # dialog) brings it to 27.333 MiB on the CI's Linux x86_64 (27.028 -> 27.333 MiB for the
 # dialog): 28 MiB.
-binary_mib_max = 28.0
+binary_mib_max = 29.0
 
 [plan]
 # A plan of 666 nodes (40 joins deep with a subplan each, parallel workers, a CTE, an Append

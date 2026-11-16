@@ -1497,8 +1497,9 @@ pub enum DbEvent {
     Block(bool),
     /// The answer to `DbCommand::Count` for result `id`: the number of rows, or why it could
     /// not be counted (a cancel is `DbError::Cancelled`). `snapshot`: it counted in a
-    /// transaction with one snapshot for its whole life (the server said `REPEATABLE READ` or
-    /// `SERIALIZABLE` in the count's own request); otherwise it counted the rows committed when
+    /// transaction with one snapshot for its whole life (the server said `REPEATABLE READ`, or on
+    /// PostgreSQL `SERIALIZABLE`, in the count's own request; MySQL refuses a count inside a
+    /// `SERIALIZABLE` transaction, [`DbError::LockingRead`]); otherwise it counted the rows committed when
     /// it ran, which may differ from the rows paged.
     Counted {
         id: u64,

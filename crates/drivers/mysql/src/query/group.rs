@@ -26,7 +26,7 @@
 //! where it cannot ([`as_the_column`], [`GroupCounts::mark_inexact`]).
 
 use super::*;
-use datarig_core::driver::{GroupBudget, GroupCounts, Isolation};
+use datarig_core::driver::{GroupBudget, GroupCounts};
 use datarig_core::query::GROUP_PREVIEW;
 use mysql_async::Value;
 use mysql_async::consts::{ColumnFlags, ColumnType};
@@ -56,7 +56,7 @@ pub(super) async fn group_count(
         Ok(asked) => asked,
         Err(why) => return Ok((Err(why), false)),
     };
-    let snapshot = s.tx.open && matches!(asked.isolation.as_str(), "REPEATABLE-READ" | "SERIALIZABLE");
+    let snapshot = in_snapshot(s, &asked);
     let bounded = limit.and_then(|l| bounded_select(sql, l, &asked, env.server.mariadb, ""));
     let (text, applied) = match &bounded {
         Some((text, applied)) => (text.as_str(), Some(*applied)),
@@ -75,20 +75,6 @@ pub(super) async fn group_count(
         OwnGot::First(_) => Err(DbError::NoResult),
     });
     Ok((counted, snapshot))
-}
-
-/// Refused ([`DbError::LockingRead`]) when a read of the app's own would lock the rows it reads:
-/// it runs in the user's transaction (one open before it, `was_open`, or open now) whose level
-/// is `SERIALIZABLE` or not known (InnoDB reads every row of such a transaction with a shared
-/// lock). With autocommit off and none open it runs in a transaction of its own at `REPEATABLE
-/// READ` ([`read_own_as`]), which reads without locks.
-fn no_locking_read(s: &State, was_open: bool) -> Result<(), DbError> {
-    let in_tx = was_open || s.tx.open;
-    let plain = matches!(
-        s.tracked.isolation(),
-        Some(Isolation::ReadUncommitted | Isolation::ReadCommitted | Isolation::RepeatableRead)
-    );
-    if in_tx && !plain { Err(DbError::LockingRead) } else { Ok(()) }
 }
 
 /// What [`rows_within`] read.

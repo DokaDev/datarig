@@ -3,7 +3,7 @@
 //! channel the reader drains, never cut by the session's paging limit; a keyset's chunks read
 //! every row once in key order; a cancel (`KILL QUERY`) and a reader that stops end the statement
 //! and its metadata lock; inside the user's transaction it reads there; at `SERIALIZABLE` it
-//! locks no rows. Tables are
+//! locks no rows (inside the user's transaction at that level it is refused). Tables are
 //! `shop.zz_it_export_*` of this process, dropped when each test ends.
 
 use datarig_core::driver::{
@@ -625,6 +625,51 @@ async fn an_export_locks_no_rows_when_the_session_is_serializable() {
     }
 }
 
+/// Count with `sql`: the count, or why not, and whether it counted in the transaction's
+/// snapshot.
+async fn counted_in(c: &mut Conn, sql: &str) -> (Result<u64, DbError>, bool) {
+    c.id += 1;
+    let id = c.id;
+    c.session.send(DbCommand::Count { id, sql: sql.to_string(), limit: None });
+    match c.wait(|e| matches!(e, DbEvent::Counted { id: i, .. } if *i == id), 30).await {
+        DbEvent::Counted { result, snapshot, .. } => (result, snapshot),
+        _ => unreachable!(),
+    }
+}
+
+/// Inside the user's transaction at `SERIALIZABLE` InnoDB reads every row with a shared lock,
+/// held until the user ends the transaction: a count and an export there are refused unsent
+/// and lock nothing, and another session writes the rows at once. At `READ COMMITTED` a count
+/// reads the latest committed rows (no snapshot); at `REPEATABLE READ` the transaction's
+/// snapshot.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_count_or_export_in_a_serializable_transaction_is_refused() {
+    let Some((url, admin)) = urls("a_count_or_export_in_a_serializable_transaction_is_refused") else { return };
+    let t = numbers(&admin, "sertx", 20).await;
+    let mut c = Conn::open(&url, SessionRole::Query, "sertx").await;
+    let id: u64 = c.rows("SELECT CONNECTION_ID()").await[0][0].as_deref().unwrap().parse().unwrap();
+    let count = format!("SELECT COUNT(*) FROM (\nSELECT id FROM {}\n) AS datarig_count", t.q());
+    c.ok("SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE").await;
+    c.ok("START TRANSACTION").await;
+    assert_eq!(counted_in(&mut c, &count).await, (Err(DbError::LockingRead), false));
+    assert_eq!(data_locks(&admin, id, &t.name).await, 0, "the count locked nothing");
+    for guard in [ExportGuard::Repeatable, ExportGuard::Confirmed] {
+        let (export, mut rx) = c.export(&format!("SELECT * FROM {}", t.q()), guard, 2, 3);
+        drain(&mut rx).await;
+        assert_eq!(c.exported(export).await.0, Err(DbError::LockingRead), "{guard:?}");
+    }
+    assert_eq!(data_locks(&admin, id, &t.name).await, 0, "the export locked nothing");
+    let wrote = writes_at_once(&admin, &t.q(), 1).await;
+    assert!(wrote.is_ok(), "another session writes at once: {wrote:?}");
+    c.ok("ROLLBACK").await;
+    for (level, snapshot) in [("READ COMMITTED", false), ("REPEATABLE READ", true)] {
+        c.ok(&format!("SET SESSION TRANSACTION ISOLATION LEVEL {level}")).await;
+        c.ok("START TRANSACTION").await;
+        assert_eq!(counted_in(&mut c, &count).await, (Ok(20), snapshot), "{level}");
+        c.ok("ROLLBACK").await;
+    }
+}
+
 /// What another session reads of `sql` (one value, in autocommit).
 async fn seen_from_side(url: &str, sql: &str) -> Option<String> {
     let mut a = side(url).await;
@@ -635,7 +680,8 @@ async fn seen_from_side(url: &str, sql: &str) -> Option<String> {
 
 /// Without autocommit the user's statements open a transaction: an export and a count after
 /// the user's uncommitted `UPDATE` read inside it (they see the change) and never end it, so
-/// the change stays uncommitted (another session does not see it) and is not rolled back.
+/// the change stays uncommitted (another session does not see it) and is not rolled back. At
+/// `SERIALIZABLE` they are refused (their reads would lock rows), and nothing ends it either.
 #[tokio::test(flavor = "multi_thread")]
 async fn without_autocommit_the_users_uncommitted_work_is_never_ended() {
     let Some((url, admin)) = urls("without_autocommit_the_users_uncommitted_work_is_never_ended") else { return };
@@ -660,9 +706,15 @@ async fn without_autocommit_the_users_uncommitted_work_is_never_ended() {
         }
         c.ok("SET autocommit = 0").await;
         c.ok(&format!("UPDATE {} SET v = 'user' WHERE id = 1", t.q())).await;
+        // At `SERIALIZABLE` a read in the user's transaction would lock every row it reads:
+        // refused unsent.
         for guard in [ExportGuard::Repeatable, ExportGuard::Confirmed] {
             let (export, mut rx) = c.export(&format!("SELECT * FROM {} ORDER BY id", t.q()), guard, 2, 3);
             let (_, rows, _) = drain(&mut rx).await;
+            if serializable {
+                assert_eq!(c.exported(export).await.0, Err(DbError::LockingRead), "{guard:?}");
+                continue;
+            }
             assert!(c.exported(export).await.0.unwrap().complete);
             assert_eq!(rows[0][1].as_deref(), Some("user"), "{guard:?}: read inside the user's transaction");
         }
@@ -670,8 +722,9 @@ async fn without_autocommit_the_users_uncommitted_work_is_never_ended() {
         let count = c.id;
         let sql = format!("SELECT COUNT(*) FROM (\nSELECT id FROM {} WHERE v = 'user'\n) AS datarig_count", t.q());
         c.session.send(DbCommand::Count { id: count, sql, limit: None });
+        let want = if serializable { Err(DbError::LockingRead) } else { Ok(1) };
         match c.wait(|e| matches!(e, DbEvent::Counted { id: i, .. } if *i == count), 30).await {
-            DbEvent::Counted { result, .. } => assert_eq!(result, Ok(1), "counted inside the user's transaction"),
+            DbEvent::Counted { result, .. } => assert_eq!(result, want, "counted inside the user's transaction"),
             _ => unreachable!(),
         }
         assert_eq!(seen_from_side(&admin, &v1).await.as_deref(), Some("row 1"), "never committed");
@@ -689,7 +742,8 @@ async fn without_autocommit_the_users_uncommitted_work_is_never_ended() {
             .await
             .unwrap();
         a.disconnect().await.unwrap();
-        assert!(sent.len() >= 4, "{sent:?}");
+        // Nothing at all when every read was refused.
+        assert!(serializable || sent.len() >= 4, "{sent:?}");
         assert!(
             !sent.iter().any(|q| {
                 let q = q.trim_start().to_uppercase();
