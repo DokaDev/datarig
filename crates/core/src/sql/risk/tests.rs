@@ -598,6 +598,28 @@ fn adversarial_texts_do_not_hide_or_invent_statements() {
     assert_eq!(danger("CREATE RULE r AS ON INSERT TO t DO INSTEAD (DELETE FROM u)"), None);
 }
 
+/// A piece continuing a string (after blanks with a line break) is read in its first piece's
+/// state: the reading with `standard_conforming_strings` off rewrites only the first piece, so
+/// the text still parses.
+#[test]
+fn a_continued_string_is_read_in_its_first_pieces_state() {
+    for first in ["'a\\b'", "N'a\\b'", "n'a\\b'"] {
+        let sql = format!("SELECT {first}\n'c'");
+        assert_eq!(classify(&sql).read_only(), Ok(()), "{sql}");
+    }
+}
+
+/// With `standard_conforming_strings` off, a call hidden after a continuing piece of a plain or
+/// national string is seen.
+#[test]
+fn a_call_hidden_after_a_continued_string_is_seen() {
+    for first in ["'x'", "N'x'", "n'x'"] {
+        let sql = format!("SELECT {first}\n'\\', ' || pg_read_file($p$f$p$) --'");
+        assert_eq!(Prepared::default().read(&sql).danger, None, "{sql}: a standard server reads strings");
+        assert_eq!(classify(&sql).read_only(), Err(ReadOnlyBlock::ServerFile), "{sql}");
+    }
+}
+
 // ── adversarial probes and what the parse tree adds ─────────────
 
 /// (1) `EXPLAIN ("analyze") DELETE FROM t`: the option name quoted (or in any case) is still

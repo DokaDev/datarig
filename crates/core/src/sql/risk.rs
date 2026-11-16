@@ -1102,7 +1102,8 @@ fn depth_of(sql: &str, tokens: &[super::lexer::Token]) -> usize {
 /// `sql` as a server with `standard_conforming_strings = off` reads it, spelled for one with
 /// it on (each plain `'…'` or national `N'…'` string, which such a server ends at an unescaped
 /// quote, becomes an `E'…'` string), when such a string holds a backslash; `None` otherwise
-/// (both read the same).
+/// (both read the same). A piece continuing a string (after blanks with a line break) is read
+/// in its first piece's state and keeps no prefix of its own.
 fn non_conforming(sql: &str) -> Option<String> {
     // The quote of a plain or national string token: 0 or 1 (after its `N`).
     let quote_at = |t: &super::lexer::Token| {
@@ -1118,9 +1119,19 @@ fn non_conforming(sql: &str) -> Option<String> {
         return None;
     }
     let mut out = String::with_capacity(sql.len() + 8);
+    // Where the last string ended, while only blanks and comments follow it.
+    let mut last_string: Option<usize> = None;
     for t in lex_backslash_strings(sql) {
         let mut s = t.text(sql);
-        if let Some(at) = quote_at(&t) {
+        let continues = last_string.is_some_and(|end| sql[end..t.start].contains(['\n', '\r']));
+        last_string = match t.kind {
+            Tok::Str => Some(t.end),
+            _ if t.is_trivia() => last_string,
+            _ => None,
+        };
+        if let Some(at) = quote_at(&t)
+            && !(at == 0 && continues)
+        {
             // `E` glued to an identifier before it would extend the identifier.
             if out.chars().last().is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '$') {
                 out.push(' ');
