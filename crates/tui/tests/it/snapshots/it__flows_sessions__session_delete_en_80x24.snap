@@ -1,6 +1,6 @@
 ---
 source: crates/tui/tests/it/flows_sessions.rs
-assertion_line: 735
+assertion_line: 782
 expression: "h.draw(80, 24).backend()"
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
@@ -18,9 +18,9 @@ expression: "h.draw(80, 24).backend()"
 "│    ◇ bro│ Environments map it: prod; their profiles will not       │         │"
 "│      sta│ connect until that is changed.                           │         │"
 "│    ◇ fk_│                                                          │         │"
-"│  ▸ ◇ my_│                 [ Cancel ]     Delete                    │         │"
-"│  ▸ ◇ rep╰────────────────────────────── y delete · n/Enter cancel ─╯         │"
-"│                      ││                                                      │"
+"│      sta│                 [ Cancel ]     Delete                    │         │"
+"│  ▸ ◇ my_╰────────────────────────────── y delete · n/Enter cancel ─╯         │"
+"│  ▸ ◇ reporting  Post…││                                                      │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"

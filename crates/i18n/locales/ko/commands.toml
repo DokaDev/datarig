@@ -66,6 +66,7 @@
 "set.local" = "SET LOCAL은 트랜잭션과 함께 끝납니다: SET으로 쓰세요"
 "set.writes" = "데이터를 바꾸거나 코드를 실행할 수 있음"
 "set.danger" = "위험한 문장"
+"set.asks" = "직접 입력하면 실행 전에 확인을 묻는 문장입니다. 접속 시 SQL은 묻지 않고 실행하므로 넣을 수 없습니다"
 "set.reason.interactive" = "{setting}은(는) 이미 열린 세션에는 효과가 없습니다. wait_timeout(읽기 전용 환경 제외)이나 환경의 idle_disconnect를 쓰세요"
 "set.reason.tx_idle_rollback" = "{setting}: datarig이 유휴 상태인 수동 커밋 트랜잭션을 미리 경고하고 직접 롤백하며 세션은 유지합니다. 이 설정은 트랜잭션마다 30초 늦게 대비책으로만 겁니다. 환경의 tx_idle_rollback을 설정하세요"
 "set.reason.read_only" = "{setting}: 읽기 전용은 환경이 보장합니다. 환경의 read_only를 설정하세요"

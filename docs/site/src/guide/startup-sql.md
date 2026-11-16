@@ -29,7 +29,7 @@ the app renames the old names in place once what they say changes.
 
 The explorer's **Startup SQL** section lists the presets with their database and how many
 statements and profiles each has (the statements in the warning colour when one changes a setting
-a read-only environment refuses, such as MySQL's `foreign_key_checks = 0`), and under each
+a read-only environment refuses, such as MySQL's `wait_timeout`), and under each
 preset the first statement that is not allowed and why. `n` makes one, `e` edits, `c` copies,
 `d` deletes, `t` tests, and `Enter` or `l` lists the profiles that use it (their own or through
 their environment). The `/` filter finds a preset by its name or a statement. The command line
@@ -147,6 +147,10 @@ an error shows the words its connect would refuse with.
   transaction only are refused too, with where the session's default is: PostgreSQL's
   `transaction_isolation` and `transaction_deferrable` (use `default_transaction_isolation`, …),
   MySQL's `SET @@transaction_isolation` without a scope (use `SET SESSION …`).
+- **Nothing that asks when typed.** A setting that asks before it runs when you type it is
+  refused, since Startup SQL runs without asking: MySQL's `foreign_key_checks = 0`,
+  `unique_checks`, `sql_log_bin`, `sql_mode` and the others of its kind, and PostgreSQL's
+  `session_replication_role`.
 - **MySQL in every sql mode.** A statement is read with and without `ANSI_QUOTES` and
   `NO_BACKSLASH_ESCAPES`; what any reading refuses is refused.
 - **Who the session is.** `SET ROLE` is allowed in a read-only environment (every transaction
@@ -179,8 +183,7 @@ Behind a pooler, set the isolation in your own block instead (`BEGIN ISOLATION L
 
 ## Details
 
-- On MySQL the classifier reads the session in the sql mode a preset set, and a read-only
-  session is checked after its statements ran. A value with a function call or a subquery
+- On MySQL a read-only session is checked after its statements ran. A value with a function call or a subquery
   (`SET @x = (SELECT …)`) runs at connect like any other.
 - A row shows its statement on one line, without its line comments, and a line break inside a
   string as `⏎`. A row you do not edit is saved as the file has it; one you edit is saved as

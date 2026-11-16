@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/it/flows_sessions.rs
+assertion_line: 473
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -17,9 +18,9 @@ expression: "h.draw(w, ht).backend()"
 "│    ◇ bro╭ New Startup SQL ─────────────────────────────────────────────────────────────────────────────────╮         │"
 "│      sta│  Startup SQL                                  profiles that pick it start their sessions with it │         │"
 "│    ◇ fk_│                                                                                                  │         │"
-"│  ▸ ◇ my_│ Name        analytics                                                                            │         │"
-"│  ▸ ◇ rep│ Database    PostgreSQL ▾   ←/→ change · Enter list                                               │         │"
-"│         │ Statements    1 SET statement_timeout = '1min'                                                 × │         │"
+"│      sta│ Name        analytics                                                                            │         │"
+"│  ▸ ◇ my_│ Database    PostgreSQL ▾   ←/→ change · Enter list                                               │         │"
+"│  ▸ ◇ rep│ Statements    1 SET statement_timeout = '1min'                                                 × │         │"
 "│         │               2 SET jit = off                                                                  × │         │"
 "│         │               + Add statement  one per row · Enter adds · Ctrl+D deletes                         │         │"
 "│         │                                                                                                  │         │"

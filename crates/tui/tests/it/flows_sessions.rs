@@ -36,7 +36,7 @@ fn presets() -> Vec<SessionPreset> {
             Dbms::Postgres,
             vec!["SET statement_timeout = '30s'".into(), "SET work_mem = '64MB'".into()],
         ),
-        SessionPreset::new("my_ro", Dbms::MySql, vec!["SET SESSION sql_mode = 'ANSI_QUOTES'".into()]),
+        SessionPreset::new("my_ro", Dbms::MySql, vec!["SET SESSION net_write_timeout = 6000".into()]),
     ]
 }
 
@@ -397,8 +397,8 @@ fn the_section_lists_the_presets_with_their_users_and_problems() {
     let rows = h.rows();
     let at = rows.iter().position(|r| r == "[startup sql]").expect("the section");
     assert_eq!(
-        rows[at..at + 7],
-        ["[startup sql]", "  $broken", "    !", "  $fk_off", "  $my_ro", "  $reporting", "    @local-pg"],
+        rows[at..at + 8],
+        ["[startup sql]", "  $broken", "    !", "  $fk_off", "    !", "  $my_ro", "  $reporting", "    @local-pg"],
         "{rows:?}"
     );
     on_preset(&mut h, "my_ro");
@@ -414,6 +414,11 @@ fn the_section_lists_the_presets_with_their_users_and_problems() {
     on_row(&mut h, RowKind::SessionError(broken));
     let status = h.status(120, 40);
     assert!(status.contains("statement 2: SET LOCAL ends with its transaction: write SET"), "{status}");
+    // A setting that asks when typed: Startup SQL runs without asking.
+    let fk = preset_id(&h, "fk_off");
+    on_row(&mut h, RowKind::SessionError(fk));
+    let status = h.status(120, 40);
+    assert!(status.contains("statement 1: typed, it asks before it runs; Startup SQL runs without asking"), "{status}");
     // The filter: by a statement.
     on_preset(&mut h, "broken");
     h.keys("/");
@@ -505,8 +510,8 @@ fn the_form_refuses_statements_that_are_not_settings_and_the_reserved_name() {
     h.ctrl('d');
     assert_eq!(h.form().session_sql.statements(), ["SET work_mem = '1MB'"]);
     h.key(KeyCode::Enter);
-    h.type_text("SET foreign_key_checks = 0");
-    // A risky MySQL setting: allowed, but read-only environments refuse it.
+    h.type_text("SET SESSION wait_timeout = 600");
+    // A MySQL setting that is allowed, but read-only environments refuse it.
     h.key(KeyCode::BackTab);
     assert_eq!(h.form().focus, Field::SessionDbms);
     h.key(KeyCode::Right);
@@ -517,7 +522,7 @@ fn the_form_refuses_statements_that_are_not_settings_and_the_reserved_name() {
     assert!(!h.form_open(), "a warning does not keep it from saving");
     assert!(
         dir.text().contains(
-            "[startup.ro]\ndbms = \"mysql\"\nsql = [\"SET work_mem = '1MB'\", \"SET foreign_key_checks = 0\"]\n"
+            "[startup.ro]\ndbms = \"mysql\"\nsql = [\"SET work_mem = '1MB'\", \"SET SESSION wait_timeout = 600\"]\n"
         ),
         "{}",
         dir.text()
@@ -1271,7 +1276,7 @@ fn a_mysql_profiles_session_view_has_no_pooler_lines() {
     let screen = h.screen(120, 40);
     assert!(screen.contains("local-pg · MySQL · environment prod"), "{screen}");
     assert!(screen.contains("From Startup SQL “my_ro” of environment prod:"), "{screen}");
-    assert!(screen.contains("  SET SESSION sql_mode = 'ANSI_QUOTES'"), "{screen}");
+    assert!(screen.contains("  SET SESSION net_write_timeout = 6000"), "{screen}");
     assert!(!screen.contains("behind a pooler"), "{screen}");
 }
 

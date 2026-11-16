@@ -134,15 +134,25 @@ fn the_servers_idle_limit_is_a_presets_to_set() {
 #[test]
 fn pg_read_only_refusal_is_the_classifiers() {
     // Not on the read-only allowlist: allowed as a setting, refused by a read-only environment.
-    let s = pg("SET session_replication_role = replica").unwrap();
+    let s = pg("SET synchronous_commit = off").unwrap();
     assert!(s.risk.read_only().is_err());
     assert!(pg("SET work_mem = '1MB'").unwrap().risk.read_only().is_ok());
+}
+
+/// A setting that asks before it runs when typed is no start-up setting: start-up statements
+/// run without asking. Other settings still are.
+#[test]
+fn settings_that_ask_when_typed_are_refused() {
+    for sql in ["SET foreign_key_checks = 0", "SET sql_log_bin = 0", "SET sql_mode = ''"] {
+        assert_eq!(mysql(sql).map(|_| ()), Err(SetProblem::Asks), "{sql}");
+    }
+    assert!(pg("SET work_mem = '64MB'").is_ok());
+    assert!(mysql("SET SESSION max_heap_table_size = 16777216").is_ok());
 }
 
 #[test]
 fn mysql_allows_session_sets() {
     for sql in [
-        "SET SESSION sql_mode = 'ANSI_QUOTES'",
         "SET @@session.time_zone = '+00:00'",
         "SET time_zone = '+00:00', @x = 1",
         "SET @@max_heap_table_size = 16777216",
@@ -212,10 +222,8 @@ fn mysql_refuses_the_settings_the_app_keeps() {
 #[test]
 fn mysql_reads_with_ansi_quotes_too() {
     // Under ANSI_QUOTES `"x"` is a name: the setting is then assigned a column, not a string.
-    // Either reading must be a plain setting; a risky one is refused only in read-only.
-    let s = mysql("SET SESSION foreign_key_checks = 0").unwrap();
-    assert_eq!(s.risk.danger, Some(Danger::Setting));
-    assert!(s.risk.read_only().is_err());
+    // Either reading must be a plain setting; one that asks when typed is refused in any.
+    assert_eq!(mysql("SET SESSION foreign_key_checks = 0").map(|_| ()), Err(SetProblem::Asks));
     assert_eq!(mysql("SET x = (SELECT 1); DROP TABLE t"), Err(SetProblem::NotOne));
 }
 

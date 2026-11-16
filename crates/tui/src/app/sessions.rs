@@ -137,6 +137,7 @@ impl App {
             SetProblem::Local => Label::SetLocal,
             SetProblem::Writes => Label::SetWrites,
             SetProblem::Danger(_) => Label::SetDanger,
+            SetProblem::Asks => Label::SetAsks,
             SetProblem::ModeDependent => Label::SetModeDependent,
             SetProblem::IdleValue => Label::SetIdleValue,
             SetProblem::TransactionOnly { name } => {
