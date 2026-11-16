@@ -635,6 +635,7 @@ impl App {
             PlanError::NotCounted { .. } => Label::EditPreviewNotCounted.into(),
             PlanError::Gone { .. } => Label::EditPreviewGone.into(),
             PlanError::Ambiguous { matches, .. } => Msg::EditPreviewAmbiguous { count: *matches },
+            PlanError::Unseen { matches, .. } => Msg::EditPreviewUnseen { count: *matches },
             PlanError::Choose { matches, .. } => Msg::EditPreviewChoose { count: *matches },
             PlanError::NoOneOfK { row: r } => {
                 let count = matches.get(r).copied().unwrap_or(0);
@@ -739,6 +740,7 @@ fn problem_at(e: &PlanError) -> Option<(RowAt, Option<usize>)> {
         PlanError::NotCounted { row }
         | PlanError::Gone { row }
         | PlanError::Ambiguous { row, .. }
+        | PlanError::Unseen { row, .. }
         | PlanError::Choose { row, .. }
         | PlanError::NoOneOfK { row } => Some((RowAt::Read(*row), None)),
         PlanError::Internal(_) => None,

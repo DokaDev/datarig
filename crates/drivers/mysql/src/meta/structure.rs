@@ -14,8 +14,12 @@
 //! functional key's, an expression default) with one level of string escaping (`\'`, `\\`):
 //! it is unescaped once ([`unescaped`]) so that it is SQL again. MariaDB keeps it as it is.
 //!
-//! `COLUMNS` lists only the columns the user has a privilege on (a column-level grant shows a
-//! part of the table). MariaDB before 10.5 has no `JSON_ARRAYAGG`: the read fails there with the
+//! `COLUMNS` lists only the columns the user has a privilege on: a grant of single columns
+//! shows a part of the table, rows that look the same may differ in the others. Every column is
+//! listed to a user with `SELECT`, `INSERT`, `UPDATE` or `REFERENCES` on the table, its schema
+//! or every schema; without such a grant of the user's own (`information_schema`'s privilege
+//! tables, which do not show a role's) the table's columns are unknown
+//! ([`TableStructure::hidden`]), those listed shown all the same. MariaDB before 10.5 has no `JSON_ARRAYAGG`: the read fails there with the
 //! server's message. With `lower_case_table_names = 2` (macOS, Windows) the names are compared
 //! as the server stores them, which is not tested.
 //!
@@ -80,8 +84,40 @@ const SQL: &str = "SELECT JSON_OBJECT(
       WHERE p.PRIVILEGE_TYPE = 'TRIGGER' AND p.GRANTEE = {grantee} AND {schema} LIKE p.TABLE_SCHEMA)
     OR EXISTS (SELECT 1 FROM information_schema.TABLE_PRIVILEGES p
       WHERE p.PRIVILEGE_TYPE = 'TRIGGER' AND p.GRANTEE = {grantee}
-      AND p.TABLE_SCHEMA = {schema} AND p.TABLE_NAME = {table}))
+      AND p.TABLE_SCHEMA = {schema} AND p.TABLE_NAME = {table}),
+  'column_privilege', {columns_granted})
 FROM information_schema.TABLES t WHERE t.TABLE_SCHEMA = {schema} AND t.TABLE_NAME = {table}";
+
+/// Whether the user's own grants list every column of the table (`COLUMNS` lists a column to a
+/// user with `SELECT`, `INSERT`, `UPDATE` or `REFERENCES` on it): such a privilege on every
+/// schema, on the table's schema or on the table. Each is taken only where it surely holds,
+/// else the columns are unknown:
+///
+/// - on every schema, not while `partial_revokes` ({partial}) may take it back for a schema;
+/// - on the schema, a pattern (`_` and `%`) when `partial_revokes` is off, a name when it is on,
+///   and only when one pattern of the user's names the schema: of several, the server takes the
+///   first in its own order, which may grant less;
+/// - names are compared byte for byte: a grant of a name in another case does not count, nor
+///   the grant of an account whose name differs in case (listed to a user who may read `mysql`).
+///
+/// `{escape}` is a backslash as the session reads literals (`NO_BACKSLASH_ESCAPES`).
+const COLUMNS_GRANTED: &str = "(({partial} = 0 AND EXISTS (SELECT 1 FROM information_schema.USER_PRIVILEGES p
+      WHERE p.PRIVILEGE_TYPE IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES') AND CAST(p.GRANTEE AS BINARY) = CAST({grantee} AS BINARY)))
+    OR (EXISTS (SELECT 1 FROM information_schema.SCHEMA_PRIVILEGES p
+        WHERE p.PRIVILEGE_TYPE IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES') AND CAST(p.GRANTEE AS BINARY) = CAST({grantee} AS BINARY)
+        AND {schema_named})
+      AND (SELECT COUNT(DISTINCT CAST(p.TABLE_SCHEMA AS BINARY)) FROM information_schema.SCHEMA_PRIVILEGES p
+        WHERE CAST(p.GRANTEE AS BINARY) = CAST({grantee} AS BINARY) AND {schema_named}) = 1)
+    OR EXISTS (SELECT 1 FROM information_schema.TABLE_PRIVILEGES p
+      WHERE p.PRIVILEGE_TYPE IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES') AND CAST(p.GRANTEE AS BINARY) = CAST({grantee} AS BINARY)
+      AND CAST(p.TABLE_SCHEMA AS BINARY) = CAST({schema} AS BINARY)
+      AND CAST(p.TABLE_NAME AS BINARY) = CAST({table} AS BINARY)))";
+
+/// A schema grant `p` names the table's schema: as a pattern, or as a name while
+/// `partial_revokes` is on.
+const SCHEMA_NAMED: &str =
+    "IF({partial} = 0, CAST({schema} AS BINARY) LIKE CAST(p.TABLE_SCHEMA AS BINARY) ESCAPE {escape},
+        CAST(p.TABLE_SCHEMA AS BINARY) = CAST({schema} AS BINARY))";
 
 /// The user the session is, as the privilege tables name a grantee (`'user'@'host'`): the host
 /// is after the last `@` (a user name may hold one).
@@ -117,6 +153,14 @@ pub(crate) fn statement(server: Server, mode: MySqlMode, schema: &str, table: &s
     // The checks' subquery names the table too; it is filled first, as a value of the
     // statement is never read again for places.
     let checks = super::fill(checks, &names);
+    // `partial_revokes` is MySQL's from 8.0.16; MariaDB has none.
+    let partial = if !server.mariadb && server.version >= (8, 0, 16) { "@@GLOBAL.partial_revokes" } else { "0" };
+    let escape = d.quote_literal("\\");
+    let named = super::fill(SCHEMA_NAMED, &[("partial", partial), ("escape", &escape), names[0]]);
+    let granted = super::fill(
+        COLUMNS_GRANTED,
+        &[("partial", partial), ("schema_named", &named), ("grantee", GRANTEE), names[0], names[1]],
+    );
     // In one pass: a name is never read as a place for another value.
     super::fill(
         SQL,
@@ -124,6 +168,7 @@ pub(crate) fn statement(server: Server, mode: MySqlMode, schema: &str, table: &s
             ("expression", if functional { "x.EXPRESSION" } else { "NULL" }),
             ("visible", if server.mariadb { "NULL" } else { "x.IS_VISIBLE" }),
             ("checks", &checks),
+            ("columns_granted", &granted),
             ("grantee", GRANTEE),
             names[0],
             names[1],
@@ -156,6 +201,7 @@ pub(crate) struct Raw {
     checks: Option<Vec<RawCheck>>,
     triggers: Option<Vec<RawTrigger>>,
     trigger_privilege: Flag,
+    column_privilege: Flag,
 }
 
 /// A boolean as a server writes it into JSON: `true`, or `1` (MariaDB).
@@ -472,6 +518,9 @@ pub(crate) fn model(
     }
     if kind == RelationKind::Table && s.triggers.is_empty() && !raw.trigger_privilege.on() {
         s.hidden.push(StructureGroup::Triggers);
+    }
+    if kind == RelationKind::Table && !raw.column_privilege.on() {
+        s.hidden.push(StructureGroup::Columns);
     }
     Ok(s)
 }

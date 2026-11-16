@@ -114,6 +114,9 @@ pub enum PlanError {
     Gone { row: usize },
     /// The row matches several rows that may differ in what the result does not show.
     Ambiguous { row: usize, matches: u64 },
+    /// The row matches several rows the same in every column the user may see; the table may
+    /// have others ([`super::Duplicates::Unseen`]).
+    Unseen { row: usize, matches: u64 },
     /// The row matches several rows the same in every column: one, or all?
     Choose { row: usize, matches: u64 },
     /// The format cannot change just one of several rows.
@@ -335,6 +338,7 @@ fn row_checks(
             Some(1) => (1, Scope::All),
             Some(k) => match (duplicates, facts.choices.get(&row)) {
                 (Duplicates::Refuse, _) => return Err(PlanError::Ambiguous { row, matches: k }),
+                (Duplicates::Unseen, _) => return Err(PlanError::Unseen { row, matches: k }),
                 (Duplicates::Choose, None) => return Err(PlanError::Choose { row, matches: k }),
                 (Duplicates::Choose, Some(Choice::All)) => (k, Scope::All),
                 (Duplicates::Choose, Some(Choice::One)) => (k, Scope::One),

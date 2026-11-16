@@ -4026,6 +4026,59 @@ async fn a_user_name_with_an_at_sign_finds_its_trigger_privilege() {
     assert!(s.hidden.is_empty(), "the privilege is the user's: {:?}", s.hidden);
 }
 
+/// A user granted single columns of a table is listed only those: the table's columns are
+/// unknown, not those few, so rows that look the same are not taken to be the same. A grant on
+/// the table lists them all.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_table_granted_column_by_column_has_its_columns_unknown() {
+    let test = "a_table_granted_column_by_column_has_its_columns_unknown";
+    use datarig_core::driver::structure::StructureGroup;
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "colgrant", 3).await;
+    let name = format!("zz_it_colgrant_{}", std::process::id());
+    let _drop = Cleanup { url: admin.clone(), sql: format!("DROP USER IF EXISTS '{name}'@'%'") };
+    let mut a = side(&admin).await;
+    a.query_drop(format!("DROP USER IF EXISTS '{name}'@'%'")).await.unwrap();
+    a.query_drop(format!("CREATE USER '{name}'@'%' IDENTIFIED BY 'pw'")).await.unwrap();
+    a.query_drop(format!("GRANT SELECT (id), UPDATE (id) ON {} TO '{name}'@'%'", t.q())).await.unwrap();
+    let mut m = Conn::start(&as_user(&url, &name, "pw"), SessionRole::Meta, false, test);
+    m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
+    let s = structure_of(&mut m, &t.name).await.unwrap();
+    assert_eq!(s.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id"], "only the granted column");
+    assert!(s.hidden.contains(&StructureGroup::Columns), "{:?}", s.hidden);
+    // A grant of a table whose name differs in case is another table's (names are compared as
+    // stored on a server that keeps their case).
+    let (lower,): (i64,) = a.query_first("SELECT @@lower_case_table_names").await.unwrap().unwrap();
+    if lower == 0 {
+        let upper = format!("shop.{}", t.name.to_uppercase());
+        let _upper = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {upper}") };
+        a.query_drop(format!("CREATE TABLE {upper} (id INT)")).await.unwrap();
+        a.query_drop(format!("GRANT SELECT ON {upper} TO '{name}'@'%'")).await.unwrap();
+        let s = structure_of(&mut m, &t.name).await.unwrap();
+        assert!(s.hidden.contains(&StructureGroup::Columns), "{:?} {:?}", s.hidden, s.columns);
+    }
+    // An account whose name differs only in case is another account: its grants, listed to a
+    // user who may read `mysql`, are not this user's.
+    let twin = name.to_uppercase();
+    let _twin = Cleanup { url: admin.clone(), sql: format!("DROP USER IF EXISTS '{twin}'@'%'") };
+    a.query_drop(format!("CREATE USER '{twin}'@'%' IDENTIFIED BY 'pw'")).await.unwrap();
+    a.query_drop(format!("GRANT SELECT ON {} TO '{twin}'@'%'", t.q())).await.unwrap();
+    a.query_drop(format!("GRANT SELECT ON mysql.* TO '{name}'@'%'")).await.unwrap();
+    let s = structure_of(&mut m, &t.name).await.unwrap();
+    assert!(s.hidden.contains(&StructureGroup::Columns), "{:?} {:?}", s.hidden, s.columns);
+    // Of two schema patterns that name the schema the server takes one: the `SELECT` of the
+    // other may not hold, so it does not count.
+    a.query_drop(format!("GRANT DELETE ON `sho_`.* TO '{name}'@'%'")).await.unwrap();
+    a.query_drop(format!("GRANT SELECT ON `s%`.* TO '{name}'@'%'")).await.unwrap();
+    let s = structure_of(&mut m, &t.name).await.unwrap();
+    assert!(s.hidden.contains(&StructureGroup::Columns), "{:?} {:?}", s.hidden, s.columns);
+    a.query_drop(format!("GRANT SELECT ON {} TO '{name}'@'%'", t.q())).await.unwrap();
+    a.disconnect().await.unwrap();
+    let s = structure_of(&mut m, &t.name).await.unwrap();
+    assert_eq!(s.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "v"]);
+    assert!(!s.hidden.contains(&StructureGroup::Columns), "{:?}", s.hidden);
+}
+
 // ── DDL ────────────────────────────────────────────────────────────────────
 
 /// The user of the tests' URL (`DATARIG_TEST_MYSQL_URL`) as a definer.

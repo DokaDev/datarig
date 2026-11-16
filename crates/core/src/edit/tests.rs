@@ -281,12 +281,20 @@ fn rows_are_never_duplicates_when_the_structure_is_not_whole() {
     let choose = Identity::Values { columns: vec![0, 1], duplicates: Duplicates::Choose };
     let refuse = Identity::Values { columns: vec![0, 1], duplicates: Duplicates::Refuse };
     assert_eq!(resolve(&["a", "b"], &cols, &s).unwrap().identity, choose);
-    // The server would not list some of it (MySQL lists only the columns a user may read).
-    for g in [StructureGroup::Columns, StructureGroup::Indexes, StructureGroup::UniqueConstraints] {
+    // The server would not list some of it.
+    for g in [StructureGroup::Indexes, StructureGroup::UniqueConstraints] {
         let s = TableStructure { hidden: vec![g], ..s.clone() };
         let t = resolve(&["a", "b"], &cols, &s).unwrap();
         assert_eq!(t.identity, refuse, "{g:?}");
     }
+    // MySQL lists only the columns a user may read: rows that look the same are refused, saying
+    // why (a key may be hidden as well: refused as any).
+    let unseen = Identity::Values { columns: vec![0, 1], duplicates: Duplicates::Unseen };
+    let s1 = TableStructure { hidden: vec![StructureGroup::Columns], ..s.clone() };
+    let t = resolve(&["a", "b"], &cols, &s1).unwrap();
+    assert_eq!((t.identity, t.all_columns_shown), (unseen, false));
+    let s2 = TableStructure { hidden: vec![StructureGroup::Columns, StructureGroup::Indexes], ..s.clone() };
+    assert_eq!(resolve(&["a", "b"], &cols, &s2).unwrap().identity, refuse);
     let s = TableStructure { hidden: vec![StructureGroup::Triggers], ..s.clone() };
     assert_eq!(resolve(&["a", "b"], &cols, &s).unwrap().identity, choose, "triggers do not matter");
     // A key on a column the structure does not list: unknown whether it may be NULL.
