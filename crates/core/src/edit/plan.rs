@@ -58,6 +58,11 @@ pub struct Step {
     pub sql: String,
     pub expect: Expect,
     pub origin: Origin,
+    /// A write of one of several rows the same in every column ("just one"): which of them it
+    /// changes is the server's pick. A replica that replays the statement picks again, so a
+    /// driver whose server may log the statement as it is (MySQL `binlog_format = STATEMENT`)
+    /// refuses the Apply before sending anything.
+    pub one: bool,
 }
 
 /// The statements of one Apply, in the order they run.
@@ -258,19 +263,19 @@ pub fn plan(t: &EditTarget, b: &EditBatch, f: &dyn EditSql, facts: &Facts) -> Re
         let (w, n, scope) = row_checks(t, row, e, f, facts)?;
         let check = f.check(&t.table, &w);
         verify(f, &t.table, &check, Kind::Check(&w))?;
-        checks.push(Step { sql: check, expect: Expect::Rows(n), origin });
+        checks.push(Step { sql: check, expect: Expect::Rows(n), origin, one: false });
         let affected = Expect::Affected(if scope == Scope::One { 1 } else { n });
         let sql = write_sql(t, row, e, f, &w, scope)?;
         let kind = if e.delete { Kind::Delete(&w, scope) } else { Kind::Update(&w, scope) };
         verify(f, &t.table, &sql, kind)?;
-        let step = Step { sql, expect: affected, origin };
+        let step = Step { sql, expect: affected, origin, one: scope == Scope::One };
         if e.delete { deletes.push(step) } else { updates.push(step) }
     }
     for d in b.drafts() {
         let cells = insert_cells(t, d)?.into_iter().map(|(col, v)| (col, f.value(col, v))).collect::<Vec<_>>();
         let sql = f.insert(&t.table, &cells);
         verify(f, &t.table, &sql, Kind::Insert)?;
-        inserts.push(Step { sql, expect: Expect::Affected(1), origin: Origin::New(d.id) });
+        inserts.push(Step { sql, expect: Expect::Affected(1), origin: Origin::New(d.id), one: false });
     }
     let steps = checks.into_iter().chain(deletes).chain(updates).chain(inserts).collect();
     Ok(Plan { steps, counts: b.counts() })

@@ -62,6 +62,8 @@
 "db.not_undoable.triggers_hidden" = "이 계정에는 트리거가 보이지 않음"
 "db.not_undoable_no_trigger" = "실행하지 않음: EXPLAIN ANALYZE는 문을 실제로 실행하는데, {tables}에서 바뀌는 것을 롤백이 모두 되돌리는지 확인할 수 없습니다(트리거는 TRIGGER 권한이 있는 계정에만 보입니다). ANALYZE 없는 EXPLAIN으로 플랜을 볼 수 있고, 측정하려면 그 테이블에 TRIGGER 권한을 직접 받은 계정을 쓰세요(역할을 통한 권한은 보이지 않습니다)"
 "db.not_undoable" = "실행하지 않음: EXPLAIN ANALYZE는 문을 실제로 실행하는데, {tables}에서 바뀌는 것은 롤백으로 되돌릴 수 없습니다(InnoDB가 아니거나 뷰, 또는 트리거가 있는 테이블). ANALYZE 없는 EXPLAIN으로 플랜을 볼 수 있습니다"
+"db.statement_logged" = "동일한 행 중 \"하나만\" 바꾸는 문은 LIMIT 1로 쓰는데, 이 세션의 바이너리 로그는 문을 쓴 그대로 기록합니다(binlog_format = {format}): 레플리카는 행을 따로 골라 다른 행을 바꿀 수 있습니다. 모두 바꾸거나 행 단위로 기록하세요(binlog_format = ROW 또는 MIXED)"
+"db.statement_logged_unread" = "동일한 행 중 \"하나만\" 바꾸는 문은 LIMIT 1로 쓰는데, 레플리카가 안전하게 따라 하려면 바이너리 로그가 행을 기록해야 하며, 이 세션의 binlog_format을 읽을 수 없었습니다"
 "db.rows_not_read" = "문은 실행되었고 행을 돌려주었습니다: 처음 {count}행만 읽었고 나머지는 가져올 수 없습니다"
 "db.schema_changed" = "쿼리를 실행하는 동안 테이블이 바뀌었습니다. 다시 실행하세요"
 "db.no_result" = "쿼리가 결과 없이 끝났습니다. 다시 실행하세요"

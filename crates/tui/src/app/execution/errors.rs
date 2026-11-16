@@ -78,6 +78,10 @@ impl App {
             DbError::RowsNotRead(n) => return self.i18n.msg(&Msg::DbRowsNotRead { count: *n }).to_string(),
             DbError::NotUndoable(t) if t.is_empty() => Label::DbNotUndoableUnread,
             DbError::NotUndoable(t) => return self.not_undoable_text(t),
+            DbError::StatementLogged(None) => Label::DbStatementLoggedUnread,
+            DbError::StatementLogged(Some(format)) => {
+                return self.i18n.msg(&Msg::DbStatementLogged { format: format.clone() }).to_string();
+            }
             DbError::Closed => Label::DbClosed,
             DbError::NotSupported => Label::DbNotSupported,
             DbError::ServerTooOld => Label::DbServerTooOld,

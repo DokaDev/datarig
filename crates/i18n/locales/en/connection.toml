@@ -64,6 +64,8 @@
 "db.not_undoable.triggers_hidden" = "its triggers are not visible to this account"
 "db.not_undoable_no_trigger" = "not run: EXPLAIN ANALYZE runs the statement, and whether a rollback undoes all it would change in {tables} cannot be checked (triggers are listed only to an account with the TRIGGER privilege). EXPLAIN without ANALYZE shows the plan; to measure it, use an account granted the TRIGGER privilege on those tables directly (a grant through a role is not seen)"
 "db.not_undoable" = "not run: EXPLAIN ANALYZE runs the statement, and a rollback cannot undo what it would change in {tables} (not InnoDB, a view, or a table with triggers). EXPLAIN without ANALYZE shows the plan"
+"db.statement_logged" = "\"just one\" of identical rows is changed with LIMIT 1, and this session's binary log keeps statements as written (binlog_format = {format}): a replica picks its own row and could change a different one. Change all of them, or log rows (binlog_format = ROW or MIXED)"
+"db.statement_logged_unread" = "\"just one\" of identical rows is changed with LIMIT 1, which a replica repeats safely only when the binary log keeps rows, and this session's binlog_format could not be read"
 "db.rows_not_read" = { one = "the statement ran and returned rows after all: only its first row was read, the rest cannot be fetched", other = "the statement ran and returned rows after all: only its first {count} rows were read, the rest cannot be fetched" }
 "db.schema_changed" = "the table changed while the query was running; run it again"
 "db.no_result" = "the query ended without a result; run it again"

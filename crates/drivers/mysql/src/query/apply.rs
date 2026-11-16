@@ -23,6 +23,11 @@ use std::sync::atomic::Ordering;
 /// The savepoint an Apply runs under inside a transaction.
 const SAVEPOINT: &str = "datarig_apply";
 
+/// How the session's writes reach the binary log: its format, whether the server keeps one,
+/// whether this session's writes go to it. Its own `LIMIT` outranks the session's
+/// `sql_select_limit`, which could return no row.
+const LOGGING: &str = "SELECT @@SESSION.binlog_format, @@GLOBAL.log_bin, @@SESSION.sql_log_bin LIMIT 1";
+
 /// Where the steps run.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -91,6 +96,28 @@ pub(super) async fn apply(
     if steps.is_empty() {
         answer(Ok(Vec::new()));
         return Ok(());
+    }
+    // "Just one" of identical rows is the server's pick (`LIMIT 1`), and a replica replaying the
+    // statement picks again: it is sent only while the binary log keeps rows, or nothing of
+    // this session. MIXED keeps such a statement as rows (it is unsafe as a statement). Read in
+    // this session right before, so a `SET` of the user's counts; a value not read refuses.
+    if steps.iter().any(|st| st.one) {
+        let read = link.guard(None, conn.query_first::<(Option<String>, Option<i64>, Option<i64>), _>(LOGGING)).await?;
+        let refused = match read {
+            Ok(Some((format, log_bin, sql_log_bin))) => {
+                let rows =
+                    format.as_deref().is_some_and(|f| f.eq_ignore_ascii_case("ROW") || f.eq_ignore_ascii_case("MIXED"));
+                let unlogged = log_bin == Some(0) || sql_log_bin == Some(0);
+                (!rows && !unlogged).then_some(DbError::StatementLogged(format))
+            }
+            Ok(None) => Some(DbError::StatementLogged(None)),
+            Err(e) if e.is_fatal() => return lost_or(e, answer),
+            Err(_) => Some(DbError::StatementLogged(None)),
+        };
+        if let Some(why) = refused {
+            answer(Err(fail(None, why)));
+            return Ok(());
+        }
     }
     let mode = match rule {
         _ if s.tx.open => Mode::Savepoint,

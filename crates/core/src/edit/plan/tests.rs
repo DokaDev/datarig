@@ -240,6 +240,9 @@ fn identical_rows_change_one_or_all_as_chosen() {
     let one = plan_with(&t, &b, &ALL, &[(3, 3)], &[(3, Choice::One)]).unwrap();
     assert_eq!(one.steps.iter().map(|s| s.expect).collect::<Vec<_>>(), [Expect::Rows(3), Expect::Affected(1)]);
     assert!(one.steps[1].sql.contains("LIMIT 1"), "{}", one.steps[1].sql);
+    // Only the write of one of them is marked, for drivers that check how it is replicated.
+    assert_eq!(one.steps.iter().map(|s| s.one).collect::<Vec<_>>(), [false, true]);
+    assert!(all.steps.iter().all(|s| !s.one));
     let no_one = Fake { one: false, ..ALL };
     assert_eq!(plan_with(&t, &b, &no_one, &[(3, 3)], &[(3, Choice::One)]), Err(PlanError::NoOneOfK { row: 3 }));
     assert!(plan_with(&t, &b, &no_one, &[(3, 3)], &[(3, Choice::All)]).is_ok());

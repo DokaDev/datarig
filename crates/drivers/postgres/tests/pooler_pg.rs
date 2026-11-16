@@ -1154,7 +1154,7 @@ async fn behind_a_pooler_an_apply_is_one_transaction_and_leaves_no_settings() {
         .lock_wait(Some(Duration::from_secs(1)));
     let mut q = Conn::open_with(&url, SessionRole::Query, opts).await;
     let steps = |v: &str| {
-        let step = |sql: String, expect| Step { sql, expect, origin: Origin::Row(0) };
+        let step = |sql: String, expect| Step { sql, expect, origin: Origin::Row(0), one: false };
         vec![
             step(format!("SELECT 1 FROM {table} WHERE id = 1 FOR UPDATE NOWAIT"), Expect::Rows(1)),
             step(
