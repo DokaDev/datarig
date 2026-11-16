@@ -515,6 +515,22 @@ pub(crate) fn not_read_only(
     )
 }
 
+/// Whether the session on `conn` is read-only: on when the server reported it on, else as the
+/// server answers [`ask_read_only`] (which `tracked` then keeps). `None` when it is; otherwise
+/// what the server reported and answered ([`not_read_only`]).
+async fn confirm_read_only(conn: &mut Conn, server: &Server, tracked: &mut Tracked) -> Result<Option<String>, DbError> {
+    if tracked.read_only == Some(true) {
+        return Ok(None);
+    }
+    let asked: Option<ReadOnlyAsked> = conn.query_first(ask_read_only(server)).await.map_err(|e| my_error(&e))?;
+    let asked = asked.unwrap_or_default();
+    tracked.read_only = Some(asked.0.as_deref().is_some_and(on));
+    if tracked.read_only == Some(true) {
+        return Ok(None);
+    }
+    Ok(Some(not_read_only(server, tracked.read_only_reported.as_deref(), &asked)))
+}
+
 /// A connection that is ready for the session.
 pub(crate) struct Opened {
     pub(crate) conn: Conn,
@@ -557,6 +573,20 @@ pub(crate) async fn open(
     let set = conn.query_drop(init_sql(&server, &settings)).await;
     set.map_err(|e| (my_error(&e), false))?;
     tracked.update(&conn);
+    // A read-only profile's start-up statements run only on a session confirmed read-only: on a
+    // server that does not keep the setting they would otherwise run writable before the
+    // refusal below.
+    // Only what the server reports counts after them: an answer now says nothing about a
+    // statement that turns it off unreported, which the check below asks again.
+    if settings.role == SessionRole::Query && settings.read_only && !session_sql.is_empty() {
+        let reported = tracked.read_only;
+        let unconfirmed = confirm_read_only(&mut conn, &server, &mut tracked).await.map_err(|e| (e, false))?;
+        tracked.read_only = reported;
+        if let Some(detail) = unconfirmed {
+            quit(conn).await;
+            return Err((DbError::Connection(Fault::other(detail)), false));
+        }
+    }
     for (index, sql) in session_sql.iter().enumerate() {
         if let Err(e) = conn.query_drop(sql.as_str()).await {
             let error = DbError::SessionSql { index, statement: sql.clone(), error: Box::new(my_error(&e)) };
@@ -596,13 +626,9 @@ pub(crate) async fn open(
     // opens anyway and says what the server answered (a reader that does not keep the setting
     // would otherwise never connect).
     let mut read_only_unconfirmed = None;
-    if read_only && tracked.read_only != Some(true) {
-        let asked: Option<ReadOnlyAsked> =
-            conn.query_first(ask_read_only(&server)).await.map_err(|e| (my_error(&e), false))?;
-        let asked = asked.unwrap_or_default();
-        tracked.read_only = Some(asked.0.as_deref().is_some_and(on));
-        if tracked.read_only != Some(true) {
-            let detail = not_read_only(&server, tracked.read_only_reported.as_deref(), &asked);
+    if read_only {
+        let unconfirmed = confirm_read_only(&mut conn, &server, &mut tracked).await.map_err(|e| (e, false))?;
+        if let Some(detail) = unconfirmed {
             if settings.role == SessionRole::Query {
                 quit(conn).await;
                 return Err((DbError::Connection(Fault::other(detail)), false));

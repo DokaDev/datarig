@@ -88,6 +88,7 @@ impl App {
                 if let Some(s) = a.session.take() {
                     s.close();
                 }
+                a.read_only_unconfirmed = None;
                 // What it was asked for never comes: asked again on the next use.
                 a.checks.retain(|_, c| *c != TableChecks::Asked);
                 if !matches!(a.schemas, Some(Ok(_))) {
@@ -145,7 +146,12 @@ impl App {
             }
             DbEvent::Keys(Ok(keys)) => a.keys = Keys::Loaded(keys),
             DbEvent::Keys(Err(_)) => a.keys = Keys::Failed(text),
-            DbEvent::ReadOnlyUnconfirmed(detail) => self.read_only_unconfirmed(profile, SessionRole::Meta, detail),
+            DbEvent::ReadOnlyUnconfirmed(detail) => {
+                self.log_read_only_unconfirmed(SessionRole::Meta, &detail);
+                if let Some(a) = self.conns.aux_by_id(id) {
+                    a.read_only_unconfirmed = Some(detail);
+                }
+            }
             _ => {}
         }
     }
@@ -160,14 +166,13 @@ impl App {
         }
     }
 
-    /// A metadata or monitor session (`role`) of profile `id` opened although the server did not
-    /// keep it read-only (`detail`: what the server reported and answered): one line in the
-    /// error log for each such session, and the profile's session view says it.
-    pub(in crate::app) fn read_only_unconfirmed(&mut self, id: ProfileId, role: SessionRole, detail: String) {
+    /// A metadata or monitor session (`role`) opened although the server did not keep it
+    /// read-only (`detail`: what the server reported and answered): one line in the error log
+    /// for each such session. The session's own state keeps `detail` for the session view.
+    pub(in crate::app) fn log_read_only_unconfirmed(&self, role: SessionRole, detail: &str) {
         let session = if role == SessionRole::Monitor { "monitor" } else { "metadata" };
         let fault = datarig_core::fault::Fault::other(format!("{session} session: {detail}"));
         ErrorLog::new(self.paths.errors_log()).record("db.read_only_unconfirmed", &fault);
-        self.conns.entry(id).read_only_unconfirmed = Some((role, detail));
     }
 
     pub(super) fn meta_event(&mut self, id: ProfileId, ev: DbEvent) {
@@ -175,7 +180,10 @@ impl App {
         let text = self.event_error_text(&ev);
         match ev {
             DbEvent::Encryption(e) => self.conns.entry(id).encryption = Some(e),
-            DbEvent::ReadOnlyUnconfirmed(detail) => self.read_only_unconfirmed(id, SessionRole::Meta, detail),
+            DbEvent::ReadOnlyUnconfirmed(detail) => {
+                self.log_read_only_unconfirmed(SessionRole::Meta, &detail);
+                self.conns.entry(id).read_only_unconfirmed = Some(detail);
+            }
             DbEvent::Connected => self.on_connected(id),
             // The profile's sessions are read-only per transaction only: said once it connected.
             DbEvent::ReadOnlyPerTransaction => {
@@ -305,6 +313,7 @@ impl App {
                 let c = self.conns.entry(id);
                 c.meta = None;
                 c.connected = false;
+                c.read_only_unconfirmed = None;
                 c.error = Some(m.clone());
                 // What it was asked for never comes: asked again on the next use.
                 c.checks.retain(|_, c| *c != TableChecks::Asked);

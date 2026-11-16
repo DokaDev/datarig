@@ -8009,9 +8009,30 @@ struct Misreport {
     ready: std::collections::VecDeque<u8>,
     /// What the client sends is changed as [`UNKEPT`] says.
     unkept: bool,
+    /// Taken from the client and changed, not yet written to the server.
+    out: Vec<u8>,
+    /// The changes in `out`, counted in `changed` once all of it is written.
+    out_changes: usize,
 }
 
 impl Misreport {
+    /// Write all of `out` to the server; its changes count once it is all written.
+    fn drain(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        while !self.out.is_empty() {
+            match std::task::ready!(tokio::io::AsyncWrite::poll_write(
+                std::pin::Pin::new(&mut self.inner),
+                cx,
+                &self.out
+            )) {
+                Ok(0) => return std::task::Poll::Ready(Err(std::io::ErrorKind::WriteZero.into())),
+                Ok(n) => drop(self.out.drain(..n)),
+                Err(e) => return std::task::Poll::Ready(Err(e)),
+            }
+        }
+        self.changed.fetch_add(std::mem::take(&mut self.out_changes), std::sync::atomic::Ordering::SeqCst);
+        std::task::Poll::Ready(Ok(()))
+    }
+
     /// Move every whole packet of `pending` to `ready`, changed.
     fn packets(&mut self) {
         loop {
@@ -8071,6 +8092,8 @@ impl tokio::io::AsyncRead for Misreport {
 }
 
 impl tokio::io::AsyncWrite for Misreport {
+    /// Unchanged without [`unkept`](Misreport::unkept); with it, `buf` is taken whole into
+    /// [`out`](Misreport::out), changed, once what was taken before has gone to the server.
     fn poll_write(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -8080,32 +8103,37 @@ impl tokio::io::AsyncWrite for Misreport {
         if !me.unkept {
             return std::pin::Pin::new(&mut me.inner).poll_write(cx, buf);
         }
-        // Changed in place, the same length: what was written of it is what was written of `buf`.
-        let mut out = buf.to_vec();
+        std::task::ready!(me.drain(cx))?;
+        let start = me.out.len();
+        me.out.extend_from_slice(buf);
         for (from, to) in UNKEPT {
-            let mut at = 0;
-            while let Some(i) = out[at..].windows(from.len()).position(|w| w == from) {
+            let mut at = start;
+            while let Some(i) = me.out[at..].windows(from.len()).position(|w| w == from) {
                 let i = at + i;
-                out[i..i + from.len()].copy_from_slice(to);
-                me.changed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                me.out[i..i + from.len()].copy_from_slice(to);
+                me.out_changes += 1;
                 at = i + from.len();
             }
         }
-        std::pin::Pin::new(&mut me.inner).poll_write(cx, &out)
+        std::task::Poll::Ready(Ok(buf.len()))
     }
 
     fn poll_flush(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+        let me = self.get_mut();
+        std::task::ready!(me.drain(cx))?;
+        std::pin::Pin::new(&mut me.inner).poll_flush(cx)
     }
 
     fn poll_shutdown(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+        let me = self.get_mut();
+        std::task::ready!(me.drain(cx))?;
+        std::pin::Pin::new(&mut me.inner).poll_shutdown(cx)
     }
 }
 
@@ -8122,7 +8150,8 @@ impl Dialer for MisreportDialer {
         Box::pin(async move {
             let inner = dial.await?;
             let (pending, ready) = (Vec::new(), std::collections::VecDeque::new());
-            Ok(Box::new(Misreport { inner, changed, pending, ready, unkept }) as datarig_core::transport::BoxedStream)
+            Ok(Box::new(Misreport { inner, changed, pending, ready, unkept, out: Vec::new(), out_changes: 0 })
+                as datarig_core::transport::BoxedStream)
         })
     }
 }
@@ -8233,4 +8262,46 @@ async fn a_read_only_the_server_does_not_keep_is_said_by_metadata_and_monitor_an
         assert_eq!(text.contains("super_read_only "), !mariadb, "{role:?}: {text}");
         drop(session);
     }
+}
+
+/// A read-only profile's query session with start-up statements, whose server does not keep
+/// the setting, is refused before they run: they never run on a writable session.
+#[tokio::test(flavor = "multi_thread")]
+async fn startup_statements_never_run_on_a_session_the_server_did_not_keep_read_only() {
+    let test = "startup_statements_never_run_on_a_session_the_server_did_not_keep_read_only";
+    let Some((url, admin)) = urls(test) else { return };
+    // Over TLS the bytes cannot be changed.
+    if std::env::var("DATARIG_TEST_MYSQL_SSLMODE").is_ok_and(|m| !m.eq_ignore_ascii_case("DISABLED")) {
+        return;
+    }
+    let t = Table::make(&admin, "unkept_startup", &["CREATE TABLE {t} (id INT)"]).await;
+    let d = Arc::new(MisreportDialer { unkept: true, ..MisreportDialer::default() });
+    let changed = d.changed.clone();
+    let sql = vec![datarig_core::driver::SessionStatement {
+        sql: format!("INSERT INTO {} VALUES (1)", t.q()),
+        per_transaction: None,
+    }];
+    let o = ConnectOptions::new(PAGE, SessionRole::Query, &tag(test))
+        .read_only(true)
+        .session_sql(sql)
+        .dialer(Some(DialerRef(d as Arc<dyn Dialer>)));
+    let (tx, mut rx) = unbounded_channel();
+    let session = MyDriver.connect(&profile(&url), SessionRole::Query, o, tx);
+    let refused = loop {
+        match tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.expect("an answer") {
+            Some(DbEvent::Connected) => panic!("the session must be refused"),
+            Some(DbEvent::ConnectFailed { error, .. }) => break error,
+            Some(_) => {}
+            None => panic!("closed"),
+        }
+    };
+    drop(session);
+    assert!(changed.load(std::sync::atomic::Ordering::SeqCst) > 0, "the set-up was not changed");
+    let DbError::Connection(fault) = &refused else { panic!("{refused:?}") };
+    let text = fault.to_string();
+    assert!(text.starts_with("the server did not make the session read-only (reported "), "{text}");
+    let mut side = side(&admin).await;
+    let rows: Option<u64> = side.query_first(format!("SELECT COUNT(*) FROM {}", t.q())).await.unwrap();
+    assert_eq!(rows, Some(0), "the start-up statement ran");
+    side.disconnect().await.unwrap();
 }
