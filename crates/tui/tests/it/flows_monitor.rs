@@ -1252,6 +1252,8 @@ fn mysql_format() -> MonitorFormat {
         innodb_trx: Readable::Yes,
         metadata_locks: Readable::Yes,
         statements: Readable::Yes,
+        threads: Readable::Yes,
+        unconfirmed: false,
         flavour: Flavour::Standard,
     })
 }
@@ -2344,6 +2346,15 @@ fn refusals_and_failures_are_said_and_not_followed_up() {
             "Refused by the server: needs one of pg_signal_backend (or the session's own role)",
         ),
         (ActionOutcome::Failed(DbError::Server("boom".into())), "Not sent: "),
+        (
+            ActionOutcome::NotSent(NotSent::Unidentified),
+            "Nothing sent: session 4211 cannot be told apart from a later session given the same id, as its \
+             thread cannot be read. Grant the monitoring account SELECT on performance_schema.threads",
+        ),
+        (
+            ActionOutcome::NotSent(NotSent::Unconfirmed),
+            "Nothing sent: this monitor connection could not be confirmed to reach the server directly",
+        ),
     ];
     for (outcome, text) in cases {
         let mut h = pg_selected(4211);
@@ -3035,6 +3046,8 @@ fn the_monitors_own_session_is_named_in_its_details_on_mysql() {
         innodb_trx: Readable::Refused,
         metadata_locks: Readable::Yes,
         statements: Readable::Yes,
+        threads: Readable::Yes,
+        unconfirmed: false,
         flavour: Flavour::Standard,
     });
     let mut rows = mysql_rows("SELECT 1");

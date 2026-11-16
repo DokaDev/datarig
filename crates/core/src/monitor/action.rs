@@ -165,6 +165,9 @@ pub enum Refusal {
     /// activity, or it never ran a statement), so a later client of the same server session (a
     /// pooler's) could not be told apart from the one the row showed.
     Untracked,
+    /// MySQL: the monitor's connection could not be confirmed to reach the server directly
+    /// ([`crate::monitor::MySqlMonitor::unconfirmed`]): its actions could reach another session.
+    Unconfirmed,
 }
 
 /// What the user is told before an action is sent, besides what the session is.
@@ -222,6 +225,9 @@ pub fn decide(format: &MonitorFormat, row: &SessionRow, read_only: bool, kind: A
 fn refusal(format: &MonitorFormat, row: &SessionRow, kind: ActionKind) -> Option<Refusal> {
     if row.monitor {
         return Some(Refusal::MonitorConnection);
+    }
+    if matches!(format, MonitorFormat::MySql(my) if my.unconfirmed) {
+        return Some(Refusal::Unconfirmed);
     }
     let Some(target) = target(format, row) else {
         return Some(Refusal::Hidden(PG_READ_ALL_STATS));
@@ -568,14 +574,28 @@ pub enum NotSent {
     ReadOnly,
     /// The target is the connection that would send it.
     OwnConnection,
+    /// MySQL: the target carries neither its start nor its thread (`THREAD_ID`, read from
+    /// `performance_schema.threads`), so it cannot be told apart from a later session given the
+    /// same id (MySQL reuses ids while it runs). The account needs `SELECT` on
+    /// `performance_schema.threads`, with the performance schema on.
+    Unidentified,
+    /// MySQL: the monitor's connection could not be confirmed to reach the server directly (its
+    /// own marker on its own id, the handshake's), so the read before the action and the action
+    /// could reach different sessions.
+    Unconfirmed,
 }
 
 /// What a read of the target's id just before an action of `kind` on `target` shows of it
 /// (`now`: the session of that id as the read found it, `None` when there is none), for a
 /// driver that reads the session again before it acts rather than in the statement that acts:
 /// why nothing may be sent, `None` when it may. A cancel needs the same statement still
-/// running; a weak stamp that matches is taken for it (the user was warned it may not be).
+/// running; a weak stamp that matches is taken for it (the user was warned it may not be). A
+/// target with neither its start nor its thread known is never acted on: the id alone may name
+/// a later session.
 pub fn recheck(kind: ActionKind, target: &ActionTarget, now: Option<&SessionRow>) -> Option<NotSent> {
+    if target.key.started.is_none() && target.thread.is_none() {
+        return Some(NotSent::Unidentified);
+    }
     let Some(row) = now else {
         return Some(NotSent::Stale(Stale::SessionGone));
     };
@@ -586,6 +606,13 @@ pub fn recheck(kind: ActionKind, target: &ActionTarget, now: Option<&SessionRow>
         Some(true) => {}
         Some(false) => return Some(NotSent::Stale(Stale::SessionReplaced)),
         None => return Some(NotSent::Stale(Stale::CannotTell)),
+    }
+    // Another account shown: a later session, or the same one inside a `SQL SECURITY DEFINER`
+    // routine (MySQL before 8.0.22 shows the definer then). Nothing is sent either way.
+    if let (Some(then), Some(now)) = (&target.user, &row.user)
+        && then != now
+    {
+        return Some(NotSent::Stale(Stale::CannotTell));
     }
     let changed = Some(NotSent::Stale(Stale::StatementChanged));
     match kind {

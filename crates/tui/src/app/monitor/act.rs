@@ -152,6 +152,7 @@ fn refusal_short(refusal: &Refusal) -> Label {
         Refusal::Background => Label::MonitorActOffBackground,
         Refusal::PooledIdle => Label::MonitorActOffPooledIdle,
         Refusal::Untracked => Label::MonitorActOffUntracked,
+        Refusal::Unconfirmed => Label::MonitorActOffUnconfirmed,
     }
 }
 
@@ -300,6 +301,7 @@ impl App {
             Refusal::Background => Msg::MonitorActRefuseBackground { id },
             Refusal::PooledIdle => Label::MonitorActRefusePooledIdle.into(),
             Refusal::Untracked => Msg::MonitorActRefuseUntracked { id },
+            Refusal::Unconfirmed => Label::MonitorActRefuseUnconfirmed.into(),
         }
     }
 
@@ -578,6 +580,8 @@ impl App {
                     NotSent::Stale(Stale::CannotTell) => Msg::MonitorActCannotTell { id },
                     NotSent::ReadOnly => Label::MonitorActNotSentReadOnly.into(),
                     NotSent::OwnConnection => Label::MonitorActNotSentOwn.into(),
+                    NotSent::Unidentified => Msg::MonitorActUnidentified { id },
+                    NotSent::Unconfirmed => Label::MonitorActUnconfirmed.into(),
                     NotSent::Refused(_) => Msg::MonitorActRefused { why: refused },
                 };
                 (msg, Level::Warning, false)

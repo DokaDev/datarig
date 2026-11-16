@@ -15,9 +15,14 @@ fn my(version: u32, performance_schema: bool, readable: Readable) -> MySqlMonito
         innodb_trx: readable,
         metadata_locks: readable,
         statements: readable,
+        threads: Readable::Yes,
+        unconfirmed: false,
         flavour: Flavour::Standard,
     }
 }
+
+/// A monitor connection's marker.
+const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
 const IDLE: SessionsWanted = SessionsWanted { idle: true };
 const NO_IDLE: SessionsWanted = SessionsWanted { idle: false };
@@ -25,8 +30,8 @@ const NO_IDLE: SessionsWanted = SessionsWanted { idle: false };
 /// Every statement of a version, each with the shape its decoder reads.
 fn every(m: &MySqlMonitor) -> Vec<(&'static str, String, &'static [&'static str])> {
     let probe = probe();
-    let shapes: [&'static [&'static str]; 6] =
-        [PROBE, NAME_VALUE, &["PRIVILEGE_TYPE"], &["trx_id"], PROBE_LOCKS, PROBE_STATEMENTS];
+    let shapes: [&'static [&'static str]; 7] =
+        [PROBE, NAME_VALUE, &["PRIVILEGE_TYPE"], &["trx_id"], PROBE_LOCKS, PROBE_STATEMENTS, &["probe"]];
     let mut out: Vec<_> = probe.into_iter().zip(shapes).map(|(sql, shape)| ("probe", sql, shape)).collect();
     let info = server_info();
     out.push(("server info", info[0].clone(), SERVER_INFO));
@@ -37,7 +42,8 @@ fn every(m: &MySqlMonitor) -> Vec<(&'static str, String, &'static [&'static str]
     out.push(("sessions", sessions(m, IDLE).remove(0), SESSIONS));
     out.push(("sessions without idle", sessions(m, NO_IDLE).remove(0), SESSIONS));
     out.push(("query text", query_text(4211), QUERY_TEXT));
-    out.push(("session before an action", guard(m, 63114), SESSIONS));
+    let guarded: &'static [&'static str] = Vec::leak([SESSIONS, GUARD_MARKER].concat());
+    out.push(("session before an action", guard(m, 63114, TOKEN), guarded));
     out.push(("session after an action", session(m, 63114), SESSIONS));
     out.push(("row lock waits", row_lock_waits(m), ROW_LOCK_WAITS));
     out.push(("metadata lock waits", metadata_lock_waits(), METADATA_LOCKS));
@@ -95,9 +101,13 @@ fn a_running_statement_is_named_by_its_event_only_when_the_events_are_read() {
     let with = sessions(&my(80411, true, Readable::Yes), IDLE).remove(0);
     assert!(with.contains("IF(pt.INSTRUMENTED = 'YES', e.EVENT_ID, NULL) AS EVENT_ID"));
     assert!(with.contains("e.NESTING_EVENT_LEVEL = 0 AND e.END_EVENT_ID IS NULL"));
+    // Without the events the thread is still read, from `threads`, where it is readable.
     let unknown = MySqlMonitor { statements: Readable::Unknown, ..my(80411, true, Readable::Yes) };
+    let without = sessions(&unknown, IDLE).remove(0);
+    assert!(without.contains("pt.THREAD_ID, NULL AS EVENT_ID") && !without.contains("events_statements"));
+    let neither = MySqlMonitor { threads: Readable::Refused, ..unknown };
     let off = my(80411, false, Readable::Yes);
-    for m in [unknown, off] {
+    for m in [neither, off] {
         let without = sessions(&m, IDLE).remove(0);
         assert!(without.contains("NULL AS THREAD_ID, NULL AS EVENT_ID") && !without.contains("events_statements"));
     }
@@ -129,7 +139,8 @@ async fn refused_as_mariadb(conn: &mut mysql_async::Conn, test: &str) -> bool {
     if !line.contains("MariaDB") {
         return false;
     }
-    let shapes: [&[&str]; 6] = [PROBE, NAME_VALUE, &["PRIVILEGE_TYPE"], &["trx_id"], PROBE_LOCKS, PROBE_STATEMENTS];
+    let shapes: [&[&str]; 7] =
+        [PROBE, NAME_VALUE, &["PRIVILEGE_TYPE"], &["trx_id"], PROBE_LOCKS, PROBE_STATEMENTS, &["probe"]];
     let mut answers = Vec::new();
     for (sql, shape) in probe().into_iter().zip(shapes) {
         let result = conn.query_iter(sql.as_str()).await.unwrap_or_else(|e| panic!("probe {sql}: {e}"));
@@ -207,7 +218,7 @@ fn action_statements() {
 #[test]
 fn the_read_before_an_action_tells_the_statement_as_the_tick_does() {
     let m = my(80411, true, Readable::Yes);
-    let before = guard(&m, 63114);
+    let before = guard(&m, 63114, TOKEN);
     let tick = sessions(&m, IDLE).remove(0);
     for part in [
         "IF(pt.INSTRUMENTED = 'YES', e.EVENT_ID, NULL) AS EVENT_ID",
@@ -220,11 +231,43 @@ fn the_read_before_an_action_tells_the_statement_as_the_tick_does() {
     }
     assert!(before.contains("WHERE p.ID IN (63114, CONNECTION_ID())"), "{before}");
     assert!(!before.contains("INNODB_TRX") && !before.contains("metadata_locks"), "{before}");
-    let old = guard(&my(80017, true, Readable::Yes), 1);
+    let old = guard(&my(80017, true, Readable::Yes), 1, TOKEN);
     assert!(old.contains("FROM information_schema.PROCESSLIST p"), "{old}");
-    let weak = guard(&my(80411, false, Readable::Yes), 1);
+    let weak = guard(&my(80411, false, Readable::Yes), 1, TOKEN);
     assert!(weak.contains("NULL AS THREAD_ID, NULL AS EVENT_ID") && weak.contains("MD5(p.INFO)"), "{weak}");
     assert!(session(&m, 63114).contains("INNODB_TRX"), "the follow-up reads the tick's columns");
+}
+
+/// The thread is read wherever `performance_schema.threads` is, also with the statement events
+/// off or refused: it tells a session apart from a later one given the same id.
+#[test]
+fn the_thread_is_read_without_the_statement_events() {
+    let no_events = MySqlMonitor { statements: Readable::Refused, ..my(80411, true, Readable::Yes) };
+    for sql in [sessions(&no_events, IDLE).remove(0), guard(&no_events, 1, TOKEN), session(&no_events, 1)] {
+        assert!(sql.contains("pt.THREAD_ID, NULL AS EVENT_ID"), "{sql}");
+        assert!(sql.contains("LEFT JOIN performance_schema.threads pt ON pt.PROCESSLIST_ID = p.ID"), "{sql}");
+        assert!(!sql.contains("events_statements_current"), "{sql}");
+    }
+    let no_threads = MySqlMonitor { threads: Readable::Refused, ..no_events.clone() };
+    let sql = guard(&no_threads, 1, TOKEN);
+    assert!(
+        sql.contains("NULL AS THREAD_ID, NULL AS EVENT_ID") && !sql.contains("performance_schema.threads"),
+        "{sql}"
+    );
+}
+
+/// The read before an action also says the reading session's id and where its marker is; only
+/// a marker as the driver makes them is written into it.
+#[test]
+fn the_read_before_an_action_names_the_monitors_marker() {
+    let m = my(80411, true, Readable::Yes);
+    let sql = guard(&m, 1, TOKEN);
+    assert!(sql.contains("CONNECTION_ID() AS own_id"), "{sql}");
+    assert!(sql.contains(&format!("{} AS marker", crate::session::marked_once(TOKEN))), "{sql}");
+    // Only one connection with it names an id: a marker listed twice confirms nothing.
+    assert!(sql.contains("IF(COUNT(*) = 1, MIN(PROCESSLIST_ID), NULL)"), "{sql}");
+    assert!(guard(&m, 1, "x' OR '1").contains("ATTR_VALUE = '') AS marker"));
+    assert!(!sessions(&m, IDLE)[0].contains("marker") && !session(&m, 1).contains("marker"));
 }
 
 #[test]

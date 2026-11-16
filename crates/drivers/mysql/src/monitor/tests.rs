@@ -12,6 +12,8 @@ fn my(flavour: Flavour) -> MySqlMonitor {
         innodb_trx: Readable::Yes,
         metadata_locks: Readable::Yes,
         statements: Readable::Yes,
+        threads: Readable::Yes,
+        unconfirmed: false,
         flavour,
     }
 }
@@ -76,23 +78,47 @@ fn server(code: u16) -> Result<Rows, Fail> {
     Err(Fail::Server { code, error: DbError::Server(format!("ERROR {code}").into()) })
 }
 
+/// The monitor connection's marker in these tests.
+const TOKEN: &str = "0123456789abcdef0123456789abcdef";
+
+/// The monitor's marker, confirmed on its own session (77, the handshake's id).
+fn marker() -> Marker {
+    Marker { token: TOKEN.into(), handshake: 77 }
+}
+
 /// Stands in for the connection: answers each statement with the next of `answers` (none
-/// left: it never answers) and keeps what was sent.
+/// left: it never answers) and keeps what was sent. A read before an action gets the next of
+/// `marked` (the reading session's id, its marker's id; the last one again once they run out)
+/// after the cells of each row.
 struct Fake {
     answers: VecDeque<Result<Rows, Fail>>,
     sent: Vec<String>,
+    marked: VecDeque<[Cell; 2]>,
 }
 
 impl Fake {
     fn new(answers: Vec<Result<Rows, Fail>>) -> Fake {
-        Fake { answers: answers.into(), sent: Vec::new() }
+        let confirmed = [Some("77".into()), Some("77".into())];
+        Fake { answers: answers.into(), sent: Vec::new(), marked: VecDeque::from([confirmed]) }
     }
 }
 
 impl Exec for Fake {
     async fn run(&mut self, sql: &str) -> Result<Rows, Fail> {
         self.sent.push(sql.to_owned());
+        let marked = sql.contains(" AS marker ");
         match self.answers.pop_front() {
+            Some(Ok(rows)) if marked => {
+                let marked =
+                    if self.marked.len() > 1 { self.marked.pop_front().unwrap() } else { self.marked[0].clone() };
+                Ok(rows
+                    .into_iter()
+                    .map(|mut r| {
+                        r.extend(marked.clone());
+                        r
+                    })
+                    .collect())
+            }
             Some(answer) => answer,
             None => std::future::pending().await,
         }
@@ -101,7 +127,7 @@ impl Exec for Fake {
 
 async fn acting(my: &MySqlMonitor, kind: ActionKind, answers: Vec<Result<Rows, Fail>>) -> (ActionOutcome, Vec<String>) {
     let mut fake = Fake::new(answers);
-    let (outcome, lost) = within(&mut fake, ACTION_DEADLINE, my, false, kind, &target()).await;
+    let (outcome, lost) = within(&mut fake, ACTION_DEADLINE, my, false, Some(&marker()), kind, &target()).await;
     assert_eq!(lost, None);
     (outcome, fake.sent)
 }
@@ -111,7 +137,8 @@ async fn a_read_only_profile_sends_nothing() {
     for flavour in [Flavour::Standard, Flavour::AmazonRds, Flavour::AzureDatabase] {
         for kind in [ActionKind::Cancel, ActionKind::Terminate] {
             let mut fake = Fake::new(vec![running(), server(1095), running(), ok()]);
-            let (outcome, lost) = within(&mut fake, ACTION_DEADLINE, &my(flavour), true, kind, &target()).await;
+            let (outcome, lost) =
+                within(&mut fake, ACTION_DEADLINE, &my(flavour), true, Some(&marker()), kind, &target()).await;
             assert_eq!((outcome, lost), (ActionOutcome::NotSent(NotSent::ReadOnly), None), "{flavour:?} {kind:?}");
             assert!(fake.sent.is_empty(), "{:?}", fake.sent);
         }
@@ -123,7 +150,7 @@ async fn the_target_is_read_right_before_the_kill() {
     let m = my(Flavour::Standard);
     let (outcome, sent) = acting(&m, ActionKind::Cancel, vec![running(), ok()]).await;
     assert_eq!(outcome, ActionOutcome::Acknowledged { via: Via::Standard });
-    assert_eq!(sent, [sql::guard(&m, 63114), "KILL QUERY 63114".to_owned()]);
+    assert_eq!(sent, [sql::guard(&m, 63114, TOKEN), "KILL QUERY 63114".to_owned()]);
     let (outcome, sent) = acting(&m, ActionKind::Terminate, vec![running(), ok()]).await;
     assert_eq!(outcome, ActionOutcome::Acknowledged { via: Via::Standard });
     assert_eq!(sent[1], "KILL 63114");
@@ -136,7 +163,7 @@ async fn a_changed_target_is_not_killed() {
     let next = Ok(vec![session(ID, false, "Query", Some(EVENT + 3)), own()]);
     assert_eq!(
         acting(&m, ActionKind::Cancel, vec![next]).await,
-        (stale(Stale::StatementChanged), vec![sql::guard(&m, 63114)])
+        (stale(Stale::StatementChanged), vec![sql::guard(&m, 63114, TOKEN)])
     );
     let idle = Ok(vec![session(ID, false, "Sleep", None), own()]);
     assert_eq!(acting(&m, ActionKind::Cancel, vec![idle.clone()]).await.0, stale(Stale::StatementChanged));
@@ -162,7 +189,7 @@ async fn the_monitors_own_connection_is_never_killed() {
     let own_target = ActionTarget { key: SessionKey { id: 77, started: None }, thread: Some(9), ..target() };
     for kind in [ActionKind::Cancel, ActionKind::Terminate] {
         let mut fake = Fake::new(vec![Ok(vec![own()]), ok()]);
-        let (outcome, _) = within(&mut fake, ACTION_DEADLINE, &m, false, kind, &own_target).await;
+        let (outcome, _) = within(&mut fake, ACTION_DEADLINE, &m, false, Some(&marker()), kind, &own_target).await;
         assert_eq!(outcome, ActionOutcome::NotSent(NotSent::OwnConnection), "{kind:?}");
         assert_eq!(fake.sent.len(), 1, "the read only: {:?}", fake.sent);
     }
@@ -182,9 +209,9 @@ async fn a_managed_server_takes_its_procedure_after_reading_the_target_again() {
             assert_eq!(
                 sent,
                 [
-                    sql::guard(&m, 63114),
+                    sql::guard(&m, 63114, TOKEN),
                     sql::kill(kind, 63114),
-                    sql::guard(&m, 63114),
+                    sql::guard(&m, 63114, TOKEN),
                     format!("CALL {procedure}(63114)")
                 ]
             );
@@ -221,7 +248,7 @@ async fn a_self_managed_refusal_names_the_privilege() {
     // A failed read sends nothing.
     assert_eq!(
         acting(&m, ActionKind::Cancel, vec![server(1142)]).await,
-        (ActionOutcome::Failed(DbError::Server("ERROR 1142".into())), vec![sql::guard(&m, 63114)])
+        (ActionOutcome::Failed(DbError::Server("ERROR 1142".into())), vec![sql::guard(&m, 63114, TOKEN)])
     );
 }
 
@@ -232,12 +259,14 @@ async fn an_answer_lost_after_the_kill_is_never_taken_for_one() {
     assert_eq!(acting(&m, ActionKind::Cancel, vec![running(), lost]).await.0, ActionOutcome::OutcomeUnknown);
     // No answer to the kill: unknown, and the connection given up.
     let mut fake = Fake::new(vec![running()]);
-    let (outcome, error) = within(&mut fake, ACTION_DEADLINE, &m, false, ActionKind::Cancel, &target()).await;
+    let (outcome, error) =
+        within(&mut fake, ACTION_DEADLINE, &m, false, Some(&marker()), ActionKind::Cancel, &target()).await;
     assert_eq!((outcome, error), (ActionOutcome::OutcomeUnknown, Some(DbError::NoAnswer(ACTION_DEADLINE))));
     assert_eq!(fake.sent.len(), 2);
     // No answer to the read: nothing was sent.
     let mut fake = Fake::new(Vec::new());
-    let (outcome, _) = within(&mut fake, ACTION_DEADLINE, &m, false, ActionKind::Cancel, &target()).await;
+    let (outcome, _) =
+        within(&mut fake, ACTION_DEADLINE, &m, false, Some(&marker()), ActionKind::Cancel, &target()).await;
     assert_eq!(outcome, ActionOutcome::Failed(DbError::NoAnswer(ACTION_DEADLINE)));
 }
 
@@ -263,4 +292,55 @@ async fn a_follow_up_reads_whether_the_statement_was_interrupted() {
     let mut fake = Fake::new(vec![Ok(vec![own()])]);
     let follow = follow_up(&mut fake, &m, &weak).await.expect("follow-up");
     assert_eq!((follow.row, follow.interrupted, fake.sent.len()), (None, None, 1));
+}
+
+/// A monitor connection not confirmed at open sends nothing at all.
+#[tokio::test]
+async fn a_monitor_not_confirmed_at_open_sends_nothing() {
+    let m = my(Flavour::Standard);
+    for kind in [ActionKind::Cancel, ActionKind::Terminate] {
+        let mut fake = Fake::new(vec![running(), ok()]);
+        let (outcome, lost) = within(&mut fake, ACTION_DEADLINE, &m, false, None, kind, &target()).await;
+        assert_eq!((outcome, lost), (ActionOutcome::NotSent(NotSent::Unconfirmed), None), "{kind:?}");
+        assert!(fake.sent.is_empty(), "{:?}", fake.sent);
+    }
+}
+
+/// The read before an action must find the connection's marker on its own id, the handshake's:
+/// else (the marker gone, on another id, or an id of something in between) nothing is sent,
+/// neither the kill nor the provider's procedure.
+#[tokio::test]
+async fn an_action_goes_only_where_the_read_confirmed_the_monitor() {
+    let m = my(Flavour::Standard);
+    for marked in [[Some("77"), None], [Some("77"), Some("78")], [Some("78"), Some("78")], [None, None]] {
+        let marked = marked.map(|c| c.map(str::to_owned));
+        let mut fake = Fake { marked: VecDeque::from([marked.clone()]), ..Fake::new(vec![running(), ok()]) };
+        let (outcome, _) =
+            within(&mut fake, ACTION_DEADLINE, &m, false, Some(&marker()), ActionKind::Cancel, &target()).await;
+        assert_eq!(outcome, ActionOutcome::NotSent(NotSent::Unconfirmed), "{marked:?}");
+        assert_eq!(fake.sent, [sql::guard(&m, 63114, TOKEN)], "the read only");
+    }
+    // Before the provider's procedure too: the second read finds the marker elsewhere.
+    let rds = my(Flavour::AmazonRds);
+    let moved = [Some("77".to_owned()), Some("78".to_owned())];
+    let mut fake = Fake::new(vec![running(), server(1095), running(), ok()]);
+    fake.marked.push_back(moved);
+    let (outcome, _) =
+        within(&mut fake, ACTION_DEADLINE, &rds, false, Some(&marker()), ActionKind::Cancel, &target()).await;
+    assert_eq!(outcome, ActionOutcome::NotSent(NotSent::Unconfirmed));
+    assert!(!fake.sent.iter().any(|s| s.starts_with("CALL")), "{:?}", fake.sent);
+}
+
+/// A target known by its id alone (no thread: `performance_schema.threads` not readable) is never
+/// acted on: the id may name a later session.
+#[tokio::test]
+async fn a_target_without_its_thread_is_never_killed() {
+    let m = my(Flavour::Standard);
+    let bare = ActionTarget { thread: None, ..target() };
+    for kind in [ActionKind::Cancel, ActionKind::Terminate] {
+        let mut fake = Fake::new(vec![running(), ok()]);
+        let (outcome, _) = within(&mut fake, ACTION_DEADLINE, &m, false, Some(&marker()), kind, &bare).await;
+        assert_eq!(outcome, ActionOutcome::NotSent(NotSent::Unidentified), "{kind:?}");
+        assert!(!fake.sent.iter().any(|s| s.starts_with("KILL")), "{:?}", fake.sent);
+    }
 }

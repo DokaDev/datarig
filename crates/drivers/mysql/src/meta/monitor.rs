@@ -28,7 +28,9 @@ const NOW: &str = "CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED)";
 /// 6. whether the statement event consumers are all on (`ENABLED`: `events_statements_current`
 ///    and the two above it, `NO` when one is off), from a statement that also names
 ///    `performance_schema.events_statements_current` and `threads`, refused without `SELECT`
-///    on them.
+///    on them;
+/// 7. a count that only names `performance_schema.threads` (`probe`), refused without `SELECT`
+///    on it: whether each session's thread can be read.
 pub(crate) fn probe() -> Vec<String> {
     let mut variables: Vec<String> = MYSQL_MARKERS
         .iter()
@@ -55,6 +57,7 @@ pub(crate) fn probe() -> Vec<String> {
          FROM performance_schema.setup_consumers c \
          WHERE c.NAME IN ('global_instrumentation', 'thread_instrumentation', 'events_statements_current')"
             .into(),
+        "SELECT COUNT(*) AS probe FROM performance_schema.threads WHERE 1 = 0".into(),
     ]
 }
 
@@ -123,8 +126,9 @@ fn process_list(my: &MySqlMonitor) -> &'static str {
 /// `performance_schema.metadata_locks` when readable (else NULL): `in_tx` (it holds a lock until
 /// its transaction ends), `explicit_locks` (it holds one past its statements outside a
 /// transaction: `LOCK TABLES`, `GET_LOCK`), then `locks_read`; from `performance_schema.threads`
-/// and `events_statements_current` when readable with their consumers on (else NULL):
-/// `THREAD_ID`, and `EVENT_ID` of the running top-level statement (no `END_EVENT_ID`, nesting
+/// when readable (else NULL): `THREAD_ID`, which tells a session apart from a later one of the
+/// same id; from `events_statements_current` when readable with its consumers on (else NULL):
+/// `EVENT_ID` of the running top-level statement (no `END_EVENT_ID`, nesting
 /// level 0) of an instrumented thread (else NULL, as a finished event stays in the table);
 /// last `info_md5`, the server's MD5 of the whole `INFO`.
 ///
@@ -144,7 +148,7 @@ pub(crate) fn sessions(my: &MySqlMonitor, wanted: SessionsWanted) -> Vec<String>
     } else {
         " WHERE p.COMMAND <> 'Sleep' OR t.trx_id IS NOT NULL OR l.id IS NOT NULL OR p.ID = CONNECTION_ID()".into()
     };
-    vec![session_rows(my, trx, locks, &idle)]
+    vec![session_rows(my, trx, locks, &idle, None)]
 }
 
 /// The rows of [`sessions`] for the one session of `id`, and the reading session's own (so
@@ -152,7 +156,7 @@ pub(crate) fn sessions(my: &MySqlMonitor, wanted: SessionsWanted) -> Vec<String>
 /// read after an action shows of it.
 pub(crate) fn session(my: &MySqlMonitor, id: u64) -> String {
     let only = format!(" WHERE p.ID IN ({id}, CONNECTION_ID())");
-    session_rows(my, my.innodb_trx == Readable::Yes, my.metadata_locks == Readable::Yes, &only)
+    session_rows(my, my.innodb_trx == Readable::Yes, my.metadata_locks == Readable::Yes, &only, None)
 }
 
 /// The read right before an action on the session of `id`: the columns of [`sessions`] for it
@@ -161,11 +165,18 @@ pub(crate) fn session(my: &MySqlMonitor, id: u64) -> String {
 /// text and its time, from the same list as the tick's), without the transaction and lock
 /// columns (NULL), which the check does not need and which would cost it a read of every
 /// session's locks.
-pub(crate) fn guard(my: &MySqlMonitor, id: u64) -> String {
-    session_rows(my, false, false, &format!(" WHERE p.ID IN ({id}, CONNECTION_ID())"))
+///
+/// Last, in every row, the reading session's own id (`own_id`) and the id the server lists its
+/// marker `token` on (`marker`, NULL: none; [`crate::session::own_verdict`]): the action goes
+/// only where the read went.
+pub(crate) fn guard(my: &MySqlMonitor, id: u64, token: &str) -> String {
+    session_rows(my, false, false, &format!(" WHERE p.ID IN ({id}, CONNECTION_ID())"), Some(token))
 }
 
-fn session_rows(my: &MySqlMonitor, trx: bool, locks: bool, filter: &str) -> String {
+/// The columns [`guard`] adds after those of [`sessions`].
+pub(crate) const GUARD_MARKER: &[&str] = &["own_id", "marker"];
+
+fn session_rows(my: &MySqlMonitor, trx: bool, locks: bool, filter: &str, marker: Option<&str>) -> String {
     let source = process_list(my);
     let mut columns = Vec::new();
     let mut joins = String::new();
@@ -192,17 +203,32 @@ fn session_rows(my: &MySqlMonitor, trx: bool, locks: bool, filter: &str) -> Stri
     } else {
         columns.push("NULL AS in_tx, NULL AS explicit_locks, 0 AS locks_read");
     }
-    if my.performance_schema && my.statements == Readable::Yes {
+    // The thread wherever `threads` is readable (the statement events read it too), the
+    // statement event only with the events.
+    let events = my.performance_schema && my.statements == Readable::Yes;
+    let threads = events || (my.performance_schema && my.threads == Readable::Yes);
+    if events {
         columns.push("pt.THREAD_ID, IF(pt.INSTRUMENTED = 'YES', e.EVENT_ID, NULL) AS EVENT_ID");
         joins.push_str(
             " LEFT JOIN performance_schema.threads pt ON pt.PROCESSLIST_ID = p.ID \
              LEFT JOIN performance_schema.events_statements_current e ON e.THREAD_ID = pt.THREAD_ID \
              AND e.NESTING_EVENT_LEVEL = 0 AND e.END_EVENT_ID IS NULL",
         );
+    } else if threads {
+        columns.push("pt.THREAD_ID, NULL AS EVENT_ID");
+        joins.push_str(" LEFT JOIN performance_schema.threads pt ON pt.PROCESSLIST_ID = p.ID");
     } else {
         columns.push("NULL AS THREAD_ID, NULL AS EVENT_ID");
     }
     columns.push("MD5(p.INFO) AS info_md5");
+    let own;
+    if let Some(token) = marker {
+        // Only a token as the driver makes them is written into the statement.
+        let token = if crate::session::is_token(token) { token } else { "" };
+        // The one connection carrying it (NULL for none, or more than one).
+        own = format!("CONNECTION_ID() AS own_id, {} AS marker", crate::session::marked_once(token));
+        columns.push(&own);
+    }
     format!(
         "SELECT {NOW} AS now, p.ID, p.USER, p.HOST, p.DB, p.COMMAND, p.TIME, p.STATE, \
          LEFT(p.INFO, {QUERY_CHARS}) AS INFO, CHAR_LENGTH(p.INFO) > {QUERY_CHARS} AS shortened, \

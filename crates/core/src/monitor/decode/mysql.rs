@@ -168,8 +168,8 @@ fn version_number(version: &str) -> Option<u32> {
 /// (name and value), the account's `PROCESS` grant, one row of `INNODB_TRX`, the metadata lock
 /// instrument ([`PROBE_LOCKS`]), the statement event consumers ([`PROBE_STATEMENTS`]).
 pub fn probe(answers: &[Answer]) -> Result<MySqlMonitor, DecodeError> {
-    let [first, variables, grants, trx, locks, statements] = answers else {
-        return Err(malformed("probe", format!("{} answers, expected 6", answers.len())));
+    let [first, variables, grants, trx, locks, statements, threads] = answers else {
+        return Err(malformed("probe", format!("{} answers, expected 7", answers.len())));
     };
     let rows = match first {
         Answer::Rows(rows) => rows,
@@ -217,6 +217,8 @@ pub fn probe(answers: &[Answer]) -> Result<MySqlMonitor, DecodeError> {
         metadata_locks: enabled(locks),
         // Readable, and the consumers on: else no statement is current.
         statements: enabled(statements),
+        threads: readable(threads),
+        unconfirmed: false,
         flavour: format::flavour(MYSQL_MARKERS, &found),
     })
 }

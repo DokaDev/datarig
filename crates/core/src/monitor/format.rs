@@ -112,6 +112,14 @@ pub struct MySqlMonitor {
     /// its consumer on with those above it: which statement each instrumented thread runs, by
     /// event id. Without it a statement is told apart by its text and times only.
     pub statements: Readable,
+    /// `performance_schema.threads` (needs `SELECT` on it): each session's `THREAD_ID`, which
+    /// tells a session apart from a later one given the same connection id. Without it no
+    /// action is sent ([`crate::monitor::action::NotSent::Unidentified`]).
+    pub threads: Readable,
+    /// The monitor's connection could not be confirmed, when it opened, to reach the server
+    /// directly (its marker on its own id, the handshake's): no action is offered or sent. The
+    /// driver sets it; the probe's answers never do.
+    pub unconfirmed: bool,
     pub flavour: Flavour,
 }
 

@@ -229,7 +229,7 @@ async fn run_session(
     let Opened { conn, wire, encryption, server, tracked, id, read_only_unconfirmed, token, own } = opened;
     // The cancel logs in as the session does, without a database (one could be dropped since).
     let kill_opts = target.opts(None, &opts.application_name, &route);
-    let killer = Killer::new(route, kill_opts, id, token);
+    let killer = Killer::new(route, kill_opts, id, token.clone());
     if let Ok(mut g) = canceller.killer.lock() {
         *g = Some(killer);
     }
@@ -270,7 +270,10 @@ async fn run_session(
     let link = Link::new(rx, wire);
     match role {
         SessionRole::Meta => crate::meta::meta_loop(conn, link, events, tracked).await,
-        SessionRole::Monitor => crate::monitor::monitor_loop(conn, link, events, opts.read_only).await,
+        SessionRole::Monitor => {
+            let marker = token.map(|token| crate::monitor::Marker { token, handshake: conn.id() });
+            crate::monitor::monitor_loop(conn, link, events, opts.read_only, marker).await
+        }
         SessionRole::Query => {
             let killer = canceller.killer.lock().ok().and_then(|g| g.clone());
             let Some(killer) = killer else { return };

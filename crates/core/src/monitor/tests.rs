@@ -113,9 +113,17 @@ fn provider_markers_name_the_flavour_first_match_first() {
     let my_with = |variables: Vec<Vec<Option<String>>>| {
         let first = Answer::Rows(vec![vec![Some("8.0.35".into()), Some("1".into()), Some("admin@%".into())]]);
         let none = Answer::Rows(Vec::new());
-        decode::mysql::probe(&[first, Answer::Rows(variables), none.clone(), none.clone(), none.clone(), none])
-            .unwrap()
-            .flavour
+        decode::mysql::probe(&[
+            first,
+            Answer::Rows(variables),
+            none.clone(),
+            none.clone(),
+            none.clone(),
+            none.clone(),
+            none,
+        ])
+        .unwrap()
+        .flavour
     };
     let var = |n: &str, v: &str| vec![Some(n.to_owned()), Some(v.to_owned())];
     assert_eq!(my_with(vec![var("basedir", "/usr/")]), Flavour::Standard);
@@ -333,10 +341,11 @@ fn mysql_probe_reads_what_the_account_may() {
         (p.innodb_trx, p.metadata_locks, p.statements),
         (Readable::Refused, Readable::Refused, Readable::Refused)
     );
+    assert_eq!(p.threads, Readable::Refused, "SELECT on performance_schema.threads not granted");
     assert_eq!(p.flavour, Flavour::Standard);
     let p = decode::mysql::probe(&fixture!("my84_root/probe")).unwrap();
     assert_eq!((p.user.as_str(), p.process, p.innodb_trx), ("root", Readable::Yes, Readable::Yes));
-    assert_eq!((p.metadata_locks, p.statements), (Readable::Yes, Readable::Yes));
+    assert_eq!((p.metadata_locks, p.statements, p.threads), (Readable::Yes, Readable::Yes, Readable::Yes));
     let p = decode::mysql::probe(&fixture!("my80/probe")).unwrap();
     assert_eq!((p.version, p.innodb_trx), (80045, Readable::Yes));
 }
@@ -346,7 +355,8 @@ fn mysql_versions_the_monitor_does_not_read() {
     let probe = |version: &str| {
         let first = Answer::Rows(vec![vec![Some(version.into()), Some("1".into()), Some("u@%".into())]]);
         let none = Answer::Rows(Vec::new());
-        decode::mysql::probe(&[first, none.clone(), none.clone(), none.clone(), none.clone(), none]).map(|m| m.version)
+        decode::mysql::probe(&[first, none.clone(), none.clone(), none.clone(), none.clone(), none.clone(), none])
+            .map(|m| m.version)
     };
     assert_eq!(probe("8.0.35-0ubuntu0.22.04.1"), Ok(80035));
     assert_eq!(probe("8.0.28-log"), Ok(80028));
@@ -365,19 +375,21 @@ fn mysql_versions_the_monitor_does_not_read() {
     let failed = Answer::Error { code: Some(2013), message: "Lost connection".into() };
     assert_eq!(
         decode::mysql::probe(&[failed]),
-        Err(DecodeError::Malformed { what: "probe", detail: "1 answers, expected 6".into() })
+        Err(DecodeError::Malformed { what: "probe", detail: "1 answers, expected 7".into() })
     );
     let failed = Answer::Error { code: Some(2013), message: "Lost connection".into() };
     let none = Answer::Rows(Vec::new());
     assert_eq!(
-        decode::mysql::probe(&[failed, none.clone(), none.clone(), none.clone(), none.clone(), none]),
+        decode::mysql::probe(&[failed, none.clone(), none.clone(), none.clone(), none.clone(), none.clone(), none]),
         Err(DecodeError::ProbeFailed("Lost connection".into()))
     );
     // A refusal for another reason than a privilege cannot tell.
     let first = Answer::Rows(vec![vec![Some("8.4.0".into()), Some("0".into()), Some("u@%".into())]]);
     let none = Answer::Rows(Vec::new());
     let other = Answer::Error { code: Some(1030), message: "storage engine".into() };
-    let p = decode::mysql::probe(&[first, none.clone(), none.clone(), other.clone(), other.clone(), other]).unwrap();
+    let p =
+        decode::mysql::probe(&[first, none.clone(), none.clone(), other.clone(), other.clone(), other.clone(), other])
+            .unwrap();
     assert_eq!(
         (p.innodb_trx, p.metadata_locks, p.statements),
         (Readable::Unknown, Readable::Unknown, Readable::Unknown)
@@ -774,7 +786,7 @@ fn super_without_process_does_not_show_other_sessions() {
     let grants = |rows: Vec<&str>| Answer::Rows(rows.into_iter().map(|g| vec![Some(g.to_owned())]).collect());
     let none = Answer::Rows(Vec::new());
     let with = |g| {
-        decode::mysql::probe(&[first.clone(), none.clone(), g, none.clone(), none.clone(), none.clone()])
+        decode::mysql::probe(&[first.clone(), none.clone(), g, none.clone(), none.clone(), none.clone(), none.clone()])
             .unwrap()
             .process
     };
