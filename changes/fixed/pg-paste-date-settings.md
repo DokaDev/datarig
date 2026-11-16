@@ -30,3 +30,6 @@
 - PostgreSQL: columns of base types that hold no dates (`citext`, `hstore`, `ltree`, geometry)
   stay editable; text typed or pasted from the clipboard into a date column of a result read
   in other settings than the session's now is refused, as a paste from the grid is.
+- PostgreSQL: a composite (or an array or a domain of one) counts as holding dates whatever its
+  fields, which may have changed since the connection read them, so its values are not applied
+  from the grid.

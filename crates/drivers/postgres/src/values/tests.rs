@@ -129,7 +129,10 @@ fn only_text_that_may_hold_dates_or_times_is_read_in_the_sessions_settings() {
     let dated = user("stay", Kind::Composite(vec![field("guest", Type::TEXT), field("night", Type::DATE)]));
     let plain = user("pair", Kind::Composite(vec![field("a", Type::INT4), field("b", Type::TEXT)]));
     assert!(styled(&dated), "a composite writes its date field in DateStyle");
-    assert!(!styled(&plain));
+    // The fields the connection keeps for a composite may be out of date (`ALTER TYPE … ADD
+    // ATTRIBUTE d date`): a composite, or an array of one, may hold dates, whatever its fields.
+    assert!(styled(&plain));
+    assert!(styled(&user("_pair", Kind::Array(plain.clone()))));
     assert!(styled(&user("_stay", Kind::Array(dated.clone()))));
     assert!(styled(&user("stays", Kind::Domain(dated))));
     assert!(styled(&user("stamprange", Kind::Range(Type::TIMESTAMP))));
@@ -167,8 +170,10 @@ fn what_dates_a_type_holds_reads_through_domains_and_arrays() {
     let field = |name: &str, ty: Type| tokio_postgres::types::Field::new(name.into(), ty);
     let stay = user("stay", Kind::Composite(vec![field("night", Type::DATE)]));
     assert_eq!(dated(&stay), Dated::Unknown);
-    let pair = user("pair", Kind::Composite(vec![field("a", Type::INT4)]));
-    assert_eq!(dated(&pair), Dated::No);
+    let pair = user("pair", Kind::Composite(vec![field("a", Type::TEXT)]));
+    assert_eq!(dated(&pair), Dated::Unknown, "its fields may have changed since they were read");
+    assert_eq!(dated(&user("_pair", Kind::Array(pair.clone()))), Dated::Unknown);
+    assert_eq!(dated(&user("pairs", Kind::Domain(pair))), Dated::Unknown);
 }
 
 #[test]

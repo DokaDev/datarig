@@ -143,7 +143,7 @@ pub fn styled_in(ty: &Type, format: i16) -> bool {
 
 /// Of a column [`styled_in`]: whether its text may hold a time with a time zone, which a
 /// `DateStyle` other than ISO writes with the zone's abbreviation: a `timestamptz` or `timetz`,
-/// a range, multirange, array or domain of one, a composite with such a field, and any type
+/// a range, multirange, array or domain of one, any composite, and any type
 /// [`styled_text`] cannot tell. A date, a time or timestamp without a zone, an interval and
 /// what holds only those do not.
 pub fn zoned_in(ty: &Type, format: i16) -> bool {
@@ -152,8 +152,8 @@ pub fn zoned_in(ty: &Type, format: i16) -> bool {
 
 /// What dates, times or intervals a value of type `ty` holds, as the server reads it from
 /// text: one kind of them, alone or in a range, multirange, array or domain; none for a type
-/// [`styled_text`] says holds none; not known for a composite that holds some, and for any type
-/// it cannot tell.
+/// [`styled_text`] says holds none; not known for a composite (whatever its fields), and for
+/// any type it cannot tell.
 pub fn dated(ty: &Type) -> datarig_core::driver::Dated {
     use datarig_core::driver::{DatePart, Dated};
     if !styled_text(ty) {
@@ -183,7 +183,7 @@ fn zoned_text(ty: &Type) -> bool {
         Kind::Array(inner) | Kind::Range(inner) | Kind::Multirange(inner) | Kind::Domain(inner) => {
             return zoned_text(inner);
         }
-        Kind::Composite(fields) => return fields.iter().any(|f| zoned_text(f.type_())),
+        Kind::Composite(_) => return true,
         Kind::Enum(_) => return false,
         _ => {}
     }
@@ -196,15 +196,19 @@ fn zoned_text(ty: &Type) -> bool {
 
 /// Whether PostgreSQL's text output of `ty` may depend on `DateStyle`, `IntervalStyle` or
 /// `TimeZone`: a date, time, timestamp or interval, a range, multirange, array or domain of
-/// one, a composite with such a field. Any other base type (numbers, text, geometry, network
-/// addresses, an extension's `citext` or `hstore`, the database's own), a range of one and an
-/// enum (its labels) do not; a pseudo-type (an anonymous `record`) and a kind not known here may,
-/// as far as this code can tell. The kinds come with the column's type, which the connection
-/// looks up once per type and keeps (no round trip of its own).
+/// one, any composite (its fields as the connection keeps them may be out of date). Any other
+/// base type (numbers, text, geometry, network addresses, an extension's `citext` or `hstore`,
+/// the database's own), a range of one and an enum (its labels) do not; a pseudo-type (an
+/// anonymous `record`) and a kind not known here may, as far as this code can tell. The kinds
+/// come with the column's type, which the connection looks up once per type and keeps (no round
+/// trip of its own).
 fn styled_text(ty: &Type) -> bool {
     match ty.kind() {
         Kind::Array(inner) | Kind::Range(inner) | Kind::Multirange(inner) | Kind::Domain(inner) => styled_text(inner),
-        Kind::Composite(fields) => fields.iter().any(|f| styled_text(f.type_())),
+        // The fields the connection keeps for a composite are those of the first time it read
+        // the type, which `ALTER TYPE … ADD ATTRIBUTE` may have changed since: whatever they
+        // are, a composite may hold dates.
+        Kind::Composite(_) => true,
         Kind::Enum(_) => false,
         // A base type (the server's `typtype` `b`, built-in, an extension's such as `citext`,
         // `hstore`, `ltree`, or the database's own): only the server's dates and times hold
