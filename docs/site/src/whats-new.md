@@ -5,7 +5,7 @@ What changed in each release, newest first. For 0.36.0 and earlier, see the rele
 
 ## 0.41.1 (2026-11-16)
 
-Table tabs get a query bar with small popups for the conditions, the order, the columns and the rows. On PostgreSQL, date, time and interval text typed or pasted into the grid is now applied only in a form that reads the same under any `DateStyle`, `TimeZone` and `IntervalStyle` (ISO dates, timestamps with an explicit offset or `Z`, ISO 8601 intervals) and is otherwise refused with the reason; columns of composite types and of multiranges the database defines cannot be edited from the grid for now; and a cancel the server does not confirm now shows a warning in Messages. MariaDB, now tested in CI, gets a series of fixes.
+Table tabs get a query bar with small popups for the conditions, the order, the columns and the rows. On PostgreSQL, date, time and interval text typed or pasted into the grid is now applied only in a form that reads the same under any `DateStyle`, `TimeZone` and `IntervalStyle` (ISO dates, timestamps with an explicit offset or `Z`, ISO 8601 intervals) and is otherwise refused with the reason; columns of composite types and of multiranges the database defines take no typed or pasted values from the grid for now (only NULL or DEFAULT); and a cancel the server does not confirm now shows a warning in Messages. MariaDB, now tested in CI, gets a series of fixes.
 
 ### Added
 
@@ -75,7 +75,9 @@ Table tabs get a query bar with small popups for the conditions, the order, the 
   that MySQL has but MariaDB does not (`ANY_VALUE`, `REGEXP_LIKE`, `BIN_TO_UUID`, ...) names a
   stored function of the current database on MariaDB, so it is now treated as any unchecked
   function call there: a read-only profile refuses it, and a query that calls one is not run
-  again for the next page. MySQL is unchanged.
+  again for the next page. MySQL is unchanged, except for Startup SQL, which is checked before
+  the server is known: there a call of one of these functions now counts as an unchecked
+  function call on MySQL too, so such a Startup SQL is refused.
 - MariaDB: reading a table's structure no longer opens every table of the server to find that
   table's foreign keys, which was slow on servers with many tables and could wait behind another
   table's lock.
@@ -118,7 +120,8 @@ Table tabs get a query bar with small popups for the conditions, the order, the 
   intervals such as `P1DT2H`), since a trigger may change them while the changes are applied;
   other text is refused, saying which form to use.
 - PostgreSQL: columns of a composite type, a pseudo-type or a multirange type the database
-  defines cannot be edited from the grid for now, since datarig cannot tell the dates in them.
+  defines take no typed, pasted or cloned text from the grid for now (NULL and DEFAULT still
+  can be set), since datarig cannot tell the dates in them.
   Base types of extensions that hold no dates (`citext`, `hstore`, `ltree`, geometry) stay
   editable once the server has said what kind of type they are, which it is asked when their
   result comes.
