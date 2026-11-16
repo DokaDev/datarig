@@ -436,14 +436,14 @@ fn counting_is_asked_for_announced_and_shown() {
     let sent = h.sent();
     let [(cid, sql)] = &counts(&sent)[..] else { panic!("{sent:?}") };
     assert_eq!(*cid, id);
-    assert_eq!(sql, "SELECT count(*) FROM (\nSELECT * FROM shop.users WHERE id <= 8\n) AS datarig_count");
+    assert_eq!(sql, "SELECT pg_catalog.count(*) FROM (\nSELECT * FROM shop.users WHERE id <= 8\n) AS datarig_count");
     // In the transaction that holds the result's portal: no time limit (its settings stay).
     assert!(sent.iter().any(|c| matches!(c, DbCommand::Count { limit: None, .. })), "{sent:?}");
     // Announced (the status bar says it is counting while it runs).
     let note = h.app.tab().exec.run.notes.last().map(|n| n.render(&h.app.i18n).to_string()).unwrap_or_default();
     assert!(
         note.starts_with(
-            "Counting rows (no time limit while the result is held open), sent for you: SELECT count(*) FROM ("
+            "Counting rows (no time limit while the result is held open), sent for you: SELECT pg_catalog.count(*) FROM ("
         ),
         "{note}"
     );

@@ -1,6 +1,8 @@
 //! The values of one column of a table and how many rows hold each, counted by the server
 //! ([`group_count`]): `SELECT <preview>, <length>, count(*) FROM <table> [WHERE (<other>)]
-//! GROUP BY <column> ORDER BY count(*) DESC LIMIT 201`.
+//! GROUP BY <column> ORDER BY count(*) DESC LIMIT 201`. On PostgreSQL every function and operator
+//! the app writes there is named with `pg_catalog`, so that none of them depends on the session's
+//! search path (the filter text inside stays as the user sees it).
 //!
 //! The filter text it counts under (the other conditions of the table's filter) passes every
 //! check of [`check_filter`](super::check_filter) on the table's usual statement, `SELECT * FROM
@@ -199,11 +201,13 @@ fn statement(d: Dialect, table: &TableName, column: &ColumnMeta, other: Option<&
     let filter = other.map_or(String::new(), |o| format!(" WHERE ({o})"));
     let (preview, length) = match (d, length(d, column, &c)) {
         (_, None) => (c.clone(), "NULL".to_string()),
-        (Dialect::Postgres, Some(len)) => (format!("CASE WHEN {len} <= {GROUP_PREVIEW} THEN {c} END"), len),
+        (Dialect::Postgres, Some(len)) => {
+            (format!("CASE WHEN {len} OPERATOR(pg_catalog.<=) {GROUP_PREVIEW} THEN {c} END"), len)
+        }
         (Dialect::MySql(_), Some(len)) => (format!("IF({len} <= {GROUP_PREVIEW}, {c}, NULL)"), len),
     };
     let count = match d {
-        Dialect::Postgres => "count(*)",
+        Dialect::Postgres => "pg_catalog.count(*)",
         Dialect::MySql(_) => "COUNT(*)",
     };
     let limit = GROUP_VALUES + 1;
@@ -225,13 +229,19 @@ fn length(d: Dialect, column: &ColumnMeta, c: &str) -> Option<String> {
     let ty = column.type_name.to_ascii_lowercase();
     match d {
         Dialect::Postgres => match column.kind {
-            ValueKind::Text | ValueKind::Bytes | ValueKind::Bit => Some(format!("octet_length({c})")),
-            ValueKind::Other if ty == "citext" => Some(format!("octet_length({c})")),
-            ValueKind::Json if ty == "jsonb" => Some(format!("octet_length(textin(jsonb_out({c})))")),
-            ValueKind::Array(_) => Some(format!("octet_length(textin(array_out({c})))")),
+            ValueKind::Text | ValueKind::Bytes | ValueKind::Bit => Some(format!("pg_catalog.octet_length({c})")),
+            ValueKind::Other if ty == "citext" => Some(format!("pg_catalog.octet_length({c})")),
+            ValueKind::Json if ty == "jsonb" => {
+                Some(format!("pg_catalog.octet_length(pg_catalog.textin(pg_catalog.jsonb_out({c})))"))
+            }
+            ValueKind::Array(_) => {
+                Some(format!("pg_catalog.octet_length(pg_catalog.textin(pg_catalog.array_out({c})))"))
+            }
             // `numeric` and a domain over it (by its own name): its text has no bound of its
             // own. `money` is short.
-            ValueKind::Decimal if ty != "money" => Some(format!("octet_length(textin(numeric_out({c})))")),
+            ValueKind::Decimal if ty != "money" => {
+                Some(format!("pg_catalog.octet_length(pg_catalog.textin(pg_catalog.numeric_out({c})))"))
+            }
             _ => None,
         },
         // Bytes in every mode: `LENGTH` counts characters under MariaDB's `sql_mode=ORACLE`.

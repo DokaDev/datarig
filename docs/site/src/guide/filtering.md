@@ -8,6 +8,10 @@ condition, `WHERE`, `ORDER BY`, the columns or the rows (or its key) opens a sma
 arrows page), and a click on a column's header opens that column's popup [from the grid](#from-the-grid), as do keys on a
 cell. [Advanced](#advanced), the filter dialog, holds every part at once, with the SQL it sends.
 A query's rows have no such bar: filter and sort them in the statement.
+The condition text runs as it is written, like SQL you type in a query: on PostgreSQL the
+functions, operators and types it names are found through the session's search path. The
+statements the app writes around it to count or group the rows name their own functions and
+operators with their schema (`pg_catalog.count(*)`), so those never depend on the path.
 
 ![Filtering a table from its query bar: ticking a value in a column's popup, sorting from the order popup, hiding a column and taking the condition out on the bar](https://dokadev.github.io/datarig/demo/table-filter.gif)
 
@@ -383,8 +387,9 @@ conditions are left out, an expression that names the column is kept (the list s
 `Limit` does not apply. On PostgreSQL it sends:
 
 ```sql
-SELECT CASE WHEN octet_length("status") <= 4096 THEN "status" END, octet_length("status"), count(*)
-FROM "store"."orders" WHERE (total > 100) GROUP BY "status" ORDER BY count(*) DESC LIMIT 201
+SELECT CASE WHEN pg_catalog.octet_length("status") OPERATOR(pg_catalog.<=) 4096 THEN "status" END,
+  pg_catalog.octet_length("status"), pg_catalog.count(*)
+FROM "store"."orders" WHERE (total > 100) GROUP BY "status" ORDER BY pg_catalog.count(*) DESC LIMIT 201
 ```
 
 (on MySQL `IF(OCTET_LENGTH(c) <= 4096, c, NULL)` and `OCTET_LENGTH(c)`). The list then says

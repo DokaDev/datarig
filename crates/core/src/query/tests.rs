@@ -1899,29 +1899,45 @@ fn group_count_writes_one_grouped_read_of_the_table() {
     let name = meta("name", "text", ValueKind::Text);
     assert_eq!(
         group(Dialect::Postgres, &name, Some("id > 1 AND price < 5"), false).unwrap(),
-        "SELECT CASE WHEN octet_length(\"name\") <= 4096 THEN \"name\" END, octet_length(\"name\"), count(*) \
-         FROM \"shop\".\"users\" WHERE (id > 1 AND price < 5) GROUP BY \"name\" ORDER BY count(*) DESC LIMIT 201"
+        "SELECT CASE WHEN pg_catalog.octet_length(\"name\") OPERATOR(pg_catalog.<=) 4096 THEN \"name\" END, \
+         pg_catalog.octet_length(\"name\"), pg_catalog.count(*) FROM \"shop\".\"users\" WHERE (id > 1 AND price < 5) \
+         GROUP BY \"name\" ORDER BY pg_catalog.count(*) DESC LIMIT 201"
     );
     // No other condition: every row; a blank one is none.
     let id = meta("id", "int4", ValueKind::Integer);
-    let all = "SELECT \"id\", NULL, count(*) FROM \"shop\".\"users\" GROUP BY \"id\" ORDER BY count(*) DESC LIMIT 201";
+    let all = "SELECT \"id\", NULL, pg_catalog.count(*) FROM \"shop\".\"users\" GROUP BY \"id\" \
+               ORDER BY pg_catalog.count(*) DESC LIMIT 201";
     assert_eq!(group(Dialect::Postgres, &id, None, false).unwrap(), all);
     assert_eq!(group(Dialect::Postgres, &id, Some("  "), true).unwrap(), all);
     // Long values of other types measured by their own output function, never a cast.
     for (m, len) in [
-        (meta("data", "bytea", ValueKind::Bytes), "octet_length(\"data\")"),
-        (meta("born", "jsonb", ValueKind::Json), "octet_length(textin(jsonb_out(\"born\")))"),
-        (meta("born", "text[]", ValueKind::Array(ArrayElement::Text)), "octet_length(textin(array_out(\"born\")))"),
-        (meta("price", "numeric", ValueKind::Decimal), "octet_length(textin(numeric_out(\"price\")))"),
+        (meta("data", "bytea", ValueKind::Bytes), "pg_catalog.octet_length(\"data\")"),
+        (
+            meta("born", "jsonb", ValueKind::Json),
+            "pg_catalog.octet_length(pg_catalog.textin(pg_catalog.jsonb_out(\"born\")))",
+        ),
+        (
+            meta("born", "text[]", ValueKind::Array(ArrayElement::Text)),
+            "pg_catalog.octet_length(pg_catalog.textin(pg_catalog.array_out(\"born\")))",
+        ),
+        (
+            meta("price", "numeric", ValueKind::Decimal),
+            "pg_catalog.octet_length(pg_catalog.textin(pg_catalog.numeric_out(\"price\")))",
+        ),
         // A domain over numeric, by its own name.
-        (meta("price", "amount", ValueKind::Decimal), "octet_length(textin(numeric_out(\"price\")))"),
+        (
+            meta("price", "amount", ValueKind::Decimal),
+            "pg_catalog.octet_length(pg_catalog.textin(pg_catalog.numeric_out(\"price\")))",
+        ),
     ] {
         let sql = group(Dialect::Postgres, &m, None, false).unwrap();
-        assert!(sql.contains(&format!("CASE WHEN {len} <= 4096 THEN")), "{sql}");
+        assert!(sql.contains(&format!("CASE WHEN {len} OPERATOR(pg_catalog.<=) 4096 THEN")), "{sql}");
         assert!(!sql.contains("::"), "{sql}");
+        // Nothing the app writes is left to the session's search path.
+        assert_eq!(crate::sql::risk::path_names::path_names(&sql), Some(Vec::new()), "{sql}");
     }
     for m in [meta("price", "money", ValueKind::Decimal), meta("born", "timestamptz", ValueKind::TimestampTz)] {
-        assert!(group(Dialect::Postgres, &m, None, false).unwrap().contains(", NULL, count(*)"));
+        assert!(group(Dialect::Postgres, &m, None, false).unwrap().contains(", NULL, pg_catalog.count(*)"));
     }
     // MySQL.
     let data = meta("data", "varbinary", ValueKind::Bytes);
@@ -1946,7 +1962,7 @@ fn group_count_writes_one_grouped_read_of_the_table() {
         assert!(sql.starts_with("SELECT "));
         assert!(sql.ends_with(&format!(
             " ORDER BY {} DESC LIMIT {}",
-            if d == MY { "COUNT(*)" } else { "count(*)" },
+            if d == MY { "COUNT(*)" } else { "pg_catalog.count(*)" },
             GROUP_VALUES + 1
         )));
         assert_eq!(sql.matches(" GROUP BY ").count(), 1);

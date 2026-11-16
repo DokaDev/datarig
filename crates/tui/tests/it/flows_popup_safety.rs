@@ -534,7 +534,7 @@ fn counts_of_values_and_of_rows_are_each_their_own_payload() {
         let (sql, limit) = &grouped[0];
         assert_eq!(
             sql,
-            r#"SELECT CASE WHEN octet_length("name") <= 4096 THEN "name" END, octet_length("name"), count(*) FROM "shop"."users" WHERE (id > 0) GROUP BY "name" ORDER BY count(*) DESC LIMIT 201"#,
+            r#"SELECT CASE WHEN pg_catalog.octet_length("name") OPERATOR(pg_catalog.<=) 4096 THEN "name" END, pg_catalog.octet_length("name"), pg_catalog.count(*) FROM "shop"."users" WHERE (id > 0) GROUP BY "name" ORDER BY pg_catalog.count(*) DESC LIMIT 201"#,
             "{via:?}"
         );
         assert!(limit.is_some(), "{via:?}: an idle session's count has a time limit");
