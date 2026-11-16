@@ -5,7 +5,7 @@ use super::ddl::{EMPTY_PATH, FIND_NAMED, FIND_RELATION, FIND_TRIGGER, FIND_TRIGG
 use super::{
     BEGIN_READ, CATALOG, DATABASES, ENUM_CTES, KEY_COLUMNS, KEY_FOREIGN, KEY_INDEXES, SCHEMA_OBJECTS, SCHEMAS,
 };
-use datarig_core::sql::risk::path_names::path_names;
+use datarig_core::sql::risk::path_names::{bare_relations, path_names};
 
 fn statements() -> Vec<(&'static str, String)> {
     vec![
@@ -43,4 +43,19 @@ fn no_catalogue_statement_leaves_a_name_to_the_search_path() {
         }
     }
     assert!(left.is_empty(), "left to the search path:\n{}", left.join("\n"));
+}
+
+/// Every relation is named with its schema: a relation of the session's temporary schema never
+/// stands for a catalog (the reads keep the session's path, where `pg_temp` comes first unless
+/// listed).
+#[test]
+fn every_catalogue_relation_is_named_with_its_schema() {
+    let bare: Vec<String> = statements()
+        .into_iter()
+        .filter_map(|(name, sql)| match bare_relations(&sql) {
+            Some(b) if b.is_empty() => None,
+            other => Some(format!("{name}: {other:?}")),
+        })
+        .collect();
+    assert!(bare.is_empty(), "{}", bare.join("\n"));
 }

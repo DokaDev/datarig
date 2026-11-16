@@ -40,6 +40,10 @@ fn visit(o: &serde_json::Map<String, Value>, found: &mut Vec<String>) {
             one_part("type", &t["names"], found);
         }
     }
+    // A column definition's `COLLATE`.
+    if let Some(c) = o.get("coll_clause") {
+        one_part("collation", &c["collname"], found);
+    }
     let Some((kind, body)) = o.iter().next().filter(|_| o.len() == 1) else { return };
     let (label, names) = match kind.as_str() {
         "AExpr" => ("operator", &body["name"]),
@@ -83,6 +87,29 @@ fn one_part(label: &str, names: &Value, found: &mut Vec<String>) {
     if parts.len() == 1 {
         found.push(format!("{label} {}", parts[0]));
     }
+}
+
+/// The relations of `sql` named without a schema that are not a `WITH` query of the statement,
+/// in the order of the parse tree; `None` when the parser rejects `sql`. Such a name is looked up
+/// in the session's temporary schema first unless the path lists `pg_temp` after `pg_catalog`.
+pub fn bare_relations(sql: &str) -> Option<Vec<String>> {
+    let mut ctes = std::collections::HashSet::new();
+    let mut bare = Vec::new();
+    for stmt in parse(sql)? {
+        walk(&stmt, &mut |o: &serde_json::Map<String, Value>| {
+            if let Some(name) = o.get("CommonTableExpr").and_then(|c| c["ctename"].as_str()) {
+                ctes.insert(name.to_string());
+            }
+            if let Some(r) = o.get("RangeVar")
+                && r["schemaname"].as_str().is_none_or(str::is_empty)
+                && let Some(name) = r["relname"].as_str()
+            {
+                bare.push(name.to_string());
+            }
+        });
+    }
+    bare.retain(|name| !ctes.contains(name));
+    Some(bare)
 }
 
 #[cfg(test)]

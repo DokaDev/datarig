@@ -49,6 +49,7 @@ fn every_kind_left_to_the_path_is_listed() {
         ("CREATE FUNCTION f(x pg_catalog.int4) RETURNS text LANGUAGE sql AS 'SELECT 1'", "type text"),
         ("CREATE FUNCTION f(x text) RETURNS pg_catalog.int4 LANGUAGE sql AS 'SELECT 1'", "type text"),
         ("CREATE TABLE t OF mytype", "type mytype"),
+        ("CREATE TABLE t (a pg_catalog.text COLLATE \"C\")", "collation C"),
         ("SELECT 1 FROM pg_catalog.pg_class TABLESAMPLE sampler(1)", "function sampler"),
     ];
     for (sql, name) in cases {
@@ -59,6 +60,13 @@ fn every_kind_left_to_the_path_is_listed() {
 #[test]
 fn every_statement_of_a_text_is_read() {
     assert_eq!(names("SELECT pg_catalog.now(); SELECT now()"), ["function now"]);
+}
+
+#[test]
+fn relations_without_a_schema_are_listed_unless_they_are_with_queries() {
+    let sql = "WITH RECURSIVE w AS (SELECT 1 FROM w) SELECT 1 FROM pg_catalog.pg_class, pg_class, w, t";
+    assert_eq!(super::bare_relations(sql), Some(vec!["pg_class".to_string(), "t".to_string()]));
+    assert_eq!(super::bare_relations("SELEC"), None);
 }
 
 #[test]
