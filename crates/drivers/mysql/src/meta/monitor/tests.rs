@@ -263,8 +263,10 @@ fn the_read_before_an_action_names_the_monitors_marker() {
     let m = my(80411, true, Readable::Yes);
     let sql = guard(&m, 1, TOKEN);
     assert!(sql.contains("CONNECTION_ID() AS own_id"), "{sql}");
-    assert!(sql.contains(&format!("a.ATTR_VALUE = '{TOKEN}') AS marker")), "{sql}");
-    assert!(guard(&m, 1, "x' OR '1").contains("a.ATTR_VALUE = '') AS marker"));
+    assert!(sql.contains(&format!("{} AS marker", crate::session::marked_once(TOKEN))), "{sql}");
+    // Only one connection with it names an id: a marker listed twice confirms nothing.
+    assert!(sql.contains("IF(COUNT(*) = 1, MIN(PROCESSLIST_ID), NULL)"), "{sql}");
+    assert!(guard(&m, 1, "x' OR '1").contains("ATTR_VALUE = '') AS marker"));
     assert!(!sessions(&m, IDLE)[0].contains("marker") && !session(&m, 1).contains("marker"));
 }
 

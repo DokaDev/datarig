@@ -225,11 +225,8 @@ fn session_rows(my: &MySqlMonitor, trx: bool, locks: bool, filter: &str, marker:
     if let Some(token) = marker {
         // Only a token as the driver makes them is written into the statement.
         let token = if crate::session::is_token(token) { token } else { "" };
-        own = format!(
-            "CONNECTION_ID() AS own_id, (SELECT MIN(a.PROCESSLIST_ID) \
-             FROM performance_schema.session_account_connect_attrs a \
-             WHERE a.ATTR_NAME = 'datarig_session' AND a.ATTR_VALUE = '{token}') AS marker"
-        );
+        // The one connection carrying it (NULL for none, or more than one).
+        own = format!("CONNECTION_ID() AS own_id, {} AS marker", crate::session::marked_once(token));
         columns.push(&own);
     }
     format!(
