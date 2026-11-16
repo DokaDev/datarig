@@ -2902,3 +2902,89 @@ async fn the_dialog_offers_patterns_only_where_the_collation_takes_them() {
     drop(app);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A range of dates copied with `y` in a session that writes dates as `SQL, DMY`, pasted with
+/// `g p` into the same table read again after `RESET DateStyle` (ISO): the copied text
+/// `[02/01/2026,05/01/2026)` names other dates there (1 February, not 2 January), so the paste
+/// is refused, saying in which settings each side writes dates, and nothing reaches the table.
+/// Makes `public.zz_it_datestyle_<pid>` and drops it; sets only its own session's settings.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_range_copied_in_another_date_style_is_not_pasted_as_other_dates() {
+    use datarig_tui::app::Results;
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::edit::EditAction;
+    let Some(url) = pg_url("a_range_copied_in_another_date_style_is_not_pasted_as_other_dates") else { return };
+    let pw = datarig_core::profile::dsn::parse(&url).unwrap().password.unwrap_or_default();
+    let t = format!("public.zz_it_datestyle_{}", std::process::id());
+    let _guard = pg_clean::TableGuard::new(&url, &[&t]);
+    pg_clean::run_fresh(&url, &format!("CREATE TABLE {t} (id int PRIMARY KEY, r daterange)")).unwrap();
+    pg_clean::run_fresh(&url, &format!("INSERT INTO {t} VALUES (1, '[2026-01-02,2026-01-05)'), (2, NULL)")).unwrap();
+    let (mut app, mut rx) = app_with(&url, &pw);
+    let clip = KeptClipboard::default();
+    let c = clip.clone();
+    app.set_clipboard(Arc::new(move || Ok(Box::new(c.clone()) as Box<dyn datarig_tui::clipboard::SystemClipboard>)));
+    app.set_env_lookup(Arc::new(|_| None));
+    let id = first(&app);
+    enter(&mut app);
+    pump(&mut app, &mut rx, 10, |a| a.conns.get(id).is_some_and(|c| c.keys.catalog().is_some())).await;
+    let select = format!("SELECT id, r FROM {t} ORDER BY id");
+    let cell_at = |app: &App, r: usize, c: usize| match &app.tab().results {
+        Results::Rows(rs) => match rs.cell(r, c) {
+            datarig_tui::widgets::grid::CellRef::Here(v) => v.clone(),
+            _ => None,
+        },
+        _ => None,
+    };
+    run_and_wait(&mut app, &mut rx, "SET DateStyle = 'SQL, DMY'", None).await;
+    run_and_wait(&mut app, &mut rx, &select, None).await;
+    assert_eq!(cell_at(&app, 0, 1).as_deref(), Some("[02/01/2026,05/01/2026)"));
+    // The server says the statement runs no code that could change the settings within it.
+    pump(&mut app, &mut rx, 10, |a| matches!(&a.tab().results, Results::Rows(rs) if rs.text_in.is_some())).await;
+    app.focus = datarig_tui::app::Focus::Results;
+    (app.tab_mut().grid.row, app.tab_mut().grid.col) = (0, 1);
+    press(&mut app, 'y');
+    run_and_wait(&mut app, &mut rx, "RESET DateStyle", None).await;
+    run_and_wait(&mut app, &mut rx, &select, None).await;
+    assert_eq!(cell_at(&app, 0, 1).as_deref(), Some("[2026-01-02,2026-01-05)"), "read in ISO now");
+    app.focus = datarig_tui::app::Focus::Results;
+    app.transient = None;
+    (app.tab_mut().grid.row, app.tab_mut().grid.col) = (1, 1);
+    press(&mut app, 'g');
+    press(&mut app, 'p');
+    // The table's structure is read first; then the paste is done or refused.
+    let landed = |a: &App| {
+        a.transient.as_ref().is_some_and(|(n, _)| {
+            let said = n.render(&a.i18n).to_string();
+            said.starts_with("Pasted") || said.starts_with("Not pasted")
+        })
+    };
+    pump(&mut app, &mut rx, 10, landed).await;
+    let said = app.transient.as_ref().map(|(n, _)| n.render(&app.i18n).to_string()).unwrap_or_default();
+    let pending = match &app.tab().results {
+        Results::Rows(rs) => rs.edit.batch.value(1, 1).cloned(),
+        _ => None,
+    };
+    if pending.is_some() {
+        // Pasted: applied as the user would, so the table shows what the paste stores.
+        app.dispatch(Action::Edit(EditAction::Apply));
+        press(&mut app, 'y');
+        pump(&mut app, &mut rx, 10, |a| matches!(&a.tab().results, Results::Rows(rs) if rs.edit.batch.is_empty()))
+            .await;
+    }
+    // What row 2 holds, read in ISO: never other dates than row 1's.
+    let check = format!(
+        "DO $$ DECLARE v text; BEGIN SELECT r::text INTO v FROM {t} WHERE id = 2; \
+         IF v IS DISTINCT FROM NULL THEN RAISE EXCEPTION 'row 2 holds %', v; END IF; END $$"
+    );
+    pg_clean::run_fresh(&url, &check).unwrap_or_else(|e| panic!("the paste stored other dates: {e} (said: {said})"));
+    assert!(
+        said.starts_with(
+            "Not pasted: column \u{201C}r\u{201D} was copied as text whose dates and times are written in DateStyle \
+             SQL, DMY"
+        ),
+        "{said}"
+    );
+    assert!(said.contains("this session reads such text in DateStyle ISO"), "{said}");
+    assert_eq!(pending, None);
+    app.dispatch(Action::Quit);
+}

@@ -285,6 +285,10 @@ pub struct TabSession {
     /// zone and results character set); `None` until it says, and for a driver whose sessions
     /// do not.
     pub values: Option<datarig_core::driver::SessionValues>,
+    /// How `session` writes dates, times and intervals as text (`DbEvent::TextStyle`: a
+    /// PostgreSQL session's `DateStyle`, `IntervalStyle` and `TimeZone`); `None` until it says,
+    /// when it says it does not know, and for a driver whose sessions do not.
+    pub text: Option<datarig_core::driver::TextStyle>,
     /// What the statement running now does to the values its result is read in, as its session
     /// said (run `query_id`): server code runs (`DbEvent::ValuesNotKnown`, its next result is
     /// read in values not known), the values changed while it ran (`DbEvent::SessionValues`
@@ -404,6 +408,7 @@ impl TabSession {
             path_per_transaction: false,
             language: None,
             values: None,
+            text: None,
             reading: Reading::default(),
             tx: None,
             apply_tx: None,
@@ -795,6 +800,22 @@ impl Tab {
         {
             self.exec.view = ResultView::Plan;
         }
+    }
+
+    /// The server answered the allowlist's question `check` about a result's statement
+    /// (`ResultSet::text_check`): `ok`, its text is known to be written in the settings its
+    /// first page came in. Whether a result asked it.
+    pub fn style_checked(&mut self, check: u64, ok: bool) -> bool {
+        let mut asked = false;
+        for rs in self.row_results_mut() {
+            if rs.text_check.as_ref().is_some_and(|(c, _)| *c == check) {
+                asked = true;
+                if let Some((_, style)) = rs.text_check.take().filter(|_| ok) {
+                    rs.text_in = Some(style);
+                }
+            }
+        }
+        asked
     }
 
     /// Every row result the tab keeps (shown or parked).

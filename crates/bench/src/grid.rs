@@ -40,6 +40,9 @@ pub fn rows(n: usize, cols: usize) -> (Vec<ColumnMeta>, Vec<Vec<Option<String>>>
                 _ => ValueKind::Text,
             },
             origin: None,
+            styled: false,
+            zoned: false,
+            dated: Default::default(),
         })
         .collect();
     let rows = (0..n)

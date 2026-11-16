@@ -166,9 +166,87 @@ pub struct EditState {
     pub gone: Option<Label>,
     /// The cells of the changes whose value their column does not take, as last found.
     pub invalid: InvalidCache,
+    /// The cells given text pasted from columns whose text is written in the session's date
+    /// settings (`styled`), by the action that pasted it: such a value is applied only while the
+    /// session reads it the same. It is the cell's only while that action gave its pending value
+    /// ([`EditState::pasted_style`]).
+    pub styled: Vec<PastedStyle>,
+}
+
+/// The text of a value as read that a change writes as it is (a copy in the grid, a clone): an
+/// interval the driver read in binary is written in ISO 8601 (its exact months, days and
+/// microseconds, read the same whatever the session's `IntervalStyle`); any other as shown.
+pub(crate) fn exact_text(m: &datarig_core::driver::ColumnMeta, shown: &str) -> String {
+    use datarig_core::driver::{DatePart, Dated, ValueKind};
+    let binary_interval = m.kind == ValueKind::Interval && !m.styled && m.dated == Dated::Of(DatePart::Interval);
+    binary_interval
+        .then(|| datarig_core::driver::text_style::interval_as_iso(shown))
+        .flatten()
+        .unwrap_or_else(|| shown.to_string())
+}
+
+/// How a value's text was written, when it is a `styled` column's: the settings (`None`: not
+/// known) and whether it may hold a time with a zone; `None` for other text (typed, say).
+type Written = Option<(Option<datarig_core::driver::TextStyle>, bool)>;
+
+/// The values of a row `O` adds, each with how it was written, and the new row it goes after.
+type ClonePlan = (Vec<(Value, Written)>, Option<u64>);
+
+/// A cell of a result's rows as the edit planner names it.
+fn cell_origin(at: RowAt) -> datarig_core::edit::Origin {
+    match at {
+        RowAt::Read(r) => datarig_core::edit::Origin::Row(r),
+        RowAt::New(id) => datarig_core::edit::Origin::New(id),
+    }
+}
+
+/// Text pasted into a cell by action `step`, with how it was written when copied from a `styled`
+/// column.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PastedStyle {
+    pub step: u64,
+    pub at: RowAt,
+    pub col: usize,
+    /// The settings it was written in (`None`: not known).
+    pub written: Option<datarig_core::driver::TextStyle>,
+    /// It may hold a time with a time zone (`ColumnMeta::zoned` of the column it was copied
+    /// from).
+    pub zoned: bool,
+    /// It was a `styled` column's text (else other text, pasted over it: no settings of its own).
+    pub styled: bool,
 }
 
 impl EditState {
+    /// How the pending value of the cell in column `col` of `at` was written: the last paste
+    /// into the cell, of an action still done, made since the action that gave the cell its
+    /// value (or by it), when that paste was of a `styled` column's text. `None` when no such
+    /// paste is (a value typed since, a revert, an undo of the paste) or the last one was of
+    /// other text.
+    pub fn pasted_style(&self, at: RowAt, col: usize) -> Option<&PastedStyle> {
+        let since = self.batch.setter(cell_origin(at), col)?;
+        let last = (self.styled.iter().rev())
+            .find(|p| p.at == at && p.col == col && p.step >= since && self.batch.done(p.step))?;
+        last.styled.then_some(last)
+    }
+
+    /// Action `step` (`None`: one that changed nothing, so none) pasted into the cell in
+    /// column `col` of `at` text written in `written` (`None` for the settings: not known)
+    /// that may hold a time with a zone (`zoned`), when copied from a `styled` column (`from`),
+    /// else other text. Kept under that action, never changing what an earlier one keeps: undone,
+    /// the earlier paste's is the cell's again. A paste that changed nothing at all is kept under
+    /// the action the cell's value is from, after what that action keeps.
+    pub(super) fn pasted(
+        &mut self,
+        step: Option<u64>,
+        at: RowAt,
+        col: usize,
+        from: Option<(Option<datarig_core::driver::TextStyle>, bool)>,
+    ) {
+        let Some(step) = step.or_else(|| self.batch.setter(cell_origin(at), col)) else { return };
+        let (styled, (written, zoned)) = (from.is_some(), from.unwrap_or((None, false)));
+        self.styled.push(PastedStyle { step, at, col, written, zoned, styled });
+    }
+
     /// The rows were read under `bound` (`None`: under no profile, so never edited).
     pub(super) fn bind(&mut self, bound: Option<Bound>) {
         self.bound = bound;
@@ -1133,19 +1211,39 @@ impl App {
             Err(why) => return self.say_not(why),
         };
         let col = self.tab().grid.col;
+        let texts = cells.iter().enumerate().filter(|(_, (v, _))| matches!(v, Value::Text(_))).map(|(c, _)| c);
+        if let Some(why) = self.target_style_refusal(texts.collect::<Vec<_>>()) {
+            return self.say_refused(why);
+        }
         let Some(rs) = rows_of_mut(self.tabs.active_mut()) else { return };
+        let (cells, written): (Vec<Value>, Vec<Written>) = cells.into_iter().unzip();
         let id = rs.edit.batch.add(usize::MAX, next_to, cells);
+        // Each value copied keeps the settings it was written in, under this action.
+        let step = rs.edit.batch.last_step();
+        for (c, w) in written.into_iter().enumerate() {
+            if w.is_some() {
+                rs.edit.pasted(step, RowAt::New(id), c, w);
+            }
+        }
         self.edit_cursor_to(RowAt::New(id), col);
     }
 
-    /// The values of the row `O` adds, and the new row it goes after; else why not.
-    fn clone_plan(&self, target: &EditTarget) -> Result<(Vec<Value>, Option<u64>), Option<Notice>> {
+    /// The values of the row `O` adds, each with the settings its text was written in when it
+    /// is a `styled` column's (`Written`), and the new row it goes after; else why not.
+    fn clone_plan(&self, target: &EditTarget) -> Result<ClonePlan, Option<Notice>> {
         let t = self.tab();
         let rs = rows_of(t).ok_or(None)?;
         let ncols = rs.columns.len();
         let at = row_at(rs, t.grid.row).ok_or(None)?;
         self.insert_column(target, ncols)?;
         // The values, and the one as read of each cell not set.
+        // How each value was written: as pasted (a value pasted, then copied with its row), as
+        // read (the result's settings, `None` when not known), and nothing for a value typed.
+        let pasted = |c: usize| rs.edit.pasted_style(at, c).map(|p| (p.written.clone(), p.zoned));
+        let read_in = |c: usize| {
+            let m = &rs.columns[c].meta;
+            m.styled.then(|| (rs.text_in.clone(), m.zoned))
+        };
         let (values, read): (Vec<Value>, Vec<Option<String>>) = match at {
             RowAt::New(id) => {
                 let d = rs.edit.batch.drafts().iter().find(|d| d.id == id).ok_or(None)?;
@@ -1159,7 +1257,10 @@ impl App {
                 (0..ncols)
                     .map(|c| match rs.edit.batch.value(r, c) {
                         Some(v) => (v.clone(), None),
-                        None => (row[c].clone().map_or(Value::Null, Value::Text), row[c].clone()),
+                        None => {
+                            let exact = row[c].as_deref().map(|s| exact_text(&rs.columns[c].meta, s));
+                            (exact.map_or(Value::Null, Value::Text), row[c].clone())
+                        }
                     })
                     .unzip()
             }
@@ -1174,16 +1275,17 @@ impl App {
         for (c, (v, as_read)) in values.into_iter().zip(read).enumerate() {
             let own = keys.contains(&c) || target.allows(c, Write::Insert).map_or(true, new_number);
             if own {
-                cells.push(Value::Default);
+                cells.push((Value::Default, None));
                 continue;
             }
+            let written = if as_read.is_some() { read_in(c) } else { pasted(c) };
             if let Some(text) = as_read
                 && !shown_whole(d, rs, c, &text, zone)
             {
                 let column = rs.columns[c].meta.name.clone();
                 return Err(Some(self.refused_notice(Msg::EditWhyCloneNotWhole { column })));
             }
-            cells.push(v);
+            cells.push((v, written));
         }
         let next_to = match at {
             RowAt::New(id) => Some(id),
@@ -1318,6 +1420,11 @@ impl App {
     /// Set `cells` (rows of one column, in order: rows read, or new rows) of the active tab's
     /// shown result to `v`, as one change.
     fn edit_write_cells(&mut self, cells: &[(RowAt, usize)], v: Value) {
+        if matches!(v, Value::Text(_))
+            && let Some(why) = self.target_style_refusal(cells.iter().map(|&(_, c)| c))
+        {
+            return self.say_refused(why);
+        }
         let Some(rs) = rows_of_mut(self.tabs.active_mut()) else { return };
         let new: Vec<(u64, usize)> = cells
             .iter()
@@ -1430,7 +1537,9 @@ impl App {
         };
         let text = self.tab().cell_edit.as_ref().map(CellEdit::text).unwrap_or_default();
         let d = self.tab_dialect(self.tab().id);
-        if let Err(reason) = self.typed_whole(d, &text).and_then(|_| self.typed_ok(d, &c, &text)) {
+        let target = self.target_style_refusal(cells.iter().map(|&(_, c)| c)).map(|m| self.i18n.msg(&m).to_string());
+        let checked = self.typed_whole(d, &text).and_then(|_| self.typed_ok(d, &c, &text));
+        if let Err(reason) = target.map_or(checked, Err) {
             if let Some(e) = self.tabs.active_mut().cell_edit.as_mut() {
                 e.error = Some(reason.clone());
                 e.invalid = false;

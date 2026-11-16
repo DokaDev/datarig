@@ -271,6 +271,8 @@ impl App {
                 self.use_answered(id, crate::app::cmdline::UseAsk::Databases, ok);
             }
             DbEvent::Context { database, .. } => self.conns.entry(id).database = Some(database),
+            // The kinds of types a tab's result has, of the profile's own database.
+            DbEvent::TypeKinds { oids, result } => self.on_type_kinds(id, oids, result),
             DbEvent::Keys(Err(_)) => {
                 self.conns.entry(id).keys = Keys::Failed(text.clone());
                 self.status = Some(Notice::new(Msg::KeysFailed { error: text }, Level::Warning));
@@ -304,7 +306,7 @@ impl App {
             // The edits its server takes.
             DbEvent::Edit(format) => self.conns.entry(id).edit = Some(format),
             // A query session's own (copying its values as SQL needs it).
-            DbEvent::SessionValues(_) | DbEvent::ValuesNotKnown { .. } => {}
+            DbEvent::SessionValues(_) | DbEvent::TextStyle(_) | DbEvent::ValuesNotKnown { .. } => {}
             // A monitor session's own.
             DbEvent::Monitor(_)
             | DbEvent::MonitorSnapshot { .. }

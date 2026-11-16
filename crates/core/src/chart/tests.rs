@@ -14,7 +14,17 @@ fn meta(name: &str, ty: &str, numeric: bool) -> ColumnMeta {
         "text" | "varchar" => ValueKind::Text,
         _ => ValueKind::Other,
     };
-    ColumnMeta { name: name.into(), type_name: ty.into(), numeric, json: ty.starts_with("json"), kind, origin: None }
+    ColumnMeta {
+        name: name.into(),
+        type_name: ty.into(),
+        numeric,
+        json: ty.starts_with("json"),
+        kind,
+        origin: None,
+        styled: false,
+        zoned: false,
+        dated: Default::default(),
+    }
 }
 
 fn rows(v: &[&[Option<&str>]]) -> Vec<Vec<Cell>> {

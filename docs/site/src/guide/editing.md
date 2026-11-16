@@ -437,6 +437,68 @@ A `TIMESTAMP` value pending in a result read in a zone without a fixed offset, i
 known, or in a session whose zone changed while its rows were read is not kept either. Into a column without a zone (`DATETIME`, `timestamp`, text) the text pastes as
 it was shown.
 
+A PostgreSQL value read as the server's text (a range or multirange of dates or times such as
+`daterange` or `tstzrange`, a composite or an array of such values, an extension's type or one
+the driver cannot tell) is written in the session's `DateStyle`, `IntervalStyle` and
+`TimeZone`: `[02/01/2026,05/01/2026)` starts on 2 January in `SQL, DMY` and on 1 February in
+`SQL, MDY`. Its cells keep the settings their result was read in, and `g p` pastes them into a
+column that reads dates, times or intervals only where they read back as the same values:
+written in ISO (`DateStyle` `ISO` and an `IntervalStyle` other than `sql_standard`), or in
+exactly the settings of the session the result is pasted in. Else it says why and pastes
+nothing ("Not pasted: column “period” was copied as text whose dates and times are written in
+DateStyle SQL, DMY, IntervalStyle postgres, TimeZone UTC; this session reads such text in
+DateStyle ISO, MDY, IntervalStyle postgres, TimeZone UTC, maybe as other values"), also when
+the copy's settings are not known (they changed while its rows were read): set the session's
+settings to the copy's (`SET DateStyle = 'SQL, DMY'`) or copy the rows again in ISO, and paste
+again. Dates, times and intervals of the plain types (`date`, `timestamptz`, `interval` and
+arrays of them) are read in ISO whatever the settings and paste as they are, as do text,
+numbers and JSON, and such text pastes as it was shown into a text column.
+
+The settings of a result are known only for a statement that cannot change them while it runs:
+one on the plain-read allowlist (a `SELECT` of tables with known built-ins, which the server
+confirms right after its first page). A statement that calls `set_config`, a function of the
+user's or a view may change them and change them back within itself, which the server never
+reports, so its cells' settings are not known. A value typed in the grid, or written back by an
+Apply, is of settings not known too, and so is any value copied while pending (pasted, typed or
+cloned, in a column of any type): it pastes into no column that reads dates or times from text.
+`g p` and `p` into such a column of a result read in other settings than the session's now (or
+in settings not known) are refused too: run the query again first. A pasted (or cloned) value
+keeps the settings it was written in, and is applied only when they are ISO (`DateStyle` `ISO`
+and an `IntervalStyle` other than `sql_standard`), which the server reads the same whatever its
+settings when the changes are applied (a trigger of the Apply's own transaction may change
+them, which nothing reports). Text written in other settings can be pasted and seen, but its
+cell is marked invalid, saying why, and the changes are not applied: set `DateStyle` to ISO,
+read the source again and paste again.
+
+Any text a change gives a PostgreSQL column that holds dates, times or intervals (a scalar,
+a range, a multirange, an array, a domain over one of those), however it got there (typed in
+the cell editor, pasted from the clipboard, `g p` of any column, cloned), is applied only in a
+form the server reads the same whatever its `DateStyle`, `TimeZone` and `IntervalStyle` when the
+statement runs: dates as `2026-01-02`, times with a time zone with their offset
+(`2026-01-02 10:00:00+09`), intervals in ISO 8601 (`P1DT2H`); `infinity` and `empty` are fine.
+An `interval` copied in the grid with `y` or cloned with `O` is written in ISO 8601 from its
+exact value (`P-1Y-2M3DT-4H-5M-6S` for `-1 years -2 mons +3 days -04:05:06`), so it is
+applied as it was read; NULL is never refused for the session's settings.
+Other text is kept, marked invalid with the form to use, and not applied. A column of a type
+whose dates the app cannot tell (any composite, whose fields may have changed since it was
+read, an array or a domain of one, a pseudo-type) takes no text from here; base types that hold no dates (`citext`, `hstore`, `ltree`, PostGIS geometry) are edited
+as before once the app has read their kind from the server, right after their result comes
+(until then, a change of them asks to try again in a moment; in a tab working in another
+database than the profile's own, they stay not known).
+
+Text put into such a column of a result read in other settings than the session's now (or in
+settings not known), by any path (typed, pasted from the clipboard or the grid, cloned), is
+refused: the cell's text, which the change is compared with, may be the same bytes for another
+value. Both in ISO is fine. Run the query again first.
+
+A time with a time zone (a `timestamptz` or `timetz` in a range, an array or a composite, or a
+type the driver cannot tell) written in a `DateStyle` other than ISO carries the zone's
+abbreviation (`CST`), which the reading session reads in its own `timezone_abbreviations`, a
+setting no server reports: such cells paste only when written in ISO, never by equal settings.
+A session whose Startup SQL goes first in each transaction (behind a pooler) may change the
+settings for the one request that reads and commits a page, so its results' settings are
+never known.
+
 ## Undo, revert, discard
 
 - `u` undoes the last change of the result and `Ctrl+R` redoes it. A change of several selected

@@ -420,14 +420,17 @@ mod terminal {
         }
     }
 
-    async fn connect(url: &str) -> (Client, oneshot::Receiver<DbError>, tokio::task::AbortHandle) {
+    async fn connect(
+        url: &str,
+    ) -> (Client, oneshot::Receiver<DbError>, tokio::task::AbortHandle, tokio_postgres::SharedParameters) {
         let (client, conn) = tokio_postgres::connect(url, NoTls).await.expect("connect");
+        let params = conn.shared_parameters();
         let (done, ended) = oneshot::channel();
         let conn = tokio::spawn(async move {
             let _ = conn.await;
             let _ = done.send(DbError::Closed);
         });
-        (client, ended, conn.abort_handle())
+        (client, ended, conn.abort_handle(), params)
     }
 
     /// Drops the test's table on a fresh connection, also when an assertion fails.
@@ -653,7 +656,7 @@ mod terminal {
         client: Client,
         link: Link,
         token: crate::route::Cancel,
-        events: UnboundedSender<DbEvent>,
+        events: super::super::style::Events,
         rx: UnboundedReceiver<DbEvent>,
         _cmds: UnboundedSender<DbCommand>,
         tx: Tx,
@@ -673,9 +676,14 @@ mod terminal {
 
     impl Session {
         async fn open(url: &str) -> Self {
-            let (client, ended, conn) = connect(url).await;
+            let (client, ended, conn, params) = connect(url).await;
             let (cmds, cmd_rx) = unbounded_channel();
-            let (events, rx) = unbounded_channel();
+            let (events, mut rx) = unbounded_channel();
+            // The settings as the session connected: said once, as the session's loop does,
+            // so a run's events show only a change.
+            let events = super::super::style::Events::new(events, params, false);
+            events.report();
+            while rx.try_recv().is_ok() {}
             let token = crate::route::Cancel::new(
                 client.cancel_token(),
                 None,
@@ -1168,19 +1176,203 @@ mod terminal {
         assert!(events.iter().any(|e| matches!(e, DbEvent::Page { columns: Some(_), .. })));
     }
 
+    /// The session says how its server writes dates and times as text, as the server reported
+    /// it: a `SET` before the answer of its run (so the next result is read in it), a
+    /// `SET LOCAL` and the rollback that undoes it, and a page read while the settings changed
+    /// (a `set_config` in the statement itself) between `None` and the settings after it. A
+    /// statement that changes nothing says nothing. Leaves nothing behind.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_session_says_its_date_settings_as_the_server_reports_them() {
+        let Some(url) = pg_url("the_session_says_its_date_settings_as_the_server_reports_them") else { return };
+        let mut s = Session::open(&url).await;
+        let styles = |events: &[DbEvent]| -> Vec<String> {
+            events
+                .iter()
+                .filter_map(|e| match e {
+                    DbEvent::TextStyle(Some(t)) => {
+                        Some(format!("{} / {} / {}", t.date_style, t.interval_style, t.time_zone))
+                    }
+                    DbEvent::TextStyle(None) => Some("unknown".into()),
+                    DbEvent::Page { .. } => Some("page".into()),
+                    DbEvent::Done { .. } => Some("done".into()),
+                    _ => None,
+                })
+                .collect()
+        };
+        s.run_all(&["SET TimeZone = 'UTC'"], None).await;
+        let events = s.run_all(&["SET DateStyle = 'SQL, DMY'"], None).await;
+        assert_eq!(styles(&events), ["SQL, DMY / postgres / UTC", "done"]);
+        let events = s.run_all(&["SELECT '[2026-01-02,2026-01-05)'::daterange"], None).await;
+        assert_eq!(styles(&events), ["page"]);
+        assert!(
+            events.iter().any(
+                |e| matches!(e, DbEvent::Page { rows, .. } if rows[0][0].as_deref() == Some("[02/01/2026,05/01/2026)"))
+            ),
+            "{events:?}"
+        );
+        s.run_all(&["BEGIN"], None).await;
+        let events = s.run_all(&["SET LOCAL IntervalStyle = 'sql_standard'"], None).await;
+        assert_eq!(styles(&events), ["SQL, DMY / sql_standard / UTC", "done"]);
+        let events = s.run_all(&["ROLLBACK"], None).await;
+        assert_eq!(styles(&events), ["SQL, DMY / postgres / UTC", "done"]);
+        let events = s.run_all(&["SELECT set_config('DateStyle', 'ISO, MDY', false)"], None).await;
+        assert_eq!(styles(&events), ["unknown", "page", "ISO, MDY / postgres / UTC"]);
+        let events = s.run_all(&["SET DateStyle = 'ISO, MDY'"], None).await;
+        assert_eq!(styles(&events), ["done"], "the same value: no change");
+        s.run_all(&["RESET DateStyle", "RESET TimeZone"], None).await;
+    }
+
+    /// What the server never reports, so the session cannot see it: a setting changed within
+    /// one request and set back before its end (a `set_config(…, true)` of a result not held,
+    /// whose transaction ends in the request that reads it), with its rows written in the other
+    /// value. Only the app's allowlist keeps such rows from counting as written in the settings
+    /// around them. (Held, the transaction stays open past the request, and the change is
+    /// reported with the page.)
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_setting_changed_and_set_back_within_one_request_is_never_reported() {
+        let Some(url) = pg_url("a_setting_changed_and_set_back_within_one_request_is_never_reported") else { return };
+        let mut s = Session::open(&url).await;
+        s.paging = PagingMode::NoHold;
+        let sql = "SELECT set_config('DateStyle', 'SQL, DMY', true), '[2026-01-02,2026-01-05)'::daterange";
+        let events = s.run_all(&[sql], None).await;
+        assert!(!events.iter().any(|e| matches!(e, DbEvent::TextStyle(_))), "{events:?}");
+        assert!(
+            events.iter().any(
+                |e| matches!(e, DbEvent::Page { rows, .. } if rows[0][1].as_deref() == Some("[02/01/2026,05/01/2026)"))
+            ),
+            "{events:?}"
+        );
+    }
+
+    /// Columns of an extension's types (`citext`, `hstore`) and of a multirange of the
+    /// database's own, which the connection all reports as base types, are looked up by their
+    /// oid; the metadata session's read says `b` for the first and `m` for the last, and lists
+    /// no type that does not exist. A composite is not known, a range over `date` holds its
+    /// dates. Makes database `zz_ext_<pid>` and drops it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn extension_types_hold_no_dates_and_a_composite_with_one_is_not_known() {
+        use datarig_core::driver::Dated;
+        let Some(url) = pg_url("extension_types_hold_no_dates_and_a_composite_with_one_is_not_known") else { return };
+        let db = format!("zz_ext_{}", std::process::id());
+        struct DropDb(String, String);
+        impl Drop for DropDb {
+            fn drop(&mut self) {
+                let (url, db) = (self.0.clone(), self.1.clone());
+                let _ = std::thread::spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                    rt.block_on(async {
+                        let (c, ..) = connect(&url).await;
+                        let _ = c.batch_execute(&format!("DROP DATABASE IF EXISTS {db} WITH (FORCE)")).await;
+                    });
+                })
+                .join();
+            }
+        }
+        let _guard = DropDb(url.clone(), db.clone());
+        let (c, ..) = connect(&url).await;
+        c.batch_execute(&format!("CREATE DATABASE {db}")).await.expect("database");
+        let in_db = format!("{}/{db}", url.rsplit_once('/').map_or(url.as_str(), |(base, _)| base));
+        let (c, ..) = connect(&in_db).await;
+        c.batch_execute(
+            "CREATE EXTENSION citext; CREATE EXTENSION hstore; CREATE TYPE zz_stay AS (night date); \
+             CREATE TYPE zz_dr AS RANGE (subtype = date)",
+        )
+        .await
+        .expect("setup");
+        drop(c);
+        let mut s = Session::open(&in_db).await;
+        let sql = "SELECT 'a'::citext, 'a=>1'::hstore, ARRAY['b'::citext], ROW('2026-01-02')::zz_stay, \
+                   '[2026-01-02,2026-01-05)'::zz_dr, '{[2026-01-02,2026-01-05)}'::zz_dr_multirange";
+        let events = s.run_all(&[sql], None).await;
+        let cols = events.iter().find_map(|e| match e {
+            DbEvent::Page { columns: Some(cols), .. } => Some(cols.clone()),
+            _ => None,
+        });
+        let cols = cols.unwrap_or_else(|| panic!("no rows: {events:?}"));
+        // A type of an extension's is a base type the connection does not tell apart from a
+        // multirange: looked up by its oid, on the metadata session, which says `b`.
+        let lookup = |c: &datarig_core::driver::ColumnMeta| match c.dated {
+            Dated::Lookup(oid) => oid,
+            other => panic!("{}: {other:?}", c.type_name),
+        };
+        let (citext, hstore) = (lookup(&cols[0]), lookup(&cols[1]));
+        assert_eq!(lookup(&cols[2]), citext, "an array of it: its element's");
+        assert_eq!((cols[3].dated, cols[3].styled), (Dated::Unknown, true), "{}", cols[3].type_name);
+        // A range of the database's own over `date` holds its dates; its multirange, whose kind
+        // the connection's lookup does not tell (`typtype` `m`), is not known: never a base type
+        // that holds none.
+        let date = Dated::Of(datarig_core::driver::DatePart::Date);
+        assert_eq!((cols[4].dated, cols[4].styled), (date, true), "{}", cols[4].type_name);
+        let multirange = lookup(&cols[5]);
+        assert!(cols[5].styled);
+        let (c, ..) = connect(&in_db).await;
+        let mut kinds = crate::meta::type_kinds::load_type_kinds(&c, &[citext, hstore, multirange, 4_000_000_000])
+            .await
+            .expect("kinds");
+        kinds.sort();
+        let mut want = vec![(citext, 'b'), (hstore, 'b'), (multirange, 'm')];
+        want.sort();
+        assert_eq!(kinds, want, "a type that does not exist is not listed");
+        drop(s);
+    }
+
+    /// An interval read in binary, as the driver shows it, written again in ISO 8601
+    /// (`text_style::interval_as_iso`) is the very same interval on the server, also read in
+    /// `sql_standard`: negative, mixed-sign, fractional, over a day.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_interval_shown_from_binary_reads_back_exactly_in_iso_8601() {
+        use datarig_core::driver::text_style::interval_as_iso;
+        let Some(url) = pg_url("an_interval_shown_from_binary_reads_back_exactly_in_iso_8601") else { return };
+        let mut s = Session::open(&url).await;
+        let values = [
+            "1 year 2 mons 3 days 04:05:06.789",
+            "-1 year -2 mons +3 days -04:05:06",
+            "1 day -00:00:00.000001",
+            "-25:00:00",
+            "0",
+            "-178000000 years",
+            "3 mons -2 days 00:00:00.5",
+        ];
+        s.run_all(&["SET IntervalStyle = 'sql_standard'"], None).await;
+        for v in values {
+            let events = s.run_all(&[&format!("SELECT '{v}'::interval")], None).await;
+            let shown = events
+                .iter()
+                .find_map(|e| match e {
+                    DbEvent::Page { rows, .. } => rows[0][0].clone(),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{v}: {events:?}"));
+            let iso = interval_as_iso(&shown).unwrap_or_else(|| panic!("{v}: {shown}"));
+            let same = format!(
+                "SELECT ('{iso}'::interval = '{v}'::interval AND '{iso}'::interval::text = '{v}'::interval::text)::text"
+            );
+            let events = s.run_all(&[&same], None).await;
+            let answer = events.iter().find_map(|e| match e {
+                DbEvent::Page { rows, .. } => rows[0][0].clone(),
+                _ => None,
+            });
+            assert_eq!(answer.as_deref(), Some("true"), "{v}: shown {shown}, written {iso}");
+        }
+        s.run_all(&["RESET IntervalStyle"], None).await;
+    }
+
     /// A run that ends without its terminal event (a bug) still answers: the dropped `Reply`
     /// sends `NoResult`, and a debug build says so loudly.
     #[test]
     fn an_unanswered_run_answers_when_dropped() {
         let (events, mut rx) = unbounded_channel();
+        let events = super::super::style::Events::plain(events);
         let failed = AtomicBool::new(false);
-        let dropped = std::panic::catch_unwind(move || drop(Reply::new(&events, &failed, 7)));
+        let dropped =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(Reply::new(&events, &failed, 7))));
         assert_eq!(dropped.is_err(), cfg!(debug_assertions), "the debug assertion");
         assert!(matches!(rx.try_recv(), Ok(DbEvent::Failed { id: 7, error: DbError::NoResult, cancelled: false })));
         assert!(rx.try_recv().is_err(), "once");
         // Answered, or closed by the UI: nothing more. (Each answer consumes the reply, so a
         // second one does not compile.)
         let (events, mut rx) = unbounded_channel();
+        let events = super::super::style::Events::plain(events);
         let failed = AtomicBool::new(false);
         Reply::new(&events, &failed, 8).fail(DbError::SchemaChanged, false);
         Reply::new(&events, &failed, 9).closed();
@@ -1294,6 +1486,29 @@ mod terminal {
 
         fn cancelled(step: Option<usize>) -> Result<(), ApplyFailure> {
             Err(ApplyFailure { step, why: ApplyError::Db(DbError::Cancelled) })
+        }
+
+        /// The rows an Apply's step returns (`RETURNING`) are read as text, every column of
+        /// them: a `date` there is written in the session's `DateStyle`, so its column is
+        /// `styled`, whatever the format its type is read in elsewhere.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn rows_an_apply_returns_are_read_as_text_in_the_sessions_settings() {
+            let Some(url) = pg_url("rows_an_apply_returns_are_read_as_text_in_the_sessions_settings") else { return };
+            let (table, _g) = table(&url, "returning_style").await;
+            let (c, ..) = connect(&url).await;
+            c.batch_execute(&format!("ALTER TABLE {table} ADD COLUMN d date DEFAULT '2026-01-02'")).await.unwrap();
+            let mut s = Session::open(&url).await;
+            s.run_all(&["SET DateStyle = 'SQL, DMY'"], None).await;
+            let sql = format!("UPDATE {table} SET v = 'b' WHERE id = 1 RETURNING id, d");
+            let step = Step { sql, expect: Expect::Affected(1), origin: Origin::Row(0), one: false };
+            let events = s.apply(&[step], ApplyTx::Commit, &Hooks::default()).await;
+            let returned = events.iter().find_map(|e| match e {
+                DbEvent::Applied { result: Ok(steps), .. } => steps.first().and_then(|s| s.returned.clone()),
+                _ => None,
+            });
+            let (cols, _) = returned.unwrap_or_else(|| panic!("nothing returned: {events:?}"));
+            assert!(cols[1].styled, "a date read as text is written in DateStyle");
+            assert!(!cols[0].styled);
         }
 
         /// A cancel asked for before the first step: nothing is sent, nothing committed, no

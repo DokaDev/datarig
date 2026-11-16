@@ -95,6 +95,10 @@ pub enum NodeState {
     Failed,
 }
 
+/// Whose answer of a type's kind it is ([`ProfileConn::type_kinds`]): the database, the
+/// connection's generation, the tab and its query session's generation, the type's oid.
+pub type TypeKindKey = (String, u64, super::tabs::TabId, u64, u32);
+
 /// The connection of one profile.
 pub struct ProfileConn {
     /// The profile's metadata session (tree, catalog).
@@ -133,6 +137,13 @@ pub struct ProfileConn {
     pub console: Option<bool>,
     /// The database the metadata session works in, as the server said.
     pub database: Option<String>,
+    /// The kinds (`pg_type.typtype`) of types of the profile's own database the metadata
+    /// session was asked (`DbCommand::LoadTypeKinds`), by the database, the attempt (the
+    /// `generation` of the connection that answered: another connection may reach another
+    /// server, where the same oid is another type), the tab that asked with its query session's
+    /// generation (an answer counts only for results of that session) and the type's oid:
+    /// `None` while the answer has not come; `?` for a type the answer did not list (dropped).
+    pub type_kinds: std::collections::HashMap<TypeKindKey, Option<char>>,
     /// The server's databases (`DbCommand::LoadDatabases`), once asked: the names, or why they
     /// could not be read.
     pub databases: Option<Result<Vec<String>, String>>,
@@ -196,6 +207,7 @@ impl ProfileConn {
             expand_on_connect: false,
             console: None,
             database: None,
+            type_kinds: Default::default(),
             databases: None,
             databases_asked: false,
             own_open: true,

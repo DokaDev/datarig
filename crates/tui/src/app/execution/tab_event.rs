@@ -124,6 +124,14 @@ impl App {
             }
             return;
         }
+        // How the session writes dates and times as text, from now on (a page read while it
+        // changed comes after `None`).
+        if let DbEvent::TextStyle(v) = ev {
+            if let Some(t) = self.tabs.get_mut(id) {
+                t.exec.text = v;
+            }
+            return;
+        }
         // Server code runs in the statement now running: its next result is read in values not
         // known.
         if let DbEvent::ValuesNotKnown { id: q } = ev {
@@ -141,6 +149,7 @@ impl App {
             if let Some(t) = self.tabs.get_mut(id) {
                 t.exec.language = None;
                 t.exec.values = None;
+                t.exec.text = None;
             }
             self.sync_tab_language(id);
         }
@@ -299,6 +308,13 @@ impl App {
         let mut idle_end: Option<Result<Notice, (Duration, crate::app::idle::RollbackFailed)>> = None;
         // The plan format a result of the tab may be in (one shows as a plan).
         let explain = self.tab_explain(id);
+        // The allowlist's question about a result's statement, for the settings its text was
+        // written in (`ResultSet::first_styled`).
+        let pg = self.tab_dialect(id) == datarig_core::sql::dialect::Dialect::Postgres;
+        let mut ask_style: Option<(u64, String)> = None;
+        // A result's first page: the kinds of its columns' types to look up are asked.
+        let first_page =
+            matches!(ev, DbEvent::Page { columns: Some(_), .. } | DbEvent::StepRows { columns: Some(_), .. });
         let Some(t) = self.tabs.get_mut(id) else { return };
         if outside.is_some() {
             t.exec.outside_offer = outside;
@@ -330,6 +346,7 @@ impl App {
             | DbEvent::Explain(_)
             | DbEvent::Edit(_)
             | DbEvent::SessionValues(_)
+            | DbEvent::TextStyle(_)
             | DbEvent::Stopping { .. }
             | DbEvent::CancelRefused { .. }
             | DbEvent::ValuesNotKnown { .. } => None,
@@ -554,6 +571,7 @@ impl App {
             | DbEvent::Structure { .. }
             | DbEvent::Ddl { .. }
             | DbEvent::TableKeys { .. }
+            | DbEvent::TypeKinds { .. }
             | DbEvent::Databases(_) => None,
             // Where the session works, as the server says: a chosen schema it does not list
             // does not exist there or cannot be used (said, never taken as fine).
@@ -635,7 +653,13 @@ impl App {
             // A statement of an export.
             DbEvent::Exported { id: qid, result, cancelled } => return self.on_exported(id, qid, result, cancelled),
             // The server's half of the allowlist, for a text plan to view as a plan.
-            DbEvent::RepeatChecked { id: check, result } => return self.as_plan_checked(id, check, result),
+            DbEvent::RepeatChecked { id: check, result } => {
+                // Or a result's, for the settings its text was written in.
+                if t.style_checked(check, result.is_ok()) {
+                    return;
+                }
+                return self.as_plan_checked(id, check, result);
+            }
             DbEvent::Lost { error } => {
                 t.exec.session = None;
                 t.exec.unsure();
@@ -735,6 +759,8 @@ impl App {
                         let store = datarig_core::results::RowStore::new(rows, spill, limits);
                         let mut rs = ResultSet::new(cols, store, more, &null);
                         rs.read_in = read_in(&mut t.exec);
+                        let sql = t.exec.run.statements.get(index).map_or("", |s| s.sql.as_str());
+                        ask_style = rs.first_styled(t.exec.text.as_ref(), sql, pg, &mut self.query_seq);
                         rs.edit.bind(bound);
                         let n = rs.rows.len();
                         let grid = GridState::paged(page_size, t.grid.page_rows);
@@ -744,6 +770,7 @@ impl App {
                     (None, Some(p)) => {
                         let rs = &mut p.rs;
                         rs.read_in.page(t.exec.values.as_ref());
+                        rs.text_page(t.exec.text.as_ref());
                         if rs.more {
                             let read = rs.rows.len();
                             rs.more = match rs.rows.append(rows) {
@@ -788,12 +815,14 @@ impl App {
                 // What was announced when it was sent stays in the status bar with its rows.
                 let announced = t.exec.run.notes.last().cloned();
                 let values = t.exec.values.clone();
+                let text = t.exec.text.clone();
                 let cap = shown_cap(t);
                 let qid = t.exec.query_id;
                 let answer = t.answer_rows_mut();
                 match (answer, r) {
                     (Some((rs, grid)), Some(r)) if same => {
                         rs.read_in.page(values.as_ref());
+                        rs.text_page(text.as_ref());
                         let read = rs.rows.len();
                         // A table tab's cap: the rows past it are left out, and nothing is
                         // read past it.
@@ -911,6 +940,8 @@ impl App {
                 let mut rs = ResultSet::new(cols, store, more, &null);
                 // Bound to the session's values now: a later `SET time_zone` is not this result's.
                 rs.read_in = read_in(&mut t.exec);
+                let sql = t.exec.run.statements.last().map_or("", |s| s.sql.as_str());
+                ask_style = rs.first_styled(t.exec.text.as_ref(), sql, pg, &mut self.query_seq);
                 rs.edit.bind(bound);
                 let query = t.exec.query_id;
                 if t.exec.reading.query != query {
@@ -988,10 +1019,12 @@ impl App {
                 t.exec.paging = paging(more);
                 let want = t.exec.want_page.take();
                 let values = t.exec.values.clone();
+                let text = t.exec.text.clone();
                 let answer = t.answer_rows_mut();
                 let m = match answer {
                     Some((rs, grid)) => {
                         rs.read_in.page(values.as_ref());
+                        rs.text_page(text.as_ref());
                         let read = rs.rows.len();
                         let appended = rs.rows.append(rows);
                         grid.rows_came(read, rs.rows.len() - read);
@@ -1170,6 +1203,12 @@ impl App {
         }
         if let Some(qid) = close_portal {
             self.send_tab(id, DbCommand::ClosePortal { id: qid });
+        }
+        if let Some((check, sql)) = ask_style {
+            self.send_tab(id, DbCommand::CheckRepeat { id: check, sql });
+        }
+        if first_page {
+            self.type_kinds_for_tab(id);
         }
         if let (Some(target), Some(t)) = (rows_for, self.tabs.get_mut(id)) {
             let (in_block, epoch) = (t.exec.in_block, t.exec.tx_epoch);

@@ -6,6 +6,7 @@ pub mod ddl;
 pub mod keys;
 mod protocol;
 pub mod structure;
+pub mod text_style;
 
 pub use keys::{KeyCatalog, KeyMarks};
 pub use protocol::{
@@ -15,6 +16,7 @@ pub use protocol::{
     PagingMode, ReadIn, SchemaObjects, ServerEnd, ServerMessage, SessionValues, StatementInfo, TxOutcome, TxRule,
     TxStep, ValueKind,
 };
+pub use text_style::{DatePart, Dated, TextStyle};
 
 use crate::profile::ConnectionConfig;
 use crate::sql::dialect::Language;

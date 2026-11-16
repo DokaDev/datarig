@@ -557,6 +557,13 @@ pub enum DbCommand {
     /// The databases of the server the user may connect to (`Capabilities::contexts`):
     /// answered with [`DbEvent::Databases`].
     LoadDatabases,
+    /// The kinds of the types `oids` of the metadata session's database (PostgreSQL's
+    /// `pg_type.typtype`): answered with [`DbEvent::TypeKinds`]. Asked for the types a result's
+    /// columns have that the connection reports as base types but are not built in
+    /// ([`super::Dated::Lookup`]).
+    LoadTypeKinds {
+        oids: Vec<u32>,
+    },
     /// The structure of table (or view) `schema.table` (`Capabilities::structure`): answered
     /// with [`DbEvent::Structure`]. Read from the catalog only, never from the table.
     LoadStructure {
@@ -1022,6 +1029,7 @@ impl DbCommand {
             DbCommand::LoadCatalog => DbEvent::Catalog(Err(error)),
             DbCommand::LoadKeys => DbEvent::Keys(Err(error)),
             DbCommand::LoadDatabases => DbEvent::Databases(Err(error)),
+            DbCommand::LoadTypeKinds { oids } => DbEvent::TypeKinds { oids: oids.clone(), result: Err(error) },
             DbCommand::LoadStructure { schema, table } => {
                 DbEvent::Structure { schema: schema.clone(), table: table.clone(), result: Err(error) }
             }
@@ -1069,6 +1077,7 @@ impl DbCommand {
                 | DbCommand::LoadCatalog
                 | DbCommand::LoadKeys
                 | DbCommand::LoadDatabases
+                | DbCommand::LoadTypeKinds { .. }
                 | DbCommand::LoadStructure { .. }
                 | DbCommand::LoadDdl { .. }
                 | DbCommand::LoadTableKeys { .. }
@@ -1092,13 +1101,40 @@ pub struct ColumnMeta {
     /// The table column this result column comes from, when the driver knows it (a plain
     /// column of a table; `None` for an expression, a function result, a literal).
     pub origin: Option<ColumnOrigin>,
+    /// Its values are the server's text output, which may write dates, times or intervals in
+    /// the session's settings ([`super::TextStyle`]): PostgreSQL's ranges and composites of
+    /// them, and types the driver cannot tell. Such text reads back as the same values only
+    /// where [`super::text_style::reads_same`] says so.
+    pub styled: bool,
+    /// Of a `styled` column: its text may hold a time with a time zone (a `timestamptz` or
+    /// `timetz` in a range, an array or a composite, a type the driver cannot tell), which a
+    /// `DateStyle` other than ISO writes with the zone's abbreviation (`CST`). Such text reads
+    /// back in the reading session's `timezone_abbreviations`, which no server reports, so it
+    /// reads the same only when written in ISO (numeric offsets).
+    pub zoned: bool,
+    /// What dates, times or intervals its values hold as the server reads them from text,
+    /// whatever format the result read them in: text written to it is applied only in a form
+    /// the server reads the same whatever the session's settings
+    /// ([`super::text_style::reads_same_anywhere`]).
+    pub dated: super::Dated,
 }
 
 impl ColumnMeta {
     /// A result column whose `numeric` and `json` follow from `kind`, so they cannot disagree
-    /// with it (what a driver builds; a literal must keep them in step itself).
+    /// with it (what a driver builds; a literal must keep them in step itself), not `styled`,
+    /// holding no dates.
     pub fn new(name: String, type_name: String, kind: ValueKind, origin: Option<ColumnOrigin>) -> Self {
-        Self { name, type_name, numeric: kind.is_number(), json: kind == ValueKind::Json, kind, origin }
+        Self {
+            name,
+            type_name,
+            numeric: kind.is_number(),
+            json: kind == ValueKind::Json,
+            kind,
+            origin,
+            styled: false,
+            zoned: false,
+            dated: super::Dated::No,
+        }
     }
 }
 
@@ -1297,6 +1333,11 @@ pub enum DbEvent {
     /// after `Connected` by a driver whose results depend on it (MySQL), and again when it
     /// changes (a `SET time_zone`, `SET NAMES` the user ran).
     SessionValues(SessionValues),
+    /// How a PostgreSQL query session writes dates, times and intervals as text from now on
+    /// ([`super::TextStyle`]; `None`: not known), as the server reported it: sent right before
+    /// `Encryption` and `Connected`, and again when it changes. A page read while it changed (rows that may be
+    /// written in two) comes between a `None` and the settings after it.
+    TextStyle(Option<super::TextStyle>),
     /// The language the query session's text is read in from now on, where it is the
     /// session's own and not the driver's ([`Capabilities::language`](super::Capabilities)):
     /// MySQL's sql mode (`ANSI_QUOTES`, `NO_BACKSLASH_ESCAPES`) and whether its server reads
@@ -1353,6 +1394,13 @@ pub enum DbEvent {
     Keys(Result<KeyCatalog, DbError>),
     /// The answer to `DbCommand::LoadDatabases`: the databases the user may connect to, by name.
     Databases(Result<Vec<String>, DbError>),
+    /// The answer to [`DbCommand::LoadTypeKinds`] of `oids`: each type found with its kind
+    /// (`typtype`: `b` base, `e` enum, `m` multirange, …); a type not among them no longer
+    /// exists.
+    TypeKinds {
+        oids: Vec<u32>,
+        result: Result<Vec<(u32, char)>, DbError>,
+    },
     /// The answer to `DbCommand::LoadStructure`: the structure of `schema.table`, or why it
     /// could not be read (a table that no longer exists is the server's error).
     Structure {

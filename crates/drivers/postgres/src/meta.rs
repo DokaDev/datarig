@@ -123,6 +123,7 @@ pub(crate) mod structure;
 pub(crate) mod ddl;
 pub(crate) mod monitor;
 pub(crate) mod order_keys;
+pub(crate) mod type_kinds;
 
 const HIDDEN_SCHEMAS: &str = "n.nspname NOT IN ('pg_catalog', 'information_schema') \
      AND n.nspname NOT LIKE 'pg\\_toast%' AND n.nspname NOT LIKE 'pg\\_temp%'";
@@ -151,7 +152,11 @@ pub const BEGIN_READ: &str = "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY; SE
 /// statement and the `COMMIT` go out together (one round trip); a failed statement leaves the
 /// transaction aborted, which the `COMMIT` rolls back. A lock wait that timed out (SQLSTATE
 /// `55P03`) is [`DbError::Locked`].
-async fn read(client: &Client, sql: &str, params: &[(&(dyn ToSql + Sync), Type)]) -> Result<Vec<Row>, DbError> {
+pub(crate) async fn read(
+    client: &Client,
+    sql: &str,
+    params: &[(&(dyn ToSql + Sync), Type)],
+) -> Result<Vec<Row>, DbError> {
     let (begun, rows, _) =
         tokio::join!(client.batch_execute(BEGIN_READ), client.query_typed(sql, params), client.batch_execute("COMMIT"));
     let error = |e: tokio_postgres::Error| {
@@ -191,6 +196,10 @@ pub(crate) async fn meta_loop(client: Client, mut link: Link, events: UnboundedS
                 DbCommand::LoadCatalog => DbEvent::Catalog(load_catalog(&client).await),
                 DbCommand::LoadKeys => DbEvent::Keys(load_keys(&client, &version).await),
                 DbCommand::LoadDatabases => DbEvent::Databases(load_databases(&client).await),
+                DbCommand::LoadTypeKinds { oids } => {
+                    let result = type_kinds::load_type_kinds(&client, &oids).await;
+                    DbEvent::TypeKinds { oids, result }
+                }
                 DbCommand::LoadStructure { schema, table } => {
                     // It reads `attgenerated` and `pg_partition_tree`, as the keys do (12).
                     let result = match version.clone().and_then(keys_supported) {

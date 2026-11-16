@@ -40,7 +40,8 @@ pub fn is_json(ty: &Type) -> bool {
 
 /// The kind of value a column of type `ty` holds. Numbers are [`is_numeric`] (a domain over a
 /// number type too: its base type's kind), JSON is [`is_json`]; any other domain, an array of
-/// anything but a built-in type, and every type not named here, is [`ValueKind::Other`].
+/// anything but a built-in type, and every type not named here, is [`ValueKind::Other`]. (What
+/// dates a domain holds is [`dated`]'s, which reads through it.)
 pub fn value_kind(ty: &Type) -> ValueKind {
     match ty.kind() {
         Kind::Array(elem) => return array_element(elem).map_or(ValueKind::Other, ValueKind::Array),
@@ -120,6 +121,116 @@ fn decodes_binary(ty: &Type) -> bool {
             Kind::Domain(inner) => decodes_binary(inner),
             _ => false,
         },
+    }
+}
+
+/// Whether a column of type `ty` is read as text written in the session's date, interval and
+/// time zone settings ([`ColumnMeta::styled`](datarig_core::driver::ColumnMeta)): it is read in
+/// the server's text output ([`format_code`] `0`) and that text [may hold](styled_text) a date,
+/// a time or an interval. A type decoded from binary is written here in ISO whatever the
+/// session's settings.
+#[cfg(test)]
+pub fn styled(ty: &Type) -> bool {
+    styled_in(ty, format_code(ty))
+}
+
+/// [`styled`] for a column of type `ty` read in result format `format`: whatever its type's
+/// usual format, a column read as text (`0`) whose text may hold a date, a time or an interval
+/// is written in the session's settings (a scalar `date` read as text too).
+pub fn styled_in(ty: &Type, format: i16) -> bool {
+    format == 0 && styled_text(ty)
+}
+
+/// Of a column [`styled_in`]: whether its text may hold a time with a time zone, which a
+/// `DateStyle` other than ISO writes with the zone's abbreviation: a `timestamptz` or `timetz`,
+/// a range, multirange, array or domain of one, any composite, and any type
+/// [`styled_text`] cannot tell. A date, a time or timestamp without a zone, an interval and
+/// what holds only those do not.
+pub fn zoned_in(ty: &Type, format: i16) -> bool {
+    styled_in(ty, format) && zoned_text(ty)
+}
+
+/// What dates, times or intervals a value of type `ty` holds, as the server reads it from
+/// text: one kind of them, alone or in a range, multirange, array or domain; none for a type
+/// [`styled_text`] says holds none; not known for a composite (whatever its fields), and for
+/// any type it cannot tell.
+pub fn dated(ty: &Type) -> datarig_core::driver::Dated {
+    use datarig_core::driver::{DatePart, Dated};
+    if matches!(ty.kind(), Kind::Simple) && !builtin(ty) {
+        return Dated::Lookup(ty.oid());
+    }
+    if !styled_text(ty) {
+        return Dated::No;
+    }
+    match ty.kind() {
+        Kind::Array(inner) | Kind::Range(inner) | Kind::Multirange(inner) | Kind::Domain(inner) => {
+            return dated(inner);
+        }
+        Kind::Composite(_) => return Dated::Unknown,
+        _ => {}
+    }
+    match *ty {
+        Type::DATE => Dated::Of(DatePart::Date),
+        Type::TIMESTAMP => Dated::Of(DatePart::Timestamp),
+        Type::TIMESTAMPTZ => Dated::Of(DatePart::TimestampTz),
+        Type::TIME => Dated::Of(DatePart::Time),
+        Type::TIMETZ => Dated::Of(DatePart::TimeTz),
+        Type::INTERVAL => Dated::Of(DatePart::Interval),
+        // A pseudo-type, or a kind not known here.
+        _ => Dated::Unknown,
+    }
+}
+
+/// A type the server has built in (its own oid's), not the database's own.
+fn builtin(ty: &Type) -> bool {
+    Type::from_oid(ty.oid()).as_ref() == Some(ty)
+}
+
+fn zoned_text(ty: &Type) -> bool {
+    match ty.kind() {
+        Kind::Array(inner) | Kind::Range(inner) | Kind::Multirange(inner) | Kind::Domain(inner) => {
+            return zoned_text(inner);
+        }
+        Kind::Composite(_) => return true,
+        Kind::Enum(_) => return false,
+        _ => {}
+    }
+    match *ty {
+        Type::TIMESTAMPTZ | Type::TIMETZ => true,
+        Type::DATE | Type::TIME | Type::TIMESTAMP | Type::INTERVAL => false,
+        _ => styled_text(ty),
+    }
+}
+
+/// Whether PostgreSQL's text output of `ty` may depend on `DateStyle`, `IntervalStyle` or
+/// `TimeZone`: a date, time, timestamp or interval, a range, multirange, array or domain of
+/// one, any composite (its fields as the connection keeps them may be out of date). Any other
+/// base type (numbers, text, geometry, network addresses, an extension's `citext` or `hstore`,
+/// the database's own), a range of one and an enum (its labels) do not; a pseudo-type (an
+/// anonymous `record`) and a kind not known here may, as far as this code can tell. The kinds
+/// come with the column's type, which the connection looks up once per type and keeps (no round
+/// trip of its own).
+fn styled_text(ty: &Type) -> bool {
+    match ty.kind() {
+        Kind::Array(inner) | Kind::Range(inner) | Kind::Multirange(inner) | Kind::Domain(inner) => styled_text(inner),
+        // The fields the connection keeps for a composite are those of the first time it read
+        // the type, which `ALTER TYPE … ADD ATTRIBUTE` may have changed since: whatever they
+        // are, a composite may hold dates.
+        Kind::Composite(_) => true,
+        Kind::Enum(_) => false,
+        // A built-in base type: only the server's dates and times hold them. One not built in
+        // (an extension's such as `citext`, `hstore`, `ltree`, or the database's own) holds none
+        // as a base type, but may be a multirange the connection does not tell apart, so it may
+        // until the metadata session says its kind (`Dated::Lookup` of [`dated`]).
+        Kind::Simple => {
+            !builtin(ty)
+                || matches!(
+                    *ty,
+                    Type::DATE | Type::TIME | Type::TIMETZ | Type::TIMESTAMP | Type::TIMESTAMPTZ | Type::INTERVAL
+                )
+        }
+        // A pseudo-type (an anonymous `record`), and any kind not known here.
+        _ => true,
     }
 }
 

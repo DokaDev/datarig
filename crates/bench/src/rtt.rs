@@ -101,6 +101,8 @@ impl WiredSession {
                 DbEvent::Encryption(datarig_core::tls::Encryption::Plain) => {}
                 DbEvent::Isolation(_) | DbEvent::Autocommit(_) => {}
                 DbEvent::Language(_) | DbEvent::Explain(_) | DbEvent::Edit(_) => {}
+                // A PostgreSQL session says its date settings as the server reported them.
+                DbEvent::TextStyle(_) => {}
                 DbEvent::Connected => return Ok(()),
                 ev => return Err(format!("connect: {ev:?}")),
             }

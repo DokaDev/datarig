@@ -76,6 +76,108 @@ fn types_without_a_binary_decoder_are_fetched_as_text() {
     assert_eq!(format_value(&Type::BIT, b"1010", true), "1010", "never the binary bytes");
 }
 
+/// Only a column read as text whose text may hold a date, a time or an interval is read in the
+/// session's settings: ranges and multiranges of them, a composite with such a field, an array
+/// of those, and any type the driver cannot tell. Dates and times read in binary, numbers,
+/// text, JSON, geometry, ranges of numbers and enums are not.
+#[test]
+fn only_text_that_may_hold_dates_or_times_is_read_in_the_sessions_settings() {
+    for ty in [
+        Type::DATE_RANGE,
+        Type::TS_RANGE,
+        Type::TSTZ_RANGE,
+        Type::DATEMULTI_RANGE,
+        Type::TSTZMULTI_RANGE,
+        Type::TSTZ_RANGE_ARRAY,
+        Type::DATEMULTI_RANGE_ARRAY,
+        Type::RECORD,
+    ] {
+        assert!(styled(&ty), "{ty}");
+    }
+    for ty in [
+        Type::DATE,
+        Type::TIMESTAMPTZ,
+        Type::INTERVAL,
+        Type::TIME,
+        Type::DATE_ARRAY,
+        Type::TIMESTAMPTZ_ARRAY,
+        Type::INTERVAL_ARRAY,
+        Type::TEXT,
+        Type::INT8,
+        Type::NUMERIC,
+        Type::JSONB,
+        Type::UUID,
+        Type::INT4_RANGE,
+        Type::NUMMULTI_RANGE,
+        Type::POINT,
+        Type::MONEY,
+        Type::BIT,
+        Type::TS_VECTOR,
+        Type::REGCLASS,
+        Type::POINT_ARRAY,
+    ] {
+        assert!(!styled(&ty), "{ty}");
+    }
+    let user = |name: &str, kind: Kind| Type::new(name.into(), 90_000, kind, "public".into());
+    // A type of an extension's the connection reports as a base type (`citext`, `hstore`) may
+    // be a multirange of the database's own: written in the session's settings until its kind
+    // is looked up; a pseudo-type (an anonymous `record`) may hold anything.
+    // (an anonymous `record`) may hold anything.
+    assert!(styled(&user("hstore", Kind::Simple)));
+    assert!(styled(&user("citext", Kind::Simple)));
+    assert!(styled(&user("anyrecord", Kind::Pseudo)));
+    assert!(!styled(&user("mood", Kind::Enum(vec!["sad".into()]))));
+    let field = |name: &str, ty: Type| tokio_postgres::types::Field::new(name.into(), ty);
+    let dated = user("stay", Kind::Composite(vec![field("guest", Type::TEXT), field("night", Type::DATE)]));
+    let plain = user("pair", Kind::Composite(vec![field("a", Type::INT4), field("b", Type::TEXT)]));
+    assert!(styled(&dated), "a composite writes its date field in DateStyle");
+    // The fields the connection keeps for a composite may be out of date (`ALTER TYPE … ADD
+    // ATTRIBUTE d date`): a composite, or an array of one, may hold dates, whatever its fields.
+    assert!(styled(&plain));
+    assert!(styled(&user("_pair", Kind::Array(plain.clone()))));
+    assert!(styled(&user("_stay", Kind::Array(dated.clone()))));
+    assert!(styled(&user("stays", Kind::Domain(dated))));
+    assert!(styled(&user("stamprange", Kind::Range(Type::TIMESTAMP))));
+    assert!(!styled(&user("floatrange", Kind::Range(Type::FLOAT8))));
+}
+
+/// What dates a column holds reads through domains, arrays, ranges and multiranges to one kind;
+/// a composite that holds some, and a type not known, are not known; what holds none is none.
+#[test]
+fn what_dates_a_type_holds_reads_through_domains_and_arrays() {
+    use datarig_core::driver::{DatePart, Dated};
+    let user = |name: &str, kind: Kind| Type::new(name.into(), 90_000, kind, "public".into());
+    let d = user("zz_d", Kind::Domain(Type::DATE));
+    let dd = user("zz_dd", Kind::Domain(d.clone()));
+    for (ty, want) in [
+        (Type::DATE, Dated::Of(DatePart::Date)),
+        (Type::DATE_RANGE_ARRAY, Dated::Of(DatePart::Date)),
+        (Type::TSTZMULTI_RANGE, Dated::Of(DatePart::TimestampTz)),
+        (Type::INTERVAL_ARRAY, Dated::Of(DatePart::Interval)),
+        (Type::TIMETZ, Dated::Of(DatePart::TimeTz)),
+        (d.clone(), Dated::Of(DatePart::Date)),
+        (user("_zz_d", Kind::Array(d.clone())), Dated::Of(DatePart::Date)),
+        (dd, Dated::Of(DatePart::Date)),
+        (user("zz_iv", Kind::Domain(Type::INTERVAL)), Dated::Of(DatePart::Interval)),
+        (Type::TEXT, Dated::No),
+        (Type::INT4_RANGE, Dated::No),
+        (user("mood", Kind::Enum(vec!["a".into()])), Dated::No),
+        (user("zz_t", Kind::Domain(Type::TEXT)), Dated::No),
+        (user("hstore", Kind::Simple), Dated::Lookup(90_000)),
+        (user("_citext", Kind::Array(user("citext", Kind::Simple))), Dated::Lookup(90_000)),
+        (Type::RECORD, Dated::Unknown),
+    ] {
+        assert_eq!(dated(&ty), want, "{ty}");
+    }
+    let field = |name: &str, ty: Type| tokio_postgres::types::Field::new(name.into(), ty);
+    let stay = user("stay", Kind::Composite(vec![field("night", Type::DATE)]));
+    assert_eq!(dated(&stay), Dated::Unknown);
+    let pair = user("pair", Kind::Composite(vec![field("a", Type::TEXT)]));
+    assert_eq!(dated(&pair), Dated::Unknown, "its fields may have changed since they were read");
+    assert_eq!(dated(&user("_pair", Kind::Array(pair.clone()))), Dated::Unknown);
+    assert_eq!(dated(&user("pairs", Kind::Domain(pair))), Dated::Unknown);
+}
+
 #[test]
 fn dates_and_timestamps_keep_infinity_bc_and_far_years() {
     let date = |days: i32| format_value(&Type::DATE, &days.to_be_bytes(), false);
@@ -244,6 +346,9 @@ fn meta_of(ty: &Type) -> datarig_core::driver::ColumnMeta {
         json: is_json(ty),
         kind: value_kind(ty),
         origin: None,
+        styled: styled(ty),
+        zoned: zoned_in(ty, format_code(ty)),
+        dated: dated(ty),
     }
 }
 

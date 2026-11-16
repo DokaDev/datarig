@@ -1300,3 +1300,53 @@ async fn behind_a_pooler_a_group_count_leaves_no_settings_nor_statements() {
         assert_eq!(rows[0][0], before, "nothing left on the server connection");
     }
 }
+
+/// Behind a pooler a start-up `SET TIME ZONE` goes first in each transaction as `SET LOCAL`, in
+/// the request that reads the first page (and commits it): the rows are written in it, and the
+/// commit sets it back before the server reports anything. The session cannot tell what its
+/// results are written in, so it says the settings are not known, every time.
+#[tokio::test(flavor = "multi_thread")]
+async fn behind_a_pooler_start_up_settings_leave_the_text_settings_not_known() {
+    use datarig_core::profile::session::{Defaults, plan};
+    let Some(url) = pooler_url("behind_a_pooler_start_up_settings_leave_the_text_settings_not_known") else { return };
+    let profile =
+        ConnectionConfig { session_sql: vec!["SET TIME ZONE 'Asia/Seoul'".into()], ..ConnectionConfig::default() };
+    let sql = plan(&profile, &Default::default(), Defaults::default(), &[]).unwrap().statements();
+    let tag = format!("poolstyle{}", std::process::id());
+    let opts = ConnectOptions::new(PAGE, SessionRole::Query, &tag).session_sql(sql);
+    let cfg = ConnectionConfig { name: "pooler".into(), dsn: Some(url.clone()), ..ConnectionConfig::default() };
+    let (tx, mut rx) = unbounded_channel();
+    let session = PgDriver.connect(&cfg, SessionRole::Query, opts, tx);
+    // Every `TextStyle` said, up to the answer of run `id`, and that answer.
+    async fn said(rx: &mut UnboundedReceiver<DbEvent>, id: u64) -> (Vec<Option<String>>, DbEvent) {
+        let mut styles = Vec::new();
+        loop {
+            match tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.expect("an answer") {
+                Some(DbEvent::TextStyle(s)) => styles.push(s.map(|s| s.date_style)),
+                Some(DbEvent::ConnectFailed { error, .. }) => panic!("{error:?}"),
+                Some(ev @ (DbEvent::Page { .. } | DbEvent::Done { .. } | DbEvent::Failed { .. })) => {
+                    if matches!(ev, DbEvent::Page { id: i, .. } | DbEvent::Done { id: i, .. } | DbEvent::Failed { id: i, .. } if i == id)
+                    {
+                        return (styles, ev);
+                    }
+                }
+                Some(_) => {}
+                None => panic!("closed"),
+            }
+        }
+    }
+    session.send(DbCommand::Execute {
+        max_rows: None,
+        id: 1,
+        statements: vec!["SELECT 1, tstzrange('2026-01-02 00:00+00', '2026-01-03 00:00+00')".into()],
+        paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
+    });
+    let (styles, ev) = said(&mut rx, 1).await;
+    let DbEvent::Page { rows, .. } = ev else { panic!("{ev:?}") };
+    let shown = rows[0][1].clone().unwrap_or_default();
+    assert!(shown.contains("+09"), "written in the start-up time zone: {shown}");
+    assert!(!styles.is_empty(), "said as it connected");
+    assert!(styles.iter().all(Option::is_none), "never known: {styles:?}");
+    drop(session);
+}

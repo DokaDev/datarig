@@ -176,6 +176,43 @@ impl EditBatch {
         self.undo.last().map(|s| s.id)
     }
 
+    /// The action still done whose change the pending value of the cell in column `col` of
+    /// `at` (a row as read, or a new row) is: the last one that changed that cell. `None` when
+    /// the cell has no pending value, or no action still done gave it (an undone one does not
+    /// count; redone, it does again).
+    pub fn setter(&self, at: super::Origin, col: usize) -> Option<u64> {
+        use super::Origin;
+        let mut now = match at {
+            Origin::Row(r) => self.value(r, col).cloned(),
+            Origin::New(id) => self.drafts.iter().find(|d| d.id == id).and_then(|d| d.cells.get(col)).cloned(),
+        };
+        now.as_ref()?;
+        for s in self.undo.iter().rev() {
+            let before = match at {
+                Origin::Row(r) => s
+                    .rows
+                    .iter()
+                    .find(|(row, _)| *row == r)
+                    .map(|(_, e)| e.as_ref().and_then(|e| e.set.get(&col)).cloned()),
+                Origin::New(id) => {
+                    s.drafts.as_ref().map(|d| d.iter().find(|d| d.id == id).and_then(|d| d.cells.get(col)).cloned())
+                }
+            };
+            if let Some(before) = before {
+                if before != now {
+                    return Some(s.id);
+                }
+                now = before;
+            }
+        }
+        None
+    }
+
+    /// Action `id` is done (not undone).
+    pub fn done(&self, id: u64) -> bool {
+        self.undo.iter().any(|s| s.id == id)
+    }
+
     /// The id of the action `redo` brings back next.
     pub fn next_redo(&self) -> Option<u64> {
         self.redo.last().map(|s| s.id)

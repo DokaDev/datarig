@@ -95,6 +95,7 @@ mod tick;
 pub mod tips;
 pub mod tunnel;
 pub mod tx;
+mod type_kinds;
 mod update;
 pub mod updates;
 pub mod whats_new;

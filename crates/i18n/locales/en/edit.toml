@@ -28,6 +28,10 @@
 "edit.why.value_not_whole" = "row {row}: {column} {reason}, so its value can't be edited as shown"
 "edit.why.not_read" = "row {row} could not be read"
 "edit.why.not_null" = "{column} is NOT NULL"
+"edit.why.dated_form" = "{column} holds dates, times or intervals, and this text may be read as other values in the session's settings when the changes are applied: write dates as 2026-01-02, times with a time zone with their offset (2026-01-02 10:00:00+09) and intervals as P1DT2H"
+"edit.why.dated_lookup" = "{column} is of a type the app is still asking the server about: try again in a moment"
+"edit.why.dated_unknown" = "{column} is of a type whose text may hold dates or times the app cannot check, which the session's settings may read as other values: its values can't be applied from here"
+"edit.why.style_not_iso" = "{column} was pasted as text whose dates and times are written in {from}, not ISO, which the server may read otherwise when the changes are applied: set DateStyle to ISO, read the source again and paste again"
 "edit.why.no_default" = "{column} has no default"
 "edit.why.new_number" = "{column} would take a new number; type a value instead"
 "edit.why.shown_rounded" = "{column} is shown rounded; edit its cells one at a time"
@@ -225,6 +229,10 @@
 "edit.paste.zone_changed" = "a session whose time zone changed while its rows were read"
 "edit.paste.zone_server" = "the server's time zone, which is not known"
 "edit.paste.register_zone_other" = "column “{column}” was copied as times in time zone {from}, without an offset; this column reads them in its session's zone"
+"edit.paste.register_style" = "column “{column}” was copied as text whose dates and times are written in {from}; this session reads such text in {to}, maybe as other values"
+"edit.paste.style" = "DateStyle {date}, IntervalStyle {interval}, TimeZone {zone}"
+"edit.paste.style_unknown" = "settings not known"
+"edit.paste.register_target_style" = "column “{column}” of this result was read in {from}, and the session now reads such text in {to}: run the query again first"
 "edit.paste.rows" = { one = "{count} row", other = "{count} rows" }
 "edit.paste.columns" = { one = "{count} column", other = "{count} columns" }
 "edit.paste.cells" = { one = "{count} cell changed", other = "{count} cells changed" }

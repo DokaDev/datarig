@@ -11,7 +11,17 @@ fn meta(name: &str, ty: &str, numeric: bool) -> ColumnMeta {
         "text" => ValueKind::Text,
         _ => ValueKind::Other,
     };
-    ColumnMeta { name: name.into(), type_name: ty.into(), numeric, json: false, kind, origin: None }
+    ColumnMeta {
+        name: name.into(),
+        type_name: ty.into(),
+        numeric,
+        json: false,
+        kind,
+        origin: None,
+        styled: false,
+        zoned: false,
+        dated: Default::default(),
+    }
 }
 
 /// A line chart's model of `values` over the row number.

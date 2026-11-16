@@ -100,7 +100,9 @@
 use crate::connect::{db_error, is_cancel};
 use crate::link::{Closed, Link, Next};
 use crate::route::Cancel;
-use crate::values::{Raw, format_code, format_value, is_json, is_numeric, type_display, value_kind};
+use crate::values::{
+    Raw, dated, format_code, format_value, is_json, is_numeric, styled_in, type_display, value_kind, zoned_in,
+};
 use datarig_core::driver::{
     COUNT_LOCK_WAIT, CancelFailure, CancelMark, Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent,
     ESTIMATE_LIMIT, Outcome, OwnSession, PagingMode, TxOutcome, TxRule, TxStep,
@@ -112,6 +114,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
+pub(crate) use style::Events;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Column, FirstPage, Row, SimpleQueryMessage, Statement, Transaction};
@@ -462,7 +465,7 @@ async fn own_session(client: &Client, link: &mut Link, env: &Env<'_>, tx: &Tx, r
 /// What a statement run needs besides the connection.
 #[derive(Clone, Copy)]
 struct Env<'a> {
-    events: &'a UnboundedSender<DbEvent>,
+    events: &'a Events,
     /// The connection's own server session ([`DbCommand::ServerSession`]).
     own: &'a Own,
     token: &'a Cancel,
@@ -600,7 +603,7 @@ impl Env<'_> {
 ///   [`DbError::NoResult`] and trips a debug assertion; the run of a session the UI closed
 ///   ([`Reply::closed`]) answers nothing, as the UI expects.
 struct Reply<'a> {
-    events: &'a UnboundedSender<DbEvent>,
+    events: &'a Events,
     /// Set when it answers with a failure ([`Env::failed`]).
     failed: &'a AtomicBool,
     id: u64,
@@ -613,7 +616,7 @@ struct Reply<'a> {
 }
 
 impl<'a> Reply<'a> {
-    fn new(events: &'a UnboundedSender<DbEvent>, failed: &'a AtomicBool, id: u64) -> Self {
+    fn new(events: &'a Events, failed: &'a AtomicBool, id: u64) -> Self {
         Self { events, failed, id, without_limit: false, answered: false }
     }
 
@@ -686,7 +689,7 @@ fn failure(e: &tokio_postgres::Error, path_tx: bool) -> (DbError, bool) {
 /// A run answered with its first page: one `Failed` may still replace the rows, and nothing
 /// else. Dropping it sends nothing (the page was the answer).
 struct Paged<'a> {
-    events: &'a UnboundedSender<DbEvent>,
+    events: &'a Events,
     failed: &'a AtomicBool,
     id: u64,
     /// As [`Reply::without_limit`].
@@ -794,7 +797,7 @@ pub(crate) async fn query_loop(
     mut link: Link,
     token: Cancel,
     cancel: Arc<CancelMark>,
-    events: UnboundedSender<DbEvent>,
+    events: Events,
     settings: Settings,
 ) {
     let failed = AtomicBool::new(false);
@@ -1140,17 +1143,25 @@ struct State<'a> {
     prepared: &'a mut Prepared,
 }
 
-/// The result's columns. The RowDescription names the table (`oid`) and column number of a
-/// column that comes straight from a table; an expression has neither (0), so no origin.
-fn columns_of(columns: &[Column]) -> Vec<ColumnMeta> {
+/// The result's columns, read in `formats` (by column, as [`decode`] takes them). The
+/// RowDescription names the table (`oid`) and column number of a column that comes straight from
+/// a table; an expression has neither (0), so no origin. A column read as text is `styled` when
+/// its text may hold a date, a time or an interval ([`styled_in`]).
+fn columns_of(columns: &[Column], formats: &[i16]) -> Vec<ColumnMeta> {
     columns
         .iter()
-        .map(|c| {
+        .enumerate()
+        .map(|(i, c)| {
             let origin = match (c.table_oid(), c.column_id()) {
                 (Some(table), Some(column)) if table != 0 && column > 0 => Some(ColumnOrigin::Pg { table, column }),
                 _ => None,
             };
-            let meta = ColumnMeta::new(c.name().to_string(), type_display(c.type_()), value_kind(c.type_()), origin);
+            let meta = ColumnMeta {
+                styled: styled_in(c.type_(), formats.get(i).copied().unwrap_or(1)),
+                zoned: zoned_in(c.type_(), formats.get(i).copied().unwrap_or(1)),
+                dated: dated(c.type_()),
+                ..ColumnMeta::new(c.name().to_string(), type_display(c.type_()), value_kind(c.type_()), origin)
+            };
             debug_assert_eq!(
                 (meta.numeric, meta.json),
                 (is_numeric(c.type_()), is_json(c.type_())),
@@ -1960,8 +1971,9 @@ async fn no_rows<'a>(
             Some(stmt) => {
                 let reply = if step.last {
                     let rows = done.rows.len().min(env.page_size);
-                    let columns = columns_of(stmt.columns());
-                    let paged = reply.page(columns, decode(&done.rows[..rows], &[0]), false, step.start.elapsed());
+                    let text = vec![0; stmt.columns().len()];
+                    let columns = columns_of(stmt.columns(), &text);
+                    let paged = reply.page(columns, decode(&done.rows[..rows], &text), false, step.start.elapsed());
                     if !done.complete || done.rows.len() > env.page_size {
                         paged.fail(DbError::RowsNotRead(rows as u64), false);
                     }
@@ -2270,7 +2282,7 @@ async fn portal<'a>(
         }
         if left > 0 {
             drop(portal);
-            let paged = reply.page(columns_of(&columns), Vec::new(), false, start.elapsed());
+            let paged = reply.page(columns_of(&columns, &formats), Vec::new(), false, start.elapsed());
             return committed(txn, keep, savepoint, link, env, tx, paged).await;
         }
         rows
@@ -2282,7 +2294,7 @@ async fn portal<'a>(
         // row locks take effect for every row): all its rows are fetched, page by page, and go
         // to the UI as the statement's own result.
         let (page, mut more) = split_page(&mut carry, rows, page_size);
-        let (columns, rows) = (Some(columns_of(&columns)), decode(&page, &formats));
+        let (columns, rows) = (Some(columns_of(&columns, &formats)), decode(&page, &formats));
         let _ = env.events.send(DbEvent::StepRows { id, index, columns, rows, more });
         while more {
             // Cancelled between two pages: the statement stops, the rest does not run.
@@ -2323,7 +2335,7 @@ async fn portal<'a>(
     let (rows, mut more) = split_page(&mut carry, rows, page_size);
     // At the cap the result ends here, whatever rows the server still has.
     more = more && !spend(&mut left, rows.len());
-    let (columns, rows) = (columns_of(&columns), decode(&rows, &formats));
+    let (columns, rows) = (columns_of(&columns, &formats), decode(&rows, &formats));
     if !more {
         // Complete in one page: nothing stays open. A plain read is shown at once and its
         // transaction ends right after; rows of a statement that may write are shown once its
@@ -3167,6 +3179,7 @@ fn split_page<T>(carry: &mut Option<T>, fetched: Vec<T>, page_size: usize) -> (V
 mod apply;
 mod export;
 mod group;
+mod style;
 
 #[cfg(test)]
 mod tests;
