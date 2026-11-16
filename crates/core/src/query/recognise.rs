@@ -247,9 +247,10 @@ impl Reader<'_> {
             Tok::Str if matches!(self.d, Dialect::MySql(_)) && self.hex_string(t).is_some() => {
                 Some((Value::Bytes(self.hex_string(t)?), at + 1))
             }
-            // A plain PostgreSQL string with a backslash reads as written or as an escape
-            // depending on the session's standard_conforming_strings, which is not known here.
-            Tok::Str if self.d == Dialect::Postgres && text.starts_with('\'') && text.contains('\\') => None,
+            // A plain or national PostgreSQL string with a backslash reads as written or as an
+            // escape depending on the session's standard_conforming_strings, which is not known
+            // here: only `E'…'` reads it the same either way.
+            Tok::Str if self.d == Dialect::Postgres && !text.starts_with(['E', 'e']) && text.contains('\\') => None,
             // A string is read only when its escapes are `\\` and `\'`: other escapes (octal,
             // hexadecimal and Unicode bytes, control characters, MySQL `\0` `\Z`) are not
             // decoded here exactly as the server decodes them.

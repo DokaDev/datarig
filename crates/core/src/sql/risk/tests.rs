@@ -609,6 +609,21 @@ fn a_continued_string_is_read_in_its_first_pieces_state() {
     }
 }
 
+/// The string of `U&'…'` is not a plain one: it is not rewritten for the reading with
+/// `standard_conforming_strings` off (a server with the setting off rejects it anyway), so the
+/// text still parses.
+#[test]
+fn a_unicode_escape_string_is_not_read_as_a_plain_one() {
+    for sql in [
+        r"SELECT U&'d\0061ta'",
+        r"SELECT u&'d\0061ta'",
+        r"SELECT U&'d\0061ta' UESCAPE '!'",
+        r"SELECT 'a\b', U&'d\0061ta' UESCAPE '!'",
+    ] {
+        assert_eq!(classify(sql).read_only(), Ok(()), "{sql}");
+    }
+}
+
 /// With `standard_conforming_strings` off, a call hidden after a continuing piece of a plain or
 /// national string is seen.
 #[test]

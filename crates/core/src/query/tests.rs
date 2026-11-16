@@ -925,8 +925,8 @@ fn recognise_keeps_what_it_does_not_model() {
     for s in ["TRUE = FALSE", "true IS NULL"] {
         assert_eq!(recognise(s, &tf), Some(Cond::Raw(s.into())), "{s}");
     }
-    // A plain PostgreSQL string with a backslash depends on standard_conforming_strings.
-    for s in [r"name = 'a\tb'", r"data = '\x01'::bytea"] {
+    // A plain or national string with a backslash depends on standard_conforming_strings.
+    for s in [r"name = 'a\tb'", r"data = '\x01'::bytea", r"name = N'a\\b'", r"name = n'a\b'"] {
         assert_eq!(pg(s), Some(Cond::Raw(s.into())), "{s}");
     }
     assert_eq!(pg(r"name = E'a\\b'"), Some(cmp("name", CmpOp::Eq, text(r"a\b"))));

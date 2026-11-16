@@ -1105,23 +1105,32 @@ fn depth_of(sql: &str, tokens: &[super::lexer::Token]) -> usize {
 /// (both read the same). A piece continuing a string (after blanks with a line break) is read
 /// in its first piece's state and keeps no prefix of its own.
 fn non_conforming(sql: &str) -> Option<String> {
-    // The quote of a plain or national string token: 0 or 1 (after its `N`).
-    let quote_at = |t: &super::lexer::Token| {
-        let s = t.text(sql);
-        match s.as_bytes() {
-            _ if t.kind != Tok::Str => None,
+    // The quote of token `i` when it is a plain or national string: 0 or 1 (after its `N`). The
+    // string of `U&'…'` (`U` and `&` right before it) is neither: a server with the setting off
+    // rejects it whatever it holds.
+    let quote_at = |toks: &[super::lexer::Token], i: usize| {
+        let t = &toks[i];
+        let unicode = i >= 2
+            && toks[i - 1].end == t.start
+            && toks[i - 1].text(sql) == "&"
+            && toks[i - 2].end == toks[i - 1].start
+            && toks[i - 2].text(sql).eq_ignore_ascii_case("u");
+        match t.text(sql).as_bytes() {
+            _ if t.kind != Tok::Str || unicode => None,
             [b'\'', ..] => Some(0),
             [b'N' | b'n', b'\'', ..] => Some(1),
             _ => None,
         }
     };
-    if !lex(sql).iter().any(|t| quote_at(t).is_some() && t.text(sql).contains('\\')) {
+    let standard = lex(sql);
+    if !(0..standard.len()).any(|i| quote_at(&standard, i).is_some() && standard[i].text(sql).contains('\\')) {
         return None;
     }
+    let toks = lex_backslash_strings(sql);
     let mut out = String::with_capacity(sql.len() + 8);
     // Where the last string ended, while only blanks and comments follow it.
     let mut last_string: Option<usize> = None;
-    for t in lex_backslash_strings(sql) {
+    for (i, t) in toks.iter().enumerate() {
         let mut s = t.text(sql);
         let continues = last_string.is_some_and(|end| sql[end..t.start].contains(['\n', '\r']));
         last_string = match t.kind {
@@ -1129,7 +1138,7 @@ fn non_conforming(sql: &str) -> Option<String> {
             _ if t.is_trivia() => last_string,
             _ => None,
         };
-        if let Some(at) = quote_at(&t)
+        if let Some(at) = quote_at(&toks, i)
             && !(at == 0 && continues)
         {
             // `E` glued to an identifier before it would extend the identifier.
