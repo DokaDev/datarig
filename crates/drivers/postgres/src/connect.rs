@@ -584,8 +584,11 @@ async fn run_session(
         SessionRole::Meta => meta_loop(client, Link::new(rx, ended, conn, None), events).await,
         SessionRole::Monitor => monitor_loop(client, Link::new(rx, ended, conn, None), events, opts.read_only).await,
         SessionRole::Query => {
+            // Told when a user's cancel was not confirmed by the server.
+            let unconfirmed = events.downgrade();
             let Some(events) = text else { return };
-            let cancel = Cancel::new(client.cancel_token(), route.clone(), tls.clone());
+            let mut cancel = Cancel::new(client.cancel_token(), route.clone(), tls.clone());
+            cancel.events = Some(unconfirmed);
             let link = Link::new(rx, ended, conn, Some(cancel.unsent.clone()));
             if let Ok(mut g) = canceller.0.lock() {
                 *g = Some(cancel.clone());

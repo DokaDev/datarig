@@ -131,7 +131,15 @@ committed.").
 On PostgreSQL a cancel (`Ctrl+C`) there reaches the server only while one of the Apply's
 statements runs: one that landed before the savepoint was set would abort your transaction, so
 a cancel asked then waits, and the Apply stops before its next statement ("Apply cancelled;
-nothing was applied."), your transaction as it was.
+nothing was applied."), your transaction as it was. So do the reads datarig runs there under a
+savepoint of its own: a row count, a count of a column's values, a statement run again to page
+on, an export and `EXPLAIN ANALYZE`. A cancel asked before the savepoint is set, or while it is
+undone, waits, and the read ends cancelled; one asked while the read itself runs stops it; one
+asked once the read is done and its savepoint released comes too late, and the read's answer
+stands. A cancel already on its way is waited for until the server has taken it in, up to
+10 seconds. When the server does not confirm it by then (a slow tunnel), datarig goes on and
+says so in Messages: the cancel may still stop what runs next in the session, your open
+transaction included, and the server then says what it stopped.
 
 - The status line question says so: "Apply 1 change to shop.users (1 update)? Opens a
   transaction; nothing is committed.  y apply · any other key cancels".

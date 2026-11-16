@@ -333,6 +333,7 @@ impl App {
             | DbEvent::Finished { .. }
             | DbEvent::Stopping { .. }
             | DbEvent::CancelRefused { .. }
+            | DbEvent::CancelUnconfirmed { .. }
             | DbEvent::Exported { .. }
             | DbEvent::ManualBegun { .. }
             | DbEvent::ManualRolledBack { .. }

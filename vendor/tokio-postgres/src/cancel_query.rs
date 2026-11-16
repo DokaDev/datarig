@@ -11,7 +11,8 @@ pub(crate) async fn cancel_query<T>(
     mut tls: T,
     process_id: i32,
     secret_key: i32,
-) -> Result<(), Error>
+    settle: Option<cancel_query_raw::Settle>,
+) -> Result<cancel_query_raw::Settled, Error>
 where
     T: MakeTlsConnect<Socket>,
 {
@@ -47,6 +48,7 @@ where
         has_hostname,
         process_id,
         secret_key,
+        settle,
     )
     .await
 }

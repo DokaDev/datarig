@@ -12,6 +12,7 @@
 
 use super::{Closed, Env, Link, Tx, columns_of, decode, idle_limit, probe};
 use crate::connect::{db_error, is_cancel};
+use crate::route::Held;
 use crate::values::text_as_shown;
 use datarig_core::driver::{AppliedStep, ApplyError, ApplyFailure, ApplyTx, DbError, DbEvent};
 use datarig_core::edit::{Expect, Step};
@@ -100,43 +101,6 @@ async fn undo(client: &Client, link: &mut Link, sql: &str, _hooks: &Hooks<'_>) -
 /// for the caller to answer. `Some` when the session must end now, for that reason: what the
 /// steps did could not be undone for sure, and closing the connection makes the server roll it
 /// back (a later `COMMIT` could keep changes said not to be applied).
-/// The user's cancels held back ([`crate::route::Hold`]) while it lives, unless released for
-/// a while or ended.
-struct Held<'a> {
-    hold: &'a crate::route::Hold,
-    /// Held at all: not once ended.
-    on: bool,
-}
-
-impl<'a> Held<'a> {
-    async fn new(hold: &'a crate::route::Hold) -> Held<'a> {
-        hold.hold().await;
-        Held { hold, on: true }
-    }
-
-    async fn hold(&mut self) {
-        if self.on {
-            self.hold.hold().await;
-        }
-    }
-
-    fn release(&mut self) {
-        self.hold.release();
-    }
-
-    /// No longer held, for good.
-    fn end(&mut self) {
-        self.on = false;
-        self.hold.release();
-    }
-}
-
-impl Drop for Held<'_> {
-    fn drop(&mut self) {
-        self.hold.release();
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn apply(
     client: &Client,

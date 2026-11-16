@@ -6,15 +6,16 @@
 
 use crate::connect::db_error;
 use crate::tls::PgTls;
-use datarig_core::driver::DbError;
+use datarig_core::driver::{DbError, DbEvent};
 use datarig_core::fault::Fault;
 use datarig_core::transport::{BoxedStream, DialError, DialerRef};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
+use tokio::sync::mpsc::WeakUnboundedSender;
 use tokio::sync::watch;
 use tokio_postgres::config::Host;
-use tokio_postgres::{CancelToken, Config};
+use tokio_postgres::{CancelToken, Config, Settled};
 
 /// Where a session reaches its server through a dialer: the dialer and the server's host and
 /// port (as the far end of the transport sees them).
@@ -74,6 +75,14 @@ pub(crate) fn route(cfg: &Config, dialer: DialerRef) -> Result<Route, DbError> {
 /// included).
 pub const CANCEL_DIAL: Duration = Duration::from_secs(10);
 
+/// How long the server is given to close a user's cancel's connection once the request is sent
+/// (it does so once it has passed the cancel on to the session): until then [`Hold::hold`]
+/// waits, so a cancel on its way does not land on what the session runs next. Past it, the
+/// session goes on, and says the cancel was not confirmed ([`DbEvent::CancelUnconfirmed`]): it
+/// may still stop what runs next, which then fails as the server says (an undo of a savepoint
+/// of the session's own is sent again).
+pub(crate) const CANCEL_SETTLE: Duration = Duration::from_secs(10);
+
 /// What a session needs to ask the server to cancel its running statement.
 #[derive(Clone)]
 pub(crate) struct Cancel {
@@ -85,16 +94,23 @@ pub(crate) struct Cancel {
     pub(crate) unsent: Unsent,
     /// While the session runs what a cancel must not land on, the user's cancels wait.
     pub(crate) hold: Arc<Hold>,
+    /// How long the server is given to take a user's cancel in ([`CANCEL_SETTLE`]).
+    pub(crate) settle: Duration,
+    /// Where the session's events go: told when a user's cancel was not confirmed. Weak: the
+    /// canceller outlives the session, whose channel must close with it.
+    pub(crate) events: Option<WeakUnboundedSender<DbEvent>>,
 }
 
 /// Holds the user's cancels back while the session runs statements a cancel must not land on:
-/// an Apply's start inside the user's block sets its savepoint, and a cancel landing before the
-/// savepoint exists would abort the block, the user's earlier work with it. A cancel asked
-/// meanwhile is not sent; the run sees it asked and stops itself at its next step.
+/// inside the user's block an Apply's start, a `Resume`'s, a count's, a count of a column's
+/// values', an export's and an `EXPLAIN ANALYZE`'s set their savepoint, and a cancel landing
+/// before the savepoint exists would abort the block, the user's earlier work with it. A cancel
+/// asked meanwhile is not sent; the run sees it asked and stops itself before its next step.
 #[derive(Default)]
 pub(crate) struct Hold {
     held: AtomicBool,
-    /// Taken by a cancel on its way to the server, so [`Hold::hold`] returns only once none is.
+    /// Taken by a cancel on its way to the server, until the server took it in
+    /// ([`CANCEL_SETTLE`]), so [`Hold::hold`] returns only once none is.
     sending: tokio::sync::RwLock<()>,
 }
 
@@ -115,41 +131,121 @@ impl Hold {
     }
 }
 
+/// The user's cancels held back ([`Hold`]) while it lives, unless released for a while or
+/// ended.
+pub(crate) struct Held<'a> {
+    hold: &'a Hold,
+    /// Held at all: not once ended, nor when made off ([`Held::when`]).
+    on: bool,
+}
+
+impl<'a> Held<'a> {
+    /// Held from now on; returns once no cancel is on its way.
+    pub(crate) async fn new(hold: &'a Hold) -> Held<'a> {
+        Held::when(hold, true).await
+    }
+
+    /// Held only when `on`; otherwise it never holds anything.
+    pub(crate) async fn when(hold: &'a Hold, on: bool) -> Held<'a> {
+        if on {
+            hold.hold().await;
+        }
+        Held { hold, on }
+    }
+
+    /// Whether it holds at all (released for a while counts).
+    pub(crate) fn on(&self) -> bool {
+        self.on
+    }
+
+    /// Held again after [`Held::release`]; returns once no cancel is on its way.
+    pub(crate) async fn hold(&mut self) {
+        if self.on {
+            self.hold.hold().await;
+        }
+    }
+
+    /// Let the cancels through for a while.
+    pub(crate) fn release(&mut self) {
+        if self.on {
+            self.hold.release();
+        }
+    }
+
+    /// No longer held, for good.
+    pub(crate) fn end(&mut self) {
+        self.release();
+        self.on = false;
+    }
+}
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
 impl Cancel {
     pub(crate) fn new(token: CancelToken, route: Option<Route>, tls: PgTls) -> Self {
-        Self { token, route, tls, unsent: Unsent::default(), hold: Arc::default() }
+        Self { token, route, tls, unsent: Unsent::default(), hold: Arc::default(), settle: CANCEL_SETTLE, events: None }
     }
 
     /// Send a cancel request (directly, or through the route), within [`CANCEL_DIAL`]; why it
     /// could not be sent.
     pub(crate) async fn send(&self) -> Result<(), DbError> {
-        self.send_if(|| true).await
+        self.send_if(|| true, false).await.map(|_| ())
     }
 
     /// [`Cancel::send`], unless `still` no longer holds once its stream is open. A cancel
     /// request names no statement, and a tunnel may take its time: by then another run may be
-    /// at the server.
-    async fn send_if(&self, still: impl Fn() -> bool) -> Result<(), DbError> {
-        let sent = async {
-            match &self.route {
-                None if !still() => Ok(()),
-                None => self.token.cancel_query(self.tls.clone()).await.map_err(|e| db_error(&e)),
-                Some(route) => {
+    /// at the server. `settle`: once sent, it returns only when the server closed the cancel's
+    /// connection, or after [`Cancel::settle`]: until then the server may not have passed it on,
+    /// and it may still land on what the session sends next. Whether the server was seen to take
+    /// it in (always, without `settle`).
+    async fn send_if(&self, still: impl Fn() -> bool, settle: bool) -> Result<Settled, DbError> {
+        let (told, sent) = futures::channel::oneshot::channel();
+        let settle = settle.then_some(tokio_postgres::Settle { sent: told, within: self.settle });
+        let sending = async {
+            let sent = match (&self.route, settle) {
+                (None, _) if !still() => return Ok(Settled::Closed),
+                (None, None) => self.token.cancel_query(self.tls.clone()).await.map(|()| Settled::Closed),
+                (None, Some(settle)) => self.token.cancel_query_settled(self.tls.clone(), settle).await,
+                (Some(route), settle) => {
                     let handshake = self.tls.to(route.name()).map_err(|e| DbError::Tls(e.0))?;
                     let stream = route.dial(CANCEL_DIAL).await?;
                     if !still() {
-                        return Ok(());
+                        return Ok(Settled::Closed);
                     }
-                    self.token.cancel_query_raw(stream, handshake).await.map_err(|e| db_error(&e))
+                    match settle {
+                        None => self.token.cancel_query_raw(stream, handshake).await.map(|()| Settled::Closed),
+                        Some(settle) => self.token.cancel_query_raw_settled(stream, handshake, settle).await,
+                    }
                 }
+            };
+            sent.map_err(|e| db_error(&e))
+        };
+        tokio::pin!(sending);
+        // Within the bound until it is sent (or it failed); then, while the server takes it in,
+        // within the settle bound of its own.
+        let first = async {
+            tokio::select! {
+                biased;
+                done = &mut sending => Some(done),
+                _ = sent => None,
             }
         };
-        tokio::time::timeout(CANCEL_DIAL, sent).await.unwrap_or(Err(DbError::NoAnswer(CANCEL_DIAL)))
+        match tokio::time::timeout(CANCEL_DIAL, first).await {
+            Err(_) => Err(DbError::NoAnswer(CANCEL_DIAL)),
+            Ok(Some(done)) => done,
+            Ok(None) => sending.await,
+        }
     }
 
     /// The user's cancel ([`Cancel::send`]), asked during the session's request `request`
     /// ([`Unsent::request`], taken when the user asked). One that could not be sent is noted for
-    /// that request ([`Unsent`]): the session must not wait for a statement it cannot stop.
+    /// that request ([`Unsent`]): the session must not wait for a statement it cannot stop. One
+    /// the server was not seen to take in ([`Cancel::settle`]) is said
+    /// ([`DbEvent::CancelUnconfirmed`]): it may still stop what the session runs next.
     /// `still`: whether the run it is for is still the one at the server.
     /// While cancels are held ([`Hold`]) it is not sent.
     pub(crate) async fn ask(&self, request: u64, still: impl Fn() -> bool) {
@@ -158,8 +254,15 @@ impl Cancel {
             return;
         }
         let hold = self.hold.clone();
-        if let Err(why) = self.send_if(|| still() && !hold.held()).await {
-            self.unsent.note(request, why);
+        match self.send_if(|| still() && !hold.held(), true).await {
+            Ok(Settled::Closed) => {}
+            // It may still stop what runs next: said, and the session goes on.
+            Ok(Settled::Unknown) => {
+                if let Some(events) = self.events.as_ref().and_then(WeakUnboundedSender::upgrade) {
+                    let _ = events.send(DbEvent::CancelUnconfirmed { waited: self.settle });
+                }
+            }
+            Err(why) => self.unsent.note(request, why),
         }
     }
 }
@@ -215,21 +318,4 @@ impl Unsent {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A cancel that failed is seen only by the request it was asked during: one asked before
-    /// the session moved on to its next request is never taken for the new request's.
-    #[tokio::test]
-    async fn a_failed_cancel_belongs_to_the_request_it_was_asked_during() {
-        let unsent = Unsent::default();
-        let asked = unsent.request();
-        unsent.next_request();
-        unsent.note(asked, DbError::Closed);
-        let late = tokio::time::timeout(Duration::from_millis(100), unsent.current()).await;
-        assert!(late.is_err(), "an earlier request's failure was taken for the current one's");
-        unsent.note(unsent.request(), DbError::Closed);
-        let now = tokio::time::timeout(Duration::from_secs(1), unsent.current()).await;
-        assert_eq!(now.ok(), Some(DbError::Closed));
-    }
-}
+pub(crate) mod tests;
