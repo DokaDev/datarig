@@ -52,7 +52,8 @@ macro_rules! target_cte {
     () => {
         "target AS (
   SELECT pg_catalog.split_part(v, ':', 1) AS class,
-         NULLIF(pg_catalog.split_part(v, ':', 2), '')::pg_catalog.oid AS oid
+         (CASE WHEN pg_catalog.split_part(v, ':', 2) OPERATOR(pg_catalog.=) '' THEN NULL
+               ELSE pg_catalog.split_part(v, ':', 2) END)::pg_catalog.oid AS oid
   FROM pg_catalog.current_setting('datarig.ddl_target') v
 )"
     };
@@ -64,10 +65,10 @@ macro_rules! target_cte {
 macro_rules! locked_cte {
     () => {
         "locked AS (
-  SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_locks l JOIN guard g ON g.oid = l.relation
-    WHERE l.locktype = 'relation' AND l.mode = 'AccessExclusiveLock'
-      AND l.database = (SELECT d.oid FROM pg_catalog.pg_database d
-                        WHERE d.datname = pg_catalog.current_database())) AS locked
+  SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_locks l JOIN guard g ON g.oid OPERATOR(pg_catalog.=) l.relation
+    WHERE l.locktype OPERATOR(pg_catalog.=) 'relation' AND l.mode OPERATOR(pg_catalog.=) 'AccessExclusiveLock'
+      AND l.database OPERATOR(pg_catalog.=) (SELECT d.oid FROM pg_catalog.pg_database d
+                        WHERE d.datname OPERATOR(pg_catalog.=) pg_catalog.current_database())) AS locked
 )"
     };
 }
@@ -76,11 +77,11 @@ macro_rules! locked_cte {
 macro_rules! description {
     ($class:literal, $oid:literal, $sub:literal) => {
         concat!(
-            "(SELECT dsc.description FROM pg_catalog.pg_description dsc WHERE dsc.classoid = 'pg_catalog.",
+            "(SELECT dsc.description FROM pg_catalog.pg_description dsc WHERE dsc.classoid OPERATOR(pg_catalog.=) 'pg_catalog.",
             $class,
-            "'::pg_catalog.regclass AND dsc.objoid = ",
+            "'::pg_catalog.regclass AND dsc.objoid OPERATOR(pg_catalog.=) ",
             $oid,
-            " AND dsc.objsubid = ",
+            " AND dsc.objsubid OPERATOR(pg_catalog.=) ",
             $sub,
             ")"
         )
@@ -94,7 +95,7 @@ macro_rules! sequence_json {
         "pg_catalog.json_build_object('schema', seqn.nspname, 'name', seq.relname,
         'type', pg_catalog.format_type(sq.seqtypid, NULL), 'start', sq.seqstart, 'increment', sq.seqincrement,
         'min', sq.seqmin, 'max', sq.seqmax, 'cache', sq.seqcache, 'cycle', sq.seqcycle,
-        'unlogged', seq.relpersistence = 'u')"
+        'unlogged', seq.relpersistence OPERATOR(pg_catalog.=) 'u')"
     };
 }
 
@@ -104,11 +105,11 @@ macro_rules! grants_json {
     ($acl:literal, $owner:literal) => {
         concat!(
             "(SELECT pg_catalog.json_agg(pg_catalog.json_build_array(
-        CASE WHEN x.grantee = 0 THEN NULL ELSE pg_catalog.pg_get_userbyid(x.grantee) END,
+        CASE WHEN x.grantee OPERATOR(pg_catalog.=) 0 THEN NULL ELSE pg_catalog.pg_get_userbyid(x.grantee) END,
         x.privilege_type, x.is_grantable))
       FROM pg_catalog.aclexplode(",
             $acl,
-            ") x WHERE x.grantee <> ",
+            ") x WHERE x.grantee OPERATOR(pg_catalog.<>) ",
             $owner,
             ")"
         )
@@ -121,43 +122,43 @@ pub const RELATION: &str = concat!(
     "WITH ",
     target_cte!(),
     ", rel AS (
-  SELECT c.oid, c.relkind::text AS kind
-  FROM target JOIN pg_catalog.pg_class c ON c.oid = target.oid
-  WHERE target.class = 'r'
+  SELECT c.oid, c.relkind::pg_catalog.text AS kind
+  FROM target JOIN pg_catalog.pg_class c ON c.oid OPERATOR(pg_catalog.=) target.oid
+  WHERE target.class OPERATOR(pg_catalog.=) 'r'
 ), guard AS (
   SELECT rel.oid FROM rel
-  UNION SELECT i.indrelid FROM rel JOIN pg_catalog.pg_index i ON i.indexrelid = rel.oid
+  UNION SELECT i.indrelid FROM rel JOIN pg_catalog.pg_index i ON i.indexrelid OPERATOR(pg_catalog.=) rel.oid
   UNION SELECT dep.refobjid FROM rel
-    JOIN pg_catalog.pg_rewrite w ON w.ev_class = rel.oid AND w.ev_type = '1'
-    JOIN pg_catalog.pg_depend dep ON dep.classid = 'pg_catalog.pg_rewrite'::pg_catalog.regclass AND dep.objid = w.oid
-  WHERE dep.refclassid = 'pg_catalog.pg_class'::pg_catalog.regclass
+    JOIN pg_catalog.pg_rewrite w ON w.ev_class OPERATOR(pg_catalog.=) rel.oid AND w.ev_type OPERATOR(pg_catalog.=) '1'
+    JOIN pg_catalog.pg_depend dep ON dep.classid OPERATOR(pg_catalog.=) 'pg_catalog.pg_rewrite'::pg_catalog.regclass AND dep.objid OPERATOR(pg_catalog.=) w.oid
+  WHERE dep.refclassid OPERATOR(pg_catalog.=) 'pg_catalog.pg_class'::pg_catalog.regclass
   UNION SELECT dep.refobjid FROM rel
-    JOIN pg_catalog.pg_policy pol ON pol.polrelid = rel.oid
-    JOIN pg_catalog.pg_depend dep ON dep.classid = 'pg_catalog.pg_policy'::pg_catalog.regclass AND dep.objid = pol.oid
-  WHERE dep.refclassid = 'pg_catalog.pg_class'::pg_catalog.regclass
+    JOIN pg_catalog.pg_policy pol ON pol.polrelid OPERATOR(pg_catalog.=) rel.oid
+    JOIN pg_catalog.pg_depend dep ON dep.classid OPERATOR(pg_catalog.=) 'pg_catalog.pg_policy'::pg_catalog.regclass AND dep.objid OPERATOR(pg_catalog.=) pol.oid
+  WHERE dep.refclassid OPERATOR(pg_catalog.=) 'pg_catalog.pg_class'::pg_catalog.regclass
 ), ",
     locked_cte!(),
     "
 SELECT CASE WHEN locked.locked THEN pg_catalog.json_build_object('locked', true)
-WHEN rel.kind IN ('i', 'I') THEN pg_catalog.json_build_object('index', (
+WHEN rel.kind OPERATOR(pg_catalog.=) ANY (ARRAY['i', 'I']) THEN pg_catalog.json_build_object('index', (
   SELECT pg_catalog.json_build_object(
     'schema', n.nspname, 'name', c.relname, 'table', tc.relname,
     'definition', pg_catalog.pg_get_indexdef(c.oid),
     'constraint', (SELECT pg_catalog.json_build_array(con.conname, pg_catalog.pg_get_constraintdef(con.oid, true))
       FROM pg_catalog.pg_constraint con
-      WHERE con.conindid = c.oid AND con.conrelid = i.indrelid AND con.contype IN ('p', 'u', 'x')),
+      WHERE con.conindid OPERATOR(pg_catalog.=) c.oid AND con.conrelid OPERATOR(pg_catalog.=) i.indrelid AND con.contype OPERATOR(pg_catalog.=) ANY (ARRAY['p', 'u', 'x']::pg_catalog.\"char\"[])),
     'constraint_comment', (SELECT ",
     description!("pg_constraint", "con.oid", "0"),
     " FROM pg_catalog.pg_constraint con
-      WHERE con.conindid = c.oid AND con.conrelid = i.indrelid AND con.contype IN ('p', 'u', 'x')),
+      WHERE con.conindid OPERATOR(pg_catalog.=) c.oid AND con.conrelid OPERATOR(pg_catalog.=) i.indrelid AND con.contype OPERATOR(pg_catalog.=) ANY (ARRAY['p', 'u', 'x']::pg_catalog.\"char\"[])),
     'comment', ",
     description!("pg_class", "c.oid", "0"),
     ")
   FROM pg_catalog.pg_class c
-  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-  JOIN pg_catalog.pg_index i ON i.indexrelid = c.oid
-  JOIN pg_catalog.pg_class tc ON tc.oid = i.indrelid
-  WHERE c.oid = rel.oid))
+  JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) c.relnamespace
+  JOIN pg_catalog.pg_index i ON i.indexrelid OPERATOR(pg_catalog.=) c.oid
+  JOIN pg_catalog.pg_class tc ON tc.oid OPERATOR(pg_catalog.=) i.indrelid
+  WHERE c.oid OPERATOR(pg_catalog.=) rel.oid))
 ELSE pg_catalog.json_build_object('relation', pg_catalog.json_build_object(
   'kind', rel.kind,
 ",
@@ -167,122 +168,122 @@ ELSE pg_catalog.json_build_object('relation', pg_catalog.json_build_object(
   SELECT pg_catalog.json_build_object(
     'schema', n.nspname, 'name', c.relname,
     'owner', pg_catalog.pg_get_userbyid(c.relowner),
-    'persistence', c.relpersistence::text,
-    'am', CASE WHEN c.relkind IN ('r', 'm', 'p') THEN
-      (SELECT am.amname FROM pg_catalog.pg_am am WHERE am.oid = c.relam) END,
+    'persistence', c.relpersistence::pg_catalog.text,
+    'am', CASE WHEN c.relkind OPERATOR(pg_catalog.=) ANY (ARRAY['r', 'm', 'p']::pg_catalog.\"char\"[]) THEN
+      (SELECT am.amname FROM pg_catalog.pg_am am WHERE am.oid OPERATOR(pg_catalog.=) c.relam) END,
     'options', c.reloptions,
-    'toast_options', (SELECT t.reloptions FROM pg_catalog.pg_class t WHERE t.oid = c.reltoastrelid),
-    'tablespace', CASE WHEN c.reltablespace <> 0 THEN
-      (SELECT ts.spcname FROM pg_catalog.pg_tablespace ts WHERE ts.oid = c.reltablespace) END,
-    'partition_key', CASE WHEN c.relkind = 'p' THEN pg_catalog.pg_get_partkeydef(c.oid) END,
-    'of_type', CASE WHEN c.reloftype <> 0 THEN pg_catalog.format_type(c.reloftype, NULL) END,
+    'toast_options', (SELECT t.reloptions FROM pg_catalog.pg_class t WHERE t.oid OPERATOR(pg_catalog.=) c.reltoastrelid),
+    'tablespace', CASE WHEN c.reltablespace OPERATOR(pg_catalog.<>) 0 THEN
+      (SELECT ts.spcname FROM pg_catalog.pg_tablespace ts WHERE ts.oid OPERATOR(pg_catalog.=) c.reltablespace) END,
+    'partition_key', CASE WHEN c.relkind OPERATOR(pg_catalog.=) 'p' THEN pg_catalog.pg_get_partkeydef(c.oid) END,
+    'of_type', CASE WHEN c.reloftype OPERATOR(pg_catalog.<>) 0 THEN pg_catalog.format_type(c.reloftype, NULL) END,
     'partition_of', CASE WHEN c.relispartition THEN (
       SELECT pg_catalog.json_build_array(pn.nspname, p.relname, pg_catalog.pg_get_expr(c.relpartbound, c.oid))
       FROM pg_catalog.pg_inherits h
-      JOIN pg_catalog.pg_class p ON p.oid = h.inhparent
-      JOIN pg_catalog.pg_namespace pn ON pn.oid = p.relnamespace
-      WHERE h.inhrelid = c.oid) END,
+      JOIN pg_catalog.pg_class p ON p.oid OPERATOR(pg_catalog.=) h.inhparent
+      JOIN pg_catalog.pg_namespace pn ON pn.oid OPERATOR(pg_catalog.=) p.relnamespace
+      WHERE h.inhrelid OPERATOR(pg_catalog.=) c.oid) END,
     'inherits', CASE WHEN NOT c.relispartition THEN (
       SELECT pg_catalog.json_agg(pg_catalog.json_build_array(pn.nspname, p.relname) ORDER BY h.inhseqno)
       FROM pg_catalog.pg_inherits h
-      JOIN pg_catalog.pg_class p ON p.oid = h.inhparent
-      JOIN pg_catalog.pg_namespace pn ON pn.oid = p.relnamespace
-      WHERE h.inhrelid = c.oid) END,
-    'view', CASE WHEN c.relkind IN ('v', 'm') THEN pg_catalog.pg_get_viewdef(c.oid, true) END,
+      JOIN pg_catalog.pg_class p ON p.oid OPERATOR(pg_catalog.=) h.inhparent
+      JOIN pg_catalog.pg_namespace pn ON pn.oid OPERATOR(pg_catalog.=) p.relnamespace
+      WHERE h.inhrelid OPERATOR(pg_catalog.=) c.oid) END,
+    'view', CASE WHEN c.relkind OPERATOR(pg_catalog.=) ANY (ARRAY['v', 'm']::pg_catalog.\"char\"[]) THEN pg_catalog.pg_get_viewdef(c.oid, true) END,
     'server', (SELECT s.srvname FROM pg_catalog.pg_foreign_table f
-      JOIN pg_catalog.pg_foreign_server s ON s.oid = f.ftserver WHERE f.ftrelid = c.oid),
-    'server_options', (SELECT f.ftoptions FROM pg_catalog.pg_foreign_table f WHERE f.ftrelid = c.oid),
+      JOIN pg_catalog.pg_foreign_server s ON s.oid OPERATOR(pg_catalog.=) f.ftserver WHERE f.ftrelid OPERATOR(pg_catalog.=) c.oid),
+    'server_options', (SELECT f.ftoptions FROM pg_catalog.pg_foreign_table f WHERE f.ftrelid OPERATOR(pg_catalog.=) c.oid),
     'columns', (
       SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
         'name', a.attname, 'local', a.attislocal,
-        'collation', CASE WHEN a.attcollation <> ty.typcollation THEN (
+        'collation', CASE WHEN a.attcollation OPERATOR(pg_catalog.<>) ty.typcollation THEN (
           SELECT pg_catalog.json_build_array(cn.nspname, co.collname) FROM pg_catalog.pg_collation co
-          JOIN pg_catalog.pg_namespace cn ON cn.oid = co.collnamespace WHERE co.oid = a.attcollation) END,
-        'storage', CASE WHEN a.attstorage <> ty.typstorage THEN a.attstorage::text END,
-        'compression', pg_catalog.to_jsonb(a) ->> 'attcompression',
+          JOIN pg_catalog.pg_namespace cn ON cn.oid OPERATOR(pg_catalog.=) co.collnamespace WHERE co.oid OPERATOR(pg_catalog.=) a.attcollation) END,
+        'storage', CASE WHEN a.attstorage OPERATOR(pg_catalog.<>) ty.typstorage THEN a.attstorage::pg_catalog.text END,
+        'compression', pg_catalog.to_jsonb(a) OPERATOR(pg_catalog.->>) 'attcompression',
         'statistics', a.attstattarget,
         'options', a.attoptions,
         'fdw_options', a.attfdwoptions,
-        'default_tree', (SELECT ad.adbin::text FROM pg_catalog.pg_attrdef ad
-          WHERE ad.adrelid = c.oid AND ad.adnum = a.attnum),
+        'default_tree', (SELECT ad.adbin::pg_catalog.text FROM pg_catalog.pg_attrdef ad
+          WHERE ad.adrelid OPERATOR(pg_catalog.=) c.oid AND ad.adnum OPERATOR(pg_catalog.=) a.attnum),
         'parent', CASE WHEN NOT a.attislocal THEN (
-          SELECT pg_catalog.json_build_object('default_tree', pd.adbin::text, 'not_null', pa.attnotnull)
+          SELECT pg_catalog.json_build_object('default_tree', pd.adbin::pg_catalog.text, 'not_null', pa.attnotnull)
           FROM pg_catalog.pg_inherits h
-          JOIN pg_catalog.pg_attribute pa ON pa.attrelid = h.inhparent AND pa.attname = a.attname
+          JOIN pg_catalog.pg_attribute pa ON pa.attrelid OPERATOR(pg_catalog.=) h.inhparent AND pa.attname OPERATOR(pg_catalog.=) a.attname
             AND NOT pa.attisdropped
-          LEFT JOIN pg_catalog.pg_attrdef pd ON pd.adrelid = pa.attrelid AND pd.adnum = pa.attnum
-          WHERE h.inhrelid = c.oid ORDER BY h.inhseqno LIMIT 1) END,
+          LEFT JOIN pg_catalog.pg_attrdef pd ON pd.adrelid OPERATOR(pg_catalog.=) pa.attrelid AND pd.adnum OPERATOR(pg_catalog.=) pa.attnum
+          WHERE h.inhrelid OPERATOR(pg_catalog.=) c.oid ORDER BY h.inhseqno LIMIT 1) END,
         'comment', ",
     description!("pg_class", "c.oid", "a.attnum"),
     ",
         'grants', ",
     grants_json!("a.attacl", "c.relowner"),
     ",
-        'identity', CASE WHEN a.attidentity <> '' THEN (
+        'identity', CASE WHEN a.attidentity OPERATOR(pg_catalog.<>) '' THEN (
           SELECT ",
     sequence_json!(),
     "
           FROM pg_catalog.pg_depend dep
-          JOIN pg_catalog.pg_class seq ON seq.oid = dep.objid AND seq.relkind = 'S'
-          JOIN pg_catalog.pg_namespace seqn ON seqn.oid = seq.relnamespace
-          JOIN pg_catalog.pg_sequence sq ON sq.seqrelid = seq.oid
-          WHERE dep.classid = 'pg_catalog.pg_class'::pg_catalog.regclass
-            AND dep.refclassid = 'pg_catalog.pg_class'::pg_catalog.regclass
-            AND dep.refobjid = c.oid AND dep.refobjsubid = a.attnum AND dep.deptype = 'i'
+          JOIN pg_catalog.pg_class seq ON seq.oid OPERATOR(pg_catalog.=) dep.objid AND seq.relkind OPERATOR(pg_catalog.=) 'S'
+          JOIN pg_catalog.pg_namespace seqn ON seqn.oid OPERATOR(pg_catalog.=) seq.relnamespace
+          JOIN pg_catalog.pg_sequence sq ON sq.seqrelid OPERATOR(pg_catalog.=) seq.oid
+          WHERE dep.classid OPERATOR(pg_catalog.=) 'pg_catalog.pg_class'::pg_catalog.regclass
+            AND dep.refclassid OPERATOR(pg_catalog.=) 'pg_catalog.pg_class'::pg_catalog.regclass
+            AND dep.refobjid OPERATOR(pg_catalog.=) c.oid AND dep.refobjsubid OPERATOR(pg_catalog.=) a.attnum AND dep.deptype OPERATOR(pg_catalog.=) 'i'
           LIMIT 1) END) ORDER BY a.attnum)
-      FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_type ty ON ty.oid = a.atttypid
-      WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped),
+      FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_type ty ON ty.oid OPERATOR(pg_catalog.=) a.atttypid
+      WHERE a.attrelid OPERATOR(pg_catalog.=) c.oid AND a.attnum OPERATOR(pg_catalog.>) 0 AND NOT a.attisdropped),
     'sequences', (
       SELECT pg_catalog.json_agg(pg_catalog.json_build_object('column', a.attname, 'sequence', ",
     sequence_json!(),
     ") ORDER BY a.attnum, seq.relname)
       FROM pg_catalog.pg_depend dep
-      JOIN pg_catalog.pg_class seq ON seq.oid = dep.objid AND seq.relkind = 'S'
-      JOIN pg_catalog.pg_namespace seqn ON seqn.oid = seq.relnamespace
-      JOIN pg_catalog.pg_sequence sq ON sq.seqrelid = seq.oid
-      JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum = dep.refobjsubid
-      WHERE dep.classid = 'pg_catalog.pg_class'::pg_catalog.regclass
-        AND dep.refclassid = 'pg_catalog.pg_class'::pg_catalog.regclass
-        AND dep.refobjid = c.oid AND dep.deptype = 'a'),
+      JOIN pg_catalog.pg_class seq ON seq.oid OPERATOR(pg_catalog.=) dep.objid AND seq.relkind OPERATOR(pg_catalog.=) 'S'
+      JOIN pg_catalog.pg_namespace seqn ON seqn.oid OPERATOR(pg_catalog.=) seq.relnamespace
+      JOIN pg_catalog.pg_sequence sq ON sq.seqrelid OPERATOR(pg_catalog.=) seq.oid
+      JOIN pg_catalog.pg_attribute a ON a.attrelid OPERATOR(pg_catalog.=) c.oid AND a.attnum OPERATOR(pg_catalog.=) dep.refobjsubid
+      WHERE dep.classid OPERATOR(pg_catalog.=) 'pg_catalog.pg_class'::pg_catalog.regclass
+        AND dep.refclassid OPERATOR(pg_catalog.=) 'pg_catalog.pg_class'::pg_catalog.regclass
+        AND dep.refobjid OPERATOR(pg_catalog.=) c.oid AND dep.deptype OPERATOR(pg_catalog.=) 'a'),
     'constraints', (
       SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
-        'name', con.conname, 'type', con.contype::text,
-        'inherited', NOT con.conislocal OR con.conparentid <> 0,
-        'definition', CASE WHEN con.contype IN ('x', 'n') THEN pg_catalog.pg_get_constraintdef(con.oid, true) END,
-        'column', CASE WHEN con.contype = 'n' THEN (SELECT ca.attname FROM pg_catalog.pg_attribute ca
-          WHERE ca.attrelid = con.conrelid AND ca.attnum = con.conkey[1]) END,
+        'name', con.conname, 'type', con.contype::pg_catalog.text,
+        'inherited', NOT con.conislocal OR con.conparentid OPERATOR(pg_catalog.<>) 0,
+        'definition', CASE WHEN con.contype OPERATOR(pg_catalog.=) ANY (ARRAY['x', 'n']::pg_catalog.\"char\"[]) THEN pg_catalog.pg_get_constraintdef(con.oid, true) END,
+        'column', CASE WHEN con.contype OPERATOR(pg_catalog.=) 'n' THEN (SELECT ca.attname FROM pg_catalog.pg_attribute ca
+          WHERE ca.attrelid OPERATOR(pg_catalog.=) con.conrelid AND ca.attnum OPERATOR(pg_catalog.=) con.conkey[1]) END,
         'no_inherit', con.connoinherit,
         'comment', ",
     description!("pg_constraint", "con.oid", "0"),
     ") ORDER BY con.conname)
       FROM pg_catalog.pg_constraint con
-      WHERE con.conrelid = c.oid AND con.contype IN ('p', 'u', 'c', 'f', 'x', 'n')),
+      WHERE con.conrelid OPERATOR(pg_catalog.=) c.oid AND con.contype OPERATOR(pg_catalog.=) ANY (ARRAY['p', 'u', 'c', 'f', 'x', 'n']::pg_catalog.\"char\"[])),
     'indexes', (
       SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
         'name', ic.relname,
-        'inherited', EXISTS (SELECT 1 FROM pg_catalog.pg_inherits h WHERE h.inhrelid = i.indexrelid),
+        'inherited', EXISTS (SELECT 1 FROM pg_catalog.pg_inherits h WHERE h.inhrelid OPERATOR(pg_catalog.=) i.indexrelid),
         'replica', i.indisreplident,
         'comment', ",
     description!("pg_class", "ic.oid", "0"),
     ") ORDER BY ic.relname)
-      FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
-      WHERE i.indrelid = c.oid),
+      FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class ic ON ic.oid OPERATOR(pg_catalog.=) i.indexrelid
+      WHERE i.indrelid OPERATOR(pg_catalog.=) c.oid),
     'triggers', (
       SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
-        'name', t.tgname, 'enabled', t.tgenabled::text,
-        'inherited', coalesce((pg_catalog.to_jsonb(t) ->> 'tgparentid')::pg_catalog.oid, 0) <> 0,
+        'name', t.tgname, 'enabled', t.tgenabled::pg_catalog.text,
+        'inherited', coalesce((pg_catalog.to_jsonb(t) OPERATOR(pg_catalog.->>) 'tgparentid')::pg_catalog.oid, 0) OPERATOR(pg_catalog.<>) 0,
         'comment', ",
     description!("pg_trigger", "t.oid", "0"),
     ") ORDER BY t.tgname)
       FROM pg_catalog.pg_trigger t
-      WHERE t.tgrelid = c.oid AND NOT t.tgisinternal),
-    'replica_identity', c.relreplident::text,
+      WHERE t.tgrelid OPERATOR(pg_catalog.=) c.oid AND NOT t.tgisinternal),
+    'replica_identity', c.relreplident::pg_catalog.text,
     'row_security', c.relrowsecurity,
     'force_row_security', c.relforcerowsecurity,
     'policies', (
       SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
-        'name', pol.polname, 'permissive', pol.polpermissive, 'command', pol.polcmd::text,
-        'roles', (SELECT pg_catalog.json_agg(CASE WHEN r.role = 0 THEN NULL ELSE pg_catalog.pg_get_userbyid(r.role) END
+        'name', pol.polname, 'permissive', pol.polpermissive, 'command', pol.polcmd::pg_catalog.text,
+        'roles', (SELECT pg_catalog.json_agg(CASE WHEN r.role OPERATOR(pg_catalog.=) 0 THEN NULL ELSE pg_catalog.pg_get_userbyid(r.role) END
                     ORDER BY r.i)
                   FROM pg_catalog.unnest(pol.polroles) WITH ORDINALITY r(role, i)),
         'using', pg_catalog.pg_get_expr(pol.polqual, pol.polrelid),
@@ -290,16 +291,16 @@ ELSE pg_catalog.json_build_object('relation', pg_catalog.json_build_object(
         'comment', ",
     description!("pg_policy", "pol.oid", "0"),
     ") ORDER BY pol.polname)
-      FROM pg_catalog.pg_policy pol WHERE pol.polrelid = c.oid),
+      FROM pg_catalog.pg_policy pol WHERE pol.polrelid OPERATOR(pg_catalog.=) c.oid),
     'grants', ",
     grants_json!("c.relacl", "c.relowner"),
     ",
     'comment', ",
     description!("pg_class", "c.oid", "0"),
     ")
-  FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-  WHERE c.oid = rel.oid))
-END::text
+  FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) c.relnamespace
+  WHERE c.oid OPERATOR(pg_catalog.=) rel.oid))
+END::pg_catalog.text
 FROM rel, locked"
 );
 
@@ -309,8 +310,8 @@ pub const TRIGGER: &str = concat!(
     target_cte!(),
     ", trg AS (
   SELECT t.oid, t.tgrelid
-  FROM target JOIN pg_catalog.pg_trigger t ON t.oid = target.oid
-  WHERE target.class = 't'
+  FROM target JOIN pg_catalog.pg_trigger t ON t.oid OPERATOR(pg_catalog.=) target.oid
+  WHERE target.class OPERATOR(pg_catalog.=) 't'
 ), guard AS (
   SELECT trg.tgrelid AS oid FROM trg
 ), ",
@@ -321,15 +322,15 @@ ELSE pg_catalog.json_build_object('trigger', (
   SELECT pg_catalog.json_build_object(
     'schema', n.nspname, 'table', c.relname, 'name', t.tgname,
     'definition', pg_catalog.pg_get_triggerdef(t.oid, true),
-    'enabled', t.tgenabled::text,
+    'enabled', t.tgenabled::pg_catalog.text,
     'comment', ",
     description!("pg_trigger", "t.oid", "0"),
     ")
   FROM pg_catalog.pg_trigger t
-  JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
-  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-  WHERE t.oid = trg.oid))
-END::text
+  JOIN pg_catalog.pg_class c ON c.oid OPERATOR(pg_catalog.=) t.tgrelid
+  JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) c.relnamespace
+  WHERE t.oid OPERATOR(pg_catalog.=) trg.oid))
+END::pg_catalog.text
 FROM trg, locked"
 );
 
@@ -339,12 +340,12 @@ pub const FUNCTION: &str = concat!(
     target_cte!(),
     ", fn AS (
   SELECT p.oid
-  FROM target JOIN pg_catalog.pg_proc p ON p.oid = target.oid
-  WHERE target.class = 'f'
+  FROM target JOIN pg_catalog.pg_proc p ON p.oid OPERATOR(pg_catalog.=) target.oid
+  WHERE target.class OPERATOR(pg_catalog.=) 'f'
 ), guard AS (
   SELECT dep.refobjid AS oid FROM fn
-  JOIN pg_catalog.pg_depend dep ON dep.classid = 'pg_catalog.pg_proc'::pg_catalog.regclass AND dep.objid = fn.oid
-  WHERE dep.refclassid = 'pg_catalog.pg_class'::pg_catalog.regclass
+  JOIN pg_catalog.pg_depend dep ON dep.classid OPERATOR(pg_catalog.=) 'pg_catalog.pg_proc'::pg_catalog.regclass AND dep.objid OPERATOR(pg_catalog.=) fn.oid
+  WHERE dep.refclassid OPERATOR(pg_catalog.=) 'pg_catalog.pg_class'::pg_catalog.regclass
 ), ",
     locked_cte!(),
     "
@@ -353,7 +354,7 @@ ELSE pg_catalog.json_build_object('function', (
   SELECT pg_catalog.json_build_object(
     'schema', n.nspname, 'name', p.proname,
     'arguments', pg_catalog.pg_get_function_identity_arguments(p.oid),
-    'procedure', p.prokind = 'p',
+    'procedure', p.prokind OPERATOR(pg_catalog.=) 'p',
     'owner', pg_catalog.pg_get_userbyid(p.proowner),
     'definition', pg_catalog.pg_get_functiondef(p.oid),
     'default_acl', p.proacl IS NULL,
@@ -363,42 +364,43 @@ ELSE pg_catalog.json_build_object('function', (
     'comment', ",
     description!("pg_proc", "p.oid", "0"),
     ")
-  FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
-  WHERE p.oid = fn.oid))
-END::text
+  FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) p.pronamespace
+  WHERE p.oid OPERATOR(pg_catalog.=) fn.oid))
+END::pg_catalog.text
 FROM fn, locked"
 );
 
 /// Look up a relation or an index `$1.$2` (the cast fails with the server's own "does not
 /// exist" when it is gone).
-const FIND_RELATION: &str = "SELECT pg_catalog.set_config('datarig.ddl_target', \
-     'r:' || pg_catalog.format('%I.%I', $1::text, $2::text)::pg_catalog.regclass::pg_catalog.oid, true)";
+pub(crate) const FIND_RELATION: &str = "SELECT pg_catalog.set_config('datarig.ddl_target', \
+     'r:' OPERATOR(pg_catalog.||) pg_catalog.format('%I.%I', $1::pg_catalog.text, $2::pg_catalog.text)::pg_catalog.regclass::pg_catalog.oid::pg_catalog.text, true)";
 
 /// Look up trigger `$3` of table `$1.$2` (`t:` without an `oid` when the table has none).
-const FIND_TRIGGER: &str = "SELECT pg_catalog.set_config('datarig.ddl_target', 't:' || coalesce(( \
-     SELECT t.oid::text FROM pg_catalog.pg_trigger t \
-     WHERE t.tgrelid = pg_catalog.format('%I.%I', $1::text, $2::text)::pg_catalog.regclass AND t.tgname = $3), ''), true)";
+pub(crate) const FIND_TRIGGER: &str = "SELECT pg_catalog.set_config('datarig.ddl_target', 't:' OPERATOR(pg_catalog.||) coalesce(( \
+     SELECT t.oid::pg_catalog.text FROM pg_catalog.pg_trigger t \
+     WHERE t.tgrelid OPERATOR(pg_catalog.=) pg_catalog.format('%I.%I', $1::pg_catalog.text, $2::pg_catalog.text)::pg_catalog.regclass AND t.tgname OPERATOR(pg_catalog.=) $3), ''), true)";
 
 /// Look up the function trigger `$3` of table `$1.$2` calls.
-const FIND_TRIGGER_FUNCTION: &str = "SELECT pg_catalog.set_config('datarig.ddl_target', 'f:' || coalesce(( \
-     SELECT t.tgfoid::text FROM pg_catalog.pg_trigger t \
-     WHERE t.tgrelid = pg_catalog.format('%I.%I', $1::text, $2::text)::pg_catalog.regclass AND t.tgname = $3), ''), true)";
+pub(crate) const FIND_TRIGGER_FUNCTION: &str = "SELECT pg_catalog.set_config('datarig.ddl_target', 'f:' OPERATOR(pg_catalog.||) coalesce(( \
+     SELECT t.tgfoid::pg_catalog.text FROM pg_catalog.pg_trigger t \
+     WHERE t.tgrelid OPERATOR(pg_catalog.=) pg_catalog.format('%I.%I', $1::pg_catalog.text, $2::pg_catalog.text)::pg_catalog.regclass AND t.tgname OPERATOR(pg_catalog.=) $3), ''), true)";
 
 /// Look up what name `$1` names in the search path: a function by its signature (`f(int)`),
 /// else a relation (or an index), else a function by its name alone (when there is only one of
 /// that name). Before PostgreSQL 16 `to_regprocedure` and `to_regclass` fail on a name of the
 /// other syntax: each gets only its own.
-const FIND_NAMED: &str = "SELECT pg_catalog.set_config('datarig.ddl_target', coalesce(CASE \
-     WHEN pg_catalog.strpos($1::text, '(') > 0 THEN 'f:' || pg_catalog.to_regprocedure($1::text)::pg_catalog.oid \
-     ELSE coalesce('r:' || pg_catalog.to_regclass($1::text)::pg_catalog.oid, \
-                   'f:' || pg_catalog.to_regproc($1::text)::pg_catalog.oid) END, ''), true)";
+pub(crate) const FIND_NAMED: &str = "SELECT pg_catalog.set_config('datarig.ddl_target', coalesce(CASE \
+     WHEN pg_catalog.strpos($1::pg_catalog.text, '(') OPERATOR(pg_catalog.>) 0 THEN 'f:' OPERATOR(pg_catalog.||) pg_catalog.to_regprocedure($1::pg_catalog.text)::pg_catalog.oid::pg_catalog.text \
+     ELSE coalesce('r:' OPERATOR(pg_catalog.||) pg_catalog.to_regclass($1::pg_catalog.text)::pg_catalog.oid::pg_catalog.text, \
+                   'f:' OPERATOR(pg_catalog.||) pg_catalog.to_regproc($1::pg_catalog.text)::pg_catalog.oid::pg_catalog.text) END, ''), true)";
 
 /// A name the user typed is looked up in the tab's schema (its search path, behind the
 /// implicit `pg_catalog`).
-const SET_PATH: &str = "SELECT pg_catalog.set_config('search_path', pg_catalog.quote_ident($1::text), true)";
+pub(crate) const SET_PATH: &str =
+    "SELECT pg_catalog.set_config('search_path', pg_catalog.quote_ident($1::pg_catalog.text), true)";
 
 /// From here on the server qualifies every name it prints.
-const EMPTY_PATH: &str = "SELECT pg_catalog.set_config('search_path', '', true)";
+pub(crate) const EMPTY_PATH: &str = "SELECT pg_catalog.set_config('search_path', '', true)";
 
 /// Read the DDL of `object` in one round trip.
 pub(crate) async fn load_ddl(client: &Client, object: &DdlObject) -> Result<DdlSource, DbError> {

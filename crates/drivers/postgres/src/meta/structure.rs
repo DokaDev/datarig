@@ -42,83 +42,85 @@ macro_rules! structure_parts {
     SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
       'name', a.attname, 'type', pg_catalog.format_type(a.atttypid, a.atttypmod),
       'not_null', a.attnotnull, 'default', pg_catalog.pg_get_expr(d.adbin, d.adrelid, true),
-      'generated', a.attgenerated::text, 'identity', a.attidentity::text,
+      'generated', a.attgenerated::pg_catalog.text, 'identity', a.attidentity::pg_catalog.text,
       'enum_labels', (WITH RECURSIVE base(typ) AS (
           SELECT a.atttypid
           UNION ALL
-          SELECT t.typbasetype FROM base JOIN pg_catalog.pg_type t ON t.oid = base.typ WHERE t.typtype = 'd')
+          SELECT t.typbasetype FROM base JOIN pg_catalog.pg_type t ON t.oid OPERATOR(pg_catalog.=) base.typ WHERE t.typtype OPERATOR(pg_catalog.=) 'd')
         SELECT pg_catalog.json_agg(e.enumlabel ORDER BY e.enumsortorder)
-        FROM base JOIN pg_catalog.pg_enum e ON e.enumtypid = base.typ),
+        FROM base JOIN pg_catalog.pg_enum e ON e.enumtypid OPERATOR(pg_catalog.=) base.typ),
       'collation', (SELECT pg_catalog.json_build_object('name', co.collname, 'deterministic', co.collisdeterministic)
-        FROM pg_catalog.pg_collation co WHERE co.oid = a.attcollation)) ORDER BY a.attnum)
+        FROM pg_catalog.pg_collation co WHERE co.oid OPERATOR(pg_catalog.=) a.attcollation)) ORDER BY a.attnum)
     FROM pg_catalog.pg_attribute a
-    LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
-    WHERE a.attrelid = rel.oid AND a.attnum > 0 AND NOT a.attisdropped),
+    LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid OPERATOR(pg_catalog.=) a.attrelid AND d.adnum OPERATOR(pg_catalog.=) a.attnum
+    WHERE a.attrelid OPERATOR(pg_catalog.=) rel.oid AND a.attnum OPERATOR(pg_catalog.>) 0 AND NOT a.attisdropped),
   'constraints', (
     SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
-      'name', con.conname, 'type', con.contype::text,
+      'name', con.conname, 'type', con.contype::pg_catalog.text,
       'columns', (SELECT pg_catalog.json_agg(a.attname ORDER BY k.i)
         FROM pg_catalog.unnest(con.conkey) WITH ORDINALITY k(n, i)
-        JOIN pg_catalog.pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.n),
+        JOIN pg_catalog.pg_attribute a ON a.attrelid OPERATOR(pg_catalog.=) con.conrelid AND a.attnum OPERATOR(pg_catalog.=) k.n),
       'ref_schema', rn.nspname, 'ref_table', rc.relname,
       'ref_columns', (SELECT pg_catalog.json_agg(a.attname ORDER BY k.i)
         FROM pg_catalog.unnest(con.confkey) WITH ORDINALITY k(n, i)
-        JOIN pg_catalog.pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.n),
-      'on_delete', con.confdeltype::text, 'on_update', con.confupdtype::text,
-      'expression', CASE WHEN con.contype = 'c' THEN pg_catalog.pg_get_expr(con.conbin, con.conrelid, true) END,
+        JOIN pg_catalog.pg_attribute a ON a.attrelid OPERATOR(pg_catalog.=) con.confrelid AND a.attnum OPERATOR(pg_catalog.=) k.n),
+      'on_delete', con.confdeltype::pg_catalog.text, 'on_update', con.confupdtype::pg_catalog.text,
+      'expression', CASE WHEN con.contype OPERATOR(pg_catalog.=) 'c' THEN pg_catalog.pg_get_expr(con.conbin, con.conrelid, true) END,
       'definition', pg_catalog.pg_get_constraintdef(con.oid, true)) ORDER BY con.conname)
     FROM pg_catalog.pg_constraint con
-    LEFT JOIN pg_catalog.pg_class rc ON rc.oid = con.confrelid
-    LEFT JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace
-    WHERE con.conrelid = rel.oid AND con.contype IN ('p', 'f', 'u', 'c')),
+    LEFT JOIN pg_catalog.pg_class rc ON rc.oid OPERATOR(pg_catalog.=) con.confrelid
+    LEFT JOIN pg_catalog.pg_namespace rn ON rn.oid OPERATOR(pg_catalog.=) rc.relnamespace
+    WHERE con.conrelid OPERATOR(pg_catalog.=) rel.oid AND con.contype OPERATOR(pg_catalog.=) ANY (ARRAY['p', 'f', 'u', 'c']::pg_catalog.\"char\"[])),
   'indexes', (
     SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
       'name', ic.relname, 'unique', i.indisunique, 'primary', i.indisprimary, 'valid', i.indisvalid AND i.indimmediate,
       'constraint', EXISTS (SELECT 1 FROM pg_catalog.pg_constraint x
-        WHERE x.conrelid = i.indrelid AND x.conindid = i.indexrelid AND x.contype IN ('p', 'u', 'x')),
+        WHERE x.conrelid OPERATOR(pg_catalog.=) i.indrelid AND x.conindid OPERATOR(pg_catalog.=) i.indexrelid AND x.contype OPERATOR(pg_catalog.=) ANY (ARRAY['p', 'u', 'x']::pg_catalog.\"char\"[])),
       'method', am.amname,
       'columns', (SELECT pg_catalog.json_agg(pg_catalog.pg_get_indexdef(i.indexrelid, k, true) ORDER BY k)
         FROM pg_catalog.generate_series(1, i.indnkeyatts) k),
       'options', (SELECT pg_catalog.json_agg(pg_catalog.concat_ws(' ',
-          CASE WHEN i.indcollation[k - 1] <> 0 AND i.indcollation[k - 1] <> coalesce(ta.attcollation, ty.typcollation)
-            THEN 'COLLATE ' || pg_catalog.quote_ident(co.collname) END,
+          CASE WHEN i.indcollation[k OPERATOR(pg_catalog.-) 1] OPERATOR(pg_catalog.<>) 0 AND i.indcollation[k OPERATOR(pg_catalog.-) 1] OPERATOR(pg_catalog.<>) coalesce(ta.attcollation, ty.typcollation)
+            THEN 'COLLATE ' OPERATOR(pg_catalog.||) pg_catalog.quote_ident(co.collname) END,
           CASE WHEN NOT oc.opcdefault THEN pg_catalog.quote_ident(oc.opcname) END,
           CASE WHEN pg_catalog.pg_indexam_has_property(am.oid, 'can_order') THEN
-            CASE i.indoption[k - 1]::int & 3 WHEN 1 THEN 'DESC NULLS LAST' WHEN 2 THEN 'NULLS FIRST' WHEN 3 THEN 'DESC' END
+            CASE WHEN (i.indoption[k OPERATOR(pg_catalog.-) 1]::int OPERATOR(pg_catalog.&) 3) OPERATOR(pg_catalog.=) 1 THEN 'DESC NULLS LAST'
+              WHEN (i.indoption[k OPERATOR(pg_catalog.-) 1]::int OPERATOR(pg_catalog.&) 3) OPERATOR(pg_catalog.=) 2 THEN 'NULLS FIRST'
+              WHEN (i.indoption[k OPERATOR(pg_catalog.-) 1]::int OPERATOR(pg_catalog.&) 3) OPERATOR(pg_catalog.=) 3 THEN 'DESC' END
           END) ORDER BY k)
         FROM pg_catalog.generate_series(1, i.indnkeyatts) k
-        LEFT JOIN pg_catalog.pg_attribute ta ON ta.attrelid = i.indrelid AND ta.attnum = i.indkey[k - 1]
-        LEFT JOIN pg_catalog.pg_attribute ia ON ia.attrelid = i.indexrelid AND ia.attnum = k
-        LEFT JOIN pg_catalog.pg_type ty ON ty.oid = ia.atttypid
-        LEFT JOIN pg_catalog.pg_opclass oc ON oc.oid = i.indclass[k - 1]
-        LEFT JOIN pg_catalog.pg_collation co ON co.oid = i.indcollation[k - 1]),
+        LEFT JOIN pg_catalog.pg_attribute ta ON ta.attrelid OPERATOR(pg_catalog.=) i.indrelid AND ta.attnum OPERATOR(pg_catalog.=) i.indkey[k OPERATOR(pg_catalog.-) 1]
+        LEFT JOIN pg_catalog.pg_attribute ia ON ia.attrelid OPERATOR(pg_catalog.=) i.indexrelid AND ia.attnum OPERATOR(pg_catalog.=) k
+        LEFT JOIN pg_catalog.pg_type ty ON ty.oid OPERATOR(pg_catalog.=) ia.atttypid
+        LEFT JOIN pg_catalog.pg_opclass oc ON oc.oid OPERATOR(pg_catalog.=) i.indclass[k OPERATOR(pg_catalog.-) 1]
+        LEFT JOIN pg_catalog.pg_collation co ON co.oid OPERATOR(pg_catalog.=) i.indcollation[k OPERATOR(pg_catalog.-) 1]),
       'include', (SELECT pg_catalog.json_agg(pg_catalog.pg_get_indexdef(i.indexrelid, k, true) ORDER BY k)
-        FROM pg_catalog.generate_series(i.indnkeyatts + 1, i.indnatts) k),
+        FROM pg_catalog.generate_series(i.indnkeyatts OPERATOR(pg_catalog.+) 1, i.indnatts) k),
       'key_columns', (SELECT pg_catalog.json_agg(ta.attname ORDER BY k)
         FROM pg_catalog.generate_series(1, i.indnkeyatts) k
-        LEFT JOIN pg_catalog.pg_attribute ta ON ta.attrelid = i.indrelid AND ta.attnum = i.indkey[k - 1]),
+        LEFT JOIN pg_catalog.pg_attribute ta ON ta.attrelid OPERATOR(pg_catalog.=) i.indrelid AND ta.attnum OPERATOR(pg_catalog.=) i.indkey[k OPERATOR(pg_catalog.-) 1]),
       'include_columns', (SELECT pg_catalog.json_agg(ta.attname ORDER BY k)
-        FROM pg_catalog.generate_series(i.indnkeyatts + 1, i.indnatts) k
-        JOIN pg_catalog.pg_attribute ta ON ta.attrelid = i.indrelid AND ta.attnum = i.indkey[k - 1]),
+        FROM pg_catalog.generate_series(i.indnkeyatts OPERATOR(pg_catalog.+) 1, i.indnatts) k
+        JOIN pg_catalog.pg_attribute ta ON ta.attrelid OPERATOR(pg_catalog.=) i.indrelid AND ta.attnum OPERATOR(pg_catalog.=) i.indkey[k OPERATOR(pg_catalog.-) 1]),
       'predicate', pg_catalog.pg_get_expr(i.indpred, i.indrelid, true),
       'definition', pg_catalog.pg_get_indexdef(i.indexrelid)) ORDER BY ic.relname)
     FROM pg_catalog.pg_index i
-    JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
-    JOIN pg_catalog.pg_am am ON am.oid = ic.relam
-    WHERE i.indrelid = rel.oid),
+    JOIN pg_catalog.pg_class ic ON ic.oid OPERATOR(pg_catalog.=) i.indexrelid
+    JOIN pg_catalog.pg_am am ON am.oid OPERATOR(pg_catalog.=) ic.relam
+    WHERE i.indrelid OPERATOR(pg_catalog.=) rel.oid),
   'triggers', (
     SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
-      'name', t.tgname, 'type', t.tgtype, 'enabled', t.tgenabled::text,
-      'function', pn.nspname || '.' || p.proname,
+      'name', t.tgname, 'type', t.tgtype, 'enabled', t.tgenabled::pg_catalog.text,
+      'function', pn.nspname OPERATOR(pg_catalog.||) '.' OPERATOR(pg_catalog.||) p.proname,
       'update_columns', (SELECT pg_catalog.json_agg(pg_catalog.quote_ident(a.attname) ORDER BY k.i)
         FROM pg_catalog.unnest(t.tgattr::pg_catalog.int2[]) WITH ORDINALITY k(n, i)
-        JOIN pg_catalog.pg_attribute a ON a.attrelid = t.tgrelid AND a.attnum = k.n),
+        JOIN pg_catalog.pg_attribute a ON a.attrelid OPERATOR(pg_catalog.=) t.tgrelid AND a.attnum OPERATOR(pg_catalog.=) k.n),
       'when', t.tgqual IS NOT NULL,
       'definition', pg_catalog.pg_get_triggerdef(t.oid, true)) ORDER BY t.tgname)
     FROM pg_catalog.pg_trigger t
-    JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
-    JOIN pg_catalog.pg_namespace pn ON pn.oid = p.pronamespace
-    WHERE t.tgrelid = rel.oid AND NOT t.tgisinternal)"
+    JOIN pg_catalog.pg_proc p ON p.oid OPERATOR(pg_catalog.=) t.tgfoid
+    JOIN pg_catalog.pg_namespace pn ON pn.oid OPERATOR(pg_catalog.=) p.pronamespace
+    WHERE t.tgrelid OPERATOR(pg_catalog.=) rel.oid AND NOT t.tgisinternal)"
     };
 }
 
@@ -127,13 +129,13 @@ macro_rules! structure_parts {
 /// and size estimates are the explorer's list's (`stats_ctes!`, for the one root).
 pub const SQL: &str = concat!(
     "WITH RECURSIVE rel AS (
-  SELECT c.oid, c.relkind::text AS kind, c.relhassubclass AND c.relkind = 'r' AS inherited,
+  SELECT c.oid, c.relkind::pg_catalog.text AS kind, c.relhassubclass AND c.relkind OPERATOR(pg_catalog.=) 'r' AS inherited,
          EXISTS (SELECT 1 FROM pg_catalog.pg_locks l
-           WHERE l.locktype = 'relation' AND l.relation = c.oid AND l.mode = 'AccessExclusiveLock'
-             AND l.database = (SELECT d.oid FROM pg_catalog.pg_database d
-                               WHERE d.datname = pg_catalog.current_database())) AS locked
+           WHERE l.locktype OPERATOR(pg_catalog.=) 'relation' AND l.relation OPERATOR(pg_catalog.=) c.oid AND l.mode OPERATOR(pg_catalog.=) 'AccessExclusiveLock'
+             AND l.database OPERATOR(pg_catalog.=) (SELECT d.oid FROM pg_catalog.pg_database d
+                               WHERE d.datname OPERATOR(pg_catalog.=) pg_catalog.current_database())) AS locked
   FROM pg_catalog.pg_class c
-  WHERE c.oid = pg_catalog.format('%I.%I', $1::text, $2::text)::regclass
+  WHERE c.oid OPERATOR(pg_catalog.=) pg_catalog.format('%I.%I', $1::pg_catalog.text, $2::pg_catalog.text)::pg_catalog.regclass
 ), roots AS (
   SELECT rel.oid, rel.kind FROM rel
 ), ",
@@ -152,8 +154,8 @@ ELSE pg_catalog.json_build_object(
 ",
     structure_parts!(),
     "
-) END::text
-FROM rel LEFT JOIN stats s ON s.root = rel.oid"
+) END::pg_catalog.text
+FROM rel LEFT JOIN stats s ON s.root OPERATOR(pg_catalog.=) rel.oid"
 );
 
 /// Read the structure of `schema.table` in one round trip.

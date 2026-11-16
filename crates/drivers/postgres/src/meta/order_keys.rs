@@ -32,9 +32,9 @@ use tokio_postgres::types::Type;
 macro_rules! pick {
     () => {
         "COALESCE(
-          (SELECT (pg_catalog.array_agg(c.oid))[1] FROM cands c WHERE c.exact HAVING pg_catalog.count(*) = 1),
-          (SELECT (pg_catalog.array_agg(c.oid))[1] FROM cands c WHERE c.preferred HAVING pg_catalog.count(*) = 1),
-          (SELECT (pg_catalog.array_agg(c.oid))[1] FROM cands c HAVING pg_catalog.count(*) = 1))"
+          (SELECT (pg_catalog.array_agg(c.oid))[1] FROM cands c WHERE c.exact HAVING pg_catalog.count(*) OPERATOR(pg_catalog.=) 1),
+          (SELECT (pg_catalog.array_agg(c.oid))[1] FROM cands c WHERE c.preferred HAVING pg_catalog.count(*) OPERATOR(pg_catalog.=) 1),
+          (SELECT (pg_catalog.array_agg(c.oid))[1] FROM cands c HAVING pg_catalog.count(*) OPERATOR(pg_catalog.=) 1))"
     };
 }
 
@@ -47,18 +47,18 @@ pub const PICK: &str = pick!();
 /// columns in order, whether they are all `NOT NULL`; then the table's columns and whether the
 /// collation of each is deterministic (the same on every row).
 pub const ORDER_KEYS: &str = concat!(
-    "SELECT c.relhassubclass AND c.relkind = 'r', x.indisprimary, x.columns, x.not_null, d.names, d.deterministic,
+    "SELECT c.relhassubclass AND c.relkind OPERATOR(pg_catalog.=) 'r', x.indisprimary, x.columns, x.not_null, d.names, d.deterministic,
        d.types, d.attnotnull, d.pk, d.fk
 FROM pg_catalog.pg_class c
-JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) c.relnamespace
 LEFT JOIN LATERAL (
   SELECT i.indisprimary,
-         pg_catalog.array_agg(a.attname::text ORDER BY k.k) AS columns,
+         pg_catalog.array_agg(a.attname::pg_catalog.text ORDER BY k.k) AS columns,
          pg_catalog.bool_and(a.attnotnull) AS not_null
   FROM pg_catalog.pg_index i
-  CROSS JOIN LATERAL pg_catalog.generate_series(0, i.indnkeyatts - 1) AS k(k)
-  JOIN pg_catalog.pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[k.k]
-  WHERE i.indrelid = c.oid AND i.indisunique AND i.indimmediate AND i.indisvalid
+  CROSS JOIN LATERAL pg_catalog.generate_series(0, i.indnkeyatts OPERATOR(pg_catalog.-) 1) AS k(k)
+  JOIN pg_catalog.pg_attribute a ON a.attrelid OPERATOR(pg_catalog.=) i.indrelid AND a.attnum OPERATOR(pg_catalog.=) i.indkey[k.k]
+  WHERE i.indrelid OPERATOR(pg_catalog.=) c.oid AND i.indisunique AND i.indimmediate AND i.indisvalid
     AND i.indpred IS NULL AND i.indexprs IS NULL
   GROUP BY i.indexrelid, i.indisprimary, i.indnkeyatts
   -- Every key column found (an expression's place, 0, has none), each compared as an ORDER BY
@@ -67,34 +67,34 @@ LEFT JOIN LATERAL (
   -- The class is picked as the server picks a default one ([`PICK`]) among the classes the
   -- type, its domains resolved, is binary compatible with. Anything else (a range, no single
   -- class) is not taken as the same order.
-  HAVING pg_catalog.count(*) = i.indnkeyatts
-    AND pg_catalog.bool_and(i.indcollation[k.k] = a.attcollation AND EXISTS (
+  HAVING pg_catalog.count(*) OPERATOR(pg_catalog.=) i.indnkeyatts
+    AND pg_catalog.bool_and(i.indcollation[k.k] OPERATOR(pg_catalog.=) a.attcollation AND EXISTS (
       WITH RECURSIVE dom (t, base) AS (
-        SELECT ty.oid, ty.typbasetype FROM pg_catalog.pg_type ty WHERE ty.oid = a.atttypid
+        SELECT ty.oid, ty.typbasetype FROM pg_catalog.pg_type ty WHERE ty.oid OPERATOR(pg_catalog.=) a.atttypid
         UNION ALL
-        SELECT ty.oid, ty.typbasetype FROM dom JOIN pg_catalog.pg_type ty ON ty.oid = dom.base WHERE dom.base <> 0
+        SELECT ty.oid, ty.typbasetype FROM dom JOIN pg_catalog.pg_type ty ON ty.oid OPERATOR(pg_catalog.=) dom.base WHERE dom.base OPERATOR(pg_catalog.<>) 0
       ), defaults AS (
         SELECT d.oid, d.opcintype FROM pg_catalog.pg_opclass d
-        JOIN pg_catalog.pg_am m ON m.oid = d.opcmethod
-        WHERE m.amname = 'btree' AND d.opcdefault
+        JOIN pg_catalog.pg_am m ON m.oid OPERATOR(pg_catalog.=) d.opcmethod
+        WHERE m.amname OPERATOR(pg_catalog.=) 'btree' AND d.opcdefault
       )
       SELECT 1 FROM dom b
-      JOIN pg_catalog.pg_type bt ON bt.oid = b.t
-      WHERE b.base = 0 AND i.indclass[k.k] = (
+      JOIN pg_catalog.pg_type bt ON bt.oid OPERATOR(pg_catalog.=) b.t
+      WHERE b.base OPERATOR(pg_catalog.=) 0 AND i.indclass[k.k] OPERATOR(pg_catalog.=) (
         -- Every default btree class the base type is binary compatible with, as the server
         -- collects them: its own, the polymorphic one an enum (`anyenum`) or an array
         -- (`anyarray`) matches, and those of types it converts to implicitly without a
         -- function. Ranges match none here (not taken as the same order).
         WITH cands (oid, exact, preferred) AS (
-          SELECT d.oid, d.opcintype = b.t, pt.typispreferred AND pt.typcategory = bt.typcategory
-          FROM defaults d JOIN pg_catalog.pg_type pt ON pt.oid = d.opcintype
-          WHERE d.opcintype = b.t
-             OR (bt.typtype = 'e' AND d.opcintype = 'pg_catalog.anyenum'::pg_catalog.regtype)
-             OR (bt.typelem <> 0 AND bt.typlen = -1 AND bt.typcategory = 'A'
-                 AND d.opcintype = 'pg_catalog.anyarray'::pg_catalog.regtype)
+          SELECT d.oid, d.opcintype OPERATOR(pg_catalog.=) b.t, pt.typispreferred AND pt.typcategory OPERATOR(pg_catalog.=) bt.typcategory
+          FROM defaults d JOIN pg_catalog.pg_type pt ON pt.oid OPERATOR(pg_catalog.=) d.opcintype
+          WHERE d.opcintype OPERATOR(pg_catalog.=) b.t
+             OR (bt.typtype OPERATOR(pg_catalog.=) 'e' AND d.opcintype OPERATOR(pg_catalog.=) 'pg_catalog.anyenum'::pg_catalog.regtype)
+             OR (bt.typelem OPERATOR(pg_catalog.<>) 0 AND bt.typlen OPERATOR(pg_catalog.=) -1 AND bt.typcategory OPERATOR(pg_catalog.=) 'A'
+                 AND d.opcintype OPERATOR(pg_catalog.=) 'pg_catalog.anyarray'::pg_catalog.regtype)
              OR EXISTS (SELECT 1 FROM pg_catalog.pg_cast cs
-                        WHERE cs.castsource = b.t AND cs.casttarget = d.opcintype
-                          AND cs.castmethod = 'b' AND cs.castcontext = 'i')
+                        WHERE cs.castsource OPERATOR(pg_catalog.=) b.t AND cs.casttarget OPERATOR(pg_catalog.=) d.opcintype
+                          AND cs.castmethod OPERATOR(pg_catalog.=) 'b' AND cs.castcontext OPERATOR(pg_catalog.=) 'i')
         )
         SELECT ",
     pick!(),
@@ -105,7 +105,7 @@ LEFT JOIN LATERAL (
   -- Per column, in the table's order: whether its collation is deterministic (a column of no
   -- collation, 0, is), its type as the server writes it, NOT NULL, and whether it is part of
   -- the primary key or of a foreign key (constraints by their column numbers).
-  SELECT pg_catalog.array_agg(a.attname::text ORDER BY a.attnum) AS names,
+  SELECT pg_catalog.array_agg(a.attname::pg_catalog.text ORDER BY a.attnum) AS names,
          pg_catalog.array_agg(co.collisdeterministic IS NOT FALSE ORDER BY a.attnum) AS deterministic,
          -- A type's modifier is written by its `typmodout` procedure (an array's, by its
          -- element type's): taken only when that is the server's own (an object number below
@@ -122,17 +122,17 @@ LEFT JOIN LATERAL (
          pg_catalog.array_agg(a.attnotnull ORDER BY a.attnum) AS attnotnull,
          pg_catalog.array_agg(EXISTS (
            SELECT 1 FROM pg_catalog.pg_constraint k
-           WHERE k.conrelid = c.oid AND k.contype = 'p' AND a.attnum = ANY (k.conkey)
+           WHERE k.conrelid OPERATOR(pg_catalog.=) c.oid AND k.contype OPERATOR(pg_catalog.=) 'p' AND a.attnum OPERATOR(pg_catalog.=) ANY (k.conkey)
          ) ORDER BY a.attnum) AS pk,
          pg_catalog.array_agg(EXISTS (
            SELECT 1 FROM pg_catalog.pg_constraint k
-           WHERE k.conrelid = c.oid AND k.contype = 'f' AND a.attnum = ANY (k.conkey)
+           WHERE k.conrelid OPERATOR(pg_catalog.=) c.oid AND k.contype OPERATOR(pg_catalog.=) 'f' AND a.attnum OPERATOR(pg_catalog.=) ANY (k.conkey)
          ) ORDER BY a.attnum) AS fk
   FROM pg_catalog.pg_attribute a
-  LEFT JOIN pg_catalog.pg_collation co ON co.oid = a.attcollation
-  WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+  LEFT JOIN pg_catalog.pg_collation co ON co.oid OPERATOR(pg_catalog.=) a.attcollation
+  WHERE a.attrelid OPERATOR(pg_catalog.=) c.oid AND a.attnum OPERATOR(pg_catalog.>) 0 AND NOT a.attisdropped
 ) d ON true
-WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p', 'f', 'v', 'm')"
+WHERE n.nspname OPERATOR(pg_catalog.=) $1 AND c.relname OPERATOR(pg_catalog.=) $2 AND c.relkind OPERATOR(pg_catalog.=) ANY (ARRAY['r', 'p', 'f', 'v', 'm']::pg_catalog.\"char\"[])"
 );
 
 /// One row of [`ORDER_KEYS`]: `(inherited, primary, columns, all NOT NULL, the table's
@@ -268,8 +268,11 @@ mod tests {
         // A table of no column: known, none.
         assert_eq!(columns_of(&None, &none()), Some(Vec::new()));
         // Nothing that opens the relation reads them.
-        for part in ["pg_catalog.format_type(a.atttypid, CASE WHEN NOT EXISTS (", "k.contype = 'p'", "k.contype = 'f'"]
-        {
+        for part in [
+            "pg_catalog.format_type(a.atttypid, CASE WHEN NOT EXISTS (",
+            "k.contype OPERATOR(pg_catalog.=) 'p'",
+            "k.contype OPERATOR(pg_catalog.=) 'f'",
+        ] {
             assert!(ORDER_KEYS.contains(part), "{part}");
         }
         // A modifier only where the server's own procedure writes it: of the type and of an
@@ -290,20 +293,20 @@ mod tests {
     #[test]
     fn the_read_keeps_only_keys_an_order_by_compares_alike() {
         for part in [
-            "i.indcollation[k.k] = a.attcollation",
-            "WHERE m.amname = 'btree' AND d.opcdefault",
+            "i.indcollation[k.k] OPERATOR(pg_catalog.=) a.attcollation",
+            "WHERE m.amname OPERATOR(pg_catalog.=) 'btree' AND d.opcdefault",
             "WITH cands (oid, exact, preferred) AS (",
-            "AND cs.castmethod = 'b' AND cs.castcontext = 'i'",
+            "AND cs.castmethod OPERATOR(pg_catalog.=) 'b' AND cs.castcontext OPERATOR(pg_catalog.=) 'i'",
             "'pg_catalog.anyenum'::pg_catalog.regtype",
             "'pg_catalog.anyarray'::pg_catalog.regtype",
-            "pt.typispreferred AND pt.typcategory = bt.typcategory",
+            "pt.typispreferred AND pt.typcategory OPERATOR(pg_catalog.=) bt.typcategory",
             "ty.typbasetype",
             "i.indimmediate AND i.indisvalid",
             "i.indpred IS NULL AND i.indexprs IS NULL",
-            "pg_catalog.generate_series(0, i.indnkeyatts - 1)",
+            "pg_catalog.generate_series(0, i.indnkeyatts OPERATOR(pg_catalog.-) 1)",
             "co.collisdeterministic IS NOT FALSE",
-            "LEFT JOIN pg_catalog.pg_collation co ON co.oid = a.attcollation",
-            "a.attnum > 0 AND NOT a.attisdropped",
+            "LEFT JOIN pg_catalog.pg_collation co ON co.oid OPERATOR(pg_catalog.=) a.attcollation",
+            "a.attnum OPERATOR(pg_catalog.>) 0 AND NOT a.attisdropped",
         ] {
             assert!(ORDER_KEYS.contains(part), "{part}");
         }

@@ -108,6 +108,7 @@
 
 mod classifier;
 pub mod mysql;
+pub mod path_names;
 pub mod repeat;
 pub mod session_set;
 
