@@ -10,6 +10,12 @@
 //! so the transaction keeps what it held before (unless the server rolls all of it back, a
 //! deadlock: said with `TxClosedBy`). Outside one they run in a transaction of their own,
 //! committed after the last step, or left open for manual commit; rolled back when a step fails.
+//!
+//! A step whose answer carries warnings fails ([`DbError::ApplyWarnings`], with what the server
+//! said): without strict mode the server stores a value it had to change (cut, converted, made
+//! zero, a SET member dropped) and only warns, so whatever the server's mode nothing it changed
+//! is kept. An undo that itself warns (a table that does not take part in transactions kept its
+//! changes) answers [`DbError::ApplyKept`].
 
 use super::{COMMIT, Closed, Env, Link, ROLLBACK, START, State, Stop, after, drain, failure, idle, rest};
 use crate::session::my_error;
@@ -27,6 +33,10 @@ const SAVEPOINT: &str = "datarig_apply";
 /// whether this session's writes go to it. Its own `LIMIT` outranks the session's
 /// `sql_select_limit`, which could return no row.
 const LOGGING: &str = "SELECT @@SESSION.binlog_format, @@GLOBAL.log_bin, @@SESSION.sql_log_bin LIMIT 1";
+
+/// Whether the server counts notes in a statement's warnings. Its own `LIMIT` outranks the
+/// session's `sql_select_limit`, which could return no row.
+const NOTES: &str = "SELECT @@SESSION.sql_notes LIMIT 1";
 
 /// Where the steps run.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -50,15 +60,36 @@ fn wanted(expect: Expect) -> u64 {
     }
 }
 
-/// One step: the rows it returned (when it returns rows) or matched, and the `AUTO_INCREMENT`
-/// value an insert took.
-async fn run_step(conn: &mut Conn, sql: &str) -> Result<(u64, Option<u64>), mysql_async::Error> {
+/// What one step did ([`run_step`]).
+struct Ran {
+    /// The rows it returned (when it returns rows) or matched.
+    count: u64,
+    /// The `AUTO_INCREMENT` value an insert took.
+    insert_id: Option<u64>,
+    /// The warnings (and notes) the server reported with its answer.
+    warnings: u16,
+}
+
+/// Run one step.
+async fn run_step(conn: &mut Conn, sql: &str) -> Result<Ran, mysql_async::Error> {
     let mut qr = conn.query_iter(sql).await?;
     let returns = qr.columns().is_some_and(|c| !c.is_empty());
     let rows = drain(&mut qr).await?;
-    let (affected, insert_id) = (qr.affected_rows(), qr.last_insert_id());
+    let (affected, insert_id, warnings) = (qr.affected_rows(), qr.last_insert_id(), qr.warnings());
     rest(&mut qr).await?;
-    Ok((if returns { rows } else { affected }, insert_id.filter(|n| *n > 0)))
+    Ok(Ran { count: if returns { rows } else { affected }, insert_id: insert_id.filter(|n| *n > 0), warnings })
+}
+
+/// The most warnings of a step an Apply's failure shows.
+const WARNINGS_SHOWN: usize = 5;
+
+/// The warnings of the statement before (`SHOW WARNINGS`, whose own `LIMIT` outranks the session's
+/// `sql_select_limit`), each as `Level Code: Message`; none when they cannot be read (the
+/// failure says so all the same).
+async fn warnings(conn: &mut Conn, link: &mut Link) -> Result<Result<Vec<String>, mysql_async::Error>, Closed> {
+    let sql = format!("SHOW WARNINGS LIMIT {WARNINGS_SHOWN}");
+    let read = link.guard(None, conn.query::<(String, u32, String), _>(sql)).await?;
+    Ok(read.map(|rows| rows.into_iter().map(|(level, code, message)| format!("{level} {code}: {message}")).collect()))
 }
 
 /// One statement of the driver's own around the steps.
@@ -96,6 +127,18 @@ pub(super) async fn apply(
     if steps.is_empty() {
         answer(Ok(Vec::new()));
         return Ok(());
+    }
+    // A step fails on the warnings and notes its answer carries: with `sql_notes` off the
+    // server counts no note (a value it rounded), so the Apply is not sent. Read in this
+    // session right before, so a `SET` of the user's counts; a value not read refuses.
+    let notes = link.guard(None, conn.query_first::<Option<i64>, _>(NOTES)).await?;
+    match notes {
+        Ok(Some(Some(1))) => {}
+        Err(e) if e.is_fatal() => return lost_or(e, answer),
+        _ => {
+            answer(Err(fail(None, DbError::ApplyNotesOff)));
+            return Ok(());
+        }
     }
     // "Just one" of identical rows is the server's pick (`LIMIT 1`), and a replica replaying the
     // statement picks again: it is sent only while the binary log keeps rows, or nothing of
@@ -161,11 +204,33 @@ pub(super) async fn apply(
         };
         idle(env, link).await;
         match ran {
-            Ok((count, _)) if count != wanted(step.expect) => {
-                failed = Some((ApplyFailure { step: Some(i), why: ApplyError::Count { got: count } }, None));
+            // The server changed or dropped what was sent (a text cut to the column's length,
+            // a character the column cannot hold, a date it made zero, a member of a SET it
+            // dropped: what a server without strict mode does, saying so only in a warning),
+            // or a condition compared values it had to convert: never applied as it is, whatever
+            // the server's mode.
+            Ok(ran) if ran.warnings > 0 => {
+                let shown = match warnings(conn, link).await {
+                    Ok(Ok(shown)) => shown,
+                    Ok(Err(e)) if e.is_fatal() => {
+                        answer(Err(fail(Some(i), DbError::ApplyWarnings(Vec::new()))));
+                        return Err(Stop::Lost(my_error(&e)));
+                    }
+                    Ok(Err(_)) => Vec::new(),
+                    Err(Closed::CancelNotTaken(why)) => {
+                        answer(Err(fail(Some(i), DbError::Cancelled)));
+                        return Err(Stop::Lost(DbError::CancelNotTaken(why)));
+                    }
+                    Err(Closed::Ui) => return Err(Stop::Closed),
+                };
+                failed = Some((fail(Some(i), DbError::ApplyWarnings(shown)), None));
                 break;
             }
-            Ok((count, insert_id)) => {
+            Ok(ran) if ran.count != wanted(step.expect) => {
+                failed = Some((ApplyFailure { step: Some(i), why: ApplyError::Count { got: ran.count } }, None));
+                break;
+            }
+            Ok(Ran { count, insert_id, .. }) => {
                 let insert_id = insert_id.filter(|_| matches!(step.expect, Expect::Affected(_)));
                 done.push(AppliedStep { count, returned: None, unshown: Vec::new(), insert_id });
             }
@@ -194,11 +259,11 @@ pub(super) async fn apply(
         let undo =
             if mode == Mode::Savepoint { format!("ROLLBACK TO SAVEPOINT {SAVEPOINT}") } else { ROLLBACK.to_string() };
         let undone = undone(conn, link, &undo).await?;
-        if mode == Mode::Savepoint && undone == Undone::Ran {
+        if mode == Mode::Savepoint && matches!(undone, Undone::Ran | Undone::Kept) {
             // Gone back to it: what the steps did is undone, whether the release works or not.
             let _ = own(conn, link, &format!("RELEASE SAVEPOINT {SAVEPOINT}")).await?;
         }
-        answer(Err(failure));
+        answer(Err(undone.said(failure)));
         if undone == Undone::Unsure {
             return Err(not_undone(link));
         }
@@ -218,7 +283,7 @@ pub(super) async fn apply(
                     return lost_or(e, answer);
                 }
                 let undone = undone(conn, link, &format!("ROLLBACK TO SAVEPOINT {SAVEPOINT}")).await?;
-                answer(Err(fail(None, my_error(&e))));
+                answer(Err(undone.said(fail(None, my_error(&e)))));
                 if undone == Undone::Unsure {
                     return Err(not_undone(link));
                 }
@@ -238,7 +303,7 @@ pub(super) async fn apply(
             // Refused: the server says what it left, and it is rolled back.
             Err(e) => {
                 let undone = undone(conn, link, ROLLBACK).await?;
-                answer(Err(fail(None, my_error(&e))));
+                answer(Err(undone.said(fail(None, my_error(&e)))));
                 if undone == Undone::Unsure {
                     return Err(not_undone(link));
                 }
@@ -260,11 +325,13 @@ pub(super) async fn apply(
 /// nothing of it is left. When the server refuses it, it is asked whether a transaction is still
 /// open: none means the server rolled all of it back already (a deadlock, a lock wait timeout
 /// under `innodb_rollback_on_timeout`: the savepoint went with it), and nothing is kept; one
-/// open, or no answer, means it may be.
+/// open, or no answer, means it may be. One that ran with warnings (1196: a table that does not
+/// take part in transactions, such as MyISAM, kept its changes) may have kept some.
 async fn undone(conn: &mut Conn, link: &mut Link, sql: &str) -> Result<Undone, Closed> {
     let closed =
         |c: &Conn| c.last_ok_packet().is_some_and(|p| !p.status_flags().contains(StatusFlags::SERVER_STATUS_IN_TRANS));
     match own(conn, link, sql).await? {
+        Ok(()) if conn.get_warnings() > 0 => Ok(Undone::Kept),
         Ok(()) => Ok(Undone::Ran),
         Err(e) if e.is_fatal() => Ok(Undone::Unsure),
         Err(_) => Ok(match link.guard(None, conn.ping()).await? {
@@ -279,10 +346,24 @@ async fn undone(conn: &mut Conn, link: &mut Link, sql: &str) -> Result<Undone, C
 enum Undone {
     /// It ran.
     Ran,
+    /// It ran with warnings: some of what the steps did may be kept (a table that does not
+    /// take part in transactions).
+    Kept,
     /// It failed, and no transaction is open: the server rolled it back already.
     Gone,
     /// It failed, and a transaction may still hold what the steps did.
     Unsure,
+}
+
+impl Undone {
+    /// The Apply's failure as it is answered after this undo: one that may have kept changes
+    /// says so ([`DbError::ApplyKept`]), never "nothing was applied".
+    fn said(self, failure: ApplyFailure) -> ApplyFailure {
+        match self {
+            Undone::Kept => ApplyFailure { step: failure.step, why: ApplyError::Db(DbError::ApplyKept) },
+            _ => failure,
+        }
+    }
 }
 
 /// What the steps did could not be undone for sure (the server refused the rollback): the

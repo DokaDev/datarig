@@ -1098,6 +1098,21 @@ fn each_failure_says_why_and_the_changes_stay() {
         (None, ApplyError::Db(DbError::Server("could not serialize access".into())), "could not serialize access. Nothing was applied.".into()),
         (Some(0), ApplyError::Db(DbError::Cancelled), "Apply cancelled; nothing was applied.".into()),
         (
+            Some(1),
+            ApplyError::Db(DbError::ApplyWarnings(vec!["Warning 1265: Data truncated for column 'email' at row 1".into()])),
+            format!(
+                "id=1 \u{B7} the server changed or dropped part of what was sent and only warned (Warning 1265: Data \
+                 truncated for column 'email' at row 1). Nothing was applied. Statement: {update}"
+            ),
+        ),
+        (
+            Some(1),
+            ApplyError::Db(DbError::ApplyKept),
+            "id=1 \u{B7} the change failed, and undoing it left some changes in place: a table they changed does not \
+             take part in transactions. Re-run the query to see the current values."
+                .into(),
+        ),
+        (
             None,
             ApplyError::Db(DbError::ReadWriteRefused),
             "not sent: the session is read-only and this statement asks for read-write. Nothing was applied.".into(),

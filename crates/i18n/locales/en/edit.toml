@@ -143,6 +143,8 @@
 "edit.failed.count" = { one = "{row} · now matches {count} row, not {expected}. Nothing was applied.", other = "{row} · now matches {count} rows, not {expected}. Nothing was applied." }
 "edit.failed.locked" = "{row} · is locked by another session. Nothing was applied."
 "edit.failed.db" = "{row} · {error}. Nothing was applied. Statement: {sql}"
+"edit.failed.kept" = "{row} · the change failed, and undoing it left some changes in place: a table they changed does not take part in transactions. Re-run the query to see the current values."
+"edit.failed.kept_plain" = "The changes failed, and undoing them left some in place: a table they changed does not take part in transactions. Re-run the query to see the current values."
 "edit.failed.plain" = "{error}. Nothing was applied."
 "edit.failed.cancelled" = "Apply cancelled; nothing was applied."
 "edit.failed.unknown" = "Apply result unknown: the connection was lost before the server confirmed. Re-run the query to check."

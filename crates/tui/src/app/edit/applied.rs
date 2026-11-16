@@ -260,6 +260,8 @@ impl App {
         match (&f.why, row) {
             (ApplyError::Db(DbError::Cancelled), _) => Label::EditFailedCancelled.into(),
             (ApplyError::Db(DbError::CommitUnknown), _) => Label::EditFailedUnknown.into(),
+            (ApplyError::Db(DbError::ApplyKept), Some(row)) => Msg::EditFailedKept { row },
+            (ApplyError::Db(DbError::ApplyKept), None) => Label::EditFailedKeptPlain.into(),
             (ApplyError::Count { got: 0 }, Some(row)) => Msg::EditFailedChanged { row },
             (ApplyError::Count { got }, Some(row)) => {
                 let expected = match step.map(|s| s.expect) {

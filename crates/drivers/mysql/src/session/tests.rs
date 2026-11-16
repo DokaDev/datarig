@@ -1396,6 +1396,12 @@ fn one_row() -> Vec<u8> {
     packets.iter().zip(1u8..).flat_map(|(p, seq)| packet(seq, p)).collect()
 }
 
+/// Answer the Apply's question whether the session counts notes: it does.
+async fn notes_on(server: &mut tokio::io::DuplexStream) {
+    assert_eq!(next_request(server).await, "SELECT @@SESSION.sql_notes LIMIT 1");
+    server.write_all(&one_row()).await.unwrap();
+}
+
 /// The session's events up to the Apply's answer.
 async fn until_applied(
     events: &mut tokio::sync::mpsc::UnboundedReceiver<datarig_core::driver::DbEvent>,
@@ -1432,6 +1438,7 @@ fn cancelled(step: Option<usize>) -> Result<(), datarig_core::driver::ApplyFailu
 async fn an_apply_cancelled_before_its_first_step_sends_no_step_and_rolls_back() {
     let Faked { mut server, asked, commands, mut events, session, kills, .. } = faked().await;
     commands.send(apply_command()).unwrap();
+    notes_on(&mut server).await;
     assert_eq!(next_request(&mut server).await, "START TRANSACTION");
     asked.ask(1);
     server.write_all(&ok_packet(0x0003)).await.unwrap();
@@ -1450,6 +1457,7 @@ async fn an_apply_cancelled_before_its_first_step_sends_no_step_and_rolls_back()
 async fn an_apply_cancelled_after_its_last_step_rolls_back_instead_of_committing() {
     let Faked { mut server, asked, commands, mut events, session, kills, .. } = faked().await;
     commands.send(apply_command()).unwrap();
+    notes_on(&mut server).await;
     assert_eq!(next_request(&mut server).await, "START TRANSACTION");
     server.write_all(&ok_packet(0x0003)).await.unwrap();
     assert!(next_request(&mut server).await.starts_with("SELECT 1 FROM"));
@@ -1474,6 +1482,7 @@ async fn an_apply_whose_kill_is_not_taken_answers_before_the_session_is_lost() {
     use datarig_core::driver::DbEvent;
     let Faked { mut server, killer, commands, mut events, session, kills, .. } = faked().await;
     commands.send(apply_command()).unwrap();
+    notes_on(&mut server).await;
     assert_eq!(next_request(&mut server).await, "START TRANSACTION");
     server.write_all(&ok_packet(0x0003)).await.unwrap();
     assert!(next_request(&mut server).await.starts_with("SELECT 1 FROM"));
@@ -1499,6 +1508,7 @@ async fn an_apply_whose_rollback_is_refused_cuts_the_connection() {
     use datarig_core::driver::{ApplyError, ApplyFailure, DbEvent};
     let Faked { mut server, commands, mut events, session, kills, .. } = faked().await;
     commands.send(apply_command()).unwrap();
+    notes_on(&mut server).await;
     assert_eq!(next_request(&mut server).await, "START TRANSACTION");
     server.write_all(&ok_packet(0x0003)).await.unwrap();
     assert!(next_request(&mut server).await.starts_with("SELECT 1 FROM"));
@@ -1546,6 +1556,7 @@ async fn an_apply_whose_step_deadlocks_in_an_open_transaction_keeps_the_session(
     assert_eq!(next_request(&mut server).await, open);
     server.write_all(&ok_packet(0x0003)).await.unwrap();
     commands.send(apply_command()).unwrap();
+    notes_on(&mut server).await;
     assert_eq!(next_request(&mut server).await, "SAVEPOINT datarig_apply");
     server.write_all(&ok_packet(0x0003)).await.unwrap();
     assert!(next_request(&mut server).await.starts_with("SELECT 1 FROM"));

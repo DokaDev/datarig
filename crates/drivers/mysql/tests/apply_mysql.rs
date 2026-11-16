@@ -839,3 +839,76 @@ async fn a_paste_of_a_thousand_keyed_updates_stays_within_its_statements() {
     let rows = c.rows(&format!("SELECT count(*) FROM {} WHERE v LIKE 'new %'", t.q())).await;
     assert_eq!(rows[0][0].as_deref(), Some("1000"));
 }
+
+/// Without strict mode the server stores a value it had to change (cut to the column's length,
+/// a member of a SET dropped) and only warns: such a step fails with what the server said, and
+/// the Apply is rolled back, so nothing it changed is kept. Where the rollback cannot undo it (a
+/// table that does not take part in transactions), the failure says changes may be in place.
+/// With `sql_notes` off (the server would not count a note) nothing is sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_value_the_server_changes_with_only_a_warning_is_never_applied() {
+    let test = "a_value_the_server_changes_with_only_a_warning_is_never_applied";
+    let Some(url) = url(test) else { return };
+    let make = |engine: &str| {
+        [
+            format!("CREATE TABLE {{t}} (id INT PRIMARY KEY, v VARCHAR(3), s SET('a', 'b')) ENGINE={engine}"),
+            "INSERT INTO {t} VALUES (1, 'a', 'a')".to_string(),
+        ]
+    };
+    let inno = make("InnoDB");
+    let t = Table::make(&url, "warned", &[inno[0].as_str(), inno[1].as_str()]).await;
+    let my = make("MyISAM");
+    let kept = Table::make(&url, "warnedmy", &[my[0].as_str(), my[1].as_str()]).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false).await;
+    if refuses_edits(&url, &mut c, &t, test).await {
+        return;
+    }
+    c.ok("SET SESSION sql_mode = ''").await;
+    let select = format!("SELECT id, v, s FROM {} ORDER BY id", t.q());
+    let e = Editing::new(&url, &mut c, &t, &select).await;
+    for (col, value) in [(1, "abcd"), (2, "a,zz")] {
+        let mut b = EditBatch::new();
+        b.set(&[(0, col)], &text(value), e.orig());
+        let plan = e.plan(&mut c, &b, &[]).await;
+        for rule in [ApplyTx::Commit, ApplyTx::Keep { idle_timeout: None }] {
+            let failure = c.apply(plan.steps.clone(), rule).await.unwrap_err();
+            assert_eq!(failure.step, Some(1), "{value}: {failure:?}");
+            assert!(
+                matches!(&failure.why, ApplyError::Db(DbError::ApplyWarnings(w)) if w.first().is_some_and(|w| w.contains("1265"))),
+                "{value}: {failure:?}"
+            );
+            assert_eq!(cells(&c.rows(&select).await), [[Some("1"), Some("a"), Some("a")]], "{value}: nothing kept");
+        }
+    }
+    // Inside the user's transaction: back to the savepoint, the transaction goes on.
+    c.ok("START TRANSACTION").await;
+    c.ok(&format!("UPDATE {} SET s = 'b' WHERE id = 1", t.q())).await;
+    let mut b = EditBatch::new();
+    b.set(&[(0, 1)], &text("abcd"), e.orig());
+    let plan = e.plan(&mut c, &b, &[]).await;
+    let failure = c.apply(plan.steps, ApplyTx::Commit).await.unwrap_err();
+    assert!(matches!(&failure.why, ApplyError::Db(DbError::ApplyWarnings(_))), "{failure:?}");
+    assert_eq!(cells(&c.rows(&select).await), [[Some("1"), Some("a"), Some("b")]], "the user's change stays");
+    c.ok("ROLLBACK").await;
+    // A table that does not take part in transactions keeps the cut value: said so.
+    let select = format!("SELECT id, v, s FROM {} ORDER BY id", kept.q());
+    let e = Editing::new(&url, &mut c, &kept, &select).await;
+    let mut b = EditBatch::new();
+    b.set(&[(0, 1)], &text("abcd"), e.orig());
+    let plan = e.plan(&mut c, &b, &[]).await;
+    let failure = c.apply(plan.steps, ApplyTx::Commit).await.unwrap_err();
+    assert_eq!(failure, ApplyFailure { step: Some(1), why: ApplyError::Db(DbError::ApplyKept) });
+    assert_eq!(cells(&c.rows(&select).await), [[Some("1"), Some("abc"), Some("a")]]);
+    // With notes off the server would not count a value it rounded: not sent.
+    let e = Editing::new(&url, &mut c, &kept, &select).await;
+    c.ok("SET SESSION sql_notes = 0").await;
+    let mut b = EditBatch::new();
+    b.set(&[(0, 1)], &text("x"), e.orig());
+    let plan = e.plan(&mut c, &b, &[]).await;
+    let failure = c.apply(plan.steps.clone(), ApplyTx::Commit).await.unwrap_err();
+    assert_eq!(failure, ApplyFailure { step: None, why: ApplyError::Db(DbError::ApplyNotesOff) });
+    assert_eq!(cells(&c.rows(&select).await), [[Some("1"), Some("abc"), Some("a")]], "nothing sent");
+    c.ok("SET SESSION sql_notes = 1").await;
+    c.apply(plan.steps, ApplyTx::Commit).await.expect("applied");
+    assert_eq!(cells(&c.rows(&select).await), [[Some("1"), Some("x"), Some("a")]]);
+}
