@@ -173,6 +173,13 @@ pub struct EditState {
     pub styled: Vec<PastedStyle>,
 }
 
+/// How a value's text was written, when it is a `styled` column's: the settings (`None`: not
+/// known) and whether it may hold a time with a zone; `None` for other text (typed, say).
+type Written = Option<(Option<datarig_core::driver::TextStyle>, bool)>;
+
+/// The values of a row `O` adds, each with how it was written, and the new row it goes after.
+type ClonePlan = (Vec<(Value, Written)>, Option<u64>);
+
 /// A cell of a result's rows as the edit planner names it.
 fn cell_origin(at: RowAt) -> datarig_core::edit::Origin {
     match at {
@@ -1193,18 +1200,34 @@ impl App {
         };
         let col = self.tab().grid.col;
         let Some(rs) = rows_of_mut(self.tabs.active_mut()) else { return };
+        let (cells, written): (Vec<Value>, Vec<Written>) = cells.into_iter().unzip();
         let id = rs.edit.batch.add(usize::MAX, next_to, cells);
+        // Each value copied keeps the settings it was written in, under this action.
+        let step = rs.edit.batch.last_step();
+        for (c, w) in written.into_iter().enumerate() {
+            if w.is_some() {
+                rs.edit.pasted(step, RowAt::New(id), c, w);
+            }
+        }
         self.edit_cursor_to(RowAt::New(id), col);
     }
 
-    /// The values of the row `O` adds, and the new row it goes after; else why not.
-    fn clone_plan(&self, target: &EditTarget) -> Result<(Vec<Value>, Option<u64>), Option<Notice>> {
+    /// The values of the row `O` adds, each with the settings its text was written in when it
+    /// is a `styled` column's (`Written`), and the new row it goes after; else why not.
+    fn clone_plan(&self, target: &EditTarget) -> Result<ClonePlan, Option<Notice>> {
         let t = self.tab();
         let rs = rows_of(t).ok_or(None)?;
         let ncols = rs.columns.len();
         let at = row_at(rs, t.grid.row).ok_or(None)?;
         self.insert_column(target, ncols)?;
         // The values, and the one as read of each cell not set.
+        // How each value was written: as pasted (a value pasted, then copied with its row), as
+        // read (the result's settings, `None` when not known), and nothing for a value typed.
+        let pasted = |c: usize| rs.edit.pasted_style(at, c).map(|p| (p.written.clone(), p.zoned));
+        let read_in = |c: usize| {
+            let m = &rs.columns[c].meta;
+            m.styled.then(|| (rs.text_in.clone(), m.zoned))
+        };
         let (values, read): (Vec<Value>, Vec<Option<String>>) = match at {
             RowAt::New(id) => {
                 let d = rs.edit.batch.drafts().iter().find(|d| d.id == id).ok_or(None)?;
@@ -1233,16 +1256,17 @@ impl App {
         for (c, (v, as_read)) in values.into_iter().zip(read).enumerate() {
             let own = keys.contains(&c) || target.allows(c, Write::Insert).map_or(true, new_number);
             if own {
-                cells.push(Value::Default);
+                cells.push((Value::Default, None));
                 continue;
             }
+            let written = if as_read.is_some() { read_in(c) } else { pasted(c) };
             if let Some(text) = as_read
                 && !shown_whole(d, rs, c, &text, zone)
             {
                 let column = rs.columns[c].meta.name.clone();
                 return Err(Some(self.refused_notice(Msg::EditWhyCloneNotWhole { column })));
             }
-            cells.push(v);
+            cells.push((v, written));
         }
         let next_to = match at {
             RowAt::New(id) => Some(id),

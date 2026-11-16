@@ -1985,3 +1985,70 @@ fn a_pg_paste_undone_gives_back_the_settings_of_the_paste_before_it() {
     assert_eq!(value(&h, 0, 2), Some(Value::Text(copied.into())), "the first paste's value");
     assert!(invalid(&h), "the first paste's settings are kept as they were");
 }
+
+/// A row cloned with `O` copies its values with the settings each was written in: a range
+/// pasted from a copy made in `SQL, DMY`, cloned, keeps them in the new row, also once the
+/// row it came from is reverted. The session back in `SQL, MDY`, the new row's range is not
+/// applied, saying why.
+#[test]
+fn a_pg_row_cloned_keeps_the_settings_its_values_were_written_in() {
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::edit::{EditAction, RowAt};
+    let st = || {
+        let mut st = users_structure();
+        st.columns[2].default = Some("''::text".into());
+        st.columns[3].type_name = "daterange".into();
+        st
+    };
+    let copied = "[02/01/2026,05/01/2026)";
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    pg_again(&mut h, Some("SQL, DMY"), DATERANGE, copied);
+    h.keys("lly");
+    pg_again(&mut h, Some("SQL, DMY"), DATERANGE, "[2026-03-01,2026-03-02)");
+    h.keys("llgp");
+    structure(&mut h, Ok(st()));
+    assert!(said_text(&mut h).starts_with("Pasted the copied cells"));
+    // Cloned: the new row has the pasted range.
+    h.keys("O");
+    h.app.transient = None;
+    let id = edits(&h).batch.drafts().first().map(|d| d.id).expect("a new row");
+    assert_eq!(edits(&h).batch.drafts()[0].cells[2], Value::Text(copied.into()));
+    // The row it came from reverted; the session back in `SQL, MDY`.
+    h.app.tab_mut().grid.row = 0;
+    h.app.tab_mut().grid.col = 2;
+    h.app.dispatch(Action::Edit(EditAction::Revert));
+    assert_eq!(value(&h, 0, 2), None, "reverted");
+    h.db(DbEvent::TextStyle(Some(pg_style("SQL, MDY"))));
+    let why = h.app.shown_invalid().and_then(|i| i.cells.get(&(RowAt::New(id), 2)).cloned());
+    assert!(why.as_deref().is_some_and(|w| w.contains("written in DateStyle SQL, DMY")), "{why:?}");
+}
+
+/// A row as read, cloned with `O`: its range keeps the settings the result was read in (not
+/// known when the result's are not), so it is applied only while the session reads it the same.
+#[test]
+fn a_pg_row_cloned_as_read_keeps_the_settings_of_its_result() {
+    use datarig_tui::app::edit::RowAt;
+    let st = || {
+        let mut st = users_structure();
+        st.columns[2].default = Some("''::text".into());
+        st.columns[3].type_name = "daterange".into();
+        st
+    };
+    for (read, valid) in [(Some("SQL, DMY"), true), (None, false)] {
+        let mut h = Harness::connected(Lang::En);
+        h.db(DbEvent::Keys(Ok(shop_keys())));
+        pg_again(&mut h, read, DATERANGE, "[02/01/2026,05/01/2026)");
+        h.db(DbEvent::TextStyle(Some(pg_style("SQL, DMY"))));
+        h.keys("le");
+        structure(&mut h, Ok(st()));
+        h.key(KeyCode::Esc);
+        h.keys("O");
+        h.app.transient = None;
+        let id = edits(&h).batch.drafts().first().map(|d| d.id).expect("a new row");
+        let invalid = |h: &Harness| h.app.shown_invalid().is_some_and(|i| i.cells.contains_key(&(RowAt::New(id), 2)));
+        assert_eq!(!invalid(&h), valid, "{read:?}");
+        h.db(DbEvent::TextStyle(Some(pg_style("SQL, MDY"))));
+        assert!(invalid(&h), "{read:?}: read in other settings");
+    }
+}
