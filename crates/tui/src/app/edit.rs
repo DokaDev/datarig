@@ -173,6 +173,18 @@ pub struct EditState {
     pub styled: Vec<PastedStyle>,
 }
 
+/// The text of a value as read that a change writes as it is (a copy in the grid, a clone): an
+/// interval the driver read in binary is written in ISO 8601 (its exact months, days and
+/// microseconds, read the same whatever the session's `IntervalStyle`); any other as shown.
+pub(crate) fn exact_text(m: &datarig_core::driver::ColumnMeta, shown: &str) -> String {
+    use datarig_core::driver::{DatePart, Dated, ValueKind};
+    let binary_interval = m.kind == ValueKind::Interval && !m.styled && m.dated == Dated::Of(DatePart::Interval);
+    binary_interval
+        .then(|| datarig_core::driver::text_style::interval_as_iso(shown))
+        .flatten()
+        .unwrap_or_else(|| shown.to_string())
+}
+
 /// How a value's text was written, when it is a `styled` column's: the settings (`None`: not
 /// known) and whether it may hold a time with a zone; `None` for other text (typed, say).
 type Written = Option<(Option<datarig_core::driver::TextStyle>, bool)>;
@@ -1245,7 +1257,10 @@ impl App {
                 (0..ncols)
                     .map(|c| match rs.edit.batch.value(r, c) {
                         Some(v) => (v.clone(), None),
-                        None => (row[c].clone().map_or(Value::Null, Value::Text), row[c].clone()),
+                        None => {
+                            let exact = row[c].as_deref().map(|s| exact_text(&rs.columns[c].meta, s));
+                            (exact.map_or(Value::Null, Value::Text), row[c].clone())
+                        }
                     })
                     .unzip()
             }

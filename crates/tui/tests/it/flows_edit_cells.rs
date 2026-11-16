@@ -2516,3 +2516,82 @@ fn a_pg_kind_answered_before_the_tabs_session_reconnected_is_asked_again() {
     h.app.tab_mut().exec.generation += 1;
     assert_eq!(read(&mut h), (true, Dated::Lookup(70_001)), "asked again, not known until then");
 }
+
+/// An interval read in binary, cloned with `O` or copied with `g p`, is written in ISO 8601
+/// (its exact value, read the same whatever the session's `IntervalStyle`) and applied; typed,
+/// the shown form stays under the rule.
+#[test]
+fn a_pg_interval_read_in_binary_is_cloned_and_pasted_exactly() {
+    use datarig_core::driver::{DatePart, Dated};
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::edit::{EditAction, RowAt};
+    let shown = "-1 years -2 mons +3 days -04:05:06";
+    let iso = "P-1Y-2M3DT-4H-5M-6S";
+    let ready = |rows: Vec<Vec<Option<String>>>| {
+        let mut h = Harness::connected(Lang::En);
+        h.db(DbEvent::Keys(Ok(shop_keys())));
+        h.db(DbEvent::TextStyle(Some(pg_style("ISO, MDY"))));
+        let mut columns = users_columns();
+        columns[2] = ColumnMeta {
+            kind: ValueKind::Interval,
+            dated: Dated::Of(DatePart::Interval),
+            ..meta_from("nickname", "interval", false, USERS, 4)
+        };
+        answer(&mut h, "SELECT id, email, nickname FROM shop.users", columns, rows);
+        h.sent();
+        let mut st = users_structure();
+        st.columns[2].default = Some("''::text".into());
+        st.columns[3].type_name = "interval".into();
+        h.keys("lle");
+        structure(&mut h, Ok(st));
+        h.key(KeyCode::Esc);
+        h.app.transient = None;
+        h
+    };
+    let applies = |h: &mut Harness| {
+        h.sent();
+        h.app.dispatch(Action::Edit(EditAction::Apply));
+        h.key(KeyCode::Char('y'));
+        h.sent().iter().any(|c| matches!(c, DbCommand::ApplyEdits { .. }))
+    };
+    // Cloned.
+    let mut h = ready(vec![vec![s("1"), s("a@x"), s(shown)]]);
+    h.keys("O");
+    h.app.transient = None;
+    let id = edits(&h).batch.drafts().first().map(|d| d.id).expect("a new row");
+    assert_eq!(edits(&h).batch.drafts()[0].cells[2], Value::Text(iso.into()));
+    assert!(h.app.shown_invalid().is_some_and(|i| !i.cells.contains_key(&(RowAt::New(id), 2))));
+    assert!(applies(&mut h), "the clone is applied");
+    // Copied with `y`, pasted with `g p` over another row's interval.
+    let mut h = ready(vec![vec![s("1"), s("a@x"), s(shown)], vec![s("2"), s("b@x"), s("00:00:00")]]);
+    h.keys("y");
+    h.keys("jgp");
+    assert_eq!(value(&h, 1, 2), Some(Value::Text(iso.into())));
+    assert!(h.app.shown_invalid().is_some_and(|i| i.cells.is_empty()));
+    assert!(applies(&mut h), "the paste is applied");
+}
+
+/// NULL is read the same whatever the session's settings: pasted into a range of a result read
+/// in other settings than the session's now, it is pasted and applied.
+#[test]
+fn a_pg_null_pasted_into_a_result_read_in_other_settings_is_pasted() {
+    let mut h = pg_read_in_mdy_with_an_iso_edit();
+    // A NULL range, copied in a tab whose session reads `SQL, DMY`.
+    h.ctrl('t');
+    pg_again(&mut h, Some("SQL, DMY"), DATERANGE, "[2026-03-01,2026-03-02)");
+    let mut columns = users_columns();
+    columns[2] =
+        ColumnMeta { kind: ValueKind::Other, styled: true, ..meta_from("nickname", "daterange", false, USERS, 4) };
+    answer(&mut h, "SELECT id, email, nickname FROM shop.users", columns, vec![vec![s("1"), s("a@x"), None]]);
+    h.sent();
+    h.keys("lly");
+    h.app.tabs.activate(0);
+    h.app.focus = Focus::Results;
+    h.app.tab_mut().grid.row = 0;
+    h.app.tab_mut().grid.col = 2;
+    h.app.transient = None;
+    h.keys("gp");
+    let said = said_text(&mut h);
+    assert!(said.starts_with("Pasted the copied cells"), "{said}");
+    assert_eq!(value(&h, 0, 2), Some(Value::Null));
+}

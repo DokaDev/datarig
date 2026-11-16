@@ -118,6 +118,87 @@ pub fn reads_same_anywhere(dated: Dated, text: &str) -> bool {
     any || !text.trim().is_empty()
 }
 
+/// An interval as the driver writes one it read in binary (`1 year 2 mons 3 days 04:05:06.5`,
+/// `-1 years -2 mons +3 days -04:05:06`: PostgreSQL's `postgres` style, from its exact months,
+/// days and microseconds) in ISO 8601 form, which the server reads as the same interval
+/// whatever its `IntervalStyle` (`P1Y2M3DT4H5M6.5S`, `P-1Y-2M3DT-4H-5M-6S`, `PT0S`);
+/// `infinity` and `-infinity` as they are. `None` for text not in that form.
+pub fn interval_as_iso(text: &str) -> Option<String> {
+    if matches!(text, "infinity" | "-infinity") {
+        return Some(text.to_string());
+    }
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.is_empty() {
+        return None;
+    }
+    let (mut years, mut months, mut days, mut time) = (None, None, None, None);
+    let mut i = 0;
+    while i < words.len() {
+        let w = words[i];
+        if w.contains(':') {
+            if time.is_some() || i + 1 != words.len() {
+                return None;
+            }
+            time = Some(w);
+            i += 1;
+            continue;
+        }
+        let n: i64 = w.strip_prefix('+').unwrap_or(w).parse().ok()?;
+        let slot = match *words.get(i + 1)? {
+            "year" | "years" => &mut years,
+            "mon" | "mons" => &mut months,
+            "day" | "days" => &mut days,
+            _ => return None,
+        };
+        if slot.is_some() {
+            return None;
+        }
+        *slot = Some(n);
+        i += 2;
+    }
+    let mut out = String::from("P");
+    for (n, unit) in [(years, 'Y'), (months, 'M'), (days, 'D')] {
+        if let Some(n) = n.filter(|n| *n != 0) {
+            out.push_str(&format!("{n}{unit}"));
+        }
+    }
+    if let Some(t) = time {
+        let (sign, clock) = match t.strip_prefix('-') {
+            Some(c) => ("-", c),
+            None => ("", t.strip_prefix('+').unwrap_or(t)),
+        };
+        let mut it = clock.split(':');
+        let (Some(h), Some(m), Some(sec), None) = (it.next(), it.next(), it.next(), it.next()) else { return None };
+        let h: u64 = h.parse().ok().filter(|_| h.bytes().all(|b| b.is_ascii_digit()))?;
+        let m: u64 = m.parse().ok().filter(|_| digits(m, 2))?;
+        let (whole, frac) = sec.split_once('.').map_or((sec, ""), |(a, b)| (a, b));
+        if !digits(whole, 2) || !frac.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let s: u64 = whole.parse().ok()?;
+        let frac = frac.trim_end_matches('0');
+        let mut parts = String::new();
+        if h != 0 {
+            parts.push_str(&format!("{sign}{h}H"));
+        }
+        if m != 0 {
+            parts.push_str(&format!("{sign}{m}M"));
+        }
+        if s != 0 || !frac.is_empty() {
+            let frac = if frac.is_empty() { String::new() } else { format!(".{frac}") };
+            parts.push_str(&format!("{sign}{s}{frac}S"));
+        }
+        if !parts.is_empty() {
+            out.push('T');
+            out.push_str(&parts);
+        }
+    }
+    if out == "P" {
+        out.push_str("T0S");
+    }
+    Some(out)
+}
+
 fn digits(s: &str, n: usize) -> bool {
     s.len() == n && s.bytes().all(|b| b.is_ascii_digit())
 }

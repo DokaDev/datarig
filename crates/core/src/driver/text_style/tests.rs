@@ -106,3 +106,25 @@ fn only_iso_dates_offsets_and_iso_intervals_read_the_same_anywhere() {
         assert!(!reads_same_anywhere(ty, text), "{ty:?} {text}");
     }
 }
+
+/// An interval the driver wrote from its binary value reads back exactly as ISO 8601, signs per
+/// field as PostgreSQL's `iso_8601` style writes them.
+#[test]
+fn an_interval_read_in_binary_is_written_again_in_iso_8601() {
+    for (shown, iso) in [
+        ("1 year 2 mons 3 days 04:05:06.789", "P1Y2M3DT4H5M6.789S"),
+        ("-1 years -2 mons +3 days -04:05:06", "P-1Y-2M3DT-4H-5M-6S"),
+        ("1 day -00:00:00.5", "P1DT-0.5S"),
+        ("00:00:00", "PT0S"),
+        ("25:00:00", "PT25H"),
+        ("-3 days", "P-3D"),
+        ("1 mon", "P1M"),
+        ("infinity", "infinity"),
+    ] {
+        assert_eq!(interval_as_iso(shown).as_deref(), Some(iso), "{shown}");
+        assert!(reads_same_anywhere(Dated::Of(DatePart::Interval), iso), "{iso}");
+    }
+    for text in ["P1D", "1 day 2 hours", "@ 1 day", "-1 2:00:00", "1 fortnight", ""] {
+        assert_eq!(interval_as_iso(text), None, "{text}");
+    }
+}

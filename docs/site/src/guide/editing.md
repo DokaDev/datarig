@@ -476,6 +476,9 @@ the cell editor, pasted from the clipboard, `g p` of any column, cloned), is app
 form the server reads the same whatever its `DateStyle`, `TimeZone` and `IntervalStyle` when the
 statement runs: dates as `2026-01-02`, times with a time zone with their offset
 (`2026-01-02 10:00:00+09`), intervals in ISO 8601 (`P1DT2H`); `infinity` and `empty` are fine.
+An `interval` copied in the grid with `y` or cloned with `O` is written in ISO 8601 from its
+exact value (`P-1Y-2M3DT-4H-5M-6S` for `-1 years -2 mons +3 days -04:05:06`), so it is
+applied as it was read; NULL is never refused for the session's settings.
 Other text is kept, marked invalid with the form to use, and not applied. A column of a type
 whose dates the app cannot tell (any composite, whose fields may have changed since it was
 read, an array or a domain of one, a pseudo-type) takes no text from here; base types that hold no dates (`citext`, `hstore`, `ltree`, PostGIS geometry) are edited

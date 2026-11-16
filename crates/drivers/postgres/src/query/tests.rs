@@ -1316,6 +1316,47 @@ mod terminal {
         drop(s);
     }
 
+    /// An interval read in binary, as the driver shows it, written again in ISO 8601
+    /// (`text_style::interval_as_iso`) is the very same interval on the server, also read in
+    /// `sql_standard`: negative, mixed-sign, fractional, over a day.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_interval_shown_from_binary_reads_back_exactly_in_iso_8601() {
+        use datarig_core::driver::text_style::interval_as_iso;
+        let Some(url) = pg_url("an_interval_shown_from_binary_reads_back_exactly_in_iso_8601") else { return };
+        let mut s = Session::open(&url).await;
+        let values = [
+            "1 year 2 mons 3 days 04:05:06.789",
+            "-1 year -2 mons +3 days -04:05:06",
+            "1 day -00:00:00.000001",
+            "-25:00:00",
+            "0",
+            "-178000000 years",
+            "3 mons -2 days 00:00:00.5",
+        ];
+        s.run_all(&["SET IntervalStyle = 'sql_standard'"], None).await;
+        for v in values {
+            let events = s.run_all(&[&format!("SELECT '{v}'::interval")], None).await;
+            let shown = events
+                .iter()
+                .find_map(|e| match e {
+                    DbEvent::Page { rows, .. } => rows[0][0].clone(),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{v}: {events:?}"));
+            let iso = interval_as_iso(&shown).unwrap_or_else(|| panic!("{v}: {shown}"));
+            let same = format!(
+                "SELECT ('{iso}'::interval = '{v}'::interval AND '{iso}'::interval::text = '{v}'::interval::text)::text"
+            );
+            let events = s.run_all(&[&same], None).await;
+            let answer = events.iter().find_map(|e| match e {
+                DbEvent::Page { rows, .. } => rows[0][0].clone(),
+                _ => None,
+            });
+            assert_eq!(answer.as_deref(), Some("true"), "{v}: shown {shown}, written {iso}");
+        }
+        s.run_all(&["RESET IntervalStyle"], None).await;
+    }
+
     /// A run that ends without its terminal event (a bug) still answers: the dropped `Reply`
     /// sends `NoResult`, and a debug build says so loudly.
     #[test]

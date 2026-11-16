@@ -675,7 +675,19 @@ impl App {
         let t = self.tab();
         let Some(rs) = rows_of(t) else { return };
         let (tab, result, revision) = (t.id, rs.id, rs.edit.batch.revision());
-        let target = self.target_style_refusal(plan.map.iter().map(|&(_, c)| c));
+        // Only text is read in the session's settings: a column the paste gives only NULL (or
+        // DEFAULT) is never refused for them.
+        let texts: Vec<usize> = {
+            let o = &plan.ops;
+            let set = o.set.iter().map(|((_, c), v)| (*c, v)).chain(o.set_new.iter().map(|((_, c), v)| (*c, v)));
+            let added = o.add.iter().flat_map(|row| row.iter().enumerate());
+            let mut cols: Vec<usize> =
+                set.chain(added).filter(|(_, v)| matches!(v, Value::Text(_))).map(|(c, _)| c).collect();
+            cols.sort_unstable();
+            cols.dedup();
+            cols
+        };
+        let target = self.target_style_refusal(texts);
         let refused = copy.and_then(|c| self.copy_zone_refused(c, &plan)).or_else(|| {
             target
                 .map(|m| self.i18n.msg(&m).to_string())

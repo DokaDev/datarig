@@ -14,3 +14,6 @@
   multirange of the database's own) take no text from the grid. Base types of extensions that
   hold no dates (`citext`, `hstore`, `ltree`, geometry) stay editable once the server has said
   what kind of type they are, which it is asked when their result comes.
+- PostgreSQL: an `interval` copied in the grid or cloned with its row is written in ISO 8601
+  from its exact value and applied, and a NULL pasted into a date column is never refused for
+  the session's settings.

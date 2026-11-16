@@ -983,7 +983,7 @@ impl App {
                                             .and_then(|x| x.cell(0, v).map(drop))
                                             .err();
                                     }
-                                    Value::Text(v.to_string())
+                                    Value::Text(crate::app::edit::exact_text(&rs.columns[c].meta, v))
                                 }
                             },
                         };
