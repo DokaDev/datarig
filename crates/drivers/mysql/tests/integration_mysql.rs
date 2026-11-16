@@ -7917,3 +7917,58 @@ async fn mariadb_system_versioned_tables_are_listed_read_and_paged_as_tables() {
     assert_eq!(metadata_locks_of(&mut a, mid).await, 0, "the metadata session keeps no lock");
     a.disconnect().await.unwrap();
 }
+
+/// The paging limit (`sql_select_limit` at a page and one row more) cuts what a top-level
+/// `SELECT` does row by row, not only what it shows: a last statement that calls a stored
+/// function runs without it, so the function runs for every row (here one that writes a row of
+/// a log for each), and its result is read to its end; a plain read is still cut at a page.
+/// `SELECT … INTO @v` keeps working.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_select_that_runs_code_is_never_cut_at_a_page() {
+    let Some((url, admin)) = urls("a_select_that_runs_code_is_never_cut_at_a_page") else { return };
+    let t = numbers(&admin, "fnpage", 600).await;
+    let log = Table::make(&admin, "fnpagelog", &["CREATE TABLE {t} (id INT AUTO_INCREMENT PRIMARY KEY)"]).await;
+    let f = format!("zz_it_fnpage_{}", std::process::id());
+    let _f = Cleanup { url: admin.clone(), sql: format!("DROP FUNCTION IF EXISTS shop.{f}") };
+    let mut a = side(&admin).await;
+    a.query_drop(format!(
+        "CREATE FUNCTION shop.{f}(x INT) RETURNS INT DETERMINISTIC MODIFIES SQL DATA \
+         BEGIN INSERT INTO {} () VALUES (); RETURN x; END",
+        log.q()
+    ))
+    .await
+    .unwrap();
+    a.disconnect().await.unwrap();
+    let mut c = Conn::open(&url, SessionRole::Query, false, "fnpage").await;
+    // A plain read: a page, and more follow.
+    let evs = c.run(1, &[&format!("SELECT id FROM {}", t.q())]).await;
+    assert_eq!((page_of(&evs).1.len(), page_of(&evs).2), (PAGE, true));
+    // A call of a stored function: every row is read, page by page, to its end.
+    c.session.send(DbCommand::Execute {
+        id: 2,
+        statements: vec![format!("SELECT shop.{f}(id) FROM {}", t.q())],
+        paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
+        max_rows: None,
+    });
+    let mut rows = 0;
+    loop {
+        match c.next(30).await {
+            DbEvent::Page { id: 2, rows: r, more, .. } => {
+                rows += r.len();
+                if !more {
+                    break;
+                }
+                c.session.send(DbCommand::FetchMore { id: 2 });
+            }
+            DbEvent::Failed { id: 2, error, .. } => panic!("{error:?}"),
+            _ => {}
+        }
+    }
+    assert_eq!(rows, 600, "every row came");
+    assert_eq!(rows_in(&mut c, 3, &log.q()).await, "600", "the function ran for every row");
+    // Variables set from a query: the limit does not apply either.
+    c.ok(4, &format!("SELECT MAX(id) INTO @zz_max FROM {}", t.q())).await;
+    let evs = c.run(5, &["SELECT @zz_max"]).await;
+    assert_eq!(page_of(&evs).1[0][0].as_deref(), Some("600"));
+}
