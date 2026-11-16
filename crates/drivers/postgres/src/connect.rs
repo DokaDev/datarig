@@ -383,8 +383,10 @@ pub(crate) async fn apply_limits(
 /// other clients share. There each one's `SET LOCAL` form goes first in every transaction
 /// instead: returned (with the indexes of those that have none, which are not sent), each tried
 /// once now in a transaction of its own (one simple query of two statements, which ends with
-/// it), so a value the server refuses fails the connect here too. A statement the server refuses
-/// fails the connect ([`DbError::SessionSql`]); the connection then closes with the task.
+/// it), so a value the server refuses fails the connect here too. One that changes who the
+/// session is ([`SessionStatement::identity`]) cannot hold there: the connect fails before any
+/// is sent ([`DbError::PooledIdentity`]). A statement the server refuses fails the connect
+/// ([`DbError::SessionSql`]); the connection then closes with the task.
 async fn start_up(
     client: &Client,
     sql: &[SessionStatement],
@@ -403,6 +405,9 @@ async fn start_up(
             client.simple_query(&s.sql).await.map_err(|e| failed(i, s, &e))?;
         }
         return Ok(None);
+    }
+    if let Some((index, s)) = sql.iter().enumerate().find(|(_, s)| s.identity) {
+        return Err(DbError::SessionSql { index, statement: s.sql.clone(), error: Box::new(DbError::PooledIdentity) });
     }
     let (mut each, mut refused) = (Vec::new(), Vec::new());
     for (i, s) in sql.iter().enumerate() {

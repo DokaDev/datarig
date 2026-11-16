@@ -22,7 +22,7 @@
 │    │   SET work_mem = '256MB'                                                                                   │    │
 │    │     behind a pooler: per transaction as SET LOCAL work_mem = '256MB'                                       │    │
 │    │   SET ROLE reporting                                                                                       │    │
-│    │     behind a pooler: not sent (it changes who the session is)                                              │    │
+│    │     behind a transaction pooler: the profile does not connect (it changes who the session is)              │    │
 │    │                                                                                                            │    │
 │    │ Applied in this order: a later setting of the same name wins                                               │    │
 │    │                                                                                                            │    │

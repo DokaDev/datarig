@@ -224,7 +224,8 @@ pub struct ConnectOptions {
     /// behind a pooler (a connection not known to be direct): each statement's
     /// [`SessionStatement::per_transaction`] goes first in every transaction instead (nothing
     /// stays on a pooled server connection), one without such a form is not sent, and
-    /// [`DbEvent::SessionPerTransaction`] comes before `Connected`.
+    /// [`DbEvent::SessionPerTransaction`] comes before `Connected`; but one that changes who the
+    /// session is ([`SessionStatement::identity`]) fails the connect there.
     pub session_sql: Vec<SessionStatement>,
 }
 
@@ -237,6 +238,11 @@ pub struct SessionStatement {
     /// a pooler sends first in each transaction instead; `None`: there is none (it is not sent
     /// there), or a driver that does not need one.
     pub per_transaction: Option<String>,
+    /// PostgreSQL: it changes who the session is (`SET ROLE`, `SET SESSION AUTHORIZATION`), so it
+    /// has no form for one transaction. Behind a pooler it cannot hold for the session: a
+    /// statement that runs outside a transaction would run as the login role, so the connect
+    /// fails ([`DbError::PooledIdentity`]).
+    pub identity: bool,
 }
 
 impl ConnectOptions {

@@ -156,7 +156,9 @@ an error shows the words its connect would refuse with.
 - **MySQL in every sql mode.** A statement is read with and without `ANSI_QUOTES` and
   `NO_BACKSLASH_ESCAPES`; what any reading refuses is refused.
 - **Who the session is.** `SET ROLE` is allowed in a read-only environment (every transaction
-  stays `READ ONLY` whatever the role); `SET SESSION AUTHORIZATION` is not.
+  stays `READ ONLY` whatever the role); `SET SESSION AUTHORIZATION` is not. Behind a
+  transaction pooler either one keeps the profile from connecting (see
+  [Behind a connection pooler](#behind-a-connection-pooler)).
 - **Errors are the profile's.** A preset name that does not exist, a preset for the other
   database, or a statement that is not allowed: the profile does not connect and says which
   preset or statement, from where, and why. It never connects without the preset instead.
@@ -173,10 +175,13 @@ session. Each `SET` goes first in every transaction as `SET LOCAL` instead, and 
 Statements that cannot run in a transaction, `CALL`, `DO`, and your own `SET` and `RESET` run
 without them.
 
+A statement that changes who the session is (`SET ROLE`, `SET SESSION AUTHORIZATION`) cannot
+hold for the session there: set per transaction, a statement run outside one would run as the
+login role. Such a profile does not connect behind a transaction pooler, and the tab names the
+statement. Connect directly, or log in as that role instead.
+
 These are not sent there at all (the profile still connects, and the tab names what was not
-sent): statements that change who the session is (`SET ROLE`, `SET SESSION AUTHORIZATION`:
-a statement run outside a transaction would run as someone else), statements with no
-`SET LOCAL` form (`SET SESSION CHARACTERISTICS …`), defaults of the session's transactions
+sent): statements with no `SET LOCAL` form (`SET SESSION CHARACTERISTICS …`), defaults of the session's transactions
 (`default_transaction_isolation`, `default_transaction_deferrable`), and values that depend on
 what the pooled connection did before (`temp_buffers`, PostgreSQL 17's `transaction_timeout`),
 and `idle_session_timeout` (the server counts it only outside a transaction, and set for the

@@ -6052,7 +6052,8 @@ async fn starting(
     sql: &[&str],
 ) -> Result<(Conn, Option<Language>), DbError> {
     use datarig_core::driver::SessionStatement;
-    let sql = sql.iter().map(|s| SessionStatement { sql: s.to_string(), per_transaction: None }).collect();
+    let sql =
+        sql.iter().map(|s| SessionStatement { sql: s.to_string(), per_transaction: None, identity: false }).collect();
     let o = opts(role, test).read_only(read_only).session_sql(sql);
     let (tx, mut rx) = unbounded_channel();
     let session = MyDriver.connect(&profile(url), role, o, tx);
@@ -6098,7 +6099,8 @@ async fn a_query_session_starts_with_its_session_statements() {
 /// `Connected`; and the session.
 async fn start_events(url: &str, test: &str, sql: &[&str]) -> (Conn, Vec<DbEvent>) {
     use datarig_core::driver::SessionStatement;
-    let sql = sql.iter().map(|s| SessionStatement { sql: s.to_string(), per_transaction: None }).collect();
+    let sql =
+        sql.iter().map(|s| SessionStatement { sql: s.to_string(), per_transaction: None, identity: false }).collect();
     let o = opts(SessionRole::Query, test).session_sql(sql);
     let (tx, mut rx) = unbounded_channel();
     let session = MyDriver.connect(&profile(url), SessionRole::Query, o, tx);
@@ -8285,6 +8287,7 @@ async fn startup_statements_never_run_on_a_session_the_server_did_not_keep_read_
     let sql = vec![datarig_core::driver::SessionStatement {
         sql: format!("INSERT INTO {} VALUES (1)", t.q()),
         per_transaction: None,
+        identity: false,
     }];
     let o = ConnectOptions::new(PAGE, SessionRole::Query, &tag(test))
         .read_only(true)

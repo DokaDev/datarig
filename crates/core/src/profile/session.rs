@@ -376,6 +376,7 @@ impl SessionPlan {
                         Some(OnPooler::PerTransaction(l)) => Some(l.clone()),
                         _ => None,
                     },
+                    identity: matches!(pooled, Some(OnPooler::Refused(NotLocal::Identity))),
                 }),
                 _ => None,
             })

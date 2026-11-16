@@ -5,3 +5,5 @@
   `SET app.tenant = '1'`) is refused; set it in the profile's Startup SQL, where it is still
   allowed.
 - Typed `SET session_replication_role` and `set_config()` of it ask before they run.
+- Behind a transaction pooler, a profile whose Startup SQL holds `SET ROLE` (or `SET SESSION
+  AUTHORIZATION`) no longer connects, since the role could not hold for the session.

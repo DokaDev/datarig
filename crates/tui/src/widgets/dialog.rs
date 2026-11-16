@@ -597,6 +597,9 @@ pub(crate) fn draw_session_view(app: &mut App, area: Rect, buf: &mut Buffer) {
                         OnPooler::PerTransaction(local) => {
                             app.i18n.msg(&Msg::SessionViewPooledLocal { sql: local.clone() }).to_string()
                         }
+                        OnPooler::Refused(NotLocal::Identity) => {
+                            app.i18n.label(Label::SessionViewPooledIdentity).to_string()
+                        }
                         OnPooler::Refused(why) => {
                             let reason = app.i18n.label(match why {
                                 NotLocal::Form => Label::SessionViewNotLocalForm,

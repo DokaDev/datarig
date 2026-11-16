@@ -265,22 +265,46 @@ fn a_refused_start_up_statement_is_said_with_its_source_and_number() {
     );
 }
 
-/// Behind a pooler the session says its settings go in each transaction, and names those it
-/// did not send.
+/// Behind a pooler a start-up `SET ROLE` keeps the profile from connecting: the tab says which
+/// statement and why.
 #[test]
-fn behind_a_pooler_the_tab_says_how_its_settings_go() {
+fn behind_a_pooler_a_start_up_set_role_is_said_with_why_it_fails() {
     let cfg = config(|p| p.session_sql = vec!["SET ROLE reporting".into()]);
     let mut h = connected(&cfg);
     run(&mut h, "SELECT 1");
     let sql: Vec<SessionStatement> = h.driver.sessions.lock().unwrap()[1].opts.session_sql.clone();
-    assert_eq!(sql[2].per_transaction, None, "an identity has no transaction form");
+    assert!(sql[2].identity && sql[2].per_transaction.is_none(), "{sql:?}");
+    assert!(!sql[1].identity);
+    let error = DbError::SessionSql {
+        index: 2,
+        statement: "SET ROLE reporting".into(),
+        error: Box::new(DbError::PooledIdentity),
+    };
+    h.tab_db(0, DbEvent::ConnectFailed { error, auth: false });
+    let screen = h.screen(260, 40);
+    assert!(
+        screen.contains("local-pg: statement 1 of its own startup SQL failed, so the session was closed: behind a transaction pooler SET ROLE (or SET SESSION AUTHORIZATION) cannot hold for the session"),
+        "{screen}"
+    );
+    assert!(h.app.tab().exec.session.is_none(), "closed");
+}
+
+/// Behind a pooler the session says its settings go in each transaction, and names those it
+/// did not send.
+#[test]
+fn behind_a_pooler_the_tab_says_how_its_settings_go() {
+    let cfg = config(|p| p.session_sql = vec!["SET temp_buffers = '16MB'".into()]);
+    let mut h = connected(&cfg);
+    run(&mut h, "SELECT 1");
+    let sql: Vec<SessionStatement> = h.driver.sessions.lock().unwrap()[1].opts.session_sql.clone();
+    assert_eq!(sql[2].per_transaction, None, "temp_buffers has no transaction form");
     // Said before `Connected`.
     h.tab_db(0, DbEvent::SessionPerTransaction { refused: vec![2] });
     h.tab_db(0, DbEvent::Connected);
     let notes: Vec<String> = h.app.tab().exec.run.notes.iter().map(|n| h.app.i18n.msg(&n.msg).to_string()).collect();
     assert!(
         notes.iter().any(|n| n
-            == "local-pg is behind a connection pooler: 1 session setting was not sent, as it cannot be set for one transaction there (:session says why): SET ROLE reporting"),
+            == "local-pg is behind a connection pooler: 1 session setting was not sent, as it cannot be set for one transaction there (:session says why): SET temp_buffers = '16MB'"),
         "{notes:?}"
     );
     let mut h = connected(&config(|_| {}));
@@ -1133,7 +1157,7 @@ fn the_session_view_lists_what_a_profiles_sessions_start_with_and_from_where() {
         "  SET work_mem = '256MB'",
         "    behind a pooler: per transaction as SET LOCAL work_mem = '256MB'",
         "  SET ROLE reporting",
-        "    behind a pooler: not sent (it changes who the session is)",
+        "    behind a transaction pooler: the profile does not connect (it changes who the session is)",
         "Applied in this order: a later setting of the same name wins",
     ] {
         assert!(screen.contains(line), "{line}\n{screen}");
