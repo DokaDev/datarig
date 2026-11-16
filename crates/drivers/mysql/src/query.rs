@@ -184,8 +184,8 @@ async fn own_session(conn: &mut Conn, link: &mut Link, env: &Env<'_>, s: &State,
 
 struct Env<'a> {
     events: &'a UnboundedSender<DbEvent>,
-    /// Whether the handshake's connection id is the server's own, once asked
-    /// ([`DbCommand::ServerSession`]).
+    /// Whether the handshake's connection id is the server's own: read as the session opened,
+    /// else once asked ([`DbCommand::ServerSession`]).
     own: &'a OnceLock<bool>,
     killer: &'a Killer,
     /// The UI asked to cancel this run: a run of several statements stops
@@ -453,9 +453,11 @@ pub(crate) async fn query_loop(
     server: Server,
     tracked: Tracked,
     select_limit: Option<u64>,
+    own: Option<bool>,
 ) {
     let failed = AtomicBool::new(false);
-    let own = OnceLock::new();
+    // Known from the open's own read, else read when first asked.
+    let own = own.map_or_else(OnceLock::new, OnceLock::from);
     let env = Env {
         events: &events,
         own: &own,

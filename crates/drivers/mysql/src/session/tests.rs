@@ -613,7 +613,7 @@ fn isolation_levels_by_name() {
 /// A killer of connection 7 over `route` (nothing is sent before it is asked to).
 fn killer_over(route: Route) -> Killer {
     let opts = mysql_async::Opts::from_url("mysql://datarig@127.0.0.1:1/").unwrap();
-    Killer::new(route, opts, 7)
+    Killer::new(route, opts, 7, Some(token()))
 }
 
 #[tokio::test]
@@ -680,7 +680,7 @@ fn killer_on_a_fake_server() -> (Killer, tokio::io::DuplexStream) {
     let cfg = mysql("127.0.0.1");
     let route = Route::new(&cfg.host, 3306, Some(DialerRef(Arc::new(OneStream(std::sync::Mutex::new(Some(client)))))));
     let opts = Target::of(&cfg).unwrap().opts(None, "datarig-k-test", &route);
-    (Killer::new(route, opts, 7), server)
+    (Killer::new(route, opts, 7, Some(token())), server)
 }
 
 /// Up to the client's login answer (the handshake response read, fast authentication next).
@@ -693,6 +693,34 @@ async fn greet(server: &mut tokio::io::DuplexStream) {
 async fn logged_in(server: &mut tokio::io::DuplexStream) {
     server.write_all(&packet(2, &[1, 3])).await.unwrap();
     server.write_all(&packet(3, &[0, 0, 0, 2, 0, 0, 0])).await.unwrap();
+}
+
+/// A text result set of one row, `values` (`None`: `NULL`), as a server answers a `SELECT`.
+fn text_row(values: &[Option<&str>]) -> Vec<u8> {
+    let mut packets = vec![vec![values.len() as u8]];
+    packets.extend(values.iter().map(|_| column("c")));
+    let mut row = Vec::new();
+    for v in values {
+        match v {
+            Some(v) => {
+                row.push(v.len() as u8);
+                row.extend_from_slice(v.as_bytes());
+            }
+            None => row.push(0xfb),
+        }
+    }
+    packets.push(row);
+    // The result set's end (`OK` in place of `EOF`).
+    packets.push(vec![0xfe, 0, 0, 0x02, 0, 0, 0]);
+    packets.iter().zip(1u8..).flat_map(|(p, seq)| packet(seq, p)).collect()
+}
+
+/// The cancel's connection reads whether the server it reached confirms the session (it has
+/// connection 7, as the cancel's own connection does on these fake servers): answered so.
+async fn confirmed(server: &mut tokio::io::DuplexStream) {
+    let check = read_packet(server).await.expect("the check");
+    assert!(check.starts_with(b"\x03SELECT CONNECTION_ID(), "), "{:?}", String::from_utf8_lossy(&check));
+    server.write_all(&text_row(&[Some("7"), Some("1"), Some("7"), Some("7")])).await.unwrap();
 }
 
 /// A kill sent again whose statement answered while its connection opened is never sent: the
@@ -724,6 +752,7 @@ async fn closing_the_gate_waits_for_a_kill_being_sent() {
     killer.try_again(&gate);
     greet(&mut server).await;
     logged_in(&mut server).await;
+    confirmed(&mut server).await;
     let sent = read_packet(&mut server).await.expect("the kill");
     assert_eq!(&sent[..], b"\x03KILL QUERY 7");
     let closing = tokio::spawn({
@@ -756,6 +785,7 @@ async fn closing_the_gate_waits_for_a_kill_answered_late() {
     killer.try_again(&gate);
     greet(&mut server).await;
     logged_in(&mut server).await;
+    confirmed(&mut server).await;
     read_packet(&mut server).await.expect("the kill");
     let t0 = Instant::now();
     let closing = tokio::spawn({
@@ -779,6 +809,7 @@ async fn a_kill_never_answered_leaves_the_gate_unclean() {
     killer.try_again(&gate);
     greet(&mut server).await;
     logged_in(&mut server).await;
+    confirmed(&mut server).await;
     read_packet(&mut server).await.expect("the kill");
     let t0 = Instant::now();
     let clean = tokio::time::timeout(KILL_TIMEOUT + std::time::Duration::from_secs(2), gate.close()).await;
@@ -821,7 +852,7 @@ async fn a_statement_answered_while_its_kill_hangs_is_answered_then_lost() {
     let dialer = OneStreamSaid(std::sync::Mutex::new(Some(client)), dialed.clone());
     let route = Route::new(&cfg.host, 3306, Some(DialerRef(Arc::new(dialer))));
     let opts = Target::of(&cfg).unwrap().opts(None, "datarig-k-test", &route);
-    let killer = Killer::new(route, opts, 7);
+    let killer = Killer::new(route, opts, 7, Some(token()));
     killer.record(Kill::Failed(KillFailure::Refused(1095)), || true);
     // The kill's server: the kill sent again (once the session asks again) is read, and never
     // answered.
@@ -832,6 +863,7 @@ async fn a_statement_answered_while_its_kill_hangs_is_answered_then_lost() {
             dialed.notified().await;
             greet(&mut server).await;
             logged_in(&mut server).await;
+            confirmed(&mut server).await;
             let kill = read_packet(&mut server).await;
             written.notify_one();
             tokio::time::sleep(KILL_TIMEOUT * 2).await;
@@ -865,6 +897,7 @@ async fn a_kill_not_sent_keeps_why() {
         Route::new("127.0.0.1", 1, None),
         mysql_async::Opts::from_url("mysql://datarig@127.0.0.1:1/").unwrap(),
         7,
+        Some(token()),
     );
     killer.kill_query().await;
     assert_eq!(*killer.watch().borrow(), Kill::Failed(KillFailure::NotSent));
@@ -923,7 +956,7 @@ async fn a_result_answered_while_its_kill_hangs_is_read_to_its_end_then_the_sess
     let dialer = OneStreamSaid(std::sync::Mutex::new(Some(kill_client)), dialed.clone());
     let route = Route::new(&cfg.host, 3306, Some(DialerRef(Arc::new(dialer))));
     let opts = Target::of(&cfg).unwrap().opts(None, "datarig-q-test", &route);
-    let killer = Killer::new(route, opts.clone(), 7);
+    let killer = Killer::new(route, opts.clone(), 7, Some(token()));
     let written = Arc::new(tokio::sync::Notify::new());
     let kills = tokio::spawn({
         let written = written.clone();
@@ -931,6 +964,7 @@ async fn a_result_answered_while_its_kill_hangs_is_read_to_its_end_then_the_sess
             dialed.notified().await;
             greet(&mut kill_server).await;
             logged_in(&mut kill_server).await;
+            confirmed(&mut kill_server).await;
             let kill = read_packet(&mut kill_server).await;
             written.notify_one();
             tokio::time::sleep(KILL_TIMEOUT * 3).await;
@@ -956,6 +990,7 @@ async fn a_result_answered_while_its_kill_hangs_is_read_to_its_end_then_the_sess
         crate::query::Settings { page_size: 100, read_only: false },
         MYSQL_84,
         Tracked::default(),
+        None,
         None,
     ));
     let call = "CALL shop.zz_rows()";
@@ -1034,7 +1069,7 @@ async fn held_while_its_kill_hangs(close: bool) {
     let dialer = OneStreamSaid(std::sync::Mutex::new(Some(kill_client)), dialed.clone());
     let route = Route::new(&cfg.host, 3306, Some(DialerRef(Arc::new(dialer))));
     let opts = Target::of(&cfg).unwrap().opts(None, "datarig-q-test", &route);
-    let killer = Killer::new(route, opts.clone(), 7);
+    let killer = Killer::new(route, opts.clone(), 7, Some(token()));
     let written = Arc::new(tokio::sync::Notify::new());
     let kills = tokio::spawn({
         let written = written.clone();
@@ -1042,6 +1077,7 @@ async fn held_while_its_kill_hangs(close: bool) {
             dialed.notified().await;
             greet(&mut kill_server).await;
             logged_in(&mut kill_server).await;
+            confirmed(&mut kill_server).await;
             let kill = read_packet(&mut kill_server).await;
             written.notify_one();
             tokio::time::sleep(KILL_TIMEOUT * 3).await;
@@ -1067,6 +1103,7 @@ async fn held_while_its_kill_hangs(close: bool) {
         crate::query::Settings { page_size: 1, read_only: false },
         MYSQL_84,
         Tracked::default(),
+        None,
         None,
     ));
     let select = "SELECT v FROM shop.zz_rows";
@@ -1149,6 +1186,7 @@ async fn a_kill_sent_and_never_answered_is_not_taken_for_one_not_sent() {
     let kill_server = tokio::spawn(async move {
         greet(&mut server).await;
         logged_in(&mut server).await;
+        confirmed(&mut server).await;
         let kill = read_packet(&mut server).await;
         // Held open past the time the killer waits for the answer.
         tokio::time::sleep(KILL_TIMEOUT + std::time::Duration::from_secs(1)).await;
@@ -1167,6 +1205,7 @@ async fn a_kill_refused_then_never_answered_is_one_not_answered() {
     let kill_server = tokio::spawn(async move {
         greet(&mut server).await;
         logged_in(&mut server).await;
+        confirmed(&mut server).await;
         read_packet(&mut server).await.expect("the kill");
         let mut refused = vec![0xff];
         refused.extend_from_slice(&KILL_DENIED.to_le_bytes());
@@ -1204,7 +1243,7 @@ async fn faked() -> Faked {
     let dialer = OneStreamSaid(std::sync::Mutex::new(Some(kill_client)), dialed.clone());
     let route = Route::new(&cfg.host, 3306, Some(DialerRef(Arc::new(dialer))));
     let opts = Target::of(&cfg).unwrap().opts(None, "datarig-q-test", &route);
-    let killer = Killer::new(route, opts.clone(), 7);
+    let killer = Killer::new(route, opts.clone(), 7, Some(token()));
     let written = Arc::new(tokio::sync::Notify::new());
     let kills = tokio::spawn({
         let written = written.clone();
@@ -1212,6 +1251,7 @@ async fn faked() -> Faked {
             dialed.notified().await;
             greet(&mut kill_server).await;
             logged_in(&mut kill_server).await;
+            confirmed(&mut kill_server).await;
             let kill = read_packet(&mut kill_server).await;
             written.notify_one();
             tokio::time::sleep(KILL_TIMEOUT * 6).await;
@@ -1237,6 +1277,7 @@ async fn faked() -> Faked {
         crate::query::Settings { page_size: 100, read_only: false },
         MYSQL_84,
         Tracked::default(),
+        None,
         None,
     ));
     Faked { server, killer, asked, busy, commands, events, session, written, kills }
@@ -1640,7 +1681,7 @@ fn killer_on_fake_servers(n: usize) -> (Killer, Vec<tokio::io::DuplexStream>) {
     let dialer = Streams(std::sync::Mutex::new(clients.into()));
     let route = Route::new(&cfg.host, 3306, Some(DialerRef(Arc::new(dialer))));
     let opts = Target::of(&cfg).unwrap().opts(None, "datarig-k-test", &route);
-    (Killer::new(route, opts, 7), servers)
+    (Killer::new(route, opts, 7, Some(token())), servers)
 }
 
 /// A server for a kill: logs it in, reads the kill and answers it (`answer`) or never does.
@@ -1648,6 +1689,7 @@ fn kill_server(mut server: tokio::io::DuplexStream, answer: bool) -> tokio::task
     tokio::spawn(async move {
         greet(&mut server).await;
         logged_in(&mut server).await;
+        confirmed(&mut server).await;
         // Read once it comes (a kill may wait for another's turn).
         let kill = sent_next(&mut server).await.expect("the kill");
         assert!(kill.ends_with("KILL QUERY 7"), "{kill:?}");
@@ -2118,4 +2160,207 @@ fn a_session_not_made_read_only_says_what_the_server_said() {
         "the server did not make the session read-only (reported tx_read_only: none; \
          asked: tx_read_only 0, innodb_read_only NULL)"
     );
+}
+
+/// Each connection's marker is fresh, and only hex digits (it is written into a statement).
+#[test]
+fn a_marker_is_32_hex_digits_fresh_per_connection() {
+    let (a, b) = (token(), token());
+    assert_ne!(a, b);
+    for t in [&a, &b] {
+        assert_eq!(t.len(), 32, "{t}");
+        assert!(is_token(t), "{t}");
+    }
+    assert!(!is_token("0123456789abcdef0123456789abcdeF"));
+    assert!(!is_token("0123456789abcdef0123456789abcde'"));
+    assert!(!is_token("0123"));
+    // A killer never keeps one that is not.
+    let opts = mysql_async::Opts::from_url("mysql://datarig@127.0.0.1:1/").unwrap();
+    let k = Killer::new(Route::new("127.0.0.1", 1, None), opts, 7, Some("x' OR 1".into()));
+    assert!(k.token.is_none());
+}
+
+/// The marker goes with the login, next to the program's name.
+#[test]
+fn the_marker_is_a_connection_attribute() {
+    let route = Route::new("127.0.0.1", 3306, None);
+    let opts = Target::of(&mysql("127.0.0.1")).unwrap().opts(None, "datarig-q-test", &route);
+    let attrs = marked(&opts, "0123456789abcdef0123456789abcdef").connect_attributes().cloned().unwrap();
+    assert_eq!(attrs.get("datarig_session").map(String::as_str), Some("0123456789abcdef0123456789abcdef"));
+    assert_eq!(attrs.get("program_name").map(String::as_str), Some("datarig-q-test"));
+}
+
+/// A session is confirmed when the server lists its marker on its own id, and that id is the
+/// handshake's (its lower 32 bits: MariaDB's ids may have more).
+#[test]
+fn a_session_is_confirmed_by_its_marker_on_its_own_id() {
+    assert!(own_verdict(7, 7, Some(7)));
+    assert!(!own_verdict(7, 7, None), "no marker listed (performance_schema off, not readable)");
+    assert!(!own_verdict(7, 7, Some(8)), "the marker on another id");
+    assert!(!own_verdict(7, 9, Some(9)), "an id of its own from something in between");
+    let wide = (1u64 << 32) + 7;
+    assert!(own_verdict(7, wide, Some(wide)), "a 64-bit id whose lower 32 bits are the handshake's");
+    assert!(!own_verdict(7, wide, Some(7)), "the full ids are compared");
+    // MariaDB 10.6 to 11.x list the marker's id as a signed INT, which stops at 2147483647: a
+    // larger id never matches it, and the session is not confirmed.
+    assert!(!own_verdict(1 << 31, 1 << 31, Some(2_147_483_647)));
+    assert_eq!(
+        side_verdict(1 << 31, 9, Some((9, 1, Some(2_147_483_647), Some(9)))),
+        Err(Unconfirmed::OtherId(Some(2_147_483_647)))
+    );
+}
+
+/// A cancel's connection sends the kill only when the server it reached lists the session's
+/// marker once, on the session's id, and its own marker on its own id, the handshake's.
+#[test]
+fn a_cancel_is_sent_only_where_the_server_confirms_both_markers() {
+    let wide = (1u64 << 32) + 9;
+    assert_eq!(side_verdict(7, 9, Some((9, 1, Some(7), Some(9)))), Ok(()));
+    assert_eq!(side_verdict(7, 9, Some((wide, 1, Some(7), Some(wide)))), Ok(()), "MariaDB 64-bit id");
+    assert_eq!(side_verdict(7, 9, None), Err(Unconfirmed::NoAnswer));
+    assert_eq!(side_verdict(7, 9, Some((9, 0, None, Some(9)))), Err(Unconfirmed::Marked(0)), "another server");
+    assert_eq!(side_verdict(7, 9, Some((9, 2, Some(7), Some(9)))), Err(Unconfirmed::Marked(2)));
+    assert_eq!(side_verdict(7, 9, Some((9, 1, Some(8), Some(9)))), Err(Unconfirmed::OtherId(Some(8))), "other id");
+    assert_eq!(side_verdict(wide, 9, Some((9, 1, Some(7), Some(9)))), Err(Unconfirmed::OtherId(Some(7))));
+    assert_eq!(side_verdict(7, 9, Some((9, 1, Some(7), None))), Err(Unconfirmed::SideUnmarked));
+    assert_eq!(side_verdict(7, 9, Some((9, 1, Some(7), Some(10)))), Err(Unconfirmed::SideUnmarked));
+    assert_eq!(side_verdict(7, 9, Some((10, 1, Some(7), Some(10)))), Err(Unconfirmed::SideNotDirect), "not direct");
+}
+
+/// A session whose marker was never confirmed is never cancelled from the side: nothing is
+/// dialled (nothing listens on port 1, which would say so), and why is said.
+#[tokio::test]
+async fn a_session_never_confirmed_sends_no_cancel() {
+    let opts = mysql_async::Opts::from_url("mysql://datarig@127.0.0.1:1/").unwrap();
+    let k = Killer::new(Route::new("127.0.0.1", 1, None), opts, 7, None);
+    k.kill_query().await;
+    assert_eq!(*k.watch().borrow(), Kill::Failed(KillFailure::NotSent));
+    assert_eq!(k.not_sent(), CancelFailure::NotSent(Box::new(DbError::CancelUnconfirmed)));
+    assert!(!k.still_there().await);
+}
+
+/// A server that does not confirm the session (its marker is listed twice there): the cancel's
+/// connection sends no kill, and the kill was not sent, as it could not be confirmed.
+#[tokio::test]
+async fn a_cancel_the_server_does_not_confirm_is_not_sent() {
+    let (killer, mut server) = killer_on_a_fake_server();
+    let kill_server = tokio::spawn(async move {
+        greet(&mut server).await;
+        logged_in(&mut server).await;
+        read_packet(&mut server).await.expect("the check");
+        server.write_all(&text_row(&[Some("7"), Some("2"), Some("7"), Some("7")])).await.unwrap();
+        read_packet(&mut server).await
+    });
+    killer.kill_query().await;
+    assert_eq!(*killer.watch().borrow(), Kill::Failed(KillFailure::NotSent));
+    assert_eq!(killer.not_sent(), CancelFailure::NotSent(Box::new(DbError::CancelUnconfirmed)));
+    let next = kill_server.await.unwrap();
+    assert!(next.as_deref().is_none_or(|p| p.first() != Some(&3)), "no kill: {next:?}");
+}
+
+/// The same for whether the statement is still there: not asked, and not there.
+#[tokio::test]
+async fn a_statement_the_server_does_not_confirm_is_not_still_there() {
+    let (killer, mut server) = killer_on_a_fake_server();
+    let probe = tokio::spawn(async move {
+        greet(&mut server).await;
+        logged_in(&mut server).await;
+        read_packet(&mut server).await.expect("the check");
+        server.write_all(&text_row(&[Some("7"), Some("1"), Some("7"), None])).await.unwrap();
+        read_packet(&mut server).await
+    });
+    assert!(!killer.still_there().await);
+    let next = probe.await.unwrap();
+    assert!(next.as_deref().is_none_or(|p| p.first() != Some(&3)), "no probe: {next:?}");
+}
+
+/// The dev or CI server (`DATARIG_TEST_MYSQL_URL`, MySQL or MariaDB), or `None`: skipped.
+fn live_url(test: &str) -> Option<String> {
+    match std::env::var("DATARIG_TEST_MYSQL_URL") {
+        Ok(u) if !u.is_empty() => Some(u),
+        _ => {
+            let required = std::env::var("DATARIG_REQUIRE_MYSQL").is_ok_and(|v| v == "1");
+            assert!(!required, "DATARIG_TEST_MYSQL_URL must be set");
+            eprintln!("SKIPPED {test}: set DATARIG_TEST_MYSQL_URL");
+            None
+        }
+    }
+}
+
+/// A query session opened on `url` as the driver opens one, its route, and the options its
+/// cancel logs in with.
+async fn live_session(url: &str) -> (Opened, Route, Opts) {
+    let sslmode = std::env::var("DATARIG_TEST_MYSQL_SSLMODE").unwrap_or_else(|_| "DISABLED".into());
+    let cfg = ConnectionConfig { driver: "mysql".into(), dsn: Some(url.into()), sslmode, ..Default::default() };
+    let target = Target::of(&cfg).unwrap();
+    let route = target.route(None).unwrap();
+    let settings = Settings {
+        role: SessionRole::Query,
+        read_only: false,
+        select_limit: None,
+        lock_wait: None,
+        wait_timeout: None,
+    };
+    let opts = target.opts(None, "datarig-q-zz-marker", &route);
+    let opened = open(&route, opts.clone(), settings, &[]).await.map_err(|e| e.0).unwrap();
+    (opened, route, opts)
+}
+
+/// A cancel never stops another connection's statement: connection B of the same account runs
+/// `SELECT SLEEP(3)`; a cancel of session A aimed at B's id (as when the same id names another
+/// client's connection on another server behind the same name) finds A's marker on A's id,
+/// not B's: nothing is sent, and B's statement runs to its end.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_never_stops_another_connections_statement() {
+    let Some(url) = live_url("a_cancel_never_stops_another_connections_statement") else { return };
+    let (a, route, opts) = live_session(&url).await;
+    assert!(a.token.is_some(), "the dev and CI servers have performance_schema on: A is confirmed");
+    let mut b = Conn::new(Opts::from_url(&url).unwrap()).await.unwrap();
+    let b_id: u64 = b.query_first("SELECT CONNECTION_ID()").await.unwrap().unwrap();
+    assert_ne!(b_id, a.id);
+    let sleeping = tokio::spawn(async move {
+        let slept = b.query_first::<u64, _>("SELECT SLEEP(3)").await;
+        (slept, b)
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let killer = Killer::new(route, opts, b_id, a.token.clone());
+    killer.kill_query().await;
+    let (slept, b) = sleeping.await.unwrap();
+    assert!(matches!(slept, Ok(Some(0))), "B's statement ran to its end: {slept:?}");
+    assert_eq!(*killer.watch().borrow(), Kill::Failed(KillFailure::NotSent));
+    assert_eq!(killer.not_sent(), CancelFailure::NotSent(Box::new(DbError::CancelUnconfirmed)));
+    quit(b).await;
+    quit(a.conn).await;
+}
+
+/// A cancel whose session marker the server does not know (as on another server) is not sent;
+/// the session's own, confirmed, is: it stops the session's statement, and the statement is
+/// seen running before that.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_is_sent_only_with_the_marker_the_server_lists_on_the_session() {
+    let Some(url) = live_url("a_cancel_is_sent_only_with_the_marker_the_server_lists_on_the_session") else {
+        return;
+    };
+    let (a, route, opts) = live_session(&url).await;
+    let (id, mine) = (a.id, a.token.clone());
+    assert!(mine.is_some(), "the dev and CI servers have performance_schema on: A is confirmed");
+    let mut conn = a.conn;
+    let t0 = std::time::Instant::now();
+    let sleeping = tokio::spawn(async move {
+        let slept = conn.query_first::<u64, _>("SELECT SLEEP(3)").await;
+        (slept, conn)
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let unknown = Killer::new(route.clone(), opts.clone(), id, Some(token()));
+    assert!(!unknown.still_there().await);
+    unknown.kill_query().await;
+    assert_eq!(unknown.not_sent(), CancelFailure::NotSent(Box::new(DbError::CancelUnconfirmed)));
+    let own = Killer::new(route, opts, id, mine);
+    assert!(own.still_there().await, "the session's statement runs");
+    own.kill_query().await;
+    assert!(matches!(*own.watch().borrow(), Kill::Taken(_)), "{:?}", *own.watch().borrow());
+    let (slept, conn) = sleeping.await.unwrap();
+    assert!(!matches!(slept, Ok(Some(0))), "stopped: {slept:?}");
+    assert!(t0.elapsed() < std::time::Duration::from_millis(2900), "{:?}", t0.elapsed());
+    quit(conn).await;
 }

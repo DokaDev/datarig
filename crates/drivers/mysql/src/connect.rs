@@ -226,10 +226,10 @@ async fn run_session(
             return;
         }
     };
-    let Opened { conn, wire, encryption, server, tracked, id, read_only_unconfirmed } = opened;
+    let Opened { conn, wire, encryption, server, tracked, id, read_only_unconfirmed, token, own } = opened;
     // The cancel logs in as the session does, without a database (one could be dropped since).
     let kill_opts = target.opts(None, &opts.application_name, &route);
-    let killer = Killer::new(route, kill_opts, id);
+    let killer = Killer::new(route, kill_opts, id, token);
     if let Ok(mut g) = canceller.killer.lock() {
         *g = Some(killer);
     }
@@ -276,8 +276,20 @@ async fn run_session(
             let Some(killer) = killer else { return };
             let settings = crate::query::Settings { page_size: opts.page_size, read_only: opts.read_only };
             let (asked, busy) = (canceller.asked.clone(), canceller.busy.clone());
-            crate::query::query_loop(conn, link, killer, asked, busy, events, settings, server, tracked, select_limit)
-                .await
+            crate::query::query_loop(
+                conn,
+                link,
+                killer,
+                asked,
+                busy,
+                events,
+                settings,
+                server,
+                tracked,
+                select_limit,
+                own,
+            )
+            .await
         }
     }
 }
