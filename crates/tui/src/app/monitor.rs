@@ -334,6 +334,9 @@ pub struct MonitorTab {
     /// Generation of `session`: events of an older one are dropped.
     pub generation: u64,
     pub state: MonState,
+    /// Its current session opened although the server did not keep it read-only: what the
+    /// server reported and answered, for the session view. Cleared when the session ends.
+    pub read_only_unconfirmed: Option<String>,
     pub view: MonitorView,
     /// This tab's interval (the setting's until `+`/`-`).
     pub interval: MonitorInterval,
@@ -425,6 +428,7 @@ impl MonitorTab {
             session: None,
             generation: 0,
             state: MonState::Idle,
+            read_only_unconfirmed: None,
             view: MonitorView::Overview,
             interval,
             paused: false,
@@ -645,6 +649,7 @@ impl MonitorTab {
         // What the closed connection still sends (a probe's answer already queued) is dropped:
         // no current connection has generation 0.
         self.generation = 0;
+        self.read_only_unconfirmed = None;
         self.request = None;
         self.text = None;
         self.prev = None;
@@ -1206,6 +1211,13 @@ impl App {
                 return self.monitor_action_done(id, request, outcome, now);
             }
             DbEvent::MonitorFollowUp { request, result } => return self.monitor_followed(id, request, result),
+            DbEvent::ReadOnlyUnconfirmed(detail) => {
+                self.log_read_only_unconfirmed(SessionRole::Monitor, &detail);
+                if let Some(m) = self.monitor_mut(id) {
+                    m.read_only_unconfirmed = Some(detail);
+                }
+                return;
+            }
             ev => ev,
         };
         let error_text = match &ev {

@@ -7972,3 +7972,337 @@ async fn a_select_that_runs_code_is_never_cut_at_a_page() {
     let evs = c.run(5, &["SELECT @zz_max"]).await;
     assert_eq!(page_of(&evs).1[0][0].as_deref(), Some("600"));
 }
+
+/// What a [`Misreport`] stream looks for in the server's answers: the session's read-only as its
+/// session state tracking reports it (`ON`, by either name), and what it puts there instead
+/// (`NO`, the same length, which no server writes for on).
+const REPORTED: [(&[u8], &[u8]); 2] = [
+    (b"\x15transaction_read_only\x02ON", b"\x15transaction_read_only\x02NO"),
+    (b"\x0ctx_read_only\x02ON", b"\x0ctx_read_only\x02NO"),
+];
+
+/// What an [`unkept`](MisreportDialer::unkept) stream looks for in what the client sends: the
+/// set-up's read-only (by either name), and what it sends instead (off, the same length, so the
+/// packet's header stays right).
+const UNKEPT: [(&[u8], &[u8]); 2] =
+    [(b"transaction_read_only = ON", b"transaction_read_only = 0 "), (b"tx_read_only = ON", b"tx_read_only = 0 ")];
+
+/// A dialer whose streams change every read-only the server reports as on into a value that is
+/// not on, as a server (or something in front of it) that reports it otherwise would. It counts
+/// what it changed.
+#[derive(Default)]
+struct MisreportDialer {
+    dialer: TcpDialer,
+    changed: Arc<std::sync::atomic::AtomicUsize>,
+    /// Its streams also change the set-up's read-only to off before the server gets it ([`UNKEPT`]),
+    /// as a server that takes the setting but does not keep it would leave the session.
+    unkept: bool,
+}
+
+/// A stream that hands the server's answers on in whole packets (however the reads split them),
+/// each changed as [`REPORTED`] says.
+struct Misreport {
+    inner: datarig_core::transport::BoxedStream,
+    changed: Arc<std::sync::atomic::AtomicUsize>,
+    /// Read, not yet a whole packet.
+    pending: Vec<u8>,
+    /// Whole packets, changed, not yet handed on.
+    ready: std::collections::VecDeque<u8>,
+    /// What the client sends is changed as [`UNKEPT`] says.
+    unkept: bool,
+    /// Taken from the client and changed, not yet written to the server.
+    out: Vec<u8>,
+    /// The changes in `out`, counted in `changed` once all of it is written.
+    out_changes: usize,
+}
+
+impl Misreport {
+    /// Write all of `out` to the server; its changes count once it is all written.
+    fn drain(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        while !self.out.is_empty() {
+            match std::task::ready!(tokio::io::AsyncWrite::poll_write(
+                std::pin::Pin::new(&mut self.inner),
+                cx,
+                &self.out
+            )) {
+                Ok(0) => return std::task::Poll::Ready(Err(std::io::ErrorKind::WriteZero.into())),
+                Ok(n) => drop(self.out.drain(..n)),
+                Err(e) => return std::task::Poll::Ready(Err(e)),
+            }
+        }
+        self.changed.fetch_add(std::mem::take(&mut self.out_changes), std::sync::atomic::Ordering::SeqCst);
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    /// Move every whole packet of `pending` to `ready`, changed.
+    fn packets(&mut self) {
+        loop {
+            if self.pending.len() < 4 {
+                return;
+            }
+            let len = 4
+                + usize::from(self.pending[0])
+                + (usize::from(self.pending[1]) << 8)
+                + (usize::from(self.pending[2]) << 16);
+            if self.pending.len() < len {
+                return;
+            }
+            let mut packet: Vec<u8> = self.pending.drain(..len).collect();
+            for (from, to) in REPORTED {
+                let mut at = 0;
+                while let Some(i) = packet[at..].windows(from.len()).position(|w| w == from) {
+                    let i = at + i;
+                    packet[i..i + from.len()].copy_from_slice(to);
+                    self.changed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    at = i + from.len();
+                }
+            }
+            self.ready.extend(packet);
+        }
+    }
+}
+
+impl tokio::io::AsyncRead for Misreport {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let me = self.get_mut();
+        while me.ready.is_empty() {
+            let mut chunk = [0u8; 4096];
+            let mut read = tokio::io::ReadBuf::new(&mut chunk);
+            match std::pin::Pin::new(&mut me.inner).poll_read(cx, &mut read) {
+                std::task::Poll::Ready(Ok(())) if read.filled().is_empty() => {
+                    // The end: whatever is left is handed on as it is.
+                    me.ready.extend(me.pending.drain(..));
+                    break;
+                }
+                std::task::Poll::Ready(Ok(())) => {
+                    me.pending.extend_from_slice(read.filled());
+                    me.packets();
+                }
+                other => return other,
+            }
+        }
+        let n = buf.remaining().min(me.ready.len());
+        let out: Vec<u8> = me.ready.drain(..n).collect();
+        buf.put_slice(&out);
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+impl tokio::io::AsyncWrite for Misreport {
+    /// Unchanged without [`unkept`](Misreport::unkept); with it, `buf` is taken whole into
+    /// [`out`](Misreport::out), changed, once what was taken before has gone to the server.
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let me = self.get_mut();
+        if !me.unkept {
+            return std::pin::Pin::new(&mut me.inner).poll_write(cx, buf);
+        }
+        std::task::ready!(me.drain(cx))?;
+        let start = me.out.len();
+        me.out.extend_from_slice(buf);
+        for (from, to) in UNKEPT {
+            let mut at = start;
+            while let Some(i) = me.out[at..].windows(from.len()).position(|w| w == from) {
+                let i = at + i;
+                me.out[i..i + from.len()].copy_from_slice(to);
+                me.out_changes += 1;
+                at = i + from.len();
+            }
+        }
+        std::task::Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let me = self.get_mut();
+        std::task::ready!(me.drain(cx))?;
+        std::pin::Pin::new(&mut me.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let me = self.get_mut();
+        std::task::ready!(me.drain(cx))?;
+        std::pin::Pin::new(&mut me.inner).poll_shutdown(cx)
+    }
+}
+
+impl Dialer for MisreportDialer {
+    fn dial(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> futures::future::BoxFuture<
+        'static,
+        Result<datarig_core::transport::BoxedStream, datarig_core::transport::DialError>,
+    > {
+        let (dial, changed, unkept) = (self.dialer.dial(host, port), self.changed.clone(), self.unkept);
+        Box::pin(async move {
+            let inner = dial.await?;
+            let (pending, ready) = (Vec::new(), std::collections::VecDeque::new());
+            Ok(Box::new(Misreport { inner, changed, pending, ready, unkept, out: Vec::new(), out_changes: 0 })
+                as datarig_core::transport::BoxedStream)
+        })
+    }
+}
+
+/// A session that must be read-only, whose server reports its read-only as something other
+/// than on, is asked: it opens when the server answers that it is read-only (the metadata and
+/// monitor sessions, and a read-only profile's query session), instead of being refused on
+/// the report alone.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_only_session_reported_otherwise_is_asked_before_it_is_refused() {
+    let test = "a_read_only_session_reported_otherwise_is_asked";
+    let Some(url) = my_url(test) else { return };
+    // Over TLS the bytes say nothing.
+    if std::env::var("DATARIG_TEST_MYSQL_SSLMODE").is_ok_and(|m| !m.eq_ignore_ascii_case("DISABLED")) {
+        return;
+    }
+    for (role, read_only) in [(SessionRole::Meta, false), (SessionRole::Monitor, false), (SessionRole::Query, true)] {
+        let d = Arc::new(MisreportDialer::default());
+        let changed = d.changed.clone();
+        let o = ConnectOptions::new(PAGE, role, &tag(test))
+            .read_only(read_only)
+            .dialer(Some(DialerRef(d as Arc<dyn Dialer>)));
+        let (tx, mut rx) = unbounded_channel();
+        let session = MyDriver.connect(&profile(&url), role, o, tx);
+        let opened = loop {
+            match tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.expect("an answer") {
+                Some(DbEvent::Connected) => break Ok(()),
+                Some(DbEvent::ConnectFailed { error, .. }) => break Err(error),
+                Some(_) => {}
+                None => panic!("closed"),
+            }
+        };
+        assert!(changed.load(std::sync::atomic::Ordering::SeqCst) > 0, "{role:?}: the report was not changed");
+        assert_eq!(opened, Ok(()), "{role:?}");
+        drop(session);
+    }
+}
+
+/// A read-only profile's session whose start-up statement turns its read-only off is refused,
+/// and the refusal says what the server reported and answered.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_left_writable_is_refused_with_the_servers_values() {
+    let test = "a_session_left_writable_is_refused_with_the_servers_values";
+    let Some((url, admin)) = urls(test) else { return };
+    let mut admin = side(&admin).await;
+    let mariadb = is_mariadb(&mut admin).await;
+    let refused = starting(&url, SessionRole::Query, test, true, &["SET SESSION TRANSACTION READ WRITE"]).await.err();
+    let Some(DbError::Connection(fault)) = &refused else { panic!("{refused:?}") };
+    let text = fault.to_string();
+    assert!(text.starts_with("the server did not make the session read-only (reported "), "{text}");
+    assert!(text.contains("_read_only: OFF; asked: "), "{text}");
+    // As the server writes them: MySQL `0`, MariaDB `OFF`.
+    let off = if mariadb { "OFF" } else { "0" };
+    assert!(text.contains(&format!("_read_only {off}, ")), "{text}");
+    assert!(text.ends_with(&format!("innodb_read_only {off})")), "{text}");
+    assert_eq!(text.contains("super_read_only 0"), !mariadb, "{text}");
+}
+
+/// A session that must be read-only, whose server does not keep the setting (it reads back
+/// off): the metadata and monitor sessions open anyway and say what the server reported and
+/// answered, as they send only the app's own fixed reads; a read-only profile's query session
+/// is still refused, with the same values.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_only_the_server_does_not_keep_is_said_by_metadata_and_monitor_and_refused_to_queries() {
+    let test = "a_read_only_the_server_does_not_keep";
+    let Some((url, admin)) = urls(test) else { return };
+    // Over TLS the bytes cannot be changed.
+    if std::env::var("DATARIG_TEST_MYSQL_SSLMODE").is_ok_and(|m| !m.eq_ignore_ascii_case("DISABLED")) {
+        return;
+    }
+    let mut admin = side(&admin).await;
+    let mariadb = is_mariadb(&mut admin).await;
+    // As the server writes them: MySQL `0`, MariaDB `OFF`.
+    let off = if mariadb { "OFF" } else { "0" };
+    for (role, read_only) in [(SessionRole::Meta, false), (SessionRole::Monitor, false), (SessionRole::Query, true)] {
+        let d = Arc::new(MisreportDialer { unkept: true, ..MisreportDialer::default() });
+        let changed = d.changed.clone();
+        let o = ConnectOptions::new(PAGE, role, &tag(test))
+            .read_only(read_only)
+            .dialer(Some(DialerRef(d as Arc<dyn Dialer>)));
+        let (tx, mut rx) = unbounded_channel();
+        let session = MyDriver.connect(&profile(&url), role, o, tx);
+        let mut unconfirmed = Vec::new();
+        let opened = loop {
+            match tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.expect("an answer") {
+                Some(DbEvent::Connected) => break Ok(()),
+                Some(DbEvent::ConnectFailed { error, .. }) => break Err(error),
+                Some(DbEvent::ReadOnlyUnconfirmed(detail)) => unconfirmed.push(detail),
+                Some(_) => {}
+                None => panic!("closed"),
+            }
+        };
+        assert!(changed.load(std::sync::atomic::Ordering::SeqCst) > 0, "{role:?}: the set-up was not changed");
+        let text = match (role, opened) {
+            (SessionRole::Query, Err(DbError::Connection(fault))) => {
+                assert!(unconfirmed.is_empty(), "{unconfirmed:?}");
+                fault.to_string()
+            }
+            (SessionRole::Query, other) => panic!("the query session must be refused: {other:?}"),
+            (_, Ok(())) => {
+                assert_eq!(unconfirmed.len(), 1, "{role:?}: {unconfirmed:?}");
+                unconfirmed.remove(0)
+            }
+            (_, Err(e)) => panic!("{role:?} must open: {e:?}"),
+        };
+        assert!(text.starts_with("the server did not make the session read-only (reported "), "{role:?}: {text}");
+        assert!(text.contains("; asked: ") && text.contains(&format!("_read_only {off}, ")), "{role:?}: {text}");
+        assert_eq!(text.contains("super_read_only "), !mariadb, "{role:?}: {text}");
+        drop(session);
+    }
+}
+
+/// A read-only profile's query session with start-up statements, whose server does not keep
+/// the setting, is refused before they run: they never run on a writable session.
+#[tokio::test(flavor = "multi_thread")]
+async fn startup_statements_never_run_on_a_session_the_server_did_not_keep_read_only() {
+    let test = "startup_statements_never_run_on_a_session_the_server_did_not_keep_read_only";
+    let Some((url, admin)) = urls(test) else { return };
+    // Over TLS the bytes cannot be changed.
+    if std::env::var("DATARIG_TEST_MYSQL_SSLMODE").is_ok_and(|m| !m.eq_ignore_ascii_case("DISABLED")) {
+        return;
+    }
+    let t = Table::make(&admin, "unkept_startup", &["CREATE TABLE {t} (id INT)"]).await;
+    let d = Arc::new(MisreportDialer { unkept: true, ..MisreportDialer::default() });
+    let changed = d.changed.clone();
+    let sql = vec![datarig_core::driver::SessionStatement {
+        sql: format!("INSERT INTO {} VALUES (1)", t.q()),
+        per_transaction: None,
+    }];
+    let o = ConnectOptions::new(PAGE, SessionRole::Query, &tag(test))
+        .read_only(true)
+        .session_sql(sql)
+        .dialer(Some(DialerRef(d as Arc<dyn Dialer>)));
+    let (tx, mut rx) = unbounded_channel();
+    let session = MyDriver.connect(&profile(&url), SessionRole::Query, o, tx);
+    let refused = loop {
+        match tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.expect("an answer") {
+            Some(DbEvent::Connected) => panic!("the session must be refused"),
+            Some(DbEvent::ConnectFailed { error, .. }) => break error,
+            Some(_) => {}
+            None => panic!("closed"),
+        }
+    };
+    drop(session);
+    assert!(changed.load(std::sync::atomic::Ordering::SeqCst) > 0, "the set-up was not changed");
+    let DbError::Connection(fault) = &refused else { panic!("{refused:?}") };
+    let text = fault.to_string();
+    assert!(text.starts_with("the server did not make the session read-only (reported "), "{text}");
+    let mut side = side(&admin).await;
+    let rows: Option<u64> = side.query_first(format!("SELECT COUNT(*) FROM {}", t.q())).await.unwrap();
+    assert_eq!(rows, Some(0), "the start-up statement ran");
+    side.disconnect().await.unwrap();
+}

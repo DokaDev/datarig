@@ -323,6 +323,9 @@ pub(crate) const ASK_VALUES: &str = "SELECT @@SESSION.sql_mode, @@SESSION.time_z
 pub(crate) struct Tracked {
     pub(crate) sql_mode: Option<String>,
     pub(crate) read_only: Option<bool>,
+    /// The read-only value as the server reported it (its own spelling), for the message when
+    /// the session is not read-only.
+    pub(crate) read_only_reported: Option<String>,
     pub(crate) select_limit: Option<String>,
     /// The current database (`USE`, `COM_INIT_DB`); `Some("")` for none.
     pub(crate) schema: Option<String>,
@@ -368,7 +371,10 @@ impl Tracked {
                         let (name, value) = (v.name_str().to_ascii_lowercase(), v.value_str().into_owned());
                         match name.as_str() {
                             "sql_mode" => self.sql_mode = Some(value),
-                            "transaction_read_only" | "tx_read_only" => self.read_only = Some(on(&value)),
+                            "transaction_read_only" | "tx_read_only" => {
+                                self.read_only = Some(on(&value));
+                                self.read_only_reported = Some(value);
+                            }
                             "sql_select_limit" => self.select_limit = Some(value),
                             "time_zone" => self.time_zone = Some(value),
                             "character_set_results" => self.results_charset = Some(value),
@@ -475,6 +481,56 @@ fn on(value: &str) -> bool {
     value.eq_ignore_ascii_case("on") || value == "1"
 }
 
+/// What [`ask_read_only`] answered, as the server wrote it: the session's read-only, and for
+/// the message only, the server's `super_read_only` (`None` on MariaDB, which has none) and
+/// `innodb_read_only`.
+pub(crate) type ReadOnlyAsked = (Option<String>, Option<String>, Option<String>);
+
+/// The statement that asks whether the session is read-only, with the server's own read-only
+/// settings for the message. Only the session's counts: a server whose own settings refuse
+/// writes may still pass them on to another (a reader that forwards writes to its writer).
+pub(crate) fn ask_read_only(server: &Server) -> String {
+    let ro = server.read_only_var();
+    let super_ro = if server.mariadb { "NULL" } else { "CAST(@@GLOBAL.super_read_only AS CHAR)" };
+    format!("SELECT CAST(@@SESSION.{ro} AS CHAR), {super_ro}, CAST(@@GLOBAL.innodb_read_only AS CHAR)")
+}
+
+/// Why the session is not read-only, with the values the server reported and answered.
+pub(crate) fn not_read_only(
+    server: &Server,
+    reported: Option<&str>,
+    (session, super_ro, innodb_ro): &ReadOnlyAsked,
+) -> String {
+    let ro = server.read_only_var();
+    let v = |v: Option<&str>| v.unwrap_or("NULL").to_string();
+    let mut asked = vec![format!("{ro} {}", v(session.as_deref()))];
+    if !server.mariadb {
+        asked.push(format!("super_read_only {}", v(super_ro.as_deref())));
+    }
+    asked.push(format!("innodb_read_only {}", v(innodb_ro.as_deref())));
+    format!(
+        "the server did not make the session read-only (reported {ro}: {}; asked: {})",
+        reported.unwrap_or("none"),
+        asked.join(", ")
+    )
+}
+
+/// Whether the session on `conn` is read-only: on when the server reported it on, else as the
+/// server answers [`ask_read_only`] (which `tracked` then keeps). `None` when it is; otherwise
+/// what the server reported and answered ([`not_read_only`]).
+async fn confirm_read_only(conn: &mut Conn, server: &Server, tracked: &mut Tracked) -> Result<Option<String>, DbError> {
+    if tracked.read_only == Some(true) {
+        return Ok(None);
+    }
+    let asked: Option<ReadOnlyAsked> = conn.query_first(ask_read_only(server)).await.map_err(|e| my_error(&e))?;
+    let asked = asked.unwrap_or_default();
+    tracked.read_only = Some(asked.0.as_deref().is_some_and(on));
+    if tracked.read_only == Some(true) {
+        return Ok(None);
+    }
+    Ok(Some(not_read_only(server, tracked.read_only_reported.as_deref(), &asked)))
+}
+
 /// A connection that is ready for the session.
 pub(crate) struct Opened {
     pub(crate) conn: Conn,
@@ -485,6 +541,10 @@ pub(crate) struct Opened {
     pub(crate) tracked: Tracked,
     /// The connection's id on the server (what `KILL QUERY` names).
     pub(crate) id: u64,
+    /// A metadata or monitor session whose read-only the server did not keep: what it reported
+    /// and answered ([`not_read_only`]). Such a session opens anyway, as it sends only the app's
+    /// own fixed reads.
+    pub(crate) read_only_unconfirmed: Option<String>,
 }
 
 /// Open a connection to `target` over a stream of `route` with `opts`, check the server's
@@ -513,6 +573,20 @@ pub(crate) async fn open(
     let set = conn.query_drop(init_sql(&server, &settings)).await;
     set.map_err(|e| (my_error(&e), false))?;
     tracked.update(&conn);
+    // A read-only profile's start-up statements run only on a session confirmed read-only: on a
+    // server that does not keep the setting they would otherwise run writable before the
+    // refusal below.
+    // Only what the server reports counts after them: an answer now says nothing about a
+    // statement that turns it off unreported, which the check below asks again.
+    if settings.role == SessionRole::Query && settings.read_only && !session_sql.is_empty() {
+        let reported = tracked.read_only;
+        let unconfirmed = confirm_read_only(&mut conn, &server, &mut tracked).await.map_err(|e| (e, false))?;
+        tracked.read_only = reported;
+        if let Some(detail) = unconfirmed {
+            quit(conn).await;
+            return Err((DbError::Connection(Fault::other(detail)), false));
+        }
+    }
     for (index, sql) in session_sql.iter().enumerate() {
         if let Err(e) = conn.query_drop(sql.as_str()).await {
             let error = DbError::SessionSql { index, statement: sql.clone(), error: Box::new(my_error(&e)) };
@@ -546,9 +620,21 @@ pub(crate) async fn open(
             tracked.connection_charset = Some(connection);
         }
     }
-    if read_only && tracked.read_only != Some(true) {
-        quit(conn).await;
-        return Err((DbError::Connection(Fault::other("the server did not make the session read-only")), false));
+    // What the server reported is not trusted to say no: a value that is missing or not on is
+    // asked on the connection itself, and only the answer decides. A query session of a
+    // read-only profile is refused when the answer is not on; a metadata or monitor session
+    // opens anyway and says what the server answered (a reader that does not keep the setting
+    // would otherwise never connect).
+    let mut read_only_unconfirmed = None;
+    if read_only {
+        let unconfirmed = confirm_read_only(&mut conn, &server, &mut tracked).await.map_err(|e| (e, false))?;
+        if let Some(detail) = unconfirmed {
+            if settings.role == SessionRole::Query {
+                quit(conn).await;
+                return Err((DbError::Connection(Fault::other(detail)), false));
+            }
+            read_only_unconfirmed = Some(detail);
+        }
     }
     // The handshake has the id's lower 32 bits: MySQL's ids have no more, MariaDB's may.
     let id = match server.mariadb {
@@ -559,7 +645,7 @@ pub(crate) async fn open(
             id.unwrap_or(u64::from(conn.id()))
         }
     };
-    Ok(Opened { conn, wire, encryption, server, tracked, id })
+    Ok(Opened { conn, wire, encryption, server, tracked, id, read_only_unconfirmed })
 }
 
 /// The handshake and login over `stream` of `route`, through a [`Wire`]: encrypted as the

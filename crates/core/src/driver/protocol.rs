@@ -1374,6 +1374,11 @@ pub enum DbEvent {
     /// server did not apply the read-only default (a pooler that drops startup options): the
     /// session runs anyway, because the driver makes each transaction it opens read-only.
     ReadOnlyPerTransaction,
+    /// Sent right before `Connected` of a metadata or monitor session whose server did not keep
+    /// the session read-only (a reader that drops the setting): the session runs anyway, as it
+    /// sends only the app's own fixed reads. What the server reported and answered, for the
+    /// error log and the session view. A query session is refused instead.
+    ReadOnlyUnconfirmed(String),
     /// Sent right after `Connected` of a query session opened in a schema of its own (before
     /// its `Context`) when the server did not apply the search path given as a startup option
     /// (a pooler that drops startup options): the driver sets it in each transaction the

@@ -713,3 +713,30 @@ fn a_question_covered_only_while_the_screen_is_too_small_waits_again() {
     h.mouse(MouseEventKind::Up(MouseButton::Left), trust.x + 1, trust.y);
     assert!(krx.try_recv().is_err(), "trusted at once after the screen grew back");
 }
+
+/// A metadata session that runs although the server did not keep it read-only is said by
+/// `:session` only while it runs: a lost tunnel closes it (no `Lost` of its own comes), and
+/// its line goes with it.
+#[test]
+fn a_lost_tunnel_takes_the_metadata_sessions_read_only_warning_with_it() {
+    let (mut h, id) = harness();
+    let generation = connect(&mut h, id);
+    tunnel(&mut h, id, generation, TunnelEvent::Opened(Arc::new(FakeTunnel::default())));
+    let detail = "the server did not make the session read-only (reported transaction_read_only: OFF; \
+                  asked: transaction_read_only 0, super_read_only 0, innodb_read_only 1)";
+    h.db(DbEvent::ReadOnlyUnconfirmed(detail.into()));
+    h.db(DbEvent::Connected);
+    let warning = "The metadata session runs although the server did not keep it read-only";
+    let shown = |h: &mut Harness| {
+        h.command("session");
+        assert_eq!(h.overlay_kind(), Some(OverlayKind::SessionView));
+        let screen = h.screen(240, 40);
+        h.key(KeyCode::Esc);
+        screen
+    };
+    let screen = shown(&mut h);
+    assert!(screen.contains(warning), "{screen}");
+    tunnel(&mut h, id, generation, TunnelEvent::Lost(Loss::Keepalive));
+    let screen = shown(&mut h);
+    assert!(!screen.contains(warning), "{screen}");
+}

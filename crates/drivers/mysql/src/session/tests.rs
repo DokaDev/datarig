@@ -2086,3 +2086,36 @@ async fn a_definer_lookup_stopped_by_a_cancel_ends_as_cancelled() {
         kills.abort();
     }
 }
+
+/// The question asks the session's variable by the server's name for it, and `super_read_only`
+/// only of MySQL (MariaDB has none).
+#[test]
+fn the_read_only_question_names_each_servers_variables() {
+    assert_eq!(
+        ask_read_only(&MYSQL_84),
+        "SELECT CAST(@@SESSION.transaction_read_only AS CHAR), CAST(@@GLOBAL.super_read_only AS CHAR), \
+         CAST(@@GLOBAL.innodb_read_only AS CHAR)"
+    );
+    assert_eq!(
+        ask_read_only(&Server { version: (10, 11, 6), mariadb: true }),
+        "SELECT CAST(@@SESSION.tx_read_only AS CHAR), NULL, CAST(@@GLOBAL.innodb_read_only AS CHAR)"
+    );
+    assert!(ask_read_only(&Server { version: (11, 4, 2), mariadb: true }).contains("@@SESSION.transaction_read_only"));
+}
+
+/// The refusal says what the server reported and what it answered.
+#[test]
+fn a_session_not_made_read_only_says_what_the_server_said() {
+    let a = (Some("0".to_string()), Some("0".to_string()), Some("0".to_string()));
+    assert_eq!(
+        not_read_only(&MYSQL_84, Some("NO"), &a),
+        "the server did not make the session read-only (reported transaction_read_only: NO; \
+         asked: transaction_read_only 0, super_read_only 0, innodb_read_only 0)"
+    );
+    let maria = Server { version: (10, 11, 6), mariadb: true };
+    assert_eq!(
+        not_read_only(&maria, None, &(Some("0".to_string()), None, None)),
+        "the server did not make the session read-only (reported tx_read_only: none; \
+         asked: tx_read_only 0, innodb_read_only NULL)"
+    );
+}

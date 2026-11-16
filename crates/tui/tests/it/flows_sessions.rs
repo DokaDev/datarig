@@ -1734,3 +1734,59 @@ fn form_saves_leave_the_rest_of_the_file_as_written() {
     let a2 = profile(1, "a", "# its preset\nstartup = \"x\"\n") + "startup_sql = [\"SET work_mem = '2MB'\"]\n";
     assert_eq!(dir.text(), format!("{head}{a2}\n{b2}\n{presets}"));
 }
+
+/// A metadata or monitor session that opened although the server did not keep it read-only
+/// writes one line to the error log with what the server reported and answered, and `:session`
+/// says it, each session's own: a monitor session that ends takes its line with it, the
+/// metadata session's stays.
+#[test]
+fn sessions_the_server_did_not_keep_read_only_are_logged_and_shown_while_they_run() {
+    let state = std::env::temp_dir().join(format!("datarig-read-only-unconfirmed-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&state);
+    std::fs::create_dir_all(&state).unwrap();
+    let mut h = Harness::with_config(&test_db_config(), Lang::En);
+    h.app.set_paths(datarig_core::paths::Paths { data: None, state: Some(state.clone()) });
+    let detail = |innodb: u8| {
+        format!(
+            "the server did not make the session read-only (reported transaction_read_only: OFF; \
+             asked: transaction_read_only 0, super_read_only 0, innodb_read_only {innodb})"
+        )
+    };
+    h.db(DbEvent::ReadOnlyUnconfirmed(detail(1)));
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["public".into()])));
+    let log = || std::fs::read_to_string(state.join("errors.log")).expect("logged");
+    let lines = log();
+    assert_eq!(lines.lines().count(), 1, "{lines}");
+    let line = format!(" db.read_only_unconfirmed: Other: metadata session: {}", detail(1));
+    assert!(lines.lines().next().unwrap().ends_with(&line), "{lines}");
+    let meta = "The metadata session runs although the server did not keep it read-only (it sends only";
+    let monitor = "The monitor session runs although the server did not keep it read-only (it sends only";
+    let shown = |h: &mut Harness| {
+        h.command("session");
+        assert_eq!(h.overlay_kind(), Some(OverlayKind::SessionView));
+        let screen = h.screen(240, 40);
+        h.key(KeyCode::Esc);
+        screen
+    };
+    let screen = shown(&mut h);
+    assert!(screen.contains(meta) && screen.contains("innodb_read_only 1)"), "{screen}");
+    assert!(!screen.contains(monitor), "{screen}");
+    // The monitor session's own, beside the metadata session's.
+    h.driver.monitor.store(true, std::sync::atomic::Ordering::SeqCst);
+    h.command("monitor");
+    h.monitor_db(DbEvent::ReadOnlyUnconfirmed(detail(0)));
+    h.monitor_db(DbEvent::Connected);
+    let lines = log();
+    assert_eq!(lines.lines().count(), 2, "{lines}");
+    assert!(lines.contains(&format!(" db.read_only_unconfirmed: Other: monitor session: {}", detail(0))), "{lines}");
+    let screen = shown(&mut h);
+    assert!(screen.contains(meta) && screen.contains("innodb_read_only 1)"), "{screen}");
+    assert!(screen.contains(monitor) && screen.contains("innodb_read_only 0)"), "{screen}");
+    // The monitor session ends: its line goes, the metadata session's stays.
+    h.monitor_db(DbEvent::Lost { error: DbError::Connection(datarig_core::fault::Fault::other("reset")) });
+    let screen = shown(&mut h);
+    assert!(screen.contains(meta), "{screen}");
+    assert!(!screen.contains(monitor), "{screen}");
+    let _ = std::fs::remove_dir_all(&state);
+}

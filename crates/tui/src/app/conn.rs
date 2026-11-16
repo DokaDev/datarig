@@ -178,6 +178,10 @@ pub struct ProfileConn {
     /// How the current attempt's metadata session's traffic goes (`DbEvent::Encryption`, sent
     /// right before `Connected`); `None` until it says.
     pub encryption: Option<datarig_core::tls::Encryption>,
+    /// The current metadata session opened although the server did not keep it read-only
+    /// (`DbEvent::ReadOnlyUnconfirmed`): what the server reported and answered, for the session
+    /// view. Cleared when that session ends or another attempt starts.
+    pub read_only_unconfirmed: Option<String>,
     /// When a session of the profile was last used (a run, an explorer read, an answer of any
     /// of its sessions), by the app's clock and the wall clock: idle since
     /// ([`super::idle`]).
@@ -220,6 +224,7 @@ impl ProfileConn {
             explain: None,
             edit: None,
             encryption: None,
+            read_only_unconfirmed: None,
             used: None,
             idle_closed: None,
         }
@@ -276,6 +281,10 @@ pub struct AuxMeta {
     pub used: Instant,
     /// The database's schema tree in the explorer, as the profile's own has.
     pub tree: Tree,
+    /// Its current session opened although the server did not keep it read-only: what the
+    /// server reported and answered, for the session view. Cleared when the session ends or
+    /// opens again.
+    pub read_only_unconfirmed: Option<String>,
 }
 
 #[derive(Default)]
@@ -315,6 +324,7 @@ impl ConnectionManager {
         let c = self.entry(id);
         c.generation = generation;
         c.encryption = None;
+        c.read_only_unconfirmed = None;
         c.explain = None;
         c.edit = None;
         generation
@@ -383,6 +393,7 @@ impl ConnectionManager {
             keys: Keys::Unknown,
             used: now,
             tree: Tree::new(),
+            read_only_unconfirmed: None,
         });
         id
     }
@@ -394,6 +405,7 @@ impl ConnectionManager {
         let next = self.aux_seq;
         let a = self.aux.iter_mut().find(|a| a.id == id)?;
         a.id = next;
+        a.read_only_unconfirmed = None;
         Some(next)
     }
 

@@ -268,6 +268,8 @@
 "session_view.title_new" = "Session settings: new profile (the form's unsaved values)"
 "session_view.keys" = "j/k scroll · Esc close"
 "session_view.read_only" = "Read-only environment: only settings a read-only session may change are allowed"
+"session_view.read_only_unconfirmed_meta" = "The metadata session runs although the server did not keep it read-only (it sends only the app's own fixed statements): {detail}"
+"session_view.read_only_unconfirmed_monitor" = "The monitor session runs although the server did not keep it read-only (it sends only the app's own fixed statements): {detail}"
 "session_view.server_setting" = "the server's setting"
 "session_view.never" = "never"
 "session_view.no_limit" = "no limit"

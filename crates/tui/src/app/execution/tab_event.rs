@@ -348,6 +348,8 @@ impl App {
             }
             // Said by the profile's metadata session (a query session connects as it does).
             DbEvent::ReadOnlyPerTransaction | DbEvent::Encryption(_) => None,
+            // Only a metadata or monitor session opens with it (a query session is refused).
+            DbEvent::ReadOnlyUnconfirmed(_) => None,
             // Handled first (`statement_cache_off`, `sync_tab_language`, the cancel's clock).
             DbEvent::StatementCacheOff
             | DbEvent::Language(_)

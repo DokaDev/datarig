@@ -805,6 +805,7 @@ impl App {
         if let Some(s) = c.meta.take() {
             s.close();
         }
+        c.read_only_unconfirmed = None;
         self.status = Some(m);
     }
 
