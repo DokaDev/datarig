@@ -138,7 +138,7 @@ statement (a session that loses it is closed).
 Some read replicas do not keep a session's `transaction_read_only = ON` (the session reads `0`
 right after it is set). On such a server a read-only profile cannot run queries: its query
 session is refused before any of its start-up statements run, with "could not talk to the
-server", and the line in [`errors.log`](../faq.md#where-is-errorslog) names the values the server
+server", and the line in `errors.log` names the values the server
 gave. datarig's own metadata and monitor sessions, which only send datarig's own reads, run there
 without it (the explorer and the monitor work), and `:session` and `errors.log` say so.
 

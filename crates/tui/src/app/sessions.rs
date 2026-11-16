@@ -328,15 +328,18 @@ impl App {
             head.push(SessionLine::Text(label(Label::SessionViewReadOnly), Tone::Warning));
         }
         // Each metadata and monitor session of the profile that runs although the server did
-        // not keep it read-only, once per distinct line.
+        // not keep it read-only, once per distinct line: only while that session is open.
         if let Some(p) = profile {
-            let meta = self.conns.get(p).and_then(|c| c.read_only_unconfirmed.clone());
-            let aux = self.conns.auxes().filter(|a| a.profile == p).filter_map(|a| a.read_only_unconfirmed.clone());
-            let monitors = self
-                .tabs
-                .iter()
-                .filter(|t| t.profile == Some(p))
-                .filter_map(|t| t.doc.monitor.as_ref()?.read_only_unconfirmed.clone());
+            let meta = self.conns.get(p).filter(|c| c.meta.is_some()).and_then(|c| c.read_only_unconfirmed.clone());
+            let aux = self
+                .conns
+                .auxes()
+                .filter(|a| a.profile == p && a.session.is_some())
+                .filter_map(|a| a.read_only_unconfirmed.clone());
+            let monitors =
+                self.tabs.iter().filter(|t| t.profile == Some(p)).filter_map(|t| {
+                    t.doc.monitor.as_ref().filter(|m| m.session.is_some())?.read_only_unconfirmed.clone()
+                });
             let metas = meta.into_iter().chain(aux).map(|detail| Msg::SessionViewReadOnlyUnconfirmedMeta { detail });
             let monitors = monitors.map(|detail| Msg::SessionViewReadOnlyUnconfirmedMonitor { detail });
             for m in metas.chain(monitors) {
