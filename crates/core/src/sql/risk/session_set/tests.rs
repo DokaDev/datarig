@@ -144,11 +144,29 @@ fn pg_read_only_refusal_is_the_classifiers() {
 }
 
 /// A setting that asks before it runs when typed is no start-up setting: start-up statements
-/// run without asking. Other settings still are.
+/// run without asking. Other settings still are, and MySQL's `sql_mode` too (the classifier
+/// reads the session in the mode it sets), but not with another that asks.
 #[test]
 fn settings_that_ask_when_typed_are_refused() {
-    for sql in ["SET foreign_key_checks = 0", "SET sql_log_bin = 0", "SET sql_mode = ''"] {
+    for sql in [
+        "SET foreign_key_checks = 0",
+        "SET sql_log_bin = 0",
+        "SET sql_mode = '', foreign_key_checks = 0",
+        "SET SESSION foreign_key_checks = 0, sql_mode = ''",
+        "SET @@session.sql_mode = '', @@session.unique_checks = 0",
+        "SET @@sql_mode = '', sql_log_bin = 0",
+    ] {
         assert_eq!(mysql(sql).map(|_| ()), Err(SetProblem::Asks), "{sql}");
+    }
+    for sql in [
+        "SET sql_mode = 'ANSI_QUOTES'",
+        "SET SESSION sql_mode = ''",
+        "SET @@session.sql_mode = 'TRADITIONAL'",
+        "SET @@sql_mode = '', SESSION SQL_MODE = ''",
+        "SET sql_mode = '', @x = 1, max_execution_time = 1000",
+    ] {
+        let s = mysql(sql).unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+        assert!(s.risk.read_only().is_err(), "{sql}: not on the read-only allowlist");
     }
     assert_eq!(pg("SET session_replication_role = replica").map(|_| ()), Err(SetProblem::Asks));
     assert!(pg("SET work_mem = '64MB'").is_ok());
@@ -158,6 +176,7 @@ fn settings_that_ask_when_typed_are_refused() {
 #[test]
 fn mysql_allows_session_sets() {
     for sql in [
+        "SET SESSION sql_mode = 'ANSI_QUOTES'",
         "SET @@session.time_zone = '+00:00'",
         "SET time_zone = '+00:00', @x = 1",
         "SET @@max_heap_table_size = 16777216",

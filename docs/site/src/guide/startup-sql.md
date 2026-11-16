@@ -151,8 +151,9 @@ an error shows the words its connect would refuse with.
   MySQL's `SET @@transaction_isolation` without a scope (use `SET SESSION …`).
 - **Nothing that asks when typed.** A setting that asks before it runs when you type it is
   refused, since Startup SQL runs without asking: MySQL's `foreign_key_checks = 0`,
-  `unique_checks`, `sql_log_bin`, `sql_mode` and the others of its kind, and PostgreSQL's
-  `session_replication_role`.
+  `unique_checks`, `sql_log_bin` and the others of its kind, and PostgreSQL's
+  `session_replication_role`. MySQL's `sql_mode` stays allowed (see [Details](#details)), but
+  not in a statement that also sets one of those.
 - **MySQL in every sql mode.** A statement is read with and without `ANSI_QUOTES` and
   `NO_BACKSLASH_ESCAPES`; what any reading refuses is refused.
 - **Who the session is.** `SET ROLE` is allowed in a read-only environment (every transaction
@@ -190,7 +191,8 @@ Behind a pooler, set the isolation in your own block instead (`BEGIN ISOLATION L
 
 ## Details
 
-- On MySQL a read-only session is checked after its statements ran. A value with a function call or a subquery
+- On MySQL the classifier reads the session in the sql mode a preset set, and a read-only
+  session is checked after its statements ran. A value with a function call or a subquery
   (`SET @x = (SELECT …)`) runs at connect like any other.
 - A row shows its statement on one line, without its line comments, and a line break inside a
   string as `⏎`. A row you do not edit is saved as the file has it; one you edit is saved as

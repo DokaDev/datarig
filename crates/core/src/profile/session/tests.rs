@@ -12,7 +12,7 @@ fn presets() -> Vec<SessionPreset> {
             Dbms::Postgres,
             vec!["SET statement_timeout = '30s'".into(), "SET work_mem = '64MB'".into()],
         ),
-        SessionPreset::new("my_ro", Dbms::MySql, vec!["SET SESSION net_write_timeout = 6000".into()]),
+        SessionPreset::new("my_ro", Dbms::MySql, vec!["SET SESSION sql_mode = 'ANSI_QUOTES'".into()]),
         SessionPreset::new("role", Dbms::Postgres, vec!["SET ROLE reporting".into()]),
     ]
 }
@@ -117,7 +117,7 @@ fn only_own_statements_without_a_preset() {
 #[test]
 fn the_environment_maps_by_database() {
     let p = plan(&profile("mariadb"), &mapped(), Defaults::default(), &presets()).unwrap();
-    assert_eq!(sql(&p), ["SET SESSION net_write_timeout = 6000"]);
+    assert_eq!(sql(&p), ["SET SESSION sql_mode = 'ANSI_QUOTES'"]);
 }
 
 #[test]

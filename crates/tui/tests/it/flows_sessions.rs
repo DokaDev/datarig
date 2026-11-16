@@ -36,7 +36,7 @@ fn presets() -> Vec<SessionPreset> {
             Dbms::Postgres,
             vec!["SET statement_timeout = '30s'".into(), "SET work_mem = '64MB'".into()],
         ),
-        SessionPreset::new("my_ro", Dbms::MySql, vec!["SET SESSION net_write_timeout = 6000".into()]),
+        SessionPreset::new("my_ro", Dbms::MySql, vec!["SET SESSION sql_mode = 'ANSI_QUOTES'".into()]),
     ]
 }
 
@@ -1300,7 +1300,7 @@ fn a_mysql_profiles_session_view_has_no_pooler_lines() {
     let screen = h.screen(120, 40);
     assert!(screen.contains("local-pg · MySQL · environment prod"), "{screen}");
     assert!(screen.contains("From Startup SQL “my_ro” of environment prod:"), "{screen}");
-    assert!(screen.contains("  SET SESSION net_write_timeout = 6000"), "{screen}");
+    assert!(screen.contains("  SET SESSION sql_mode = 'ANSI_QUOTES'"), "{screen}");
     assert!(!screen.contains("behind a pooler"), "{screen}");
 }
 
