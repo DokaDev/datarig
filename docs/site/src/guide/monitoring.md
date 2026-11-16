@@ -290,8 +290,16 @@ lists both, dimmed with the reason when they cannot be sent:
   sends the signal. MySQL reads the session first and sends `KILL` right after (a few
   milliseconds apart): a cancel checks the statement's event in `performance_schema`, or,
   without it, the statement's text and times (a weak check: the same text may be a new run of
-  it, and the dialog says so); an end checks the session only. An action asked for before the
-  monitor reconnected is dropped.
+  it, and the dialog says so); an end checks the session only. Both also check its account, and
+  its thread (`THREAD_ID`, from `performance_schema.threads`): MySQL gives a later session the
+  same id while it runs, so without `SELECT` on `performance_schema.threads` nothing is sent, and
+  the answer says what to grant. An action asked for before the monitor reconnected is dropped.
+- MySQL: an action is sent only on a monitor connection the server confirms is direct. Each of
+  datarig's connections carries a marker of its own (the `datarig_session` connection
+  attribute), and the read right before the action also reads where the server lists the
+  monitor's marker in `performance_schema.session_account_connect_attrs`: on the monitor's own
+  id, the one its login gave, or nothing is sent (a proxy in between could send the read and the
+  action to different servers).
 
 Sent is not done. The answer says what the server said: refused (with the privilege it needs),
 nothing sent (the session ended, another session took its id, it runs another statement),
@@ -346,6 +354,7 @@ nothing:
 | MySQL | `PROCESS`, `SELECT` on `performance_schema`, or the metadata lock instrument (`wait/lock/metadata/sql/mdl`) | an idle session as `idle ?`: whether it holds a transaction open is not known |
 | MySQL | enough `performance_schema` thread slots (`performance_schema_max_thread_instances`) | that the list may miss sessions |
 | MySQL | `SELECT` on `performance_schema` | the Locks view without who blocks a row lock wait, and without metadata lock waits |
+| MySQL | `SELECT` on `performance_schema.threads` | no cancel or end is sent: a session cannot be told apart from a later one given the same id |
 | MySQL | the metadata lock instrument (`wait/lock/metadata/sql/mdl`) | the Locks view without metadata lock waits |
 | MySQL | 8.0.38 or later in 8.0, or 8.4 or later | the Locks view without who blocks a row lock wait (on older versions reading it can stall a busy server, so it is not read) |
 | PostgreSQL | `pg_read_all_stats` | WAL senders and the WAL receiver without their state and positions (a standby's received and replayed positions still show) |
