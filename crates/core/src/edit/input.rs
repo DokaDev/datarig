@@ -72,8 +72,41 @@ pub fn check_input(d: Dialect, c: &TableColumn, text: &str) -> Result<(), Invali
         ValueKind::Bit => bits(mysql, &ty, text),
         ValueKind::Text => self::text(mysql, &ty, text),
         ValueKind::Other if !mysql && ty.name == "uuid" => uuid(text).then_some(()).ok_or(Invalid::NotUuid),
+        ValueKind::Interval if mysql => mysql_time(&ty, text),
         ValueKind::Other | ValueKind::Json | ValueKind::Interval | ValueKind::Array(_) => Ok(()),
     }
+}
+
+/// MySQL's `TIME` in the forms the server reads exactly: `[-]H:M:S[.f]` (the hours one to three
+/// digits, minutes and seconds one or two: `838:59:59`, `8:3:2`), `[-]H:M` (seconds zero), and
+/// either with days first (`D HH:MM:SS[.f]`, `D HH:MM`). At most as many digits of a second as
+/// the column keeps: the server rounds the others away without a warning. Out of the type's
+/// range the server warns, which fails the Apply.
+fn mysql_time(ty: &TypeName, s: &str) -> Result<(), Invalid> {
+    let digits = |p: &str, most: usize| !p.is_empty() && p.len() <= most && p.bytes().all(|b| b.is_ascii_digit());
+    let sixty = |p: &str| digits(p, 2) && p.parse::<u32>().is_ok_and(|n| n < 60);
+    let s = s.strip_prefix('-').unwrap_or(s);
+    let (s, most_hours) = match s.split_once(' ') {
+        Some((days, rest)) if digits(days, 2) => (rest, 2),
+        Some(_) => return Err(Invalid::NotTime),
+        None => (s, 3),
+    };
+    let (clock, frac) = match s.split_once('.') {
+        Some((c, f)) if digits(f, usize::MAX) => (c, f),
+        Some(_) => return Err(Invalid::NotTime),
+        None => (s, ""),
+    };
+    let fields: Vec<&str> = clock.split(':').collect();
+    let ok = match fields[..] {
+        [h, m] => frac.is_empty() && digits(h, most_hours) && sixty(m),
+        [h, m, sec] => digits(h, most_hours) && sixty(m) && sixty(sec),
+        _ => false,
+    };
+    if !ok {
+        return Err(Invalid::NotTime);
+    }
+    let keep = fraction_digits(true, ty);
+    if frac.trim_end_matches('0').len() > keep as usize { Err(Invalid::TooPrecise { digits: keep }) } else { Ok(()) }
 }
 
 /// A type name as the server formats it, read for its checks: `int(11) unsigned` is `int`

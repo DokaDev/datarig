@@ -298,6 +298,20 @@ pub enum DbError {
     /// server rolls back the transaction, the Apply's changes with the rest of it. Comes as
     /// [`DbEvent::Lost`]'s reason, after the Apply's answer.
     ApplyNotUndone,
+    /// MySQL: a step of an Apply ([`DbCommand::ApplyEdits`]) was answered with warnings: the
+    /// server changed or dropped part of what was sent (without strict mode a value cut to the
+    /// column's length, a character it cannot hold, a date made zero, a member of a SET dropped)
+    /// or converted values to compare them. The Apply failed and was undone. What the server
+    /// said, `Level Code: Message` each (the first few; none when they could not be read).
+    ApplyWarnings(Vec<String>),
+    /// MySQL: an Apply failed, and undoing what its steps did was answered with warnings (a
+    /// table that does not take part in transactions, such as MyISAM, kept its changes): some
+    /// of the changes may be in place.
+    ApplyKept,
+    /// MySQL: the session's `sql_notes` is off (or could not be read), so the server would not
+    /// count a note such as a value it rounded in an Apply's step's warnings
+    /// ([`DbError::ApplyWarnings`]): the Apply was not sent.
+    ApplyNotesOff,
     /// MySQL: an `EXPLAIN ANALYZE` of a write names tables whose changes a rollback does not undo
     /// (an engine that is not InnoDB, such as MyISAM or MEMORY, or a view, whose tables are not
     /// known), or tables whose triggers may write elsewhere: it was not sent. The tables,
@@ -368,6 +382,7 @@ impl DbError {
             DbError::Transport(e) => Cow::Borrowed(e.raw()),
             DbError::CancelNotTaken(CancelFailure::NotSent(why)) => why.raw(),
             DbError::SessionSql { error, .. } => error.raw(),
+            DbError::ApplyWarnings(w) => Cow::Owned(w.join("; ")),
             DbError::AuthUnsupported(s) | DbError::AccessDenied(s) => Cow::Borrowed(s),
             DbError::Tls(p) => Cow::Borrowed(p.raw()),
             DbError::ServerKeyFile { fault, .. } => {
@@ -407,6 +422,8 @@ impl DbError {
             | DbError::CommitUnknown
             | DbError::ReservedSavepoint
             | DbError::ApplyNotUndone
+            | DbError::ApplyKept
+            | DbError::ApplyNotesOff
             | DbError::NotUndoable(_)
             | DbError::StatementLogged(_)
             | DbError::NotAPlainRead

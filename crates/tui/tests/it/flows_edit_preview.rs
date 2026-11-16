@@ -1098,6 +1098,14 @@ fn each_failure_says_why_and_the_changes_stay() {
         (None, ApplyError::Db(DbError::Server("could not serialize access".into())), "could not serialize access. Nothing was applied.".into()),
         (Some(0), ApplyError::Db(DbError::Cancelled), "Apply cancelled; nothing was applied.".into()),
         (
+            Some(1),
+            ApplyError::Db(DbError::ApplyWarnings(vec!["Warning 1265: Data truncated for column 'email' at row 1".into()])),
+            format!(
+                "id=1 \u{B7} the server changed or dropped part of what was sent and only warned (Warning 1265: Data \
+                 truncated for column 'email' at row 1). Nothing was applied. Statement: {update}"
+            ),
+        ),
+        (
             None,
             ApplyError::Db(DbError::ReadWriteRefused),
             "not sent: the session is read-only and this statement asks for read-write. Nothing was applied.".into(),
@@ -1188,6 +1196,30 @@ fn an_apply_whose_result_is_unknown_is_applied_again_only_when_asked() {
     h.key(KeyCode::Esc);
     answer(&mut h, "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows());
     assert!(!edits(&h).apply_unknown);
+}
+
+/// An Apply whose undo left changes in place (a table that does not take part in transactions)
+/// says so, and is applied again only when the user says so again, as one whose result is not
+/// known: applying the same edits again could repeat what stayed.
+#[test]
+fn an_apply_whose_undo_left_changes_is_applied_again_only_when_asked() {
+    use datarig_core::driver::{ApplyError, ApplyFailure};
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    let (id, _, _) = applies(&mut h);
+    let why = ApplyError::Db(DbError::ApplyKept);
+    h.db(DbEvent::Applied { id, result: Err(ApplyFailure { step: Some(1), why }) });
+    let kept = "id=1 \u{B7} the change failed, and undoing it left some changes in place: a table they changed does \
+                not take part in transactions. Re-run the query to see the current values.";
+    assert_eq!(said(&mut h).map(|m| h.app.i18n.msg(&m).to_string()).as_deref(), Some(kept));
+    assert!(edits(&h).apply_unknown);
+    assert!(!h.app.edit_preview_view().unwrap().apply, "Apply is disabled");
+    h.key(KeyCode::Esc);
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    assert!(no_apply_sent(&mut h), "warned first");
 }
 
 /// An answer to another Apply is not this one's; an answer that comes after the session ended

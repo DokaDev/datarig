@@ -183,7 +183,11 @@ impl App {
             // Not for the changes as they are now: what it did is not known for them, and they
             // are applied again only once the user says so.
             Ok(_) if stale => rs.edit.apply_unknown = true,
-            Err(f) if f.why == ApplyError::Db(DbError::CommitUnknown) => rs.edit.apply_unknown = true,
+            // What the table holds now is not known: a commit not confirmed, or an undo that
+            // left changes in place. Applying the same edits again could repeat them.
+            Err(f) if matches!(f.why, ApplyError::Db(DbError::CommitUnknown | DbError::ApplyKept)) => {
+                rs.edit.apply_unknown = true
+            }
             _ if stale => return,
             Ok(steps) => {
                 let applied = layer(rs, &a, steps);
@@ -260,6 +264,8 @@ impl App {
         match (&f.why, row) {
             (ApplyError::Db(DbError::Cancelled), _) => Label::EditFailedCancelled.into(),
             (ApplyError::Db(DbError::CommitUnknown), _) => Label::EditFailedUnknown.into(),
+            (ApplyError::Db(DbError::ApplyKept), Some(row)) => Msg::EditFailedKept { row },
+            (ApplyError::Db(DbError::ApplyKept), None) => Label::EditFailedKeptPlain.into(),
             (ApplyError::Count { got: 0 }, Some(row)) => Msg::EditFailedChanged { row },
             (ApplyError::Count { got }, Some(row)) => {
                 let expected = match step.map(|s| s.expect) {

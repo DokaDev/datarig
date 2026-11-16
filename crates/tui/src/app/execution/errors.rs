@@ -97,6 +97,12 @@ impl App {
             DbError::TxNotOpened => Label::DbTxNotOpened,
             DbError::CommitUnknown => Label::DbCommitUnknown,
             DbError::ApplyNotUndone => Label::DbApplyNotUndone,
+            DbError::ApplyKept => Label::DbApplyKept,
+            DbError::ApplyNotesOff => Label::DbApplyNotesOff,
+            DbError::ApplyWarnings(w) if w.is_empty() => Label::DbApplyWarningsUnread,
+            DbError::ApplyWarnings(w) => {
+                return self.i18n.msg(&Msg::DbApplyWarnings { warnings: w.join("; ") }).to_string();
+            }
             DbError::ReservedSavepoint => Label::DbReservedSavepoint,
             DbError::NotAPlainRead => Label::DbNotAPlainRead,
             DbError::NextTransactionSet => Label::DbNextTransactionSet,
