@@ -427,6 +427,43 @@ fn a_session_answers_monitor_actions_it_does_not_do() {
     }
 }
 
+/// A MySQL target that carries neither its start nor its thread is never acted on: MySQL gives
+/// a later session the same id while it runs. The account is told what would show the thread.
+#[test]
+fn a_target_known_by_its_id_alone_is_never_acted_on() {
+    let (my, list) = my_unprivileged();
+    let row = by_id(&list, 18986).clone();
+    let t = target(&my, &SessionRow { thread: None, ..row.clone() }).unwrap();
+    assert_eq!((t.key.started, t.thread), (None, None));
+    for kind in BOTH {
+        assert_eq!(recheck(kind, &t, Some(&row)), Some(NotSent::Unidentified), "{kind:?}");
+        assert_eq!(recheck(kind, &t, None), Some(NotSent::Unidentified), "{kind:?}");
+    }
+    // With the thread known (performance_schema.threads readable) it is.
+    let row = SessionRow { thread: Some(19035), ..row };
+    let t = target(&my, &row).unwrap();
+    assert_eq!(recheck(ActionKind::Terminate, &t, Some(&row)), None);
+}
+
+/// A session of another account under the target's id is not the target.
+#[test]
+fn a_recheck_compares_the_account_when_both_are_known() {
+    let (my, list) = my_root();
+    let update = by_id(&list, 18986).clone();
+    let t = target(&my, &update).unwrap();
+    assert!(t.user.is_some());
+    let other = SessionRow { user: Some("zz_someone_else".into()), ..update.clone() };
+    let unknown = SessionRow { user: None, ..update.clone() };
+    for kind in BOTH {
+        assert_eq!(recheck(kind, &t, Some(&other)), Some(NotSent::Stale(Stale::SessionReplaced)), "{kind:?}");
+        assert_eq!(recheck(kind, &t, Some(&unknown)), recheck(kind, &t, Some(&update)), "{kind:?}");
+    }
+    assert_eq!(
+        confirm(ActionKind::Terminate, &t, &FollowUp { row: Some(other), interrupted: None }),
+        Confirmation::Gone
+    );
+}
+
 #[test]
 fn a_recheck_sends_only_to_the_same_session_and_statement() {
     let (my, list) = my_root();
@@ -452,7 +489,8 @@ fn a_recheck_sends_only_to_the_same_session_and_statement() {
 
     // A weak stamp that matches is sent on; another text or a new run is not.
     let (my, list) = my_unprivileged();
-    let weak = by_id(&list, 18986).clone();
+    // The statement events refused, `performance_schema.threads` readable: the thread is known.
+    let weak = SessionRow { thread: Some(19035), ..by_id(&list, 18986).clone() };
     let t = target(&my, &weak).unwrap();
     assert!(t.stamp.as_ref().is_some_and(StatementStamp::weak));
     assert_eq!(recheck(ActionKind::Cancel, &t, Some(&weak)), None);
@@ -523,7 +561,8 @@ fn identity_hidden_or_read_another_way_proves_nothing() {
     // MySQL: the weak form then, a statement event now (the consumer switched on): another
     // statement may run, so nothing is sent.
     let (my, list) = my_unprivileged();
-    let weak = by_id(&list, 18986).clone();
+    // The statement events refused, `performance_schema.threads` readable: the thread is known.
+    let weak = SessionRow { thread: Some(19035), ..by_id(&list, 18986).clone() };
     let t = target(&my, &weak).unwrap();
     let event_now =
         SessionRow { statement: Some(StatementStamp::MySqlEvent { thread_id: 1, event_id: 2 }), ..weak.clone() };

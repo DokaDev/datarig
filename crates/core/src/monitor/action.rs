@@ -109,6 +109,12 @@ fn same_session(target: &ActionTarget, row: &SessionRow) -> Option<bool> {
     if row.key.id != target.key.id {
         return Some(false);
     }
+    // Another account's session took the id.
+    if let (Some(then), Some(now)) = (&target.user, &row.user)
+        && then != now
+    {
+        return Some(false);
+    }
     let mut known = true;
     if let Some(started) = target.key.started {
         match row.key.started {
@@ -568,14 +574,28 @@ pub enum NotSent {
     ReadOnly,
     /// The target is the connection that would send it.
     OwnConnection,
+    /// MySQL: the target carries neither its start nor its thread (`THREAD_ID`, read from
+    /// `performance_schema.threads`), so it cannot be told apart from a later session given the
+    /// same id (MySQL reuses ids while it runs). The account needs `SELECT` on
+    /// `performance_schema.threads`, with the performance schema on.
+    Unidentified,
+    /// MySQL: the monitor's connection could not be confirmed to reach the server directly (its
+    /// own marker on its own id, the handshake's), so the read before the action and the action
+    /// could reach different sessions.
+    Unconfirmed,
 }
 
 /// What a read of the target's id just before an action of `kind` on `target` shows of it
 /// (`now`: the session of that id as the read found it, `None` when there is none), for a
 /// driver that reads the session again before it acts rather than in the statement that acts:
 /// why nothing may be sent, `None` when it may. A cancel needs the same statement still
-/// running; a weak stamp that matches is taken for it (the user was warned it may not be).
+/// running; a weak stamp that matches is taken for it (the user was warned it may not be). A
+/// target with neither its start nor its thread known is never acted on: the id alone may name
+/// a later session.
 pub fn recheck(kind: ActionKind, target: &ActionTarget, now: Option<&SessionRow>) -> Option<NotSent> {
+    if target.key.started.is_none() && target.thread.is_none() {
+        return Some(NotSent::Unidentified);
+    }
     let Some(row) = now else {
         return Some(NotSent::Stale(Stale::SessionGone));
     };

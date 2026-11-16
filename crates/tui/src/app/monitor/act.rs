@@ -578,6 +578,8 @@ impl App {
                     NotSent::Stale(Stale::CannotTell) => Msg::MonitorActCannotTell { id },
                     NotSent::ReadOnly => Label::MonitorActNotSentReadOnly.into(),
                     NotSent::OwnConnection => Label::MonitorActNotSentOwn.into(),
+                    NotSent::Unidentified => Msg::MonitorActUnidentified { id },
+                    NotSent::Unconfirmed => Label::MonitorActUnconfirmed.into(),
                     NotSent::Refused(_) => Msg::MonitorActRefused { why: refused },
                 };
                 (msg, Level::Warning, false)

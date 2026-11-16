@@ -315,6 +315,8 @@
 "monitor.act.cannot_tell" = "아무것도 보내지 않았습니다: 지금은 세션 {id}을(를) 구별할 수 없습니다. 다시 읽으세요"
 "monitor.act.not_sent_read_only" = "아무것도 보내지 않았습니다: 읽기 전용 환경"
 "monitor.act.not_sent_own" = "아무것도 보내지 않았습니다: 모니터 자신의 연결입니다"
+"monitor.act.unidentified" = "아무것도 보내지 않았습니다: 세션 {id}의 스레드를 읽을 수 없어, 같은 id를 받은 나중 세션과 구별할 수 없습니다. 계정에 performance_schema.threads에 대한 SELECT 권한을 주고(performance_schema가 켜져 있어야 함) 다시 읽으세요"
+"monitor.act.unconfirmed" = "아무것도 보내지 않았습니다: 이 모니터 연결이 서버에 직접 닿는지 확인할 수 없어, 동작이 다른 세션에 닿을 수 있습니다(performance_schema가 꺼져 있거나 읽을 수 없음, 또는 중간의 프록시나 로드 밸런서)"
 "monitor.act.refused" = "서버가 거부했습니다: {why}"
 "monitor.act.why.grant" = "{grants} 중 하나가 필요합니다 (또는 세션 자신의 역할)"
 "monitor.act.why.superuser" = "슈퍼유저의 세션: 슈퍼유저만 신호를 보낼 수 있습니다"

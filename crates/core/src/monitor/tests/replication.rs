@@ -256,6 +256,7 @@ fn my(process: bool) -> MySqlMonitor {
         innodb_trx: Readable::Yes,
         metadata_locks: Readable::Yes,
         statements: Readable::Yes,
+        threads: Readable::Yes,
         flavour: Flavour::Standard,
     }
 }

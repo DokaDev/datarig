@@ -11,7 +11,10 @@
 //!
 //! An action on another session ([`act`]) reads the target right before it (its session and
 //! statement as the tick tells them, compared in the core) and sends `KILL QUERY` or `KILL`
-//! only when it is still what the row showed; on a managed server that refuses it, the
+//! only when it is still what the row showed, and only when the monitor's connection is
+//! confirmed to reach the server directly: at open, and again in that very read, the server
+//! lists the connection's marker on its own id, the handshake's ([`Marker`]); else nothing is
+//! sent (a statement-routing proxy could send the read and the kill to different servers); on a managed server that refuses it, the
 //! provider's procedure, after the target is read again. A few milliseconds lie between the
 //! read and the statement: the server offers no statement that checks and kills in one. An
 //! action is never sent twice: an answer lost on the way is reported as such.
@@ -24,7 +27,7 @@
 
 use crate::link::{Link, Next};
 use crate::meta::monitor as sql;
-use crate::session::{my_error, quit};
+use crate::session::{my_error, own_verdict, quit};
 use datarig_core::driver::{Cell, DbCommand, DbError, DbEvent};
 use datarig_core::monitor::action::{
     self, ActionKind, ActionOutcome, ActionTarget, FollowUp, NativeError, NotSent, Stale, Via,
@@ -54,6 +57,14 @@ const GRACE: Duration = Duration::from_secs(3);
 /// is given up on.
 const ACTION_DEADLINE: Duration = Duration::from_secs(10);
 
+/// The monitor connection's marker (`session::MARKER`), confirmed on its own id when it opened,
+/// and the id its handshake gave.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Marker {
+    pub(crate) token: String,
+    pub(crate) handshake: u32,
+}
+
 /// The connection and what it sent.
 struct Monitor {
     conn: Conn,
@@ -69,8 +80,15 @@ struct Monitor {
 }
 
 /// `read_only`: the profile's own (the monitor session is read-only whatever the profile says,
-/// so this is the only place that tells an action may not be sent).
-pub(crate) async fn monitor_loop(conn: Conn, mut link: Link, events: UnboundedSender<DbEvent>, read_only: bool) {
+/// so this is the only place that tells an action may not be sent). `marker`: the connection's,
+/// when it was confirmed at open; `None`: no action is ever sent.
+pub(crate) async fn monitor_loop(
+    conn: Conn,
+    mut link: Link,
+    events: UnboundedSender<DbEvent>,
+    read_only: bool,
+    marker: Option<Marker>,
+) {
     let mut m = Monitor { conn, sent: 0, selects: 0, calls: 0, limit: None };
     let probed = match link.guard(None, tokio::time::timeout(PROBE_LIMIT, m.probe())).await {
         Ok(Ok(probed)) => probed,
@@ -146,9 +164,8 @@ pub(crate) async fn monitor_loop(conn: Conn, mut link: Link, events: UnboundedSe
                 }
             }
             DbCommand::MonitorAction { request, kind, target } => {
-                let Ok((outcome, lost)) =
-                    link.guard(None, within(&mut m, ACTION_DEADLINE, my, read_only, kind, &target)).await
-                else {
+                let act = within(&mut m, ACTION_DEADLINE, my, read_only, marker.as_ref(), kind, &target);
+                let Ok((outcome, lost)) = link.guard(None, act).await else {
                     return;
                 };
                 (DbEvent::MonitorActionDone { request, outcome }, lost)
@@ -375,11 +392,12 @@ async fn within(
     deadline: Duration,
     my: &MySqlMonitor,
     read_only: bool,
+    marker: Option<&Marker>,
     kind: ActionKind,
     target: &ActionTarget,
 ) -> (ActionOutcome, Option<DbError>) {
     let mut sending = false;
-    match tokio::time::timeout(deadline, act(x, my, read_only, kind, target, &mut sending)).await {
+    match tokio::time::timeout(deadline, act(x, my, read_only, marker, kind, target, &mut sending)).await {
         Ok(outcome) => (outcome, None),
         Err(_) => {
             let error = DbError::NoAnswer(deadline);
@@ -389,12 +407,14 @@ async fn within(
     }
 }
 
-/// Send `kind` on `target` if a read right before finds it unchanged; on a `read_only` profile
-/// nothing is sent at all. `sending` is set before the statement that acts goes out.
+/// Send `kind` on `target` if a read right before finds it unchanged and the connection
+/// confirmed (`marker`); on a `read_only` profile nothing is sent at all, nor without a marker
+/// confirmed at open. `sending` is set before the statement that acts goes out.
 async fn act(
     x: &mut impl Exec,
     my: &MySqlMonitor,
     read_only: bool,
+    marker: Option<&Marker>,
     kind: ActionKind,
     target: &ActionTarget,
     sending: &mut bool,
@@ -402,11 +422,14 @@ async fn act(
     if read_only {
         return ActionOutcome::NotSent(NotSent::ReadOnly);
     }
+    let Some(marker) = marker else {
+        return ActionOutcome::NotSent(NotSent::Unconfirmed);
+    };
     // No session has an id that is not a positive integer.
     let Ok(id) = u64::try_from(target.key.id) else {
         return ActionOutcome::NotSent(NotSent::Stale(Stale::SessionGone));
     };
-    if let Err(outcome) = recheck(x, my, kind, target, id).await {
+    if let Err(outcome) = recheck(x, my, marker, kind, target, id).await {
         return outcome;
     }
     let format = MonitorFormat::MySql(my.clone());
@@ -423,7 +446,7 @@ async fn act(
     // The standard statement was refused: nothing reached the target. The provider's procedure
     // goes only to the same target, read again.
     *sending = false;
-    if let Err(outcome) = recheck(x, my, kind, target, id).await {
+    if let Err(outcome) = recheck(x, my, marker, kind, target, id).await {
         return outcome;
     }
     let procedure = fallback.procedure(kind);
@@ -435,15 +458,32 @@ async fn act(
 }
 
 /// Read the target again: `Err` with the outcome when nothing may be sent (or the read
-/// failed, so nothing was).
+/// failed, so nothing was). The read also says where the server lists the connection's
+/// `marker`: not on its own id, the handshake's, and nothing is sent.
 async fn recheck(
     x: &mut impl Exec,
     my: &MySqlMonitor,
+    marker: &Marker,
     kind: ActionKind,
     target: &ActionTarget,
     id: u64,
 ) -> Result<(), ActionOutcome> {
-    let rows = x.run(&sql::guard(my, id)).await.map_err(|f| ActionOutcome::Failed(f.into_error()))?;
+    let mut rows =
+        x.run(&sql::guard(my, id, &marker.token)).await.map_err(|f| ActionOutcome::Failed(f.into_error()))?;
+    // The last cells of every row: the reading session's id and its marker's.
+    let mut confirmed = !rows.is_empty();
+    for row in &mut rows {
+        let Some(at) = row.len().checked_sub(sql::GUARD_MARKER.len()) else {
+            confirmed = false;
+            continue;
+        };
+        let ids: Vec<Option<u64>> =
+            row.split_off(at).iter().map(|c| c.as_deref().and_then(|v| v.parse().ok())).collect();
+        confirmed &= matches!(ids[..], [Some(own), marked] if own_verdict(marker.handshake, own, marked));
+    }
+    if !confirmed {
+        return Err(ActionOutcome::NotSent(NotSent::Unconfirmed));
+    }
     let (list, _) = decode::mysql::sessions(&[rows], my, SessionsWanted { idle: true })
         .map_err(|e| ActionOutcome::Failed(e.into_db(MYSQL_OLDEST)))?;
     let now = list.rows.iter().find(|r| r.key.id == target.key.id);

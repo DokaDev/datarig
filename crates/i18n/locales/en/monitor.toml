@@ -317,6 +317,8 @@
 "monitor.act.cannot_tell" = "Nothing sent: session {id} cannot be told apart now; read it again"
 "monitor.act.not_sent_read_only" = "Nothing sent: read-only environment"
 "monitor.act.not_sent_own" = "Nothing sent: that is the monitor's own connection"
+"monitor.act.unidentified" = "Nothing sent: session {id} cannot be told apart from a later session given the same id, as its thread cannot be read. Grant the account SELECT on performance_schema.threads (with performance_schema on), then read it again"
+"monitor.act.unconfirmed" = "Nothing sent: this monitor connection could not be confirmed to reach the server directly, so the action could reach a different session (performance_schema off or not readable, or a proxy or load balancer in between)"
 "monitor.act.refused" = "Refused by the server: {why}"
 "monitor.act.why.grant" = "needs one of {grants} (or the session's own role)"
 "monitor.act.why.superuser" = "a superuser's session: only a superuser may signal it"

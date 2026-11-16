@@ -112,6 +112,10 @@ pub struct MySqlMonitor {
     /// its consumer on with those above it: which statement each instrumented thread runs, by
     /// event id. Without it a statement is told apart by its text and times only.
     pub statements: Readable,
+    /// `performance_schema.threads` (needs `SELECT` on it): each session's `THREAD_ID`, which
+    /// tells a session apart from a later one given the same connection id. Without it no
+    /// action is sent ([`crate::monitor::action::NotSent::Unidentified`]).
+    pub threads: Readable,
     pub flavour: Flavour,
 }
 

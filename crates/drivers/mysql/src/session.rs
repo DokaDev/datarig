@@ -149,7 +149,7 @@ pub(crate) fn token() -> String {
 }
 
 /// Whether `t` is a token as [`token`] makes it: only those are written into a statement.
-fn is_token(t: &str) -> bool {
+pub(crate) fn is_token(t: &str) -> bool {
     t.len() == 32 && t.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
