@@ -134,9 +134,11 @@ pub struct ProfileConn {
     /// The database the metadata session works in, as the server said.
     pub database: Option<String>,
     /// The kinds (`pg_type.typtype`) of types of the profile's own database the metadata
-    /// session was asked (`DbCommand::LoadTypeKinds`), by the database and the type's oid:
-    /// `None` while the answer has not come; `?` for a type the answer did not list (dropped).
-    pub type_kinds: std::collections::HashMap<(String, u32), Option<char>>,
+    /// session was asked (`DbCommand::LoadTypeKinds`), by the database, the attempt (the
+    /// `generation` of the connection that answered: another connection may reach another
+    /// server, where the same oid is another type) and the type's oid: `None` while the answer
+    /// has not come; `?` for a type the answer did not list (dropped).
+    pub type_kinds: std::collections::HashMap<(String, u64, u32), Option<char>>,
     /// The server's databases (`DbCommand::LoadDatabases`), once asked: the names, or why they
     /// could not be read.
     pub databases: Option<Result<Vec<String>, String>>,

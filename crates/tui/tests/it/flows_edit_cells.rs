@@ -2447,3 +2447,38 @@ fn a_pg_kind_answered_for_another_database_does_not_count() {
     };
     assert_eq!(dated, Dated::Lookup(70_001), "still not known in another database");
 }
+
+/// The kinds the metadata session said are of the connection that said them: once the profile
+/// connects again (another generation, maybe another server where the same oid is another
+/// type), a new result's type is not known until it is asked again.
+#[test]
+fn a_pg_kind_answered_on_an_earlier_connection_is_asked_again() {
+    use datarig_core::driver::Dated;
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    h.db(DbEvent::TextStyle(Some(pg_style("ISO, MDY"))));
+    let read = |h: &mut Harness| {
+        let mut columns = users_columns();
+        columns[2] = ColumnMeta {
+            kind: ValueKind::Other,
+            styled: true,
+            dated: Dated::Lookup(70_001),
+            ..meta_from("nickname", "citext", false, USERS, 4)
+        };
+        answer(h, "SELECT id, email, nickname FROM shop.users", columns, vec![vec![s("1"), s("a@x"), s("x")]]);
+        let asked = h.sent().iter().any(|c| matches!(c, DbCommand::LoadTypeKinds { oids } if oids == &[70_001]));
+        let dated = match &h.app.tab().results {
+            Results::Rows(rs) => rs.columns[2].meta.dated,
+            _ => panic!("no row result"),
+        };
+        (asked, dated)
+    };
+    assert_eq!(read(&mut h), (true, Dated::Lookup(70_001)));
+    let name = h.app.profiles[0].name.clone();
+    h.meta_db(&name, DbEvent::TypeKinds { oids: vec![70_001], result: Ok(vec![(70_001, 'b')]) });
+    assert_eq!(read(&mut h), (false, Dated::No), "known on this connection");
+    // Connected again: another generation of the profile's connection.
+    let p = h.app.profiles[0].id;
+    h.app.conns.get_mut(p).expect("profile").generation += 1;
+    assert_eq!(read(&mut h), (true, Dated::Lookup(70_001)), "asked again, not known until then");
+}
