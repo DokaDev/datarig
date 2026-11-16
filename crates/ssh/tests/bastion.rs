@@ -128,8 +128,13 @@ async fn a_session_pages_and_cancels_through_the_bastion() {
     let session = PgDriver.connect(&db_behind(), SessionRole::Query, opts, tx);
     let mut next =
         async || tokio::time::timeout(Duration::from_secs(20), rx.recv()).await.expect("event").expect("open");
+    // The session first says the date settings the server reported.
+    let mut first = next().await;
+    while matches!(first, DbEvent::TextStyle(_)) {
+        first = next().await;
+    }
     // Over the tunnel, the connection itself is not encrypted (the tunnel is).
-    assert!(matches!(next().await, DbEvent::Encryption(Encryption::Plain)));
+    assert!(matches!(first, DbEvent::Encryption(Encryption::Plain)));
     assert!(matches!(next().await, DbEvent::Connected));
     session.send(DbCommand::Execute {
         max_rows: None,
