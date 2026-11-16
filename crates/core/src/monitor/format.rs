@@ -116,6 +116,10 @@ pub struct MySqlMonitor {
     /// tells a session apart from a later one given the same connection id. Without it no
     /// action is sent ([`crate::monitor::action::NotSent::Unidentified`]).
     pub threads: Readable,
+    /// The monitor's connection could not be confirmed, when it opened, to reach the server
+    /// directly (its marker on its own id, the handshake's): no action is offered or sent. The
+    /// driver sets it; the probe's answers never do.
+    pub unconfirmed: bool,
     pub flavour: Flavour,
 }
 

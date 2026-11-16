@@ -102,6 +102,8 @@ pub(crate) async fn monitor_loop(
     };
     let format = match probed {
         Ok(my) => {
+            // Not confirmed at open: no action is offered (nor sent, [`act`]).
+            let my = MySqlMonitor { unconfirmed: marker.is_none(), ..my };
             let _ = events.send(DbEvent::Monitor(Ok(MonitorFormat::MySql(my.clone()))));
             Some(my)
         }

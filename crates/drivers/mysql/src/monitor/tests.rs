@@ -13,6 +13,7 @@ fn my(flavour: Flavour) -> MySqlMonitor {
         metadata_locks: Readable::Yes,
         statements: Readable::Yes,
         threads: Readable::Yes,
+        unconfirmed: false,
         flavour,
     }
 }

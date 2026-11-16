@@ -445,23 +445,41 @@ fn a_target_known_by_its_id_alone_is_never_acted_on() {
     assert_eq!(recheck(ActionKind::Terminate, &t, Some(&row)), None);
 }
 
-/// A session of another account under the target's id is not the target.
+/// Another account shown under the target's id and thread (a later session, or the same one
+/// inside a `SQL SECURITY DEFINER` routine on MySQL before 8.0.22): nothing is sent, and a
+/// follow-up does not call the session gone, as its thread is the same.
 #[test]
-fn a_recheck_compares_the_account_when_both_are_known() {
+fn another_account_on_the_same_thread_sends_nothing_and_is_not_gone() {
     let (my, list) = my_root();
     let update = by_id(&list, 18986).clone();
     let t = target(&my, &update).unwrap();
-    assert!(t.user.is_some());
+    assert!(t.user.is_some() && t.thread.is_some());
     let other = SessionRow { user: Some("zz_someone_else".into()), ..update.clone() };
+    assert_eq!(other.thread, update.thread);
     let unknown = SessionRow { user: None, ..update.clone() };
     for kind in BOTH {
-        assert_eq!(recheck(kind, &t, Some(&other)), Some(NotSent::Stale(Stale::SessionReplaced)), "{kind:?}");
+        assert_eq!(recheck(kind, &t, Some(&other)), Some(NotSent::Stale(Stale::CannotTell)), "{kind:?}");
         assert_eq!(recheck(kind, &t, Some(&unknown)), recheck(kind, &t, Some(&update)), "{kind:?}");
+        let follow = FollowUp { row: Some(other.clone()), interrupted: None };
+        assert_ne!(confirm(kind, &t, &follow), Confirmation::Gone, "{kind:?}");
     }
     assert_eq!(
         confirm(ActionKind::Terminate, &t, &FollowUp { row: Some(other), interrupted: None }),
-        Confirmation::Gone
+        Confirmation::StillThere
     );
+}
+
+/// A MySQL monitor connection not confirmed when it opened offers no action on any row.
+#[test]
+fn an_unconfirmed_monitor_offers_no_action() {
+    let (my, list) = my_root();
+    let update = by_id(&list, 18986).clone();
+    let MonitorFormat::MySql(my) = my else { unreachable!("a MySQL format") };
+    let format = |unconfirmed| MonitorFormat::MySql(MySqlMonitor { unconfirmed, ..my.clone() });
+    for kind in BOTH {
+        assert!(matches!(decide(&format(false), &update, false, kind), Decision::Offer(_)), "{kind:?}");
+        assert_eq!(decide(&format(true), &update, false, kind), Decision::Refuse(Refusal::Unconfirmed), "{kind:?}");
+    }
 }
 
 #[test]

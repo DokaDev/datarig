@@ -152,6 +152,7 @@ fn refusal_short(refusal: &Refusal) -> Label {
         Refusal::Background => Label::MonitorActOffBackground,
         Refusal::PooledIdle => Label::MonitorActOffPooledIdle,
         Refusal::Untracked => Label::MonitorActOffUntracked,
+        Refusal::Unconfirmed => Label::MonitorActOffUnconfirmed,
     }
 }
 
@@ -300,6 +301,7 @@ impl App {
             Refusal::Background => Msg::MonitorActRefuseBackground { id },
             Refusal::PooledIdle => Label::MonitorActRefusePooledIdle.into(),
             Refusal::Untracked => Msg::MonitorActRefuseUntracked { id },
+            Refusal::Unconfirmed => Label::MonitorActRefuseUnconfirmed.into(),
         }
     }
 

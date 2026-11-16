@@ -109,12 +109,6 @@ fn same_session(target: &ActionTarget, row: &SessionRow) -> Option<bool> {
     if row.key.id != target.key.id {
         return Some(false);
     }
-    // Another account's session took the id.
-    if let (Some(then), Some(now)) = (&target.user, &row.user)
-        && then != now
-    {
-        return Some(false);
-    }
     let mut known = true;
     if let Some(started) = target.key.started {
         match row.key.started {
@@ -171,6 +165,9 @@ pub enum Refusal {
     /// activity, or it never ran a statement), so a later client of the same server session (a
     /// pooler's) could not be told apart from the one the row showed.
     Untracked,
+    /// MySQL: the monitor's connection could not be confirmed to reach the server directly
+    /// ([`crate::monitor::MySqlMonitor::unconfirmed`]): its actions could reach another session.
+    Unconfirmed,
 }
 
 /// What the user is told before an action is sent, besides what the session is.
@@ -228,6 +225,9 @@ pub fn decide(format: &MonitorFormat, row: &SessionRow, read_only: bool, kind: A
 fn refusal(format: &MonitorFormat, row: &SessionRow, kind: ActionKind) -> Option<Refusal> {
     if row.monitor {
         return Some(Refusal::MonitorConnection);
+    }
+    if matches!(format, MonitorFormat::MySql(my) if my.unconfirmed) {
+        return Some(Refusal::Unconfirmed);
     }
     let Some(target) = target(format, row) else {
         return Some(Refusal::Hidden(PG_READ_ALL_STATS));
@@ -606,6 +606,13 @@ pub fn recheck(kind: ActionKind, target: &ActionTarget, now: Option<&SessionRow>
         Some(true) => {}
         Some(false) => return Some(NotSent::Stale(Stale::SessionReplaced)),
         None => return Some(NotSent::Stale(Stale::CannotTell)),
+    }
+    // Another account shown: a later session, or the same one inside a `SQL SECURITY DEFINER`
+    // routine (MySQL before 8.0.22 shows the definer then). Nothing is sent either way.
+    if let (Some(then), Some(now)) = (&target.user, &row.user)
+        && then != now
+    {
+        return Some(NotSent::Stale(Stale::CannotTell));
     }
     let changed = Some(NotSent::Stale(Stale::StatementChanged));
     match kind {

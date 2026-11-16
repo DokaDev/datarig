@@ -218,6 +218,7 @@ pub fn probe(answers: &[Answer]) -> Result<MySqlMonitor, DecodeError> {
         // Readable, and the consumers on: else no statement is current.
         statements: enabled(statements),
         threads: readable(threads),
+        unconfirmed: false,
         flavour: format::flavour(MYSQL_MARKERS, &found),
     })
 }

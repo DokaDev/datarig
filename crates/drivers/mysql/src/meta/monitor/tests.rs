@@ -16,6 +16,7 @@ fn my(version: u32, performance_schema: bool, readable: Readable) -> MySqlMonito
         metadata_locks: readable,
         statements: readable,
         threads: Readable::Yes,
+        unconfirmed: false,
         flavour: Flavour::Standard,
     }
 }
