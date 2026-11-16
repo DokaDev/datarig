@@ -154,6 +154,8 @@ refused, with the reason, when it would be stored as something else. Some of the
 - "longer than 20 characters", "ends in spaces, which a CHAR column drops" (MySQL)
 - "not bytes as shown: \x and hexadecimal digits in pairs" (MySQL: `0x` and upper-case digits)
 - "real would store it rounded, as …" (a floating-point value must read back as typed)
+- a MySQL `TIME` is typed `H:MM` or `H:MM:SS` (`838:59:59`, `-01:30:00`, `8:3:2`), or with days
+  first (`1 10:00:00`), with no more digits of a second than the column keeps
 
 What the app cannot judge, such as a check constraint, is left to the server.
 
@@ -716,6 +718,17 @@ statement in a message is its first line, cut short when long:
 - "Apply result unknown: the connection was lost before the server confirmed. Re-run the query
   to check." The changes may be in the table already: the next Apply opens the dialog, whose
   first `y` warns, and only a second `y` applies them again.
+- MySQL: "id=5 · the server changed or dropped part of what was sent and only warned (Warning
+  1265: Data truncated for column 'name' at row 1). Nothing was applied. Statement: …". A server
+  without strict mode stores a value it has to change (text cut to the column's length, a
+  character the column cannot hold, a date made zero, a member of a SET dropped) and only warns:
+  any warning, or note, fails the Apply, whatever the server's mode.
+- MySQL: "not sent: this session's sql_notes is off, so the server would not report a value it
+  rounded. Turn it on (SET SESSION sql_notes = 1) and apply again. Nothing was applied."
+- MySQL: "id=5 · the change failed, and undoing it left some changes in place: a table they
+  changed does not take part in transactions. Re-run the query to see the current values." A
+  table such as MyISAM keeps what a statement did; the next Apply warns first, as after an
+  unknown result.
 
 ## After an Apply
 

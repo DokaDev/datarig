@@ -183,7 +183,11 @@ impl App {
             // Not for the changes as they are now: what it did is not known for them, and they
             // are applied again only once the user says so.
             Ok(_) if stale => rs.edit.apply_unknown = true,
-            Err(f) if f.why == ApplyError::Db(DbError::CommitUnknown) => rs.edit.apply_unknown = true,
+            // What the table holds now is not known: a commit not confirmed, or an undo that
+            // left changes in place. Applying the same edits again could repeat them.
+            Err(f) if matches!(f.why, ApplyError::Db(DbError::CommitUnknown | DbError::ApplyKept)) => {
+                rs.edit.apply_unknown = true
+            }
             _ if stale => return,
             Ok(steps) => {
                 let applied = layer(rs, &a, steps);

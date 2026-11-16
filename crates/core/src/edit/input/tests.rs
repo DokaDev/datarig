@@ -440,6 +440,59 @@ fn json_intervals_and_arrays_are_the_server_s_to_check() {
     table(PG, "jsonb", ValueKind::Json, &[("{not json", OK)]);
     table(PG, "interval", ValueKind::Interval, &[("1 year 2 mons", OK)]);
     table(MY, "time", ValueKind::Interval, &[("-838:59:59", OK)]);
+}
+
+#[test]
+fn mysql_times_keep_their_columns_digits_of_a_second() {
+    let no = || Err(Invalid::NotTime);
+    // The forms people type, as the server reads them exactly.
+    let common = [
+        ("12:30", OK),
+        ("12:30:00", OK),
+        ("-12:30:00", OK),
+        ("9:05", OK),
+        ("838:59:59", OK),
+        ("-838:59:59", OK),
+        ("1 10:00:00", OK),
+        ("2 03:15", OK),
+        ("00:00:00", OK),
+        ("8:3:2", OK),
+        ("8:03", OK),
+    ];
+    table(MY, "time", ValueKind::Interval, &common);
+    table(MY, "time(2)", ValueKind::Interval, &common);
+    table(
+        MY,
+        "time",
+        ValueKind::Interval,
+        &[
+            ("12:30:00.5", Err(Invalid::TooPrecise { digits: 0 })),
+            ("12:30:00.0", OK),
+            ("12", no()),
+            ("12:", no()),
+            ("12:123", no()),
+            ("12:60", no()),
+            ("12:30:60", no()),
+            ("1234:00:00", no()),
+            ("12:30:00:00", no()),
+            ("1 100:00:00", no()),
+            ("x 10:00:00", no()),
+            ("12:30.5", no()),
+            ("noon", no()),
+            ("", no()),
+        ],
+    );
+    table(
+        MY,
+        "time(2)",
+        ValueKind::Interval,
+        &[
+            ("17:51:04.77", OK),
+            ("17:51:04.770", OK),
+            ("17:51:04.777", Err(Invalid::TooPrecise { digits: 2 })),
+            ("1 10:00:00.5", OK),
+        ],
+    );
     table(PG, "integer[]", ValueKind::Array(crate::driver::ArrayElement::Number), &[("{1,2}", OK)]);
 }
 

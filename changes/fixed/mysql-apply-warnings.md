@@ -5,3 +5,7 @@
   are not sent, since the server would then not report a value it rounded. When undoing a failed
   change leaves some of it in place (a table that does not take part in transactions, such as
   MyISAM), the message says so instead of saying nothing was applied.
+- MySQL: a value typed for a `TIME` column is checked before it is applied, like other times:
+  it is `H:MM` or `H:MM:SS` (`8:3:2` too) with at most as many digits of a second as the column
+  keeps (the server would round the others away without a warning), or either of them with
+  days first (`1 10:00:00`).

@@ -88,8 +88,15 @@ const WARNINGS_SHOWN: usize = 5;
 /// failure says so all the same).
 async fn warnings(conn: &mut Conn, link: &mut Link) -> Result<Result<Vec<String>, mysql_async::Error>, Closed> {
     let sql = format!("SHOW WARNINGS LIMIT {WARNINGS_SHOWN}");
-    let read = link.guard(None, conn.query::<(String, u32, String), _>(sql)).await?;
-    Ok(read.map(|rows| rows.into_iter().map(|(level, code, message)| format!("{level} {code}: {message}")).collect()))
+    let read = link.guard(None, conn.query::<mysql_async::Row, _>(sql)).await?;
+    // Read as bytes: the message comes in the session's result character set, not always UTF-8.
+    let text = |row: &mysql_async::Row, i: usize| match row.as_ref(i) {
+        Some(mysql_async::Value::Bytes(b)) => String::from_utf8_lossy(b).into_owned(),
+        Some(mysql_async::Value::Int(n)) => n.to_string(),
+        Some(mysql_async::Value::UInt(n)) => n.to_string(),
+        _ => String::new(),
+    };
+    Ok(read.map(|rows| rows.iter().map(|r| format!("{} {}: {}", text(r, 0), text(r, 1), text(r, 2))).collect()))
 }
 
 /// One statement of the driver's own around the steps.
@@ -212,8 +219,10 @@ pub(super) async fn apply(
             Ok(ran) if ran.warnings > 0 => {
                 let shown = match warnings(conn, link).await {
                     Ok(Ok(shown)) => shown,
+                    // The connection ended: a table that does not take part in transactions may
+                    // keep what the step did, so what was applied is not known.
                     Ok(Err(e)) if e.is_fatal() => {
-                        answer(Err(fail(Some(i), DbError::ApplyWarnings(Vec::new()))));
+                        answer(Err(fail(Some(i), DbError::CommitUnknown)));
                         return Err(Stop::Lost(my_error(&e)));
                     }
                     Ok(Err(_)) => Vec::new(),
