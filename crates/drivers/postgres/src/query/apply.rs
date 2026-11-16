@@ -100,6 +100,43 @@ async fn undo(client: &Client, link: &mut Link, sql: &str, _hooks: &Hooks<'_>) -
 /// for the caller to answer. `Some` when the session must end now, for that reason: what the
 /// steps did could not be undone for sure, and closing the connection makes the server roll it
 /// back (a later `COMMIT` could keep changes said not to be applied).
+/// The user's cancels held back ([`crate::route::Hold`]) while it lives, unless released for
+/// a while or ended.
+struct Held<'a> {
+    hold: &'a crate::route::Hold,
+    /// Held at all: not once ended.
+    on: bool,
+}
+
+impl<'a> Held<'a> {
+    async fn new(hold: &'a crate::route::Hold) -> Held<'a> {
+        hold.hold().await;
+        Held { hold, on: true }
+    }
+
+    async fn hold(&mut self) {
+        if self.on {
+            self.hold.hold().await;
+        }
+    }
+
+    fn release(&mut self) {
+        self.hold.release();
+    }
+
+    /// No longer held, for good.
+    fn end(&mut self) {
+        self.on = false;
+        self.hold.release();
+    }
+}
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        self.hold.release();
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn apply(
     client: &Client,
@@ -118,6 +155,17 @@ pub(super) async fn apply(
     };
     if env.read_only {
         answer(Err(fail(None, DbError::ReadWriteRefused)));
+        return Ok(None);
+    }
+    // A cancel lands only on a step: inside the user's block one that lands on the probe, the
+    // start (before the savepoint exists), an undo or the release would abort the block, and the
+    // user's earlier work in it would be lost. One asked meanwhile stops the steps before the
+    // next.
+    let mut held = Held::new(&env.token.hold).await;
+    // Asked before the hold: it may be on its way (a cancel names no statement), so nothing is
+    // sent for it to land on.
+    if env.cancel.asked() {
+        answer(Err(fail(None, DbError::Cancelled)));
         return Ok(None);
     }
     if tx.unsure {
@@ -146,6 +194,10 @@ pub(super) async fn apply(
         ApplyTx::Commit => Mode::Own,
         ApplyTx::Keep { idle_timeout } => Mode::Keep(idle_timeout),
     };
+    // In a transaction of its own a cancel ends nothing of the user's: it may land anywhere.
+    if !matches!(mode, Mode::Savepoint) {
+        held.end();
+    }
     let start = match mode {
         Mode::Savepoint => {
             let mut first = tx.take_first(env);
@@ -176,7 +228,16 @@ pub(super) async fn apply(
             break;
         }
         // Every row it matches (0: no limit), so a check locks them all.
-        let ran = link.guard(Some(env.token), client.execute_pipelined_wrapped(&step.sql, 0, &[], None)).await?;
+        held.release();
+        // Asked while held, after the check above: it was not sent.
+        if env.cancel.asked() {
+            failure = Some(fail(Some(i), DbError::Cancelled));
+            held.hold().await;
+            break;
+        }
+        let ran = link.guard(Some(env.token), client.execute_pipelined_wrapped(&step.sql, 0, &[], None)).await;
+        held.hold().await;
+        let ran = ran?;
         if cache_off {
             // A type lookup's statements go with the transaction too.
             client.forget_typeinfo_statements();

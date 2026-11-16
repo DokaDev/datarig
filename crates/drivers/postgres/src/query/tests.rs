@@ -1398,6 +1398,77 @@ mod terminal {
             assert_eq!(committed(&url, &table).await, "a");
             s.client.batch_execute("ROLLBACK").await.unwrap();
         }
+
+        /// Cancels are held only inside the user's block, and only off the steps: in a transaction
+        /// of the Apply's own a cancel may land anywhere (its commit too), and after the Apply
+        /// nothing is held.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn cancels_are_held_only_off_the_steps_of_an_apply_in_the_users_block() {
+            let name = "cancels_are_held_only_off_the_steps_of_an_apply_in_the_users_block";
+            let Some(url) = pg_url(name) else { return };
+            let (table, _g) = table(&url, "hold_where").await;
+            let mut s = Session::open(&url).await;
+            let seen = std::sync::Mutex::new(Vec::new());
+            let hold = s.token.hold.clone();
+            let note = |_: usize| seen.lock().unwrap().push(hold.held());
+            let hooks = Hooks { before_step: Some(&note), ..Hooks::default() };
+            assert_eq!(answer(&s.apply(&steps(&table), ApplyTx::Commit, &hooks).await), Ok(()));
+            assert_eq!(std::mem::take(&mut *seen.lock().unwrap()), [false, false, false], "its own transaction");
+            assert!(!s.token.hold.held());
+            s.rule = manual(&[TxStep::Open]);
+            s.run_all(&[&format!("INSERT INTO {table} VALUES (2, 'earlier')")], None).await;
+            let again = vec![steps(&table)[0].clone()];
+            let _ = s.apply(&again, ApplyTx::Commit, &hooks).await;
+            // Held between the steps (the hook runs before a step's own check), never after.
+            assert_eq!(std::mem::take(&mut *seen.lock().unwrap()), [true, true], "the user's block");
+            assert!(!s.token.hold.held(), "released once the Apply answered");
+            s.client.batch_execute("ROLLBACK").await.unwrap();
+        }
+
+        /// Inside the user's block, a cancel the user asks while the Apply's start runs (its
+        /// savepoint not set yet) is held back: the block and the user's earlier work in it stand,
+        /// and the Apply stops before its first step. The start is kept waiting on an advisory
+        /// lock queued before the savepoint, and the cancel goes the way the user's does.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn a_cancel_asked_before_the_savepoint_exists_leaves_the_block_as_it_was() {
+            let name = "a_cancel_asked_before_the_savepoint_exists_leaves_the_block_as_it_was";
+            let Some(url) = pg_url(name) else { return };
+            let (table, _g) = table(&url, "cancel_start").await;
+            let key = 0x2369_0000_i64 + i64::from(std::process::id());
+            let (side, ..) = connect(&url).await;
+            side.query("SELECT pg_advisory_lock($1)", &[&key]).await.unwrap();
+            let mut s = Session::open(&url).await;
+            s.rule = manual(&[TxStep::Open]);
+            let events = s.run_all(&[&format!("INSERT INTO {table} VALUES (2, 'earlier')")], None).await;
+            assert!(events.iter().any(|e| matches!(e, DbEvent::ManualBegun { .. })), "{events:?}");
+            s.tx.queued.push(format!("SELECT pg_catalog.pg_advisory_xact_lock({key})"));
+            let (flag, run, token) = (s.cancel.clone(), s.runs + 1, s.token.clone());
+            let asker = tokio::spawn(async move {
+                // Once the start waits for the lock, the user cancels; then the lock goes.
+                let waits = "SELECT count(*) FROM pg_catalog.pg_locks \
+                             WHERE locktype = 'advisory' AND NOT granted AND objid = ($1::bigint & 4294967295)::oid";
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while side.query_one(waits, &[&key]).await.unwrap().get::<_, i64>(0) == 0 {
+                    assert!(std::time::Instant::now() < deadline, "the start never waited");
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                assert!(flag.ask(run), "the Apply is the run asked");
+                let request = token.unsent.request();
+                let mark = flag.clone();
+                token.ask(request, move || mark.stands(run)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                side.query("SELECT pg_advisory_unlock($1)", &[&key]).await.unwrap();
+            });
+            let events = s.apply(&steps(&table), ApplyTx::Commit, &Hooks::default()).await;
+            asker.await.expect("the cancel was asked");
+            assert_eq!(answer(&events), cancelled(Some(0)));
+            assert!(!events.iter().any(|e| matches!(e, DbEvent::TxAborted(true))), "{events:?}");
+            assert!(s.tx.block && !s.tx.aborted, "the block is open and usable");
+            let read = format!("SELECT string_agg(v, ',' ORDER BY id) FROM {table}");
+            let rows = s.client.query(&read, &[]).await.unwrap();
+            assert_eq!(rows[0].get::<_, String>(0), "a,earlier", "the earlier write stands");
+            s.client.batch_execute("ROLLBACK").await.unwrap();
+        }
     }
 }
 
