@@ -358,6 +358,9 @@ pub fn blocked_msg(why: &ReadOnlyBlock) -> Msg {
         ReadOnlyBlock::UnknownFunction(function) => {
             return Msg::SafetyBlockedUnknownFunction { function: function.clone() };
         }
+        ReadOnlyBlock::CustomSetting(setting) => {
+            return Msg::SafetyBlockedCustomSetting { setting: setting.clone() };
+        }
         ReadOnlyBlock::DynamicSql => Label::SafetyBlockedDynamicSql,
         ReadOnlyBlock::ServerCommand => Label::SafetyBlockedServerCommand,
         ReadOnlyBlock::Locks => Label::SafetyBlockedLocks,

@@ -17,7 +17,7 @@
 //! `SESSION`) and checked by parsing it again: the same setting, the same value, now for the
 //! transaction only. A statement that has no such form ([`NotLocal`]) is not sent there.
 
-use super::{Danger, Risk, STACK, THREAD, classify, node, parse, text};
+use super::{Danger, ReadOnlyBlock, Risk, STACK, THREAD, classify, node, parse, text};
 use crate::sql::lexer::{Tok, lex};
 use serde_json::Value;
 
@@ -132,6 +132,19 @@ pub struct SessionSet {
     /// among them. The value is only reliable for a setting of one scalar value (a list such as
     /// `search_path`'s, or `SET TIME ZONE …`, is not read as one).
     pub settings: Vec<(String, String)>,
+}
+
+impl SessionSet {
+    /// Whether a read-only environment lets a session start with it: what [`Risk::read_only`]
+    /// allows, and a setting of an extension or a custom one too
+    /// ([`ReadOnlyBlock::CustomSetting`], refused typed): the profile's owner put it there, as
+    /// row-level security policies read it (`SET app.tenant = '…'`).
+    pub fn read_only(&self) -> Result<(), ReadOnlyBlock> {
+        match self.risk.read_only() {
+            Err(ReadOnlyBlock::CustomSetting(_)) => Ok(()),
+            other => other,
+        }
+    }
 }
 
 /// PostgreSQL's settings the app keeps itself.

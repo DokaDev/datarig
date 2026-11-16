@@ -162,7 +162,7 @@ impl SessionPreset {
     /// The first statement a read-only environment refuses (`index` from 1).
     pub fn read_only_refused(&self) -> Option<(usize, ReadOnlyBlock)> {
         self.sql.iter().enumerate().find_map(|(i, s)| match Classifier::session_set(self.dbms.language(), s) {
-            Ok(set) => set.risk.read_only().err().map(|b| (i + 1, b)),
+            Ok(set) => set.read_only().err().map(|b| (i + 1, b)),
             Err(_) => None,
         })
     }
@@ -627,7 +627,7 @@ fn statement(
         problem,
     })?;
     if rules.read_only
-        && let Err(block) = set.risk.read_only()
+        && let Err(block) = set.read_only()
     {
         return Err(SessionError::ReadOnly { source: source.clone(), index, statement: sql.to_string(), block });
     }

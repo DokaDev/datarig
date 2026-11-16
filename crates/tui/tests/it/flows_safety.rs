@@ -63,6 +63,10 @@ fn a_read_only_policy_refuses_what_may_write_and_sends_nothing() {
         ("EXECUTE p", "this statement is not known to be a read"),
         ("SET default_transaction_read_only = off", "this statement asks for a read-write transaction"),
         ("BEGIN READ WRITE", "this statement asks for a read-write transaction"),
+        (
+            "SET app.tenant = '1'",
+            "this statement sets app.tenant, a setting of an extension or a custom one: on a read-only profile set it in the profile's Startup SQL",
+        ),
         ("SET session_replication_role = replica", "this setting is not on the read-only allowlist"),
     ] {
         assert!(run(&mut h, sql).is_empty(), "nothing is sent: {sql}");

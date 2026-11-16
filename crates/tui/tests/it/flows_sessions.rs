@@ -183,7 +183,7 @@ fn a_profile_whose_plan_has_an_error_does_not_connect() {
 /// refuses the connect with the read-only reason.
 #[test]
 fn read_only_refuses_a_setting_off_its_allowlist() {
-    let mut cfg = config(|p| p.session_sql = vec!["SET session_replication_role = replica".into()]);
+    let mut cfg = config(|p| p.session_sql = vec!["SET synchronous_commit = off".into()]);
     let mut rules = cfg.policies.environment("prod").unwrap().policy.clone();
     rules.read_only = true;
     cfg.policies.insert("prod", rules);
@@ -194,7 +194,7 @@ fn read_only_refuses_a_setting_off_its_allowlist() {
     assert_eq!(
         h.node_error("local-pg").as_deref(),
         Some(
-            "local-pg does not connect: its environment is read-only and statement 1 of its own startup SQL is refused (this setting is not on the read-only allowlist): SET session_replication_role = replica"
+            "local-pg does not connect: its environment is read-only and statement 1 of its own startup SQL is refused (this setting is not on the read-only allowlist): SET synchronous_commit = off"
         )
     );
 }

@@ -30,7 +30,7 @@ fn pg_allows_session_sets_with_their_transaction_form() {
     for (sql, local) in cases {
         let s = pg(sql).unwrap_or_else(|e| panic!("{sql}: {e:?}"));
         assert_eq!(s.per_transaction, Some(Ok(local.to_string())), "{sql}");
-        assert!(s.risk.read_only().is_ok(), "{sql}: a safe setting");
+        assert!(s.read_only().is_ok(), "{sql}: a safe setting");
     }
 }
 
@@ -137,6 +137,10 @@ fn pg_read_only_refusal_is_the_classifiers() {
     let s = pg("SET synchronous_commit = off").unwrap();
     assert!(s.risk.read_only().is_err());
     assert!(pg("SET work_mem = '1MB'").unwrap().risk.read_only().is_ok());
+    // A setting of an extension or a custom one is refused typed, allowed as a start-up setting.
+    let s = pg("SET app.tenant = '1'").unwrap();
+    assert_eq!(s.risk.read_only(), Err(ReadOnlyBlock::CustomSetting("app.tenant".into())));
+    assert_eq!(s.read_only(), Ok(()));
 }
 
 /// A setting that asks before it runs when typed is no start-up setting: start-up statements
@@ -146,6 +150,7 @@ fn settings_that_ask_when_typed_are_refused() {
     for sql in ["SET foreign_key_checks = 0", "SET sql_log_bin = 0", "SET sql_mode = ''"] {
         assert_eq!(mysql(sql).map(|_| ()), Err(SetProblem::Asks), "{sql}");
     }
+    assert_eq!(pg("SET session_replication_role = replica").map(|_| ()), Err(SetProblem::Asks));
     assert!(pg("SET work_mem = '64MB'").is_ok());
     assert!(mysql("SET SESSION max_heap_table_size = 16777216").is_ok());
 }

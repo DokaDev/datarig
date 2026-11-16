@@ -360,7 +360,6 @@ fn read_only_verdicts() {
         "SET LOCAL statement_timeout = '5s'",
         "set work_mem = '64MB'",
         "SET enable_seqscan = off",
-        "SET app.tenant_id = '42'",
         "SET \"search_path\" = shop",
         "SET TIME ZONE 'UTC'",
         "SET SCHEMA 'shop'",
@@ -402,6 +401,51 @@ fn read_only_verdicts() {
     ] {
         assert_eq!(ok(blocked), Err(why), "{blocked}");
     }
+}
+
+/// PostgreSQL's `session_replication_role` asks before it runs, set with `SET` or with
+/// `set_config()`; a read-only policy refuses it.
+#[test]
+fn the_replication_role_asks() {
+    for sql in [
+        "SET session_replication_role = replica",
+        "SET LOCAL session_replication_role TO replica",
+        "SELECT set_config('session_replication_role', 'replica', true)",
+        "SELECT pg_catalog.set_config('SESSION_REPLICATION_ROLE', 'replica', false)",
+    ] {
+        let r = classify(sql);
+        assert_eq!(r.confirm(false), Some(Why::Danger(Danger::Setting)), "{sql}");
+        assert_eq!(r.read_only(), Err(ReadOnlyBlock::Setting), "{sql}");
+    }
+    assert_eq!(classify("SET work_mem = '1MB'").confirm(false), None);
+}
+
+/// A read-only policy refuses a typed setting of an extension or a custom one (a dotted name),
+/// set with `SET` or with `set_config()`, naming it; `set_config()` follows the allowlist as `SET`
+/// does, and one of a setting it does not name with a constant is refused.
+#[test]
+fn read_only_refuses_custom_settings_and_set_config_off_the_allowlist() {
+    let ok = |sql: &str| classify(sql).read_only();
+    for (sql, name) in [
+        ("SET app.tenant = '1'", "app.tenant"),
+        ("SET LOCAL pgaudit.log = 'none'", "pgaudit.log"),
+        ("SET SESSION App.Tenant TO DEFAULT", "app.tenant"),
+        ("SELECT set_config('pgaudit.log', 'none', true)", "pgaudit.log"),
+    ] {
+        assert_eq!(ok(sql), Err(ReadOnlyBlock::CustomSetting(name.into())), "{sql}");
+        assert_eq!(classify(sql).confirm(false), None, "typed it does not ask: {sql}");
+    }
+    // Something else refused is said first.
+    assert_eq!(ok("SET app.x = 1; SET synchronous_commit = off"), Err(ReadOnlyBlock::Setting));
+    assert_eq!(ok("SELECT set_config('app.x', '1', true) FROM t FOR UPDATE"), Err(ReadOnlyBlock::Class(Class::Write)));
+    assert_eq!(ok("SET enable_seqscan = off"), Ok(()));
+    assert_eq!(ok("SELECT set_config('enable_seqscan', 'off', true)"), Ok(()));
+    assert_eq!(ok("SELECT set_config('work_mem', '1MB', true)"), Ok(()));
+    assert_eq!(ok("SELECT set_config('synchronous_commit', 'off', true)"), Err(ReadOnlyBlock::Setting));
+    assert!(ok("SELECT set_config(current_user, 'x', false)").is_err());
+    assert!(ok("SELECT set_config(name, 'x', false) FROM t").is_err());
+    // `RESET` of one goes back to its default.
+    assert_eq!(ok("RESET app.tenant"), Ok(()));
 }
 
 #[test]

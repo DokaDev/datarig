@@ -269,9 +269,19 @@ pub struct Risk {
     /// where PostgreSQL needs quotes.
     pub target: Option<String>,
     /// A session statement that a read-only policy allows: a setting on the allowlist
-    /// ([`SAFE_SETTINGS`], names with a `.`, the `enable_*` planner switches), `RESET ALL`,
-    /// `DISCARD`, `LISTEN`, `UNLISTEN`, `DEALLOCATE`, `PREPARE … AS`.
+    /// ([`SAFE_SETTINGS`], names with a `.` but see [`Risk::custom_setting`], the `enable_*`
+    /// planner switches), `RESET ALL`, `DISCARD`, `LISTEN`, `UNLISTEN`, `DEALLOCATE`, `PREPARE …
+    /// AS`.
     pub safe_setting: bool,
+    /// PostgreSQL: it sets a setting whose name has a `.` (an extension's or a custom one:
+    /// `SET [LOCAL] app.tenant = …`, `set_config('app.tenant', …)`): the first one, lower case.
+    /// A read-only policy refuses it typed ([`ReadOnlyBlock::CustomSetting`]) and allows it in a
+    /// profile's start-up statements ([`super::SessionSet::read_only`]).
+    pub custom_setting: Option<String>,
+    /// PostgreSQL: it calls `set_config()` of a setting a read-only policy does not let a session
+    /// change (not one [`Risk::safe_setting`] allows), or of one it names with something other
+    /// than a constant.
+    pub sets_unsafe_setting: bool,
     /// It asks for a read-write transaction or may turn read-only off: `BEGIN READ WRITE`,
     /// `SET TRANSACTION READ WRITE`, `SET default_transaction_read_only = off`, `RESET
     /// transaction_read_only`, a call of `set_config()` on one of those settings, …
@@ -335,6 +345,9 @@ pub enum ReadOnlyBlock {
     Unrecognized,
     /// It calls a function that is not a built-in ([`Risk::unchecked_call`]), named as written.
     UnknownFunction(String),
+    /// It sets a setting of an extension or a custom one ([`Risk::custom_setting`]), named, and
+    /// nothing else refuses it: allowed in a profile's start-up statements.
+    CustomSetting(String),
     /// It prepares SQL given as text ([`Danger::DynamicSql`]).
     DynamicSql,
     /// It acts on the whole server ([`Danger::ServerCommand`]).
@@ -426,6 +439,11 @@ pub const THREAD: &str = "datarig-classify";
 /// The settings that make a transaction read-only.
 const READ_ONLY_SETTINGS: [&str; 2] = ["default_transaction_read_only", "transaction_read_only"];
 
+/// PostgreSQL's `session_replication_role`: set to `replica` it turns off the triggers (foreign
+/// keys among them) and rules of the session's writes, so a change of it asks
+/// ([`Danger::Setting`]).
+const REPLICATION_ROLE: &str = "session_replication_role";
+
 impl Risk {
     fn of(class: Class) -> Self {
         Self {
@@ -436,6 +454,8 @@ impl Risk {
             danger: None,
             target: None,
             safe_setting: false,
+            custom_setting: None,
+            sets_unsafe_setting: false,
             read_write: false,
             stdio: false,
             runs_code: false,
@@ -469,6 +489,8 @@ impl Risk {
             danger: self.danger.or(o.danger),
             target: self.target.or(o.target),
             safe_setting: self.safe_setting && o.safe_setting,
+            custom_setting: self.custom_setting.or(o.custom_setting),
+            sets_unsafe_setting: self.sets_unsafe_setting || o.sets_unsafe_setting,
             read_write: self.read_write || o.read_write,
             stdio: self.stdio || o.stdio,
             runs_code: self.runs_code || o.runs_code,
@@ -508,11 +530,18 @@ impl Risk {
         if self.read_write {
             return Err(ReadOnlyBlock::ReadWrite);
         }
+        if self.sets_unsafe_setting {
+            return Err(ReadOnlyBlock::Setting);
+        }
         match self.class {
-            Class::Read | Class::Tx => Ok(()),
-            Class::Session if self.safe_setting => Ok(()),
-            Class::Session => Err(ReadOnlyBlock::Setting),
-            c => Err(ReadOnlyBlock::Class(c)),
+            Class::Read | Class::Tx => {}
+            Class::Session if self.safe_setting => {}
+            Class::Session => return Err(ReadOnlyBlock::Setting),
+            c => return Err(ReadOnlyBlock::Class(c)),
+        }
+        match &self.custom_setting {
+            Some(name) => Err(ReadOnlyBlock::CustomSetting(name.clone())),
+            None => Ok(()),
         }
     }
 
@@ -867,6 +896,25 @@ impl Prepared {
             risk = risk.merge(query);
             risk.target = target.or(risk.target);
         }
+        // `set_config()`: as `SET` of the same setting would be (a dotted name is a custom
+        // setting, one off the allowlist is refused by a read-only policy, the replication role
+        // asks).
+        for name in set_config_names(v) {
+            match name {
+                Some(n) if n == REPLICATION_ROLE => {
+                    if risk.danger.is_none() {
+                        risk.danger = Some(Danger::Setting);
+                    }
+                    risk.sets_unsafe_setting = true;
+                }
+                Some(n) if safe_setting(&n) => {
+                    if n.contains('.') && risk.custom_setting.is_none() {
+                        risk.custom_setting = Some(n);
+                    }
+                }
+                _ => risk.sets_unsafe_setting = true,
+            }
+        }
         risk
     }
 
@@ -1213,6 +1261,29 @@ fn sets_read_only(v: &Value) -> bool {
         };
     });
     found
+}
+
+/// The settings `v` calls `set_config()` of, lower case: `None` for one named with something
+/// other than a string constant.
+fn set_config_names(v: &Value) -> Vec<Option<String>> {
+    let mut names = Vec::new();
+    walk(v, &mut |o| {
+        let Some(call) = o.get("FuncCall") else { return };
+        let is_set_config = call["funcname"]
+            .as_array()
+            .and_then(|n| n.last())
+            .and_then(text)
+            .is_some_and(|f| f.eq_ignore_ascii_case("set_config"));
+        if !is_set_config {
+            return;
+        }
+        let first = call["args"].as_array().and_then(|a| a.first());
+        names.push(match first.and_then(node) {
+            Some(("AConst", c)) => c["val"]["Sval"]["sval"].as_str().map(str::to_ascii_lowercase),
+            _ => None,
+        });
+    });
+    names
 }
 
 /// Whether `v` calls `set_config()` on `search_path` (or on a setting it names with something
@@ -1706,6 +1777,10 @@ fn set(b: &Value) -> Risk {
         let local = b["is_local"].as_bool().unwrap_or(false);
         return Risk { session_path: set && !local, ..Risk::session(true) };
     }
+    let sets = [K::VarSetValue, K::VarSetDefault, K::VarSetCurrent].iter().any(|k| *k as i64 == kind);
+    if sets && name == REPLICATION_ROLE {
+        return Risk::danger(Class::Session, Danger::Setting);
+    }
     if READ_ONLY_SETTINGS.contains(&name.as_str()) {
         // Only turning it on is harmless.
         let args = b["args"].as_array().map(Vec::as_slice).unwrap_or_default();
@@ -1714,7 +1789,8 @@ fn set(b: &Value) -> Risk {
             && (constant(&args[0]) == Some(true) || constant_int(&args[0]) == Some(1));
         return Risk { read_write: !on, ..Risk::session(on) };
     }
-    Risk::session(safe_setting(&name))
+    let custom_setting = (sets && name.contains('.')).then(|| name.clone());
+    Risk { custom_setting, ..Risk::session(safe_setting(&name)) }
 }
 
 /// `ALTER TABLE` (also of a foreign table, a view, a type's attributes): DDL; dropping a

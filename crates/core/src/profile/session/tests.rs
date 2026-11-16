@@ -206,6 +206,11 @@ fn read_only_allows_only_safe_settings() {
     let mut m = profile("mysql");
     m.session_sql = vec!["SET SESSION lock_wait_timeout = 3, innodb_lock_wait_timeout = 3".into()];
     assert!(plan(&m, &rules, Defaults::default(), &[]).is_ok());
+    // A setting of an extension or a custom one, as row-level security policies read it.
+    c.session_sql = vec!["SET app.tenant = '1'".into()];
+    assert!(plan(&c, &rules, Defaults::default(), &[]).is_ok());
+    let custom = SessionPreset::new("tenant", Dbms::Postgres, vec!["SET app.tenant = '1'".into()]);
+    assert_eq!(custom.read_only_refused(), None);
     let idle = SessionPreset::new("idle", Dbms::MySql, vec!["SET SESSION wait_timeout = 600".into()]);
     assert_eq!(idle.read_only_refused(), Some((1, ReadOnlyBlock::Setting)));
 }
