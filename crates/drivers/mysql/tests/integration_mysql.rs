@@ -7971,4 +7971,181 @@ async fn a_select_that_runs_code_is_never_cut_at_a_page() {
     c.ok(4, &format!("SELECT MAX(id) INTO @zz_max FROM {}", t.q())).await;
     let evs = c.run(5, &["SELECT @zz_max"]).await;
     assert_eq!(page_of(&evs).1[0][0].as_deref(), Some("600"));
+
+/// What a [`Misreport`] stream looks for in the server's answers: the session's read-only as its
+/// session state tracking reports it (`ON`, by either name), and what it puts there instead
+/// (`NO`, the same length, which no server writes for on).
+const REPORTED: [(&[u8], &[u8]); 2] = [
+    (b"\x15transaction_read_only\x02ON", b"\x15transaction_read_only\x02NO"),
+    (b"\x0ctx_read_only\x02ON", b"\x0ctx_read_only\x02NO"),
+];
+
+/// A dialer whose streams change every read-only the server reports as on into a value that is
+/// not on, as a server (or something in front of it) that reports it otherwise would. It counts
+/// what it changed.
+#[derive(Default)]
+struct MisreportDialer {
+    dialer: TcpDialer,
+    changed: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+/// A stream that hands the server's answers on in whole packets (however the reads split them),
+/// each changed as [`REPORTED`] says.
+struct Misreport {
+    inner: datarig_core::transport::BoxedStream,
+    changed: Arc<std::sync::atomic::AtomicUsize>,
+    /// Read, not yet a whole packet.
+    pending: Vec<u8>,
+    /// Whole packets, changed, not yet handed on.
+    ready: std::collections::VecDeque<u8>,
+}
+
+impl Misreport {
+    /// Move every whole packet of `pending` to `ready`, changed.
+    fn packets(&mut self) {
+        loop {
+            if self.pending.len() < 4 {
+                return;
+            }
+            let len = 4 + usize::from(self.pending[0]) + (usize::from(self.pending[1]) << 8) + (usize::from(self.pending[2]) << 16);
+            if self.pending.len() < len {
+                return;
+            }
+            let mut packet: Vec<u8> = self.pending.drain(..len).collect();
+            for (from, to) in REPORTED {
+                let mut at = 0;
+                while let Some(i) = packet[at..].windows(from.len()).position(|w| w == from) {
+                    let i = at + i;
+                    packet[i..i + from.len()].copy_from_slice(to);
+                    self.changed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    at = i + from.len();
+                }
+            }
+            self.ready.extend(packet);
+        }
+    }
+}
+
+impl tokio::io::AsyncRead for Misreport {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let me = self.get_mut();
+        while me.ready.is_empty() {
+            let mut chunk = [0u8; 4096];
+            let mut read = tokio::io::ReadBuf::new(&mut chunk);
+            match std::pin::Pin::new(&mut me.inner).poll_read(cx, &mut read) {
+                std::task::Poll::Ready(Ok(())) if read.filled().is_empty() => {
+                    // The end: whatever is left is handed on as it is.
+                    me.ready.extend(me.pending.drain(..));
+                    break;
+                }
+                std::task::Poll::Ready(Ok(())) => {
+                    me.pending.extend_from_slice(read.filled());
+                    me.packets();
+                }
+                other => return other,
+            }
+        }
+        let n = buf.remaining().min(me.ready.len());
+        let out: Vec<u8> = me.ready.drain(..n).collect();
+        buf.put_slice(&out);
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+impl tokio::io::AsyncWrite for Misreport {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+}
+
+impl Dialer for MisreportDialer {
+    fn dial(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> futures::future::BoxFuture<
+        'static,
+        Result<datarig_core::transport::BoxedStream, datarig_core::transport::DialError>,
+    > {
+        let (dial, changed) = (self.dialer.dial(host, port), self.changed.clone());
+        Box::pin(async move {
+            let inner = dial.await?;
+            let (pending, ready) = (Vec::new(), std::collections::VecDeque::new());
+            Ok(Box::new(Misreport { inner, changed, pending, ready }) as datarig_core::transport::BoxedStream)
+        })
+    }
+}
+
+/// A session that must be read-only, whose server reports its read-only as something other
+/// than on, is asked: it opens when the server answers that it is read-only (the metadata and
+/// monitor sessions, and a read-only profile's query session), instead of being refused on
+/// the report alone.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_only_session_reported_otherwise_is_asked_before_it_is_refused() {
+    let test = "a_read_only_session_reported_otherwise_is_asked";
+    let Some(url) = my_url(test) else { return };
+    // Over TLS the bytes say nothing.
+    if std::env::var("DATARIG_TEST_MYSQL_SSLMODE").is_ok_and(|m| !m.eq_ignore_ascii_case("DISABLED")) {
+        return;
+    }
+    for (role, read_only) in [(SessionRole::Meta, false), (SessionRole::Monitor, false), (SessionRole::Query, true)] {
+        let d = Arc::new(MisreportDialer::default());
+        let changed = d.changed.clone();
+        let o = ConnectOptions::new(PAGE, role, &tag(test)).read_only(read_only).dialer(Some(DialerRef(d as Arc<dyn Dialer>)));
+        let (tx, mut rx) = unbounded_channel();
+        let session = MyDriver.connect(&profile(&url), role, o, tx);
+        let opened = loop {
+            match tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.expect("an answer") {
+                Some(DbEvent::Connected) => break Ok(()),
+                Some(DbEvent::ConnectFailed { error, .. }) => break Err(error),
+                Some(_) => {}
+                None => panic!("closed"),
+            }
+        };
+        assert!(changed.load(std::sync::atomic::Ordering::SeqCst) > 0, "{role:?}: the report was not changed");
+        assert_eq!(opened, Ok(()), "{role:?}");
+        drop(session);
+    }
+}
+
+/// A read-only profile's session whose start-up statement turns its read-only off is refused,
+/// and the refusal says what the server reported and answered.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_left_writable_is_refused_with_the_servers_values() {
+    let test = "a_session_left_writable_is_refused_with_the_servers_values";
+    let Some((url, admin)) = urls(test) else { return };
+    let mut admin = side(&admin).await;
+    let mariadb = is_mariadb(&mut admin).await;
+    let refused = starting(&url, SessionRole::Query, test, true, &["SET SESSION TRANSACTION READ WRITE"]).await.err();
+    let Some(DbError::Connection(fault)) = &refused else { panic!("{refused:?}") };
+    let text = fault.to_string();
+    assert!(text.starts_with("the server did not make the session read-only (reported "), "{text}");
+    assert!(text.contains("_read_only: OFF; asked: "), "{text}");
+    // As the server writes them: MySQL `0`, MariaDB `OFF`.
+    let off = if mariadb { "OFF" } else { "0" };
+    assert!(text.contains(&format!("_read_only {off}, ")), "{text}");
+    assert!(text.ends_with(&format!("innodb_read_only {off})")), "{text}");
+    assert_eq!(text.contains("super_read_only 0"), !mariadb, "{text}");
 }
