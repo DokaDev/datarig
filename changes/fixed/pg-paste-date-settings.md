@@ -33,3 +33,6 @@
 - PostgreSQL: a composite (or an array or a domain of one) counts as holding dates whatever its
   fields, which may have changed since the connection read them, so its values are not applied
   from the grid.
+- PostgreSQL: the kind of a type the connection reports as a base type (an extension's, or a
+  multirange of the database's own) is read once from the server when its result comes: only
+  a base type or an enum is taken to hold no dates.

@@ -1244,9 +1244,11 @@ mod terminal {
         );
     }
 
-    /// Extension types' columns (`citext`, `hstore`) hold no dates, as the server's kinds of
-    /// them say (base types), and are read as plain text; a composite with a date field holds
-    /// dates the driver does not tell apart. Makes database `zz_ext_<pid>` and drops it.
+    /// Columns of an extension's types (`citext`, `hstore`) and of a multirange of the
+    /// database's own, which the connection all reports as base types, are looked up by their
+    /// oid; the metadata session's read says `b` for the first and `m` for the last, and lists
+    /// no type that does not exist. A composite is not known, a range over `date` holds its
+    /// dates. Makes database `zz_ext_<pid>` and drops it.
     #[tokio::test(flavor = "multi_thread")]
     async fn extension_types_hold_no_dates_and_a_composite_with_one_is_not_known() {
         use datarig_core::driver::Dated;
@@ -1271,22 +1273,46 @@ mod terminal {
         c.batch_execute(&format!("CREATE DATABASE {db}")).await.expect("database");
         let in_db = format!("{}/{db}", url.rsplit_once('/').map_or(url.as_str(), |(base, _)| base));
         let (c, ..) = connect(&in_db).await;
-        c.batch_execute("CREATE EXTENSION citext; CREATE EXTENSION hstore; CREATE TYPE zz_stay AS (night date)")
-            .await
-            .expect("setup");
+        c.batch_execute(
+            "CREATE EXTENSION citext; CREATE EXTENSION hstore; CREATE TYPE zz_stay AS (night date); \
+             CREATE TYPE zz_dr AS RANGE (subtype = date)",
+        )
+        .await
+        .expect("setup");
         drop(c);
         let mut s = Session::open(&in_db).await;
-        let sql = "SELECT 'a'::citext, 'a=>1'::hstore, ARRAY['b'::citext], ROW('2026-01-02')::zz_stay";
+        let sql = "SELECT 'a'::citext, 'a=>1'::hstore, ARRAY['b'::citext], ROW('2026-01-02')::zz_stay, \
+                   '[2026-01-02,2026-01-05)'::zz_dr, '{[2026-01-02,2026-01-05)}'::zz_dr_multirange";
         let events = s.run_all(&[sql], None).await;
         let cols = events.iter().find_map(|e| match e {
             DbEvent::Page { columns: Some(cols), .. } => Some(cols.clone()),
             _ => None,
         });
         let cols = cols.unwrap_or_else(|| panic!("no rows: {events:?}"));
-        for c in &cols[..3] {
-            assert_eq!((c.dated, c.styled), (Dated::No, false), "{}", c.type_name);
-        }
+        // A type of an extension's is a base type the connection does not tell apart from a
+        // multirange: looked up by its oid, on the metadata session, which says `b`.
+        let lookup = |c: &datarig_core::driver::ColumnMeta| match c.dated {
+            Dated::Lookup(oid) => oid,
+            other => panic!("{}: {other:?}", c.type_name),
+        };
+        let (citext, hstore) = (lookup(&cols[0]), lookup(&cols[1]));
+        assert_eq!(lookup(&cols[2]), citext, "an array of it: its element's");
         assert_eq!((cols[3].dated, cols[3].styled), (Dated::Unknown, true), "{}", cols[3].type_name);
+        // A range of the database's own over `date` holds its dates; its multirange, whose kind
+        // the connection's lookup does not tell (`typtype` `m`), is not known: never a base type
+        // that holds none.
+        let date = Dated::Of(datarig_core::driver::DatePart::Date);
+        assert_eq!((cols[4].dated, cols[4].styled), (date, true), "{}", cols[4].type_name);
+        let multirange = lookup(&cols[5]);
+        assert!(cols[5].styled);
+        let (c, ..) = connect(&in_db).await;
+        let mut kinds = crate::meta::type_kinds::load_type_kinds(&c, &[citext, hstore, multirange, 4_000_000_000])
+            .await
+            .expect("kinds");
+        kinds.sort();
+        let mut want = vec![(citext, 'b'), (hstore, 'b'), (multirange, 'm')];
+        want.sort();
+        assert_eq!(kinds, want, "a type that does not exist is not listed");
         drop(s);
     }
 

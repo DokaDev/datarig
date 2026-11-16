@@ -479,7 +479,9 @@ statement runs: dates as `2026-01-02`, times with a time zone with their offset
 Other text is kept, marked invalid with the form to use, and not applied. A column of a type
 whose dates the app cannot tell (any composite, whose fields may have changed since it was
 read, an array or a domain of one, a pseudo-type) takes no text from here; base types that hold no dates (`citext`, `hstore`, `ltree`, PostGIS geometry) are edited
-as before.
+as before once the app has read their kind from the server, right after their result comes
+(until then, a change of them asks to try again in a moment; in a tab working in another
+database than the profile's own, they stay not known).
 
 Text put into such a column of a result read in other settings than the session's now (or in
 settings not known), by any path (typed, pasted from the clipboard or the grid, cloned), is

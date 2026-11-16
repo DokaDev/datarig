@@ -119,10 +119,12 @@ fn only_text_that_may_hold_dates_or_times_is_read_in_the_sessions_settings() {
         assert!(!styled(&ty), "{ty}");
     }
     let user = |name: &str, kind: Kind| Type::new(name.into(), 90_000, kind, "public".into());
-    // A base type of an extension's (`citext`, `hstore`) holds its own text; a pseudo-type
+    // A type of an extension's the connection reports as a base type (`citext`, `hstore`) may
+    // be a multirange of the database's own: written in the session's settings until its kind
+    // is looked up; a pseudo-type (an anonymous `record`) may hold anything.
     // (an anonymous `record`) may hold anything.
-    assert!(!styled(&user("hstore", Kind::Simple)));
-    assert!(!styled(&user("citext", Kind::Simple)));
+    assert!(styled(&user("hstore", Kind::Simple)));
+    assert!(styled(&user("citext", Kind::Simple)));
     assert!(styled(&user("anyrecord", Kind::Pseudo)));
     assert!(!styled(&user("mood", Kind::Enum(vec!["sad".into()]))));
     let field = |name: &str, ty: Type| tokio_postgres::types::Field::new(name.into(), ty);
@@ -161,8 +163,8 @@ fn what_dates_a_type_holds_reads_through_domains_and_arrays() {
         (Type::INT4_RANGE, Dated::No),
         (user("mood", Kind::Enum(vec!["a".into()])), Dated::No),
         (user("zz_t", Kind::Domain(Type::TEXT)), Dated::No),
-        (user("hstore", Kind::Simple), Dated::No),
-        (user("_citext", Kind::Array(user("citext", Kind::Simple))), Dated::No),
+        (user("hstore", Kind::Simple), Dated::Lookup(90_000)),
+        (user("_citext", Kind::Array(user("citext", Kind::Simple))), Dated::Lookup(90_000)),
         (Type::RECORD, Dated::Unknown),
     ] {
         assert_eq!(dated(&ty), want, "{ty}");

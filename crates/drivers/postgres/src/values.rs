@@ -156,6 +156,9 @@ pub fn zoned_in(ty: &Type, format: i16) -> bool {
 /// any type it cannot tell.
 pub fn dated(ty: &Type) -> datarig_core::driver::Dated {
     use datarig_core::driver::{DatePart, Dated};
+    if matches!(ty.kind(), Kind::Simple) && !builtin(ty) {
+        return Dated::Lookup(ty.oid());
+    }
     if !styled_text(ty) {
         return Dated::No;
     }
@@ -176,6 +179,11 @@ pub fn dated(ty: &Type) -> datarig_core::driver::Dated {
         // A pseudo-type, or a kind not known here.
         _ => Dated::Unknown,
     }
+}
+
+/// A type the server has built in (its own oid's), not the database's own.
+fn builtin(ty: &Type) -> bool {
+    Type::from_oid(ty.oid()).as_ref() == Some(ty)
 }
 
 fn zoned_text(ty: &Type) -> bool {
@@ -210,11 +218,16 @@ fn styled_text(ty: &Type) -> bool {
         // are, a composite may hold dates.
         Kind::Composite(_) => true,
         Kind::Enum(_) => false,
-        // A base type (the server's `typtype` `b`, built-in, an extension's such as `citext`,
-        // `hstore`, `ltree`, or the database's own): only the server's dates and times hold
-        // them; any other base type's text is its own.
+        // A built-in base type: only the server's dates and times hold them. One not built in
+        // (an extension's such as `citext`, `hstore`, `ltree`, or the database's own) holds none
+        // as a base type, but may be a multirange the connection does not tell apart, so it may
+        // until the metadata session says its kind (`Dated::Lookup` of [`dated`]).
         Kind::Simple => {
-            matches!(*ty, Type::DATE | Type::TIME | Type::TIMETZ | Type::TIMESTAMP | Type::TIMESTAMPTZ | Type::INTERVAL)
+            !builtin(ty)
+                || matches!(
+                    *ty,
+                    Type::DATE | Type::TIME | Type::TIMETZ | Type::TIMESTAMP | Type::TIMESTAMPTZ | Type::INTERVAL
+                )
         }
         // A pseudo-type (an anonymous `record`), and any kind not known here.
         _ => true,

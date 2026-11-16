@@ -122,6 +122,8 @@ pub(crate) async fn meta_loop(mut conn: Conn, mut link: Link, events: UnboundedS
                 DbCommand::LoadCatalog => DbEvent::Catalog(load_catalog(&mut conn).await),
                 // A database is the schema: the server's databases are its schemas.
                 DbCommand::LoadDatabases => DbEvent::Databases(load_schemas(&mut conn).await),
+                // MySQL's columns say no kinds to look up (`Dated::Lookup` is PostgreSQL's).
+                cmd @ DbCommand::LoadTypeKinds { .. } => cmd.not_supported(),
                 DbCommand::LoadKeys => DbEvent::Keys(keys::load_keys(&mut conn).await),
                 DbCommand::LoadStructure { schema, table } => {
                     let result = structure::load_structure(&mut conn, server, mode, &schema, &table).await;

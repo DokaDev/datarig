@@ -201,6 +201,7 @@ struct ModelKey {
     /// by it).
     text: Option<datarig_core::driver::TextStyle>,
     styled: Vec<super::PastedStyle>,
+    dated: Vec<datarig_core::driver::Dated>,
     /// The NULL token a paste reads (an empty pasted value's problem names it).
     null: datarig_core::config::PasteNull,
 }
@@ -427,6 +428,7 @@ impl App {
             read_in: rs.read_in.clone(),
             text: t.exec.text.clone(),
             styled: rs.edit.styled.clone(),
+            dated: rs.columns.iter().map(|c| c.meta.dated).collect(),
             null: self.prefs.paste_null,
         };
         let cache = &rs.edit.changes;

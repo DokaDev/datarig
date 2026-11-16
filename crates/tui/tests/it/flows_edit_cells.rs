@@ -2156,6 +2156,30 @@ fn pg_applies(
     value: &str,
     into: Into,
 ) -> (Option<String>, bool) {
+    pg_applies_with(ty, kind, dated, value, into, Look::Not)
+}
+
+/// What the metadata session answers when it is asked the kind of a type ([`pg_applies_with`]).
+#[derive(Clone, Copy, Debug)]
+enum Look {
+    /// Nothing (the answer has not come).
+    Not,
+    /// The kind (`typtype`), or `None`: the type no longer exists.
+    Kind(Option<char>),
+    /// The read failed.
+    Failed,
+}
+
+/// [`pg_applies`], the metadata session answering `look` when it is asked the kind of the
+/// nickname's type.
+fn pg_applies_with(
+    ty: &str,
+    kind: ValueKind,
+    dated: datarig_core::driver::Dated,
+    value: &str,
+    into: Into,
+    look: Look,
+) -> (Option<String>, bool) {
     use datarig_core::driver::Dated;
     use datarig_tui::app::action::Action;
     use datarig_tui::app::edit::{EditAction, RowAt};
@@ -2167,11 +2191,28 @@ fn pg_applies(
     columns[2] = ColumnMeta { kind, styled, dated, ..meta_from("nickname", ty, false, USERS, 4) };
     let email = if matches!(into, Into::FromText) { value } else { "a@x" };
     answer(&mut h, "SELECT id, email, nickname FROM shop.users", columns, vec![vec![s("1"), s(email), s("x")]]);
-    if let Some(id) = h.sent().into_iter().find_map(|c| match c {
-        DbCommand::CheckRepeat { id, .. } => Some(id),
+    let sent = h.sent();
+    if let Some(id) = sent.iter().find_map(|c| match c {
+        DbCommand::CheckRepeat { id, .. } => Some(*id),
         _ => None,
     }) {
         h.db(DbEvent::RepeatChecked { id, result: Ok(()) });
+    }
+    let asked = sent.iter().find_map(|c| match c {
+        DbCommand::LoadTypeKinds { oids } => Some(oids.clone()),
+        _ => None,
+    });
+    let name = h.app.profiles[0].name.clone();
+    match (look, asked) {
+        (Look::Kind(k), Some(oids)) => {
+            let found = oids.iter().filter_map(|&o| k.map(|k| (o, k))).collect();
+            h.meta_db(&name, DbEvent::TypeKinds { oids, result: Ok(found) });
+        }
+        (Look::Failed, Some(oids)) => {
+            h.meta_db(&name, DbEvent::TypeKinds { oids, result: Err(DbError::Closed) });
+        }
+        (Look::Kind(_) | Look::Failed, None) => panic!("{ty}: the kind was not asked"),
+        (Look::Not, _) => {}
     }
     let mut st = users_structure();
     st.columns[3].type_name = ty.into();
@@ -2269,19 +2310,47 @@ fn a_pg_value_of_a_column_holding_dates_is_applied_only_in_a_form_read_the_same_
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
-/// Columns of an extension's base types (`citext`, `hstore`), which hold no dates, take any
-/// text, typed or pasted, as before.
+/// Columns of an extension's base types (`citext`, `hstore`), which the connection reports as
+/// base types: their kind is asked of the metadata session, and once it says a base type
+/// (`b`), they take any text, typed or pasted, as before.
 #[test]
 fn a_pg_extension_type_holding_no_dates_stays_editable() {
     use datarig_core::driver::Dated;
-    for (ty, value, into) in [
-        ("citext", "Ann Lee", Into::Typed),
-        ("citext", "02/01/2026", Into::Pasted),
-        ("hstore", "a=>1", Into::Typed),
-        ("hstore", "b=>2", Into::Pasted),
+    for (ty, oid, value, into) in [
+        ("citext", 70_001, "Ann Lee", Into::Typed),
+        ("citext", 70_001, "02/01/2026", Into::Pasted),
+        ("hstore", 70_002, "a=>1", Into::Typed),
+        ("hstore", 70_002, "b=>2", Into::Pasted),
     ] {
-        let (why, sent) = pg_applies(ty, ValueKind::Other, Dated::No, value, into);
-        assert_eq!((why, sent), (None, true), "{ty} {value} {into:?}");
+        let looked = pg_applies_with(ty, ValueKind::Other, Dated::Lookup(oid), value, into, Look::Kind(Some('b')));
+        assert_eq!(looked, (None, true), "{ty} {value} {into:?}");
+    }
+}
+
+/// Until its kind is known, a type to look up takes no text: while the answer has not come
+/// (try again), or when the read failed; a multirange of the database's own (`m`) and a type
+/// that no longer exists are not known.
+#[test]
+fn a_pg_type_whose_kind_is_not_known_takes_no_text() {
+    use datarig_core::driver::Dated;
+    let wait = "nickname is of a type the app is still asking the server about: try again in a moment";
+    let unknown = "a type whose text may hold dates or times the app cannot check";
+    let typed = |look| {
+        pg_applies_with(
+            "zz_dr_multirange",
+            ValueKind::Other,
+            Dated::Lookup(70_003),
+            "{[2026-01-02,2026-01-05)}",
+            Into::Typed,
+            look,
+        )
+    };
+    for (look, said) in
+        [(Look::Not, wait), (Look::Failed, wait), (Look::Kind(Some('m')), unknown), (Look::Kind(None), unknown)]
+    {
+        let (why, sent) = typed(look);
+        assert!(!sent, "{look:?}");
+        assert!(why.as_deref().is_some_and(|w| w.contains(said)), "{look:?}: {why:?}");
     }
 }
 
@@ -2349,4 +2418,32 @@ fn a_pg_value_typed_into_a_result_read_in_other_settings_is_refused() {
     let said = said_text(&mut h);
     assert!(said.contains(READ_ELSEWHERE), "{said}");
     assert_eq!(value(&h, 0, 2), Some(Value::Text("[2026-03-01,2026-03-02)".into())), "the edit stays");
+}
+
+/// The metadata session's answer is of its own database's types: a tab working in another
+/// database does not ask it, and an answer for the oid does not count there (oids are per
+/// database).
+#[test]
+fn a_pg_kind_answered_for_another_database_does_not_count() {
+    use datarig_core::driver::Dated;
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    h.db(DbEvent::TextStyle(Some(pg_style("ISO, MDY"))));
+    h.app.tab_mut().context.database = Some("elsewhere".into());
+    let mut columns = users_columns();
+    columns[2] = ColumnMeta {
+        kind: ValueKind::Other,
+        styled: true,
+        dated: Dated::Lookup(70_001),
+        ..meta_from("nickname", "citext", false, USERS, 4)
+    };
+    answer(&mut h, "SELECT id, email, nickname FROM shop.users", columns, vec![vec![s("1"), s("a@x"), s("x")]]);
+    assert!(!h.sent().iter().any(|c| matches!(c, DbCommand::LoadTypeKinds { .. })), "not asked");
+    let name = h.app.profiles[0].name.clone();
+    h.meta_db(&name, DbEvent::TypeKinds { oids: vec![70_001], result: Ok(vec![(70_001, 'b')]) });
+    let dated = match &h.app.tab().results {
+        Results::Rows(rs) => rs.columns[2].meta.dated,
+        _ => panic!("no row result"),
+    };
+    assert_eq!(dated, Dated::Lookup(70_001), "still not known in another database");
 }

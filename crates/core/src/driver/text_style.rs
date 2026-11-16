@@ -68,6 +68,11 @@ pub enum Dated {
     /// The driver cannot tell what of them it holds: a composite with such a field, a
     /// pseudo-type, a type of an extension or of the database's own.
     Unknown,
+    /// A type of the database's own (`oid`) that the connection reports as a base type, which
+    /// may also be a multirange: not known until the metadata session says its kind
+    /// ([`super::DbCommand::LoadTypeKinds`]); a base type or an enum holds none, any other
+    /// kind is not known.
+    Lookup(u32),
 }
 
 /// A kind of date or time a value holds ([`Dated::Of`]).
@@ -91,7 +96,7 @@ pub enum DatePart {
 pub fn reads_same_anywhere(dated: Dated, text: &str) -> bool {
     let part: fn(&str) -> bool = match dated {
         Dated::No => return true,
-        Dated::Unknown => return false,
+        Dated::Unknown | Dated::Lookup(_) => return false,
         Dated::Of(DatePart::Date) => iso_date,
         Dated::Of(DatePart::Timestamp) => |p| iso_timestamp(p, false),
         Dated::Of(DatePart::TimestampTz) => |p| iso_timestamp(p, true),

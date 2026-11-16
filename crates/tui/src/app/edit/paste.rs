@@ -208,6 +208,8 @@ struct InvalidKey {
     /// a `styled` column is judged by.
     text: Option<datarig_core::driver::TextStyle>,
     styled: Vec<super::PastedStyle>,
+    /// What dates the columns hold (a type's kind looked up since changes it).
+    dated: Vec<datarig_core::driver::Dated>,
     lang: Lang,
     null: datarig_core::config::PasteNull,
     dialect: Dialect,
@@ -1403,6 +1405,7 @@ impl App {
             revision: rs.edit.batch.revision(),
             text: t.exec.text.clone(),
             styled: rs.edit.styled.clone(),
+            dated: rs.columns.iter().map(|c| c.meta.dated).collect(),
             lang: self.i18n.lang,
             null: self.prefs.paste_null,
             dialect: self.tab_dialect(t.id),
@@ -1474,6 +1477,7 @@ impl App {
                     if !datarig_core::driver::text_style::reads_same_anywhere(m.dated, s) {
                         let why = match m.dated {
                             datarig_core::driver::Dated::Unknown => Msg::EditWhyDatedUnknown { column },
+                            datarig_core::driver::Dated::Lookup(_) => Msg::EditWhyDatedLookup { column },
                             _ => Msg::EditWhyDatedForm { column },
                         };
                         out.cells.insert((at, c), self.i18n.msg(&why).to_string());

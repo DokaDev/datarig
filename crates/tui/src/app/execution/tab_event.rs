@@ -312,6 +312,9 @@ impl App {
         // written in (`ResultSet::first_styled`).
         let pg = self.tab_dialect(id) == datarig_core::sql::dialect::Dialect::Postgres;
         let mut ask_style: Option<(u64, String)> = None;
+        // A result's first page: the kinds of its columns' types to look up are asked.
+        let first_page =
+            matches!(ev, DbEvent::Page { columns: Some(_), .. } | DbEvent::StepRows { columns: Some(_), .. });
         let Some(t) = self.tabs.get_mut(id) else { return };
         if outside.is_some() {
             t.exec.outside_offer = outside;
@@ -568,6 +571,7 @@ impl App {
             | DbEvent::Structure { .. }
             | DbEvent::Ddl { .. }
             | DbEvent::TableKeys { .. }
+            | DbEvent::TypeKinds { .. }
             | DbEvent::Databases(_) => None,
             // Where the session works, as the server says: a chosen schema it does not list
             // does not exist there or cannot be used (said, never taken as fine).
@@ -1202,6 +1206,9 @@ impl App {
         }
         if let Some((check, sql)) = ask_style {
             self.send_tab(id, DbCommand::CheckRepeat { id: check, sql });
+        }
+        if first_page {
+            self.type_kinds_for_tab(id);
         }
         if let (Some(target), Some(t)) = (rows_for, self.tabs.get_mut(id)) {
             let (in_block, epoch) = (t.exec.in_block, t.exec.tx_epoch);

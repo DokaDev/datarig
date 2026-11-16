@@ -271,6 +271,8 @@ impl App {
                 self.use_answered(id, crate::app::cmdline::UseAsk::Databases, ok);
             }
             DbEvent::Context { database, .. } => self.conns.entry(id).database = Some(database),
+            // The kinds of types a tab's result has, of the profile's own database.
+            DbEvent::TypeKinds { oids, result } => self.on_type_kinds(id, oids, result),
             DbEvent::Keys(Err(_)) => {
                 self.conns.entry(id).keys = Keys::Failed(text.clone());
                 self.status = Some(Notice::new(Msg::KeysFailed { error: text }, Level::Warning));

@@ -133,6 +133,10 @@ pub struct ProfileConn {
     pub console: Option<bool>,
     /// The database the metadata session works in, as the server said.
     pub database: Option<String>,
+    /// The kinds (`pg_type.typtype`) of types of the profile's own database the metadata
+    /// session was asked (`DbCommand::LoadTypeKinds`), by the database and the type's oid:
+    /// `None` while the answer has not come; `?` for a type the answer did not list (dropped).
+    pub type_kinds: std::collections::HashMap<(String, u32), Option<char>>,
     /// The server's databases (`DbCommand::LoadDatabases`), once asked: the names, or why they
     /// could not be read.
     pub databases: Option<Result<Vec<String>, String>>,
@@ -196,6 +200,7 @@ impl ProfileConn {
             expand_on_connect: false,
             console: None,
             database: None,
+            type_kinds: Default::default(),
             databases: None,
             databases_asked: false,
             own_open: true,

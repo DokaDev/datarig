@@ -557,6 +557,13 @@ pub enum DbCommand {
     /// The databases of the server the user may connect to (`Capabilities::contexts`):
     /// answered with [`DbEvent::Databases`].
     LoadDatabases,
+    /// The kinds of the types `oids` of the metadata session's database (PostgreSQL's
+    /// `pg_type.typtype`): answered with [`DbEvent::TypeKinds`]. Asked for the types a result's
+    /// columns have that the connection reports as base types but are not built in
+    /// ([`super::Dated::Lookup`]).
+    LoadTypeKinds {
+        oids: Vec<u32>,
+    },
     /// The structure of table (or view) `schema.table` (`Capabilities::structure`): answered
     /// with [`DbEvent::Structure`]. Read from the catalog only, never from the table.
     LoadStructure {
@@ -1022,6 +1029,7 @@ impl DbCommand {
             DbCommand::LoadCatalog => DbEvent::Catalog(Err(error)),
             DbCommand::LoadKeys => DbEvent::Keys(Err(error)),
             DbCommand::LoadDatabases => DbEvent::Databases(Err(error)),
+            DbCommand::LoadTypeKinds { oids } => DbEvent::TypeKinds { oids: oids.clone(), result: Err(error) },
             DbCommand::LoadStructure { schema, table } => {
                 DbEvent::Structure { schema: schema.clone(), table: table.clone(), result: Err(error) }
             }
@@ -1069,6 +1077,7 @@ impl DbCommand {
                 | DbCommand::LoadCatalog
                 | DbCommand::LoadKeys
                 | DbCommand::LoadDatabases
+                | DbCommand::LoadTypeKinds { .. }
                 | DbCommand::LoadStructure { .. }
                 | DbCommand::LoadDdl { .. }
                 | DbCommand::LoadTableKeys { .. }
@@ -1385,6 +1394,13 @@ pub enum DbEvent {
     Keys(Result<KeyCatalog, DbError>),
     /// The answer to `DbCommand::LoadDatabases`: the databases the user may connect to, by name.
     Databases(Result<Vec<String>, DbError>),
+    /// The answer to [`DbCommand::LoadTypeKinds`] of `oids`: each type found with its kind
+    /// (`typtype`: `b` base, `e` enum, `m` multirange, …); a type not among them no longer
+    /// exists.
+    TypeKinds {
+        oids: Vec<u32>,
+        result: Result<Vec<(u32, char)>, DbError>,
+    },
     /// The answer to `DbCommand::LoadStructure`: the structure of `schema.table`, or why it
     /// could not be read (a table that no longer exists is the server's error).
     Structure {
