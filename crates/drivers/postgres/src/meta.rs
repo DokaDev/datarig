@@ -58,36 +58,43 @@ use tokio_postgres::{Client, Row};
 macro_rules! stats_ctes {
     () => {
         "tree AS (
-  SELECT r.oid AS root, r.oid FROM roots r WHERE r.kind = 'p'
+  SELECT r.oid AS root, r.oid FROM roots r WHERE r.kind OPERATOR(pg_catalog.=) 'p'
   UNION ALL
-  SELECT tree.root, i.inhrelid FROM pg_catalog.pg_inherits i JOIN tree ON i.inhparent = tree.oid
+  SELECT tree.root, i.inhrelid FROM pg_catalog.pg_inherits i JOIN tree ON i.inhparent OPERATOR(pg_catalog.=) tree.oid
 ), heaps AS (
-  SELECT m.root, h.oid, h.relkind, h.reltuples::float8 AS reltuples, h.relpages::int8 AS relpages, h.reltoastrelid,
-         pg_catalog.pg_stat_get_live_tuples(h.oid)::float8 AS live
-  FROM (SELECT r.oid AS root, r.oid FROM roots r WHERE r.kind IN ('r', 'm')
+  SELECT m.root, h.oid, h.relkind, h.reltuples::pg_catalog.float8 AS reltuples, h.relpages::pg_catalog.int8 AS relpages,
+         h.reltoastrelid, pg_catalog.pg_stat_get_live_tuples(h.oid)::pg_catalog.float8 AS live
+  FROM (SELECT r.oid AS root, r.oid FROM roots r WHERE r.kind OPERATOR(pg_catalog.=) ANY (ARRAY['r', 'm'])
         UNION ALL SELECT tree.root, tree.oid FROM tree) m
-  JOIN pg_catalog.pg_class h ON h.oid = m.oid
-  WHERE h.relkind <> 'p'
+  JOIN pg_catalog.pg_class h ON h.oid OPERATOR(pg_catalog.=) m.oid
+  WHERE h.relkind OPERATOR(pg_catalog.<>) 'p'
 ), index_pages AS (
-  SELECT x.root, x.heap, sum(ic.relpages)::int8 AS pages
+  SELECT x.root, x.heap, pg_catalog.sum(ic.relpages)::pg_catalog.int8 AS pages
   FROM (SELECT y.root, y.oid AS heap, y.oid FROM heaps y
         UNION ALL SELECT y.root, y.oid, y.reltoastrelid FROM heaps y) x
-  JOIN pg_catalog.pg_index i ON i.indrelid = x.oid
-  JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
+  JOIN pg_catalog.pg_index i ON i.indrelid OPERATOR(pg_catalog.=) x.oid
+  JOIN pg_catalog.pg_class ic ON ic.oid OPERATOR(pg_catalog.=) i.indexrelid
   GROUP BY x.root, x.heap
 ), sized AS (
   SELECT h.root, h.relkind, h.reltuples, h.relpages,
-         CASE WHEN h.live > 2 * h.reltuples AND h.reltuples >= 0 THEN h.live WHEN h.reltuples >= 0 THEN h.reltuples END
+         CASE WHEN h.live OPERATOR(pg_catalog.>) (2 OPERATOR(pg_catalog.*) h.reltuples)
+                   AND h.reltuples OPERATOR(pg_catalog.>=) 0 THEN h.live
+              WHEN h.reltuples OPERATOR(pg_catalog.>=) 0 THEN h.reltuples END
            AS est_rows,
-         (h.relpages + coalesce(t.relpages, 0) + coalesce(ix.pages, 0))::float8 AS pages
+         (h.relpages OPERATOR(pg_catalog.+) coalesce(t.relpages, 0) OPERATOR(pg_catalog.+) coalesce(ix.pages, 0))
+           ::pg_catalog.float8 AS pages
   FROM heaps h
-  LEFT JOIN pg_catalog.pg_class t ON t.oid = h.reltoastrelid
-  LEFT JOIN index_pages ix ON ix.root = h.root AND ix.heap = h.oid
+  LEFT JOIN pg_catalog.pg_class t ON t.oid OPERATOR(pg_catalog.=) h.reltoastrelid
+  LEFT JOIN index_pages ix ON ix.root OPERATOR(pg_catalog.=) h.root AND ix.heap OPERATOR(pg_catalog.=) h.oid
 ), stats AS (
-  SELECT z.root, bool_and(z.est_rows IS NOT NULL) AS known_rows, sum(z.est_rows)::float8 AS est_rows,
-         bool_and(z.relkind = 'f' OR z.reltuples >= 0 OR z.relpages > 0) AS known_size,
-         pg_catalog.round(sum(CASE WHEN z.reltuples > 0 THEN z.pages * z.est_rows / z.reltuples ELSE z.pages END))::int8
-           * pg_catalog.current_setting('block_size')::int8 AS bytes
+  SELECT z.root, pg_catalog.bool_and(z.est_rows IS NOT NULL) AS known_rows,
+         pg_catalog.sum(z.est_rows)::pg_catalog.float8 AS est_rows,
+         pg_catalog.bool_and(z.relkind OPERATOR(pg_catalog.=) 'f' OR z.reltuples OPERATOR(pg_catalog.>=) 0
+                             OR z.relpages OPERATOR(pg_catalog.>) 0) AS known_size,
+         pg_catalog.round(pg_catalog.sum(CASE WHEN z.reltuples OPERATOR(pg_catalog.>) 0
+             THEN z.pages OPERATOR(pg_catalog.*) z.est_rows OPERATOR(pg_catalog./) z.reltuples ELSE z.pages END))
+           ::pg_catalog.int8
+           OPERATOR(pg_catalog.*) pg_catalog.current_setting('block_size')::pg_catalog.int8 AS bytes
   FROM sized z
   GROUP BY z.root
 )"
@@ -102,7 +109,8 @@ macro_rules! stats_rows {
         concat!(
             "CASE WHEN ",
             $kind,
-            " IN ('r', 'm', 'p') THEN CASE WHEN s.root IS NULL THEN 0 WHEN s.known_rows THEN s.est_rows ELSE -1 END END"
+            " OPERATOR(pg_catalog.=) ANY (ARRAY['r', 'm', 'p']) \
+             THEN CASE WHEN s.root IS NULL THEN 0 WHEN s.known_rows THEN s.est_rows ELSE -1 END END"
         )
     };
 }
@@ -113,7 +121,8 @@ macro_rules! stats_bytes {
         concat!(
             "CASE WHEN ",
             $kind,
-            " IN ('r', 'm', 'p') THEN CASE WHEN s.root IS NULL THEN 0 WHEN s.known_size THEN s.bytes END END"
+            " OPERATOR(pg_catalog.=) ANY (ARRAY['r', 'm', 'p']) \
+             THEN CASE WHEN s.root IS NULL THEN 0 WHEN s.known_size THEN s.bytes END END"
         )
     };
 }
@@ -125,8 +134,15 @@ pub(crate) mod monitor;
 pub(crate) mod order_keys;
 pub(crate) mod type_kinds;
 
-const HIDDEN_SCHEMAS: &str = "n.nspname NOT IN ('pg_catalog', 'information_schema') \
-     AND n.nspname NOT LIKE 'pg\\_toast%' AND n.nspname NOT LIKE 'pg\\_temp%'";
+/// The schemas the explorer and completion leave out: the system's own, TOAST and temporary
+/// ones. A fragment of a statement on `pg_namespace n`.
+macro_rules! hidden_schemas {
+    () => {
+        "n.nspname OPERATOR(pg_catalog.<>) ALL (ARRAY['pg_catalog', 'information_schema']::pg_catalog.name[]) \
+         AND NOT (n.nspname OPERATOR(pg_catalog.~~) 'pg\\_toast%') \
+         AND NOT (n.nspname OPERATOR(pg_catalog.~~) 'pg\\_temp%')"
+    };
+}
 
 /// What each read starts with: its own read-only transaction at `READ COMMITTED` (never the
 /// session's default level: at `SERIALIZABLE` the read would take predicate locks that others
@@ -135,16 +151,21 @@ const HIDDEN_SCHEMAS: &str = "n.nspname NOT IN ('pg_catalog', 'information_schem
 /// waits for a lock end after 2 s, without JIT compilation (PostgreSQL 11 and later:
 /// `set_config(…, true)` is a `SET LOCAL` the older servers, which have no `jit`, skip). A
 /// catalog read is short, but a catalog of some thousand relations can raise its planned cost
-/// over `jit_above_cost`, and compiling it costs far more than running it. `pg_catalog` goes
-/// first on the path, so that a schema a role's or database's default lists ahead of it
-/// shadows none of the functions, operators and types of the read (the rest of the path stays:
-/// what `format_type` and `regclass` show as visible is what the session sees). All of this
-/// ends with the transaction, so nothing is left on a server connection a pooler hands to
-/// another client.
+/// over `jit_above_cost`, and compiling it costs far more than running it.
+///
+/// The reads name every operator, function and type they use with its schema
+/// (`OPERATOR(pg_catalog.=)`, `pg_catalog.sum`, `::pg_catalog.int8`): PostgreSQL takes the best
+/// match of the argument types among all the schemas of the path, so an operator of another
+/// schema that matches the types exactly (`oid >= integer`) would be chosen over the server's
+/// own wherever the path lists that schema. The path itself stays the session's, with
+/// `pg_catalog` first and `pg_temp` last (a relation or type of the session's temporary schema,
+/// searched first while it is not listed, never stands for one of the catalog's): what
+/// `format_type` and `regclass` show as visible is what the session sees. All of this ends with
+/// the transaction, so nothing is left on a server connection a pooler hands to another client.
 pub const BEGIN_READ: &str = "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY; SET LOCAL lock_timeout = '2s'; \
      SELECT pg_catalog.set_config('search_path', \
-       CASE WHEN pg_catalog.current_setting('search_path') OPERATOR(pg_catalog.=) '' THEN 'pg_catalog' \
-       ELSE pg_catalog.concat('pg_catalog, ', pg_catalog.current_setting('search_path')) END, true); \
+       CASE WHEN pg_catalog.current_setting('search_path') OPERATOR(pg_catalog.=) '' THEN 'pg_catalog, pg_temp' \
+       ELSE pg_catalog.concat('pg_catalog, ', pg_catalog.current_setting('search_path'), ', pg_temp') END, true); \
      SELECT pg_catalog.set_config('jit', 'off', true) \
      WHERE pg_catalog.current_setting('server_version_num')::int OPERATOR(pg_catalog.>=) 110000";
 
@@ -262,23 +283,23 @@ pub(crate) async fn meta_loop(client: Client, mut link: Link, events: UnboundedS
     }
 }
 
+/// The schemas of the explorer, by name.
+pub const SCHEMAS: &str =
+    concat!("SELECT n.nspname FROM pg_catalog.pg_namespace n WHERE ", hidden_schemas!(), " ORDER BY n.nspname");
+
 async fn load_schemas(client: &Client) -> Result<Vec<String>, DbError> {
-    let sql = format!("SELECT n.nspname FROM pg_namespace n WHERE {HIDDEN_SCHEMAS} ORDER BY n.nspname");
-    let rows = read(client, &sql, &[]).await?;
+    let rows = read(client, SCHEMAS, &[]).await?;
     Ok(rows.iter().map(|r| r.get::<_, String>(0)).collect())
 }
 
 /// The databases the user may connect to (templates and databases that refuse connections
 /// left out), by name.
+pub const DATABASES: &str = "SELECT d.datname::pg_catalog.text FROM pg_catalog.pg_database d \
+     WHERE d.datallowconn AND NOT d.datistemplate \
+     AND pg_catalog.has_database_privilege(d.datname, 'CONNECT') ORDER BY 1";
+
 async fn load_databases(client: &Client) -> Result<Vec<String>, DbError> {
-    let rows = read(
-        client,
-        "SELECT d.datname::text FROM pg_catalog.pg_database d \
-         WHERE d.datallowconn AND NOT d.datistemplate \
-         AND pg_catalog.has_database_privilege(d.datname, 'CONNECT') ORDER BY 1",
-        &[],
-    )
-    .await?;
+    let rows = read(client, DATABASES, &[]).await?;
     Ok(rows.iter().map(|r| r.get::<_, String>(0)).collect())
 }
 
@@ -286,18 +307,18 @@ async fn load_databases(client: &Client) -> Result<Vec<String>, DbError> {
 /// statement.
 pub const SCHEMA_OBJECTS: &str = concat!(
     "WITH RECURSIVE roots AS (
-  SELECT c.oid, c.relname, c.relkind::text AS kind
-  FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-  WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'f', 'v', 'm')
+  SELECT c.oid, c.relname, c.relkind::pg_catalog.text AS kind
+  FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) c.relnamespace
+  WHERE n.nspname OPERATOR(pg_catalog.=) $1 AND c.relkind OPERATOR(pg_catalog.=) ANY (ARRAY['r', 'p', 'f', 'v', 'm']::pg_catalog.\"char\"[])
 ), ",
     stats_ctes!(),
     "
 SELECT r.relname, r.kind, (",
     stats_rows!("r.kind"),
-    ")::float8, (",
+    ")::pg_catalog.float8, (",
     stats_bytes!("r.kind"),
-    ")::int8
-FROM roots r LEFT JOIN stats s ON s.root = r.oid
+    ")::pg_catalog.int8
+FROM roots r LEFT JOIN stats s ON s.root OPERATOR(pg_catalog.=) r.oid
 ORDER BY r.relname"
 );
 
@@ -331,32 +352,39 @@ pub(crate) fn relation_stats(rows: Option<f64>, bytes: Option<i64>) -> RelationS
 /// The values of each column whose type is an enum, or a domain over one (through domains over
 /// domains): the enum's labels in their order. Read with the columns, from `pg_type` and
 /// `pg_enum` only, so no relation is locked. An array of an enum has none.
-const ENUM_CTES: &str = "WITH RECURSIVE domains AS (
-  SELECT t.oid, t.typbasetype AS base FROM pg_catalog.pg_type t WHERE t.typtype = 'd'
+pub(crate) const ENUM_CTES: &str = "WITH RECURSIVE domains AS (
+  SELECT t.oid, t.typbasetype AS base FROM pg_catalog.pg_type t WHERE t.typtype OPERATOR(pg_catalog.=) 'd'
   UNION ALL
-  SELECT d.oid, t.typbasetype FROM domains d JOIN pg_catalog.pg_type t ON t.oid = d.base WHERE t.typtype = 'd'
+  SELECT d.oid, t.typbasetype FROM domains d JOIN pg_catalog.pg_type t ON t.oid OPERATOR(pg_catalog.=) d.base
+  WHERE t.typtype OPERATOR(pg_catalog.=) 'd'
 ), labels AS (
-  SELECT e.enumtypid, pg_catalog.array_agg(e.enumlabel::text ORDER BY e.enumsortorder) AS labels
+  SELECT e.enumtypid, pg_catalog.array_agg(e.enumlabel::pg_catalog.text ORDER BY e.enumsortorder) AS labels
   FROM pg_catalog.pg_enum e GROUP BY e.enumtypid
 ), enum_of AS (
   SELECT l.enumtypid AS typ, l.enumtypid AS enum FROM labels l
   UNION ALL
-  SELECT d.oid, d.base FROM domains d JOIN labels l ON l.enumtypid = d.base
+  SELECT d.oid, d.base FROM domains d JOIN labels l ON l.enumtypid OPERATOR(pg_catalog.=) d.base
 )";
+
+/// The relations of the completion catalog with their columns (after [`ENUM_CTES`]). The type
+/// names are `format_type`'s on the session's path: a type of a schema on it is written without
+/// the schema, as the user writes it.
+pub const CATALOG: &str = concat!(
+    "SELECT n.nspname, c.relname, c.relkind::pg_catalog.text, a.attname, \
+     pg_catalog.format_type(a.atttypid, a.atttypmod), l.enumtypid::pg_catalog.int8, l.labels \
+     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) c.relnamespace \
+     LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid OPERATOR(pg_catalog.=) c.oid \
+       AND a.attnum OPERATOR(pg_catalog.>) 0 AND NOT a.attisdropped \
+     LEFT JOIN enum_of eo ON eo.typ OPERATOR(pg_catalog.=) a.atttypid \
+     LEFT JOIN labels l ON l.enumtypid OPERATOR(pg_catalog.=) eo.enum \
+     WHERE c.relkind OPERATOR(pg_catalog.=) ANY (ARRAY['r', 'p', 'f', 'v', 'm']::pg_catalog.\"char\"[]) AND ",
+    hidden_schemas!(),
+    " ORDER BY n.nspname, c.relname, a.attnum"
+);
 
 async fn load_catalog(client: &Client) -> Result<Catalog, DbError> {
     let schemas = load_schemas(client).await?;
-    let sql = format!(
-        "{ENUM_CTES} \
-         SELECT n.nspname, c.relname, c.relkind::text, a.attname, format_type(a.atttypid, a.atttypmod), \
-         l.enumtypid::int8, l.labels \
-         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
-         LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped \
-         LEFT JOIN enum_of eo ON eo.typ = a.atttypid \
-         LEFT JOIN labels l ON l.enumtypid = eo.enum \
-         WHERE c.relkind IN ('r', 'p', 'f', 'v', 'm') AND {HIDDEN_SCHEMAS} \
-         ORDER BY n.nspname, c.relname, a.attnum"
-    );
+    let sql = format!("{ENUM_CTES} {CATALOG}");
     let rows = read(client, &sql, &[]).await?;
     let mut relations: Vec<Relation> = Vec::new();
     // Columns of one enum share its labels.
@@ -395,6 +423,36 @@ fn keys_supported(version: u32) -> Result<(), DbError> {
     if version < 120_000 { Err(DbError::ServerTooOld) } else { Ok(()) }
 }
 
+/// The columns of the tables and views outside the system schemas ([`load_keys`]).
+pub const KEY_COLUMNS: &str = concat!(
+    "SELECT c.oid, n.nspname, c.relname, a.attnum, a.attname, a.attgenerated::pg_catalog.text, \
+     a.attidentity::pg_catalog.text, c.relkind OPERATOR(pg_catalog.=) ANY (ARRAY['v', 'm']::pg_catalog.\"char\"[]) \
+     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) c.relnamespace \
+     JOIN pg_catalog.pg_attribute a ON a.attrelid OPERATOR(pg_catalog.=) c.oid \
+       AND a.attnum OPERATOR(pg_catalog.>) 0 AND NOT a.attisdropped \
+     WHERE c.relkind OPERATOR(pg_catalog.=) ANY (ARRAY['r', 'p', 'f', 'v', 'm']::pg_catalog.\"char\"[]) AND ",
+    hidden_schemas!(),
+    " ORDER BY c.oid, a.attnum"
+);
+
+/// The unique indexes on plain columns of those tables ([`load_keys`]).
+pub const KEY_INDEXES: &str = concat!(
+    "SELECT i.indrelid, i.indisprimary, i.indkey::pg_catalog.int2[] FROM pg_catalog.pg_index i \
+     JOIN pg_catalog.pg_class c ON c.oid OPERATOR(pg_catalog.=) i.indrelid \
+     JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) c.relnamespace \
+     WHERE i.indisunique AND i.indpred IS NULL AND i.indexprs IS NULL AND ",
+    hidden_schemas!()
+);
+
+/// Their foreign keys ([`load_keys`]).
+pub const KEY_FOREIGN: &str = concat!(
+    "SELECT con.conrelid, con.conkey FROM pg_catalog.pg_constraint con \
+     JOIN pg_catalog.pg_class c ON c.oid OPERATOR(pg_catalog.=) con.conrelid \
+     JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) c.relnamespace \
+     WHERE con.contype OPERATOR(pg_catalog.=) 'f' AND ",
+    hidden_schemas!()
+);
+
 /// The tables and views outside the system schemas with their columns (and which of them are
 /// generated: `attgenerated`, `attidentity`, PostgreSQL 12 or later), and their keys: the
 /// primary key and the unique keys (from their indexes: full ones on plain columns, so unique
@@ -402,15 +460,7 @@ fn keys_supported(version: u32) -> Result<(), DbError> {
 /// is marked.
 async fn load_keys(client: &Client, version: &Result<u32, DbError>) -> Result<KeyCatalog, DbError> {
     keys_supported(version.clone()?)?;
-    let sql = format!(
-        "SELECT c.oid, n.nspname, c.relname, a.attnum, a.attname, a.attgenerated::text, a.attidentity::text, \
-         c.relkind IN ('v', 'm') \
-         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
-         JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped \
-         WHERE c.relkind IN ('r', 'p', 'f', 'v', 'm') AND {HIDDEN_SCHEMAS} \
-         ORDER BY c.oid, a.attnum"
-    );
-    let rows = read(client, &sql, &[]).await?;
+    let rows = read(client, KEY_COLUMNS, &[]).await?;
     // A table and its columns (number, name), in the order they come.
     struct Table {
         schema: String,
@@ -449,25 +499,18 @@ async fn load_keys(client: &Client, version: &Result<u32, DbError>) -> Result<Ke
             keys.set_generated(id, column, g);
         }
     }
-    let indexes = format!(
-        "SELECT i.indrelid, i.indisprimary, i.indkey::int2[] FROM pg_index i \
-         JOIN pg_class c ON c.oid = i.indrelid JOIN pg_namespace n ON n.oid = c.relnamespace \
-         WHERE i.indisunique AND i.indpred IS NULL AND i.indexprs IS NULL AND {HIDDEN_SCHEMAS}"
-    );
-    for r in read(client, &indexes, &[]).await? {
+    for r in read(client, KEY_INDEXES, &[]).await? {
         let kind = if r.get::<_, bool>(1) { KeyKind::Primary } else { KeyKind::Unique };
         keys.mark(r.get(0), &r.get::<_, Vec<i16>>(2), kind);
     }
-    let foreign = format!(
-        "SELECT con.conrelid, con.conkey FROM pg_constraint con \
-         JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace \
-         WHERE con.contype = 'f' AND {HIDDEN_SCHEMAS}"
-    );
-    for r in read(client, &foreign, &[]).await? {
+    for r in read(client, KEY_FOREIGN, &[]).await? {
         keys.mark(r.get(0), &r.get::<_, Vec<i16>>(1), KeyKind::Foreign);
     }
     Ok(keys)
 }
+
+#[cfg(test)]
+mod path_names;
 
 #[cfg(test)]
 mod tests {
