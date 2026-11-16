@@ -23,6 +23,7 @@ fn meta(name: &str, ty: &str, numeric: bool) -> ColumnMeta {
         origin: None,
         styled: false,
         zoned: false,
+        dated: Default::default(),
     }
 }
 

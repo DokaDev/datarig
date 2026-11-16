@@ -54,5 +54,117 @@ pub fn reads_same(from: Option<&TextStyle>, to: Option<&TextStyle>, zoned: bool)
     }
 }
 
+/// What dates, times or intervals a column's values hold, as the server reads them from text
+/// (whatever format a result reads them in).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Dated {
+    /// None: its text is read the same whatever the session's settings (numbers, text, JSON,
+    /// geometry, enums, ranges of numbers, …), or the driver does not say (MySQL).
+    #[default]
+    No,
+    /// Values of one kind of date or time: alone, or in a range, a multirange, an array or a
+    /// domain (`date`, `daterange`, `tstzrange[]`, a domain over `interval`).
+    Of(DatePart),
+    /// The driver cannot tell what of them it holds: a composite with such a field, a
+    /// pseudo-type, a type of an extension or of the database's own.
+    Unknown,
+}
+
+/// A kind of date or time a value holds ([`Dated::Of`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DatePart {
+    Date,
+    Timestamp,
+    TimestampTz,
+    Time,
+    TimeTz,
+    Interval,
+}
+
+/// Whether `text`, read as a value of a column that holds `dated`, reads as the same value
+/// whatever `DateStyle`, `IntervalStyle` and `TimeZone` the reading session has: every date
+/// and time in it is in ISO 8601 form (`2026-01-02`, `2026-01-02 10:00:00`), every time with a
+/// zone carries a numeric offset or `Z` (`+09`, `-03:30`), and every interval is in ISO 8601
+/// form (`P1DT2H`); `infinity`, `-infinity`, `empty` and `NULL` read the same anywhere. Any text
+/// of a column that holds no dates does; of one whose dates the driver cannot tell, none:
+/// not known is never the same.
+pub fn reads_same_anywhere(dated: Dated, text: &str) -> bool {
+    let part: fn(&str) -> bool = match dated {
+        Dated::No => return true,
+        Dated::Unknown => return false,
+        Dated::Of(DatePart::Date) => iso_date,
+        Dated::Of(DatePart::Timestamp) => |p| iso_timestamp(p, false),
+        Dated::Of(DatePart::TimestampTz) => |p| iso_timestamp(p, true),
+        Dated::Of(DatePart::Time) => |p| iso_time(p, false),
+        Dated::Of(DatePart::TimeTz) => |p| iso_time(p, true),
+        Dated::Of(DatePart::Interval) => iso_interval,
+    };
+    // The parts between the punctuation of ranges, multiranges and arrays (`[`, `)`, `{`, `,`,
+    // quotes); a bound left open or an empty range or array has none.
+    let parts = text.split(['[', ']', '(', ')', '{', '}', ',', '"']).map(str::trim).filter(|p| !p.is_empty());
+    let mut any = false;
+    for p in parts {
+        any = true;
+        let special = ["empty", "infinity", "-infinity", "NULL"].iter().any(|w| p.eq_ignore_ascii_case(w));
+        if !special && !part(p) {
+            return false;
+        }
+    }
+    any || !text.trim().is_empty()
+}
+
+fn digits(s: &str, n: usize) -> bool {
+    s.len() == n && s.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// `2026-01-02` (a year of four digits or more), with ` BC` after it or not.
+fn iso_date(p: &str) -> bool {
+    let p = p.strip_suffix(" BC").unwrap_or(p);
+    let mut it = p.split('-');
+    let (Some(y), Some(m), Some(d), None) = (it.next(), it.next(), it.next(), it.next()) else { return false };
+    y.len() >= 4 && y.bytes().all(|b| b.is_ascii_digit()) && digits(m, 2) && digits(d, 2)
+}
+
+/// `10:00:00` or `10:00:00.5`; with a numeric offset or `Z` after it (`zoned`) or without.
+fn iso_time(p: &str, zoned: bool) -> bool {
+    let (clock, offset) = match p.find(['+', '-', 'Z']) {
+        Some(i) => (&p[..i], Some(&p[i..])),
+        None => (p, None),
+    };
+    let ok_offset = match offset {
+        None => !zoned,
+        Some("Z") => zoned,
+        Some(o) => {
+            zoned && {
+                let o = &o[1..];
+                let mut it = o.split(':');
+                it.next().is_some_and(|h| digits(h, 2)) && it.all(|x| digits(x, 2))
+            }
+        }
+    };
+    let (hms, frac) = clock.split_once('.').map_or((clock, None), |(a, b)| (a, Some(b)));
+    let mut it = hms.split(':');
+    let clock_ok = matches!((it.next(), it.next(), it.next(), it.next()), (Some(h), Some(m), Some(s), None)
+        if digits(h, 2) && digits(m, 2) && digits(s, 2))
+        && frac.is_none_or(|f| !f.is_empty() && f.bytes().all(|b| b.is_ascii_digit()));
+    clock_ok && ok_offset
+}
+
+/// `2026-01-02 10:00:00` (`zoned`: with a numeric offset or `Z`), with ` BC` after it or not.
+fn iso_timestamp(p: &str, zoned: bool) -> bool {
+    let p = p.strip_suffix(" BC").unwrap_or(p);
+    let Some((date, time)) = p.split_once(' ') else { return false };
+    iso_date(date) && iso_time(time, zoned)
+}
+
+/// An interval in ISO 8601 form: `P1Y2M3DT4H5M6.5S`, with signs on its fields or not.
+fn iso_interval(p: &str) -> bool {
+    let body = p.strip_prefix('-').unwrap_or(p);
+    let Some(rest) = body.strip_prefix('P') else { return false };
+    !rest.is_empty()
+        && rest.bytes().any(|b| b.is_ascii_digit())
+        && rest.bytes().all(|b| b.is_ascii_digit() || b"YMWDTHS.-".contains(&b))
+}
+
 #[cfg(test)]
 mod tests;

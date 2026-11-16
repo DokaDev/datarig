@@ -133,6 +133,40 @@ fn only_text_that_may_hold_dates_or_times_is_read_in_the_sessions_settings() {
     assert!(!styled(&user("floatrange", Kind::Range(Type::FLOAT8))));
 }
 
+/// What dates a column holds reads through domains, arrays, ranges and multiranges to one kind;
+/// a composite that holds some, and a type not known, are not known; what holds none is none.
+#[test]
+fn what_dates_a_type_holds_reads_through_domains_and_arrays() {
+    use datarig_core::driver::{DatePart, Dated};
+    let user = |name: &str, kind: Kind| Type::new(name.into(), 90_000, kind, "public".into());
+    let d = user("zz_d", Kind::Domain(Type::DATE));
+    let dd = user("zz_dd", Kind::Domain(d.clone()));
+    for (ty, want) in [
+        (Type::DATE, Dated::Of(DatePart::Date)),
+        (Type::DATE_RANGE_ARRAY, Dated::Of(DatePart::Date)),
+        (Type::TSTZMULTI_RANGE, Dated::Of(DatePart::TimestampTz)),
+        (Type::INTERVAL_ARRAY, Dated::Of(DatePart::Interval)),
+        (Type::TIMETZ, Dated::Of(DatePart::TimeTz)),
+        (d.clone(), Dated::Of(DatePart::Date)),
+        (user("_zz_d", Kind::Array(d.clone())), Dated::Of(DatePart::Date)),
+        (dd, Dated::Of(DatePart::Date)),
+        (user("zz_iv", Kind::Domain(Type::INTERVAL)), Dated::Of(DatePart::Interval)),
+        (Type::TEXT, Dated::No),
+        (Type::INT4_RANGE, Dated::No),
+        (user("mood", Kind::Enum(vec!["a".into()])), Dated::No),
+        (user("zz_t", Kind::Domain(Type::TEXT)), Dated::No),
+        (user("hstore", Kind::Simple), Dated::Unknown),
+        (Type::RECORD, Dated::Unknown),
+    ] {
+        assert_eq!(dated(&ty), want, "{ty}");
+    }
+    let field = |name: &str, ty: Type| tokio_postgres::types::Field::new(name.into(), ty);
+    let stay = user("stay", Kind::Composite(vec![field("night", Type::DATE)]));
+    assert_eq!(dated(&stay), Dated::Unknown);
+    let pair = user("pair", Kind::Composite(vec![field("a", Type::INT4)]));
+    assert_eq!(dated(&pair), Dated::No);
+}
+
 #[test]
 fn dates_and_timestamps_keep_infinity_bc_and_far_years() {
     let date = |days: i32| format_value(&Type::DATE, &days.to_be_bytes(), false);
@@ -303,6 +337,7 @@ fn meta_of(ty: &Type) -> datarig_core::driver::ColumnMeta {
         origin: None,
         styled: styled(ty),
         zoned: zoned_in(ty, format_code(ty)),
+        dated: dated(ty),
     }
 }
 

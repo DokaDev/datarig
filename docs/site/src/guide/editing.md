@@ -462,10 +462,23 @@ reports, so its cells' settings are not known. A value typed in the grid, or wri
 Apply, is of settings not known too, and so is any value copied while pending (pasted, typed or
 cloned, in a column of any type): it pastes into no column that reads dates or times from text.
 `g p` and `p` into such a column of a result read in other settings than the session's now (or
-in settings not known) are refused too: run the query again first. A pasted value keeps the
-settings it was written in, and is applied only while the session still reads it the same: after a `RESET`, or a
-commit or rollback that ends a `SET LOCAL`, the cell is marked invalid, saying why, and the
-changes are not applied until it is pasted again or the session's settings are set back.
+in settings not known) are refused too: run the query again first. A pasted (or cloned) value
+keeps the settings it was written in, and is applied only when they are ISO (`DateStyle` `ISO`
+and an `IntervalStyle` other than `sql_standard`), which the server reads the same whatever its
+settings when the changes are applied (a trigger of the Apply's own transaction may change
+them, which nothing reports). Text written in other settings can be pasted and seen, but its
+cell is marked invalid, saying why, and the changes are not applied: set `DateStyle` to ISO,
+read the source again and paste again.
+
+Any text a change gives a PostgreSQL column that holds dates, times or intervals (a scalar,
+a range, a multirange, an array, a domain over one of those), however it got there (typed in
+the cell editor, pasted from the clipboard, `g p` of any column, cloned), is applied only in a
+form the server reads the same whatever its `DateStyle`, `TimeZone` and `IntervalStyle` when the
+statement runs: dates as `2026-01-02`, times with a time zone with their offset
+(`2026-01-02 10:00:00+09`), intervals in ISO 8601 (`P1DT2H`); `infinity` and `empty` are fine.
+Other text is kept, marked invalid with the form to use, and not applied. A column of a type
+whose dates the app cannot tell (a composite holding one, an extension's type) takes no
+text from here.
 
 A time with a time zone (a `timestamptz` or `timetz` in a range, an array or a composite, or a
 type the driver cannot tell) written in a `DateStyle` other than ISO carries the zone's

@@ -17,3 +17,13 @@
 - PostgreSQL: a value copied while pending (not applied yet) no longer pastes into a column of
   dates or times, and `g p` into such a column of a result read in other settings than the
   session's now is refused, so the same text is never taken for an unchanged value.
+- PostgreSQL: a range or other value read as text, pasted or cloned, is applied only when it was
+  written in ISO (`DateStyle` ISO), which reads the same whatever a trigger of the Apply sets;
+  text written in other settings can be pasted but its cell is invalid until pasted again in
+  ISO.
+- PostgreSQL: text given to a column of dates, times or intervals (also a range, an array or a
+  domain over one), typed, pasted or cloned, is applied only in a form read the same in any
+  `DateStyle`, `TimeZone` and `IntervalStyle` (ISO dates, times with their offset, ISO 8601
+  intervals), since a trigger may change them while the changes are applied; other text is
+  marked invalid, saying which form to use. A type whose dates the app cannot tell takes no
+  text from the grid.

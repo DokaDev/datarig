@@ -1149,6 +1149,7 @@ pub fn meta(name: &str, ty: &str, numeric: bool, json: bool) -> ColumnMeta {
         origin: None,
         styled: false,
         zoned: false,
+        dated: Default::default(),
     }
 }
 

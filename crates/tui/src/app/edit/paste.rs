@@ -1452,19 +1452,29 @@ impl App {
                 Value::Null => tc.column.not_null.then(|| self.i18n.msg(&Msg::EditWhyNotNull { column }).to_string()),
                 Value::Text(s) => {
                     let Some(m) = rs.columns.get(c).map(|c| &c.meta) else { return };
-                    // Pasted text written in settings the session does not read the same now
-                    // (they changed since the paste: a `RESET`, a rollback, a commit that ended
-                    // a `SET LOCAL`).
+                    // Text pasted (or cloned) from a `styled` column is applied only when known to
+                    // be written in ISO, which reads the same whatever the session's settings
+                    // are when the statement runs: a trigger of the Apply's own transaction may
+                    // change them (`set_config(…, true)`) between two of its statements, which
+                    // nothing reports, and a `RESET` or the end of a `SET LOCAL` after the paste
+                    // does too.
                     if let Some(p) = rs.edit.pasted_style(at, c)
                         && reads_styled(m)
-                        && !datarig_core::driver::text_style::reads_same(
-                            p.written.as_ref(),
-                            t.exec.text.as_ref(),
-                            p.zoned,
-                        )
+                        && !p.written.as_ref().is_some_and(datarig_core::driver::TextStyle::reads_anywhere)
                     {
-                        let (from, to) = (self.style_words(p.written.as_ref()), self.style_words(t.exec.text.as_ref()));
-                        let why = Msg::EditWhyStyleChanged { column, from, to };
+                        let from = self.style_words(p.written.as_ref());
+                        let why = Msg::EditWhyStyleNotIso { column, from };
+                        out.cells.insert((at, c), self.i18n.msg(&why).to_string());
+                        return;
+                    }
+                    // Any text (typed, pasted from anywhere, cloned) of a column that holds dates,
+                    // times or intervals: only in a form the server reads the same whatever its
+                    // settings when the statement runs.
+                    if !datarig_core::driver::text_style::reads_same_anywhere(m.dated, s) {
+                        let why = match m.dated {
+                            datarig_core::driver::Dated::Unknown => Msg::EditWhyDatedUnknown { column },
+                            _ => Msg::EditWhyDatedForm { column },
+                        };
                         out.cells.insert((at, c), self.i18n.msg(&why).to_string());
                         return;
                     }
@@ -1580,6 +1590,9 @@ impl App {
 /// bytes, bits, arrays of those), and a type of no such kind the driver says is not `styled`.
 fn reads_styled(m: &datarig_core::driver::ColumnMeta) -> bool {
     use datarig_core::driver::{ArrayElement as A, ValueKind as V};
+    if m.dated != datarig_core::driver::Dated::No {
+        return true;
+    }
     let plain = match m.kind {
         V::Text | V::Json | V::Integer | V::Decimal | V::Float | V::Bool | V::Bytes | V::Bit => true,
         V::Array(A::Number | A::Bool | A::Json) => true,

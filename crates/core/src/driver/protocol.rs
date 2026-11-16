@@ -1103,11 +1103,17 @@ pub struct ColumnMeta {
     /// back in the reading session's `timezone_abbreviations`, which no server reports, so it
     /// reads the same only when written in ISO (numeric offsets).
     pub zoned: bool,
+    /// What dates, times or intervals its values hold as the server reads them from text,
+    /// whatever format the result read them in: text written to it is applied only in a form
+    /// the server reads the same whatever the session's settings
+    /// ([`super::text_style::reads_same_anywhere`]).
+    pub dated: super::Dated,
 }
 
 impl ColumnMeta {
     /// A result column whose `numeric` and `json` follow from `kind`, so they cannot disagree
-    /// with it (what a driver builds; a literal must keep them in step itself), not `styled`.
+    /// with it (what a driver builds; a literal must keep them in step itself), not `styled`,
+    /// holding no dates.
     pub fn new(name: String, type_name: String, kind: ValueKind, origin: Option<ColumnOrigin>) -> Self {
         Self {
             name,
@@ -1118,6 +1124,7 @@ impl ColumnMeta {
             origin,
             styled: false,
             zoned: false,
+            dated: super::Dated::No,
         }
     }
 }

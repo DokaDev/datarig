@@ -16,7 +16,7 @@ pub use protocol::{
     PagingMode, ReadIn, SchemaObjects, ServerEnd, ServerMessage, SessionValues, StatementInfo, TxOutcome, TxRule,
     TxStep, ValueKind,
 };
-pub use text_style::TextStyle;
+pub use text_style::{DatePart, Dated, TextStyle};
 
 use crate::profile::ConnectionConfig;
 use crate::sql::dialect::Language;

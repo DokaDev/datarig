@@ -23,6 +23,7 @@ fn column(name: &str, type_name: &str, numeric: bool, kind: ValueKind) -> Column
         origin: None,
         styled: false,
         zoned: false,
+        dated: Default::default(),
     }
 }
 

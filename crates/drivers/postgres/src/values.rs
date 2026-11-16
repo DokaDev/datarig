@@ -40,7 +40,8 @@ pub fn is_json(ty: &Type) -> bool {
 
 /// The kind of value a column of type `ty` holds. Numbers are [`is_numeric`] (a domain over a
 /// number type too: its base type's kind), JSON is [`is_json`]; any other domain, an array of
-/// anything but a built-in type, and every type not named here, is [`ValueKind::Other`].
+/// anything but a built-in type, and every type not named here, is [`ValueKind::Other`]. (What
+/// dates a domain holds is [`dated`]'s, which reads through it.)
 pub fn value_kind(ty: &Type) -> ValueKind {
     match ty.kind() {
         Kind::Array(elem) => return array_element(elem).map_or(ValueKind::Other, ValueKind::Array),
@@ -147,6 +148,33 @@ pub fn styled_in(ty: &Type, format: i16) -> bool {
 /// what holds only those do not.
 pub fn zoned_in(ty: &Type, format: i16) -> bool {
     styled_in(ty, format) && zoned_text(ty)
+}
+
+/// What dates, times or intervals a value of type `ty` holds, as the server reads it from
+/// text: one kind of them, alone or in a range, multirange, array or domain; none for a type
+/// [`styled_text`] says holds none; not known for a composite that holds some, and for any type
+/// it cannot tell.
+pub fn dated(ty: &Type) -> datarig_core::driver::Dated {
+    use datarig_core::driver::{DatePart, Dated};
+    if !styled_text(ty) {
+        return Dated::No;
+    }
+    match ty.kind() {
+        Kind::Array(inner) | Kind::Range(inner) | Kind::Multirange(inner) | Kind::Domain(inner) => {
+            return dated(inner);
+        }
+        Kind::Composite(_) => return Dated::Unknown,
+        _ => {}
+    }
+    match *ty {
+        Type::DATE => Dated::Of(DatePart::Date),
+        Type::TIMESTAMP => Dated::Of(DatePart::Timestamp),
+        Type::TIMESTAMPTZ => Dated::Of(DatePart::TimestampTz),
+        Type::TIME => Dated::Of(DatePart::Time),
+        Type::TIMETZ => Dated::Of(DatePart::TimeTz),
+        Type::INTERVAL => Dated::Of(DatePart::Interval),
+        _ => Dated::Unknown,
+    }
 }
 
 fn zoned_text(ty: &Type) -> bool {

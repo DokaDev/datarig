@@ -59,3 +59,50 @@ fn a_time_with_a_zone_written_outside_iso_never_reads_the_same_by_its_settings()
     assert!(reads_same(Some(&iso), Some(&style("ISO, DMY", "postgres", "Asia/Seoul")), true));
     assert!(reads_same(Some(&iso), None, true));
 }
+
+/// Text reads the same whatever the session's settings only when every date and time in it is
+/// in ISO 8601 form, every time with a zone has a numeric offset, and every interval is in ISO
+/// 8601 form; any other type is not known to.
+#[test]
+fn only_iso_dates_offsets_and_iso_intervals_read_the_same_anywhere() {
+    use Dated::{Of, Unknown as U};
+    const D: Dated = Of(DatePart::Date);
+    const TS: Dated = Of(DatePart::Timestamp);
+    const TZ: Dated = Of(DatePart::TimestampTz);
+    const TTZ: Dated = Of(DatePart::TimeTz);
+    const IV: Dated = Of(DatePart::Interval);
+    assert!(reads_same_anywhere(Dated::No, "02/01/2026"), "no dates in it");
+    for (ty, text) in [
+        (D, "[2026-01-02,2026-01-05)"),
+        (D, "empty"),
+        (D, "[2026-01-02,)"),
+        (D, "{[2026-01-02,2026-01-05),[2026-02-01,2026-02-03)}"),
+        (TS, "[\"2026-01-02 10:00:00\",\"2026-01-02 11:00:00.5\")"),
+        (TZ, "[\"2026-01-02 10:00:00+09\",\"2026-01-02 11:00:00-03:30\")"),
+        (TZ, "[\"2026-01-02 10:00:00Z\",infinity)"),
+        (D, "{\"[2026-01-02,2026-01-05)\",NULL}"),
+        (D, "0044-03-15 BC"),
+        (TTZ, "10:00:00+09"),
+        (IV, "P1Y2M3DT4H5M6.5S"),
+        (IV, "P-1D"),
+    ] {
+        assert!(reads_same_anywhere(ty, text), "{ty:?} {text}");
+    }
+    for (ty, text) in [
+        (D, "[02/01/2026,05/01/2026)"),
+        (D, "[02.01.2026,05.01.2026)"),
+        (TZ, "[\"2026-01-02 10:00:00\",)"),
+        (TZ, "[\"02/01/2026 10:00:00 CST\",)"),
+        (TS, "[\"Fri Jan 02 10:00:00 2026\",)"),
+        (TTZ, "10:00:00"),
+        (IV, "1 day 02:00:00"),
+        (IV, "@ 1 day ago"),
+        (IV, "-1 2:00:00"),
+        (U, "happy"),
+        (U, "(guest,2026-01-02)"),
+        (U, "(1,2026-01-02)"),
+        (D, ""),
+    ] {
+        assert!(!reads_same_anywhere(ty, text), "{ty:?} {text}");
+    }
+}

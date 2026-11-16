@@ -1766,40 +1766,49 @@ fn a_pg_range_read_by_a_statement_that_may_change_the_settings_is_read_in_settin
     assert!(said.contains("written in settings not known; this session reads"), "{said}");
 }
 
-/// A range pasted while the session read it the same is applied only while it still does: the
-/// settings changed before the Apply (a `RESET`, a commit that ends a `SET LOCAL`) make the
-/// value invalid, saying why, and nothing is sent; set back, it is valid again.
+/// A range pasted from a copy written in `SQL, DMY` is not applied, even while the session
+/// reads it the same: a trigger of the Apply's own transaction may set `DateStyle` between two
+/// of its statements, which nothing reports. Written in ISO, which reads the same whatever the
+/// settings, it is applied.
 #[test]
-fn a_pg_range_pasted_in_one_date_style_is_not_applied_once_the_session_reads_another() {
+fn a_pg_range_pasted_not_in_iso_is_not_applied_even_in_the_same_settings() {
     use datarig_tui::app::action::Action;
     use datarig_tui::app::edit::{EditAction, RowAt};
-    let mut h = Harness::connected(Lang::En);
-    h.db(DbEvent::Keys(Ok(shop_keys())));
-    pg_again(&mut h, Some("SQL, DMY"), DATERANGE, "[02/01/2026,05/01/2026)");
-    h.keys("lly");
-    pg_again(&mut h, Some("SQL, DMY"), DATERANGE, "[2026-03-01,2026-03-02)");
-    h.keys("llgp");
-    let mut st = users_structure();
-    st.columns[3].type_name = "daterange".into();
-    structure(&mut h, Ok(st));
-    assert!(said_text(&mut h).starts_with("Pasted the copied cells"));
-    assert!(h.app.shown_invalid().is_some_and(|i| i.cells.is_empty()));
-    h.db(DbEvent::TextStyle(Some(pg_style("ISO, MDY"))));
-    let why = h.app.shown_invalid().and_then(|i| i.cells.get(&(RowAt::Read(0), 2)).cloned());
-    assert_eq!(
-        why.as_deref(),
-        Some(
-            "nickname was pasted as text whose dates and times are written in DateStyle SQL, DMY, IntervalStyle \
-             postgres, TimeZone UTC, but the session now reads such text in DateStyle ISO, MDY, IntervalStyle \
-             postgres, TimeZone UTC: paste it again, or set the session back"
-        )
-    );
-    h.sent();
-    h.app.dispatch(Action::Edit(EditAction::Apply));
-    assert!(!h.sent().iter().any(|c| matches!(c, DbCommand::ApplyEdits { .. })), "nothing applied");
-    h.app.transient = None;
-    h.db(DbEvent::TextStyle(Some(pg_style("SQL, DMY"))));
-    assert!(h.app.shown_invalid().is_some_and(|i| i.cells.is_empty()));
+    let st = || {
+        let mut st = users_structure();
+        st.columns[3].type_name = "daterange".into();
+        st
+    };
+    for (style, copied, applied) in
+        [("SQL, DMY", "[02/01/2026,05/01/2026)", false), ("ISO, MDY", "[2026-01-02,2026-01-05)", true)]
+    {
+        let mut h = Harness::connected(Lang::En);
+        h.db(DbEvent::Keys(Ok(shop_keys())));
+        pg_again(&mut h, Some(style), DATERANGE, copied);
+        h.keys("lly");
+        pg_again(&mut h, Some(style), DATERANGE, "[2026-03-01,2026-03-02)");
+        h.keys("llgp");
+        structure(&mut h, Ok(st()));
+        assert!(said_text(&mut h).starts_with("Pasted the copied cells"), "{style}");
+        let why = h.app.shown_invalid().and_then(|i| i.cells.get(&(RowAt::Read(0), 2)).cloned());
+        if applied {
+            assert_eq!(why, None, "{style}");
+        } else {
+            assert_eq!(
+                why.as_deref(),
+                Some(
+                    "nickname was pasted as text whose dates and times are written in DateStyle SQL, DMY, \
+                     IntervalStyle postgres, TimeZone UTC, not ISO, which the server may read otherwise when the \
+                     changes are applied: set DateStyle to ISO, read the source again and paste again"
+                )
+            );
+        }
+        h.sent();
+        h.app.dispatch(Action::Edit(EditAction::Apply));
+        h.key(KeyCode::Char('y'));
+        let sent = h.sent().iter().any(|c| matches!(c, DbCommand::ApplyEdits { .. }));
+        assert_eq!(sent, applied, "{style}");
+    }
 }
 
 /// A copy of values the result did not read (a value typed, pending) is of settings not known;
@@ -2027,8 +2036,8 @@ fn a_pg_row_cloned_keeps_the_settings_its_values_were_written_in() {
     assert!(why.as_deref().is_some_and(|w| w.contains("written in DateStyle SQL, DMY")), "{why:?}");
 }
 
-/// A row as read, cloned with `O`: its range keeps the settings the result was read in (not
-/// known when the result's are not), so it is applied only while the session reads it the same.
+/// A row as read, cloned with `O`: its range keeps the settings the result was read in, and is
+/// applied only when they are known to be ISO.
 #[test]
 fn a_pg_row_cloned_as_read_keeps_the_settings_of_its_result() {
     use datarig_tui::app::edit::RowAt;
@@ -2038,11 +2047,15 @@ fn a_pg_row_cloned_as_read_keeps_the_settings_of_its_result() {
         st.columns[3].type_name = "daterange".into();
         st
     };
-    for (read, valid) in [(Some("SQL, DMY"), true), (None, false)] {
+    for (read, value, valid) in [
+        (Some("ISO, MDY"), "[2026-01-02,2026-01-05)", true),
+        (Some("SQL, DMY"), "[02/01/2026,05/01/2026)", false),
+        (None, "[02/01/2026,05/01/2026)", false),
+    ] {
         let mut h = Harness::connected(Lang::En);
         h.db(DbEvent::Keys(Ok(shop_keys())));
-        pg_again(&mut h, read, DATERANGE, "[02/01/2026,05/01/2026)");
-        h.db(DbEvent::TextStyle(Some(pg_style("SQL, DMY"))));
+        pg_again(&mut h, read, DATERANGE, value);
+        h.db(DbEvent::TextStyle(read.map(pg_style)));
         h.keys("le");
         structure(&mut h, Ok(st()));
         h.key(KeyCode::Esc);
@@ -2052,7 +2065,7 @@ fn a_pg_row_cloned_as_read_keeps_the_settings_of_its_result() {
         let invalid = |h: &Harness| h.app.shown_invalid().is_some_and(|i| i.cells.contains_key(&(RowAt::New(id), 2)));
         assert_eq!(!invalid(&h), valid, "{read:?}");
         h.db(DbEvent::TextStyle(Some(pg_style("SQL, MDY"))));
-        assert!(invalid(&h), "{read:?}: read in other settings");
+        assert_eq!(!invalid(&h), valid, "{read:?}: whatever the session reads now");
     }
 }
 
@@ -2116,4 +2129,137 @@ fn a_pg_paste_into_a_result_read_in_other_settings_is_refused() {
          postgres, TimeZone UTC, and the session now reads such text in DateStyle SQL, DMY, IntervalStyle postgres, \
          TimeZone UTC: run the query again first"
     );
+}
+
+/// How a value gets into a cell for [`pg_applies`].
+#[derive(Clone, Copy, Debug)]
+enum Into {
+    /// Typed in the cell editor.
+    Typed,
+    /// The terminal's paste (the system clipboard's text, as `space d v` reads it).
+    Pasted,
+    /// `g p` of the email (text, as read) copied in the grid.
+    FromText,
+}
+
+/// In a session reading `ISO, MDY`, `value` put `into` the nickname, a column of type `ty`
+/// (kind `kind`) that holds `dated`: why its cell is invalid, if it is, and whether an Apply
+/// sends it.
+fn pg_applies(
+    ty: &str,
+    kind: ValueKind,
+    dated: datarig_core::driver::Dated,
+    value: &str,
+    into: Into,
+) -> (Option<String>, bool) {
+    use datarig_core::driver::Dated;
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::edit::{EditAction, RowAt};
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    h.db(DbEvent::TextStyle(Some(pg_style("ISO, MDY"))));
+    let styled = dated != Dated::No && kind == ValueKind::Other;
+    let mut columns = users_columns();
+    columns[2] = ColumnMeta { kind, styled, dated, ..meta_from("nickname", ty, false, USERS, 4) };
+    let email = if matches!(into, Into::FromText) { value } else { "a@x" };
+    answer(&mut h, "SELECT id, email, nickname FROM shop.users", columns, vec![vec![s("1"), s(email), s("x")]]);
+    if let Some(id) = h.sent().into_iter().find_map(|c| match c {
+        DbCommand::CheckRepeat { id, .. } => Some(id),
+        _ => None,
+    }) {
+        h.db(DbEvent::RepeatChecked { id, result: Ok(()) });
+    }
+    let mut st = users_structure();
+    st.columns[3].type_name = ty.into();
+    h.keys("lle");
+    structure(&mut h, Ok(st));
+    h.key(KeyCode::Esc);
+    h.app.transient = None;
+    match into {
+        Into::Typed => {
+            h.keys("e");
+            h.key(KeyCode::Backspace);
+            h.type_text(value);
+            h.key(KeyCode::Enter);
+        }
+        Into::Pasted => h.event(Event::Paste(value.to_string())),
+        Into::FromText => {
+            h.keys("hyl");
+            h.keys("gp");
+        }
+    }
+    h.app.transient = None;
+    assert_eq!(value_at(&h), Some(Value::Text(value.into())), "{ty} {value} {into:?}: pending");
+    let why = h.app.shown_invalid().and_then(|i| i.cells.get(&(RowAt::Read(0), 2)).cloned());
+    h.sent();
+    h.app.dispatch(Action::Edit(EditAction::Apply));
+    h.key(KeyCode::Char('y'));
+    let sent = h.sent().iter().any(|c| matches!(c, DbCommand::ApplyEdits { .. }));
+    (why, sent)
+}
+
+fn value_at(h: &Harness) -> Option<Value> {
+    value(h, 0, 2)
+}
+
+/// Any text going into a column that holds dates, times or intervals, however it got there
+/// (typed, the clipboard, `g p` of a text column), is applied only in a form the server reads
+/// the same whatever its `DateStyle`, `TimeZone` and `IntervalStyle` when the statement runs
+/// (a trigger may set them): ISO dates, times with a zone with their offset, ISO 8601
+/// intervals. A type whose dates the driver cannot tell takes none from here.
+#[test]
+fn a_pg_value_of_a_column_holding_dates_is_applied_only_in_a_form_read_the_same_anywhere() {
+    use datarig_core::driver::{DatePart, Dated};
+    let form = "nickname holds dates, times or intervals, and this text may be read as other values in the session's \
+                settings when the changes are applied: write dates as 2026-01-02, times with a time zone with their \
+                offset (2026-01-02 10:00:00+09) and intervals as P1DT2H";
+    let date = Dated::Of(DatePart::Date);
+    let cases: &[(&str, ValueKind, Dated, &str, Into, bool)] = &[
+        ("daterange", ValueKind::Other, date, "[2026-01-02,2026-01-05)", Into::Typed, true),
+        ("daterange", ValueKind::Other, date, "[02/01/2026,05/01/2026)", Into::Typed, false),
+        ("date", ValueKind::Date, date, "2026-01-02", Into::Pasted, true),
+        ("zz_d", ValueKind::Other, date, "02/01/2026", Into::Pasted, false),
+        ("daterange", ValueKind::Other, date, "[02/01/2026,05/01/2026)", Into::FromText, false),
+        ("daterange", ValueKind::Other, date, "[2026-01-02,2026-01-05)", Into::FromText, true),
+        (
+            "tstzrange",
+            ValueKind::Other,
+            Dated::Of(DatePart::TimestampTz),
+            "[\"2026-01-02 10:00:00+09\",)",
+            Into::Typed,
+            true,
+        ),
+        (
+            "tstzrange",
+            ValueKind::Other,
+            Dated::Of(DatePart::TimestampTz),
+            "[\"2026-01-02 10:00:00\",)",
+            Into::Typed,
+            false,
+        ),
+        ("interval", ValueKind::Interval, Dated::Of(DatePart::Interval), "P1DT2H", Into::Typed, true),
+        ("interval", ValueKind::Interval, Dated::Of(DatePart::Interval), "-1 2:00:00", Into::Typed, false),
+        ("interval", ValueKind::Interval, Dated::Of(DatePart::Interval), "1 day", Into::Pasted, false),
+        // A domain over `date`, and an array of it, hold its dates.
+        ("zz_d", ValueKind::Other, date, "02/01/2026", Into::Typed, false),
+        ("zz_d", ValueKind::Other, date, "2026-01-02", Into::Typed, true),
+        ("zz_d[]", ValueKind::Other, date, "{02/01/2026}", Into::Typed, false),
+        ("zz_d[]", ValueKind::Other, date, "{2026-01-02}", Into::Typed, true),
+    ];
+    let mut wrong = Vec::new();
+    for &(ty, kind, dated, value, into, applies) in cases {
+        let (why, sent) = pg_applies(ty, kind, dated, value, into);
+        let want = if applies { None } else { Some(form) };
+        if sent != applies || why.as_deref() != want {
+            wrong.push(format!("{ty} {value} {into:?}: sent {sent}, {why:?}"));
+        }
+    }
+    // A type whose dates the driver cannot tell (an extension's): none applied from here.
+    let (why, sent) = pg_applies("hstore", ValueKind::Other, Dated::Unknown, "a=>1", Into::Typed);
+    if sent
+        || !why.as_ref().is_some_and(|w| w.contains("a type whose text may hold dates or times the app cannot check"))
+    {
+        wrong.push(format!("hstore a=>1: sent {sent}, {why:?}"));
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }
