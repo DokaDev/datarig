@@ -1286,7 +1286,7 @@ fn sets_read_only(v: &Value) -> bool {
 }
 
 /// The settings `v` calls `set_config()` of, lower case: `None` for one named with something
-/// other than a string constant ([`string_constant`], which reads through a cast to `text`).
+/// other than a string constant ([`setting_name`]).
 fn set_config_names(v: &Value) -> Vec<Option<String>> {
     let mut names = Vec::new();
     walk(v, &mut |o| {
@@ -1300,9 +1300,26 @@ fn set_config_names(v: &Value) -> Vec<Option<String>> {
             return;
         }
         let first = call["args"].as_array().and_then(|a| a.first());
-        names.push(first.and_then(string_constant).map(|n| n.to_ascii_lowercase()));
+        names.push(first.and_then(setting_name).map(|n| n.to_ascii_lowercase()));
     });
     names
+}
+
+/// The setting a `set_config()` names with a string constant, read through casts written to
+/// `pg_catalog.text` only: a bare `text` may be a type of another schema of `search_path` whose
+/// cast turns the string into another name.
+fn setting_name(n: &Value) -> Option<String> {
+    match node(n)? {
+        ("AConst", c) => c["val"]["Sval"]["sval"].as_str().map(str::to_string),
+        ("TypeCast", c) => {
+            let t = &c["type_name"];
+            let names: Vec<&str> = t["names"].as_array()?.iter().filter_map(text).collect();
+            let empty = |k: &str| t[k].as_array().is_none_or(Vec::is_empty);
+            let plain = empty("typmods") && empty("array_bounds") && t["setof"] != Value::Bool(true);
+            if plain && names == ["pg_catalog", "text"] { setting_name(&c["arg"]) } else { None }
+        }
+        _ => None,
+    }
 }
 
 /// Whether `v` calls `set_config()` on `search_path` (or on a setting it names with something

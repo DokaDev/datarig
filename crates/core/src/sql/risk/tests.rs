@@ -462,12 +462,15 @@ fn read_only_refuses_custom_settings_and_set_config_off_the_allowlist() {
     assert_eq!(ok("RESET work_mem"), Ok(()));
 }
 
-/// `set_config()` of a setting it names through a cast reads the name; one whose name is not a
-/// constant may be any setting, so it asks.
+/// `set_config()` of a setting it names through a cast to `pg_catalog.text` reads the name; one
+/// whose name is not a constant may be any setting, so it asks. A bare `text` may be a type of
+/// the user's whose cast turns the string into another name: not a constant either.
 #[test]
 fn set_config_names_through_casts_and_asks_when_unnamed() {
     for sql in [
         "SELECT set_config('session_replication_role'::text, 'replica', false)",
+        "SELECT set_config('work_mem'::text, 'replica', false)",
+        "SELECT set_config('session_replication_role'::pg_catalog.text, 'replica', false)",
         "SELECT set_config(CAST('session_replication_role' AS pg_catalog.text), 'replica', true)",
         "SELECT set_config(current_user, 'x', false)",
         "SELECT set_config(name, 'x', true) FROM t",
@@ -475,9 +478,9 @@ fn set_config_names_through_casts_and_asks_when_unnamed() {
         assert_eq!(classify(sql).confirm(false), Some(Why::Danger(Danger::Setting)), "{sql}");
         assert!(classify(sql).read_only().is_err(), "{sql}");
     }
-    // A safe setting through a cast: as before, it does not ask (read-only refuses it, as the
-    // read-only settings' check does not read through casts).
-    let r = classify("SELECT set_config('work_mem'::text, '1MB', true)");
+    // A safe setting through a cast to `pg_catalog.text`: as before, it does not ask (read-only
+    // refuses it, as the read-only settings' check does not read through casts).
+    let r = classify("SELECT set_config('work_mem'::pg_catalog.text, '1MB', true)");
     assert_eq!((r.confirm(false), r.read_only()), (None, Err(ReadOnlyBlock::ReadWrite)));
 }
 
