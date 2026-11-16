@@ -459,8 +459,11 @@ one on the plain-read allowlist (a `SELECT` of tables with known built-ins, whic
 confirms right after its first page). A statement that calls `set_config`, a function of the
 user's or a view may change them and change them back within itself, which the server never
 reports, so its cells' settings are not known. A value typed in the grid, or written back by an
-Apply, is of settings not known too; a pasted one keeps the settings it was written in. Such a
-pasted value is applied only while the session still reads it the same: after a `RESET`, or a
+Apply, is of settings not known too, and so is any value copied while pending (pasted, typed or
+cloned, in a column of any type): it pastes into no column that reads dates or times from text.
+`g p` and `p` into such a column of a result read in other settings than the session's now (or
+in settings not known) are refused too: run the query again first. A pasted value keeps the
+settings it was written in, and is applied only while the session still reads it the same: after a `RESET`, or a
 commit or rollback that ends a `SET LOCAL`, the cell is marked invalid, saying why, and the
 changes are not applied until it is pasted again or the session's settings are set back.
 

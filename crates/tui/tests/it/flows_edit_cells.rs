@@ -1660,13 +1660,18 @@ fn a_pg_range_copied_in_one_date_style_is_pasted_only_where_it_reads_the_same() 
     let (said, pending) = pg_paste((None, DATERANGE, copied), (Some("ISO, MDY"), DATERANGE, other));
     assert!(said.contains("written in settings not known; this session reads"), "{said}");
     assert_eq!(pending, None);
+    // A result read in settings not known takes no paste of a range (its text may be the same
+    // bytes for another value), even one written in ISO.
     let (said, pending) = pg_paste((Some("SQL, DMY"), DATERANGE, copied), (None, DATERANGE, other));
-    assert!(said.ends_with("this session reads such text in settings not known, maybe as other values"), "{said}");
+    assert!(
+        said.ends_with("the session now reads such text in settings not known: run the query again first"),
+        "{said}"
+    );
     assert_eq!(pending, None);
     let iso = "[2026-01-02,2026-01-05)";
     let (said, pending) = pg_paste((Some("ISO, DMY"), DATERANGE, iso), (None, DATERANGE, other));
-    assert!(said.starts_with("Pasted the copied cells"), "{said}");
-    assert_eq!(pending, Some(Value::Text(iso.into())));
+    assert!(said.contains("of this result was read in settings not known"), "{said}");
+    assert_eq!(pending, None);
     let (said, _) = pg_paste((Some("ISO, DMY"), DATERANGE, iso), (Some("SQL, MDY"), DATERANGE, other));
     assert!(said.starts_with("Pasted the copied cells"), "{said}");
 }
@@ -1873,22 +1878,23 @@ fn a_pg_time_with_a_zone_written_outside_iso_is_never_pasted_by_equal_settings()
     let said = said_text(&mut h);
     assert!(said.starts_with("Not pasted: column \u{201C}nickname\u{201D}"), "{said}");
     let _ = TSTZRANGE;
-    // In ISO: pasted.
+    // In ISO: pasted (into a result read, and a session reading, in ISO too: its own text,
+    // compared with what is pasted, has numeric offsets).
     pg_zoned(&mut h, Some("ISO, MDY"), "[\"2026-01-02 00:00:00-06\",)");
     h.keys("lly");
-    pg_zoned(&mut h, Some("SQL, DMY"), "[\"03/01/2026 00:00:00 CST\",)");
+    pg_zoned(&mut h, Some("ISO, DMY"), "[\"2026-01-03 00:00:00-06\",)");
     h.keys("llgp");
     structure(&mut h, Ok(st()));
     let said = said_text(&mut h);
     assert!(said.starts_with("Pasted the copied cells"), "{said}");
 }
 
-/// The settings a pasted value was written in are those of the last paste that gave the cell its
-/// value, also the same text again: pasted again from where the session reads it the same, it
-/// is valid, and a copy of it says so. (Which action gave a cell its value, through undo and
-/// redo, is `EditBatch::setter`'s.)
+/// A value pasted in `SQL, DMY` stays invalid once the session reads `SQL, MDY`; pasting the
+/// same text again, copied where the session reads it the same, is refused into the result read
+/// in `SQL, DMY` (its text may be the same bytes for another value), so the first paste is not
+/// taken for the second's.
 #[test]
-fn a_pg_value_pasted_again_keeps_the_settings_of_the_last_paste() {
+fn a_pg_value_pasted_again_into_a_result_read_in_other_settings_is_refused() {
     use datarig_tui::app::edit::RowAt;
     let st = || {
         let mut st = users_structure();
@@ -1920,22 +1926,17 @@ fn a_pg_value_pasted_again_keeps_the_settings_of_the_last_paste() {
     h.app.tab_mut().grid.col = 2;
     h.keys("gp");
     let said = said_text(&mut h);
-    assert!(said.starts_with("Pasted the copied cells") || said.is_empty(), "{said}");
-    assert!(!invalid(&h), "pasted again from where it reads the same");
-    // A copy of it says the settings it was pasted in last.
-    h.keys("y");
-    h.ctrl('t');
-    pg_again(&mut h, Some("SQL, MDY"), DATERANGE, "[2026-04-01,2026-04-02)");
-    h.keys("llgp");
-    structure(&mut h, Ok(st()));
-    assert!(said_text(&mut h).starts_with("Pasted the copied cells"));
+    assert!(
+        said.contains("of this result was read in DateStyle SQL, DMY"),
+        "refused: the result was read in other settings: {said}"
+    );
+    assert!(invalid(&h), "the first paste stays, and is not applied");
 }
 
-/// A paste of the same text again, as part of a paste that changes another cell, is an action
-/// of its own: undone, the cell's value is the first paste's, written in the first paste's
-/// settings, whatever the later one said.
+/// The same text again, as part of a row pasted over a row of a result read in other settings
+/// than the session's: refused whole, the first paste stays invalid, and `u` takes it back.
 #[test]
-fn a_pg_paste_undone_gives_back_the_settings_of_the_paste_before_it() {
+fn a_pg_row_pasted_over_a_result_read_in_other_settings_is_refused() {
     use datarig_tui::app::edit::RowAt;
     let st = || {
         let mut st = users_structure();
@@ -1978,12 +1979,14 @@ fn a_pg_paste_undone_gives_back_the_settings_of_the_paste_before_it() {
     h.app.tab_mut().grid.col = 0;
     h.keys("gp");
     let said = said_text(&mut h);
-    assert!(said.starts_with("Pasted the copied cells"), "{said}");
-    assert!(!invalid(&h), "pasted again from where it reads the same");
-    // Undone: the first paste's value, written in `SQL, DMY`, which the session no longer reads.
+    assert!(
+        said.contains("of this result was read in DateStyle SQL, DMY"),
+        "refused: the result was read in other settings: {said}"
+    );
+    assert!(invalid(&h), "the first paste stays, and is not applied");
+    // Undone: nothing pasted, the first paste's value gone too.
     h.keys("u");
-    assert_eq!(value(&h, 0, 2), Some(Value::Text(copied.into())), "the first paste's value");
-    assert!(invalid(&h), "the first paste's settings are kept as they were");
+    assert_eq!(value(&h, 0, 2), None);
 }
 
 /// A row cloned with `O` copies its values with the settings each was written in: a range
@@ -2051,4 +2054,66 @@ fn a_pg_row_cloned_as_read_keeps_the_settings_of_its_result() {
         h.db(DbEvent::TextStyle(Some(pg_style("SQL, MDY"))));
         assert!(invalid(&h), "{read:?}: read in other settings");
     }
+}
+
+/// A pending value copied in a grid is of settings not known, whatever its column: a range
+/// pasted into a text column, copied again from there while pending, is not pasted into a
+/// column that reads dates from text.
+#[test]
+fn a_pg_pending_value_copied_from_a_text_column_is_of_settings_not_known() {
+    let mut st = users_structure();
+    st.columns[3].type_name = "daterange".into();
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    pg_again(&mut h, Some("SQL, DMY"), DATERANGE, "[02/01/2026,05/01/2026)");
+    h.keys("lly");
+    // Into the email (text): pasted, pending.
+    h.keys("hgp");
+    structure(&mut h, Ok(st.clone()));
+    assert!(said_text(&mut h).starts_with("Pasted the copied cells"));
+    assert_eq!(value(&h, 0, 1), Some(Value::Text("[02/01/2026,05/01/2026)".into())));
+    // Copied again from the email while pending, into a range of a result read in `SQL, MDY`.
+    h.keys("y");
+    h.ctrl('t');
+    pg_again(&mut h, Some("SQL, MDY"), DATERANGE, "[2026-03-01,2026-03-02)");
+    h.keys("llgp");
+    structure(&mut h, Ok(st));
+    let said = said_text(&mut h);
+    assert!(said.starts_with("Not pasted: column \u{201C}email\u{201D}"), "{said}");
+    assert!(said.contains("settings not known"), "{said}");
+    assert_eq!(value(&h, 0, 2), None);
+}
+
+/// A result read in other settings than the session's now: its range's text, compared with
+/// what is pasted to tell what changes, may be the same bytes for another value, so `g p` into
+/// it is refused (else the same text copied in the session's settings would be taken for no
+/// change and the old value kept).
+#[test]
+fn a_pg_paste_into_a_result_read_in_other_settings_is_refused() {
+    let mut st = users_structure();
+    st.columns[3].type_name = "daterange".into();
+    let same = "[02/01/2026,05/01/2026)";
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    // Read under a `SET LOCAL` of `SQL, MDY` (1 February to 1 May).
+    pg_again(&mut h, Some("SQL, MDY"), DATERANGE, same);
+    // The same text read in `SQL, DMY` in another tab (2 January to 5 January), copied.
+    h.ctrl('t');
+    pg_again(&mut h, Some("SQL, DMY"), DATERANGE, same);
+    h.keys("lly");
+    // Back in the first tab, its session reads `SQL, DMY` again.
+    h.app.tabs.activate(0);
+    h.db(DbEvent::TextStyle(Some(pg_style("SQL, DMY"))));
+    h.app.focus = Focus::Results;
+    h.app.tab_mut().grid.row = 0;
+    h.app.tab_mut().grid.col = 2;
+    h.keys("gp");
+    structure(&mut h, Ok(st));
+    let said = said_text(&mut h);
+    assert_eq!(
+        said,
+        "Not pasted: column \u{201C}nickname\u{201D} of this result was read in DateStyle SQL, MDY, IntervalStyle \
+         postgres, TimeZone UTC, and the session now reads such text in DateStyle SQL, DMY, IntervalStyle postgres, \
+         TimeZone UTC: run the query again first"
+    );
 }

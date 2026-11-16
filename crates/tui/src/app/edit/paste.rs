@@ -78,6 +78,10 @@ pub struct GridCopy {
     /// A `styled` column's text is pasted only where it reads back the same
     /// ([`datarig_core::driver::text_style::reads_same`]).
     pub text_in: Vec<Option<datarig_core::driver::TextStyle>>,
+    /// By column, a pending value of it (not applied: pasted, typed, cloned) was copied: its
+    /// text was written nowhere the app can tell, so the column pastes into no column that reads
+    /// dates or times from text, whatever the column it came from.
+    pub pending: Vec<bool>,
     pub rows: Vec<Vec<Value>>,
 }
 
@@ -669,7 +673,11 @@ impl App {
         let t = self.tab();
         let Some(rs) = rows_of(t) else { return };
         let (tab, result, revision) = (t.id, rs.id, rs.edit.batch.revision());
-        let refused = copy.and_then(|c| self.copy_zone_refused(c, &plan).or_else(|| self.copy_style_refused(c, &plan)));
+        let refused = copy.and_then(|c| {
+            self.copy_zone_refused(c, &plan)
+                .or_else(|| self.target_style_refused(c, &plan))
+                .or_else(|| self.copy_style_refused(c, &plan))
+        });
         let mut plan = plan;
         if let Some(c) = copy {
             plan.styled = (plan.map.iter())
@@ -975,16 +983,44 @@ impl App {
         plan.map.iter().find_map(|&(j, c)| {
             let from = copy.columns.get(j)?;
             let valued = copy.rows.iter().any(|r| matches!(r.get(j), Some(Value::Text(_))));
-            if !from.styled || !valued || !reads_styled(&rs.columns.get(c)?.meta) {
+            let pending = copy.pending.get(j).copied().unwrap_or(true);
+            if !(from.styled || pending) || !valued || !reads_styled(&rs.columns.get(c)?.meta) {
                 return None;
             }
-            let written = copy.text_in.get(j).and_then(Option::as_ref);
+            let written = copy.text_in.get(j).and_then(Option::as_ref).filter(|_| !pending);
             if text_style::reads_same(written, t.exec.text.as_ref(), from.zoned) {
                 return None;
             }
             let (column, from, to) =
                 (from.name.clone(), self.style_words(written), self.style_words(t.exec.text.as_ref()));
             Some(self.i18n.msg(&Msg::EditPasteRegisterStyle { column, from, to }).to_string())
+        })
+    }
+
+    /// Why text copied in a grid is not pasted as `plan` lays it into a `styled` column of the
+    /// active tab's shown result: the result was read in other settings than the session's now,
+    /// or either is not known (its cells' text, compared with what is pasted to tell what
+    /// changes, may be the same bytes for another value). Both in ISO is the same, and the same
+    /// settings are, but for a column whose text may hold a time with a zone.
+    fn target_style_refused(&self, copy: &GridCopy, plan: &PastePlan) -> Option<String> {
+        let t = self.tab();
+        let rs = rows_of(t)?;
+        let (read, now) = (rs.text_in.as_ref(), t.exec.text.as_ref());
+        plan.map.iter().find_map(|&(j, c)| {
+            let target = &rs.columns.get(c)?.meta;
+            let valued = copy.rows.iter().any(|r| matches!(r.get(j), Some(Value::Text(_))));
+            if !target.styled || !valued {
+                return None;
+            }
+            let same = match (read, now) {
+                (Some(r), Some(n)) => (r == n && !target.zoned) || (r.reads_anywhere() && n.reads_anywhere()),
+                _ => false,
+            };
+            if same {
+                return None;
+            }
+            let (column, from, to) = (target.name.clone(), self.style_words(read), self.style_words(now));
+            Some(self.i18n.msg(&Msg::EditPasteRegisterTargetStyle { column, from, to }).to_string())
         })
     }
 

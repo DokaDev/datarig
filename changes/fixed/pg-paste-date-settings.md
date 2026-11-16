@@ -14,3 +14,6 @@
   `timezone_abbreviations`; behind a pooler, results of a session whose Startup SQL goes in
   each transaction are of settings not known; and a value pasted again into a cell keeps the
   settings of the last paste.
+- PostgreSQL: a value copied while pending (not applied yet) no longer pastes into a column of
+  dates or times, and `g p` into such a column of a result read in other settings than the
+  session's now is refused, so the same text is never taken for an unchanged value.
