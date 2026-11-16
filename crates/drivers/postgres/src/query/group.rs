@@ -331,7 +331,8 @@ pub(super) async fn group_counted_in(
         Err(why) => Err(why),
     };
     // Read: the release and the undo after it keep the block as it was. A cancel asked before
-    // the answer is honoured, one held back meanwhile too: the read is undone instead.
+    // the release is honoured, one held back meanwhile too: the read is undone instead. Once
+    // released, what it did stands.
     held.hold().await;
     let read = match read {
         Ok(_) if held.on() && env.cancel.asked() => Err(DbError::Cancelled),
@@ -343,9 +344,6 @@ pub(super) async fn group_counted_in(
     }
     match read {
         Ok(counts) => match link.guard(None, txn.batch_execute(&format!("RELEASE SAVEPOINT {sp}"))).await? {
-            // One held back while the savepoint was released is honoured too: the count wrote
-            // nothing.
-            Ok(()) if held.on() && env.cancel.asked() => Ok((Err(DbError::Cancelled), false)),
             Ok(()) => Ok((Ok(counts), fixed)),
             Err(e) => {
                 let _ = undone(link, env, &count_undo(env), undo).await?;

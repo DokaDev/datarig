@@ -110,7 +110,8 @@ pub(super) async fn export(
         let out = stream(&txn, link, env, &stmt, &sink, max).await?;
         drop(sink);
         // Read: the release and the undo after it keep the block as it was. A cancel asked
-        // before the answer is honoured, one held back meanwhile too: the read is undone instead.
+        // before the release is honoured, one held back meanwhile too: the read is undone instead.
+        // Once released, what it did stands.
         held.hold().await;
         let out = match out {
             Ok(_) if env.cancel.asked() => Err((DbError::Cancelled, true)),
@@ -138,12 +139,9 @@ pub(super) async fn export(
         };
         drop(txn);
         probe(client, link, env, s.tx).await?;
-        // A cancel asked before the answer, one held back while the savepoint was released or
-        // the block probed too, is honoured: the read wrote nothing anywhere.
-        let answer = match answer {
-            (Ok(_), _) if env.cancel.asked() => (Err(DbError::Cancelled), true),
-            answer => answer,
-        };
+        // A cancel held back while the savepoint was released or the block probed came too late:
+        // what the statement did stands (a function it calls may write), so the answer is its
+        // own; that cancel was never sent.
         return Ok(answer);
     }
     if let Some(c) = &check

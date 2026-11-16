@@ -2074,35 +2074,41 @@ mod terminal {
             block_as_it_was(&mut s, &table).await;
         }
 
-        /// A cancel asked while an export's savepoint is released (the user's cancels held, so
-        /// it is not sent) is honoured: the export answers cancelled, once, and the block stands.
+        /// A cancel asked once an export read everything and is about to release its savepoint
+        /// (the user's cancels held, so it is not sent) comes too late: once released, what the
+        /// statement did stands, so the export answers as it went, once; the cancel never went
+        /// out, nothing is held after, and the block stands.
         #[tokio::test(flavor = "multi_thread")]
-        async fn a_cancel_asked_while_an_export_releases_its_savepoint_is_honoured() {
-            let name = "a_cancel_asked_while_an_export_releases_its_savepoint_is_honoured";
+        async fn a_cancel_asked_while_an_export_releases_its_savepoint_is_too_late() {
+            let name = "a_cancel_asked_while_an_export_releases_its_savepoint_is_too_late";
             let Some(url) = pg_url(name) else { return };
             let (table, _g) = table(&url, "export_release").await;
             let mut s = Session::open(&url).await;
             earlier_write(&mut s, &table).await;
+            let dialer = gated(&mut s, &url);
             s.cancel_before_release(s.runs + 1);
             let (sink, mut written) = tokio::sync::mpsc::channel(16);
             let sql = format!("SELECT v FROM {table} ORDER BY id");
             let export = DbCommand::Export { id: 109, sql, guard: ExportGuard::Repeatable, sink, batch: 100 };
             let events = s.command(export).await;
             assert!(matches!(written.try_recv(), Ok(ExportBatch::Columns(_))), "it read");
-            assert_eq!(exported(&events), (Err(DbError::Cancelled), true));
+            let (answer, cancelled) = exported(&events);
+            assert!(answer.is_ok() && !cancelled, "{events:?}");
+            assert_eq!(dialer.wrote.load(std::sync::atomic::Ordering::SeqCst), 0, "no cancel went out");
             block_as_it_was(&mut s, &table).await;
         }
 
         /// So for a count of a column's values while a result is held open in the user's block
-        /// (in the result's transaction, under a savepoint of its own): it answers cancelled,
+        /// (in the result's transaction, under a savepoint of its own): it answers its counts,
         /// once, and the result and the block stand.
         #[tokio::test(flavor = "multi_thread")]
-        async fn a_cancel_asked_while_a_value_count_beside_a_held_result_releases_is_honoured() {
-            let name = "a_cancel_asked_while_a_value_count_beside_a_held_result_releases_is_honoured";
+        async fn a_cancel_asked_while_a_value_count_beside_a_held_result_releases_is_too_late() {
+            let name = "a_cancel_asked_while_a_value_count_beside_a_held_result_releases_is_too_late";
             let Some(url) = pg_url(name) else { return };
             let (table, _g) = table(&url, "group_held").await;
             let mut s = Session::open(&url).await;
             earlier_write(&mut s, &table).await;
+            let dialer = gated(&mut s, &url);
             // The result (more rows than a page) is held, then counted, then closed.
             s._cmds.send(DbCommand::GroupCount { id: 111, sql: values_of(&table), limit: None }).unwrap();
             s._cmds.send(DbCommand::ClosePortal { id: 110 }).unwrap();
@@ -2121,7 +2127,8 @@ mod terminal {
                 DbEvent::GroupCounted { id: 111, result, .. } => Some(result.clone().map(|_| ())),
                 _ => None,
             });
-            assert_eq!(answer, Err(DbError::Cancelled));
+            assert_eq!(answer, Ok(()), "{events:?}");
+            assert_eq!(dialer.wrote.load(std::sync::atomic::Ordering::SeqCst), 0, "no cancel went out");
             assert!(
                 matches!(terminal(&events), DbEvent::Page { id: 110, columns: Some(_), .. }),
                 "the result stands: {events:?}"
