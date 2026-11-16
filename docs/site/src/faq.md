@@ -129,7 +129,7 @@ SSH hosts of your tunnels.
 | Config file | `--config <path>`, else `$XDG_CONFIG_HOME/datarig/config.toml`, else `~/.config/datarig/config.toml` (on every OS) |
 | Secrets file, theme files | Next to the config file: `secrets.toml`, `themes/<name>.toml` |
 | Data (saved queries, datarig's own `known_hosts`) | `~/.local/share/datarig` on Linux, `~/Library/Application Support/datarig` on macOS, `%APPDATA%\datarig` on Windows |
-| State (tabs, console buffers, `usage.toml`, `update.toml`, `keychain.toml`) | `~/.local/state/datarig` on Linux, `~/Library/Application Support/datarig/state` on macOS, `%LOCALAPPDATA%\datarig` on Windows |
+| State (tabs, console buffers, `errors.log`, `usage.toml`, `update.toml`, `keychain.toml`) | `~/.local/state/datarig` on Linux, `~/Library/Application Support/datarig/state` on macOS, `%LOCALAPPDATA%\datarig` on Windows |
 
 `$XDG_DATA_HOME` and `$XDG_STATE_HOME`, when set, take precedence on every OS (as
 `<dir>/datarig`), and `DATARIG_DATA_DIR` / `DATARIG_STATE_DIR` override both. Windows paths are
@@ -147,6 +147,43 @@ steps count as done.
 [update check](guide/updates.md) learnt: when it last asked and how that ended, the latest
 release, a version you skipped and when you last closed the notice. A second datarig open at the
 same time reads it but never writes it.
+
+## Where is `errors.log`?
+
+A message that ends in "(details in errors.log)" keeps the status line short; the full text of
+the failure (the driver's, the operating system's or the server's) is in `errors.log` in the state
+directory:
+
+| OS | Path |
+|---|---|
+| macOS | `~/Library/Application Support/datarig/state/errors.log` |
+| Linux and other Unix | `~/.local/state/datarig/errors.log` |
+| Windows (untested) | `%LOCALAPPDATA%\datarig\errors.log` |
+
+With `DATARIG_STATE_DIR` set it is `$DATARIG_STATE_DIR/errors.log`, else with `XDG_STATE_HOME`
+set it is `$XDG_STATE_HOME/datarig/errors.log` (on every OS).
+
+Each failure is one line, added at the end (when the state directory cannot be found or the file
+cannot be written, nothing is logged):
+
+```text
+<unix seconds> <context>: <kind>: <detail>
+```
+
+A failure that came without any text is written as `<unix seconds> <context>: <kind> (no detail given)`.
+
+`<context>` is the name of the message that was shown (such as `db.connection` for "could not
+talk to the server"), `<kind>` what kind of failure it was (such as `Other`, or `Io(...)` for a
+file or network error) and `<detail>` the full text, with any line breaks written as ` | `. For
+example:
+
+```text
+1763290000 db.connection: Other: the server did not make the session read-only (...)
+```
+
+The file only grows; datarig never sends it anywhere and never reads it back, so you can delete it
+at any time. It may hold names of hosts, databases and tables, and the text of server errors:
+look before you share it.
 
 ## The config file has an `[editor] mode` key
 
