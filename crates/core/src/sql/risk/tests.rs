@@ -1948,7 +1948,6 @@ fn every_unchecked_call_is_kept() {
     assert_eq!(r.unchecked_calls, vec![names(&["st_x"]), names(&["app", "f"]), names(&["g"])]);
     assert_eq!(r.unchecked_call.as_deref(), Some("st_x"));
     let allow = |e: &[&str]| ReadOnlyContext {
-        server_major: None,
         allowed: e.iter().map(|e| AllowedFunction::parse(e).unwrap()).collect(),
         ..Default::default()
     };
@@ -1970,7 +1969,6 @@ fn every_unchecked_call_is_kept() {
 #[test]
 fn allowed_functions_match_by_name_and_schema() {
     let cx = |e: &[&str]| ReadOnlyContext {
-        server_major: None,
         allowed: e.iter().map(|e| AllowedFunction::parse(e).unwrap()).collect(),
         ..Default::default()
     };
@@ -2043,50 +2041,95 @@ fn allowed_function_entries() {
     }
 }
 
-/// The built-ins PostgreSQL 18 adds run on a read-only policy only when the server is
-/// PostgreSQL 18 or later; with no version, or an older server, they are calls of functions
-/// that are not built-ins, as before. Those that act on the server are refused on every
-/// version.
+/// The built-ins PostgreSQL 18 adds run on a read-only policy only called in `pg_catalog`
+/// (also with a database): there it is the built-in on PostgreSQL 18, and on an older server
+/// the call fails. Unqualified, the search path may find a function of another schema on an
+/// older server: refused, with a hint, unless the environment allows it.
 #[test]
-fn newer_built_ins_follow_the_servers_version() {
+fn newer_built_ins_run_qualified_with_pg_catalog() {
     let names: Vec<&str> = allow::BUILTINS_18.lines().collect();
     assert!(names.windows(2).all(|w| w[0] < w[1]), "sorted, no duplicates");
     assert!(names.iter().all(|n| !builtin(n)), "none of PostgreSQL 17's");
     for f in ["uuidv7", "uuidv4", "casefold", "array_sort", "crc32c"] {
         assert!(allow::builtin_18(f), "{f}");
     }
-    let on = |v: Option<u32>| ReadOnlyContext { server_major: v, ..Default::default() };
+    let cx = ReadOnlyContext::default();
     for sql in [
-        "SELECT uuidv7()",
+        "SELECT pg_catalog.uuidv7()",
+        "SELECT db.pg_catalog.uuidv7()",
         "SELECT pg_catalog.uuidv4()",
-        "SELECT uuidv7(interval '1 hour')",
-        "SELECT casefold('A'), crc32('a'::bytea)",
+        "SELECT pg_catalog.uuidv7(interval '1 hour')",
+        "SELECT pg_catalog.casefold('A'), pg_catalog.crc32('a'::bytea)",
     ] {
+        assert_eq!(classify(sql).read_only(), Ok(()), "{sql}");
+    }
+    let check = |sql: &str, cx: &ReadOnlyContext| {
         let r = classify(sql);
-        assert!(matches!(r.read_only(), Err(ReadOnlyBlock::UnknownFunction(_))), "{sql}");
-        for v in [None, Some(12), Some(17)] {
-            assert!(matches!(r.read_only_in(&on(v)), Err(ReadOnlyBlock::UnknownFunction(_))), "{sql} {v:?}");
-        }
-        for v in [18, 19] {
-            assert_eq!(r.read_only_in(&on(Some(v))), Ok(()), "{sql} {v}");
-        }
+        (r.read_only_in(cx), r.refused_call_name(cx).map(|n| cx.hint(n)))
+    };
+    for (sql, f) in [
+        ("SELECT uuidv7()", "uuidv7"),
+        ("SELECT uuidv7(interval '1 hour')", "uuidv7"),
+        ("SELECT pg_catalog.casefold('A'), crc32('a'::bytea)", "crc32"),
+    ] {
+        assert_eq!(
+            check(sql, &cx),
+            (Err(ReadOnlyBlock::UnknownFunction(f.into())), Some(CallHint::NewerBuiltin)),
+            "{sql}"
+        );
     }
     // Only as a built-in: not in another schema.
     assert_eq!(
-        classify("SELECT public.uuidv7()").read_only_in(&on(Some(18))),
-        Err(ReadOnlyBlock::UnknownFunction("public.uuidv7".into()))
+        check("SELECT public.uuidv7()", &cx),
+        (Err(ReadOnlyBlock::UnknownFunction("public.uuidv7".into())), Some(CallHint::NotAllowed))
     );
-    // Statistics written in place and a directory of the server: refused on every version.
-    for (sql, why) in [
-        ("SELECT pg_restore_relation_stats('schemaname', 'public', 'relname', 't')", ReadOnlyBlock::ServerAction),
-        ("SELECT pg_clear_relation_stats('public', 't')", ReadOnlyBlock::ServerAction),
-        ("SELECT pg_restore_attribute_stats('schemaname', 'public')", ReadOnlyBlock::ServerAction),
-        ("SELECT pg_clear_attribute_stats('public', 't', 'a', false)", ReadOnlyBlock::ServerAction),
-        ("SELECT pg_stat_reset_backend_stats(1)", ReadOnlyBlock::ServerAction),
-        ("SELECT * FROM pg_ls_summariesdir()", ReadOnlyBlock::ServerFile),
-    ] {
-        for v in [None, Some(17), Some(18)] {
-            assert_eq!(classify(sql).read_only_in(&on(v)), Err(why.clone()), "{sql} {v:?}");
+    // Unqualified, when the environment allows it.
+    let allowed = ReadOnlyContext { allowed: vec![AllowedFunction::parse("uuidv7").unwrap()], ..Default::default() };
+    assert_eq!(check("SELECT uuidv7()", &allowed), (Ok(()), None));
+}
+
+/// The rule for PostgreSQL 18's built-ins in `pg_catalog` never lets one run that acts on the
+/// server: statistics written in place, a directory of the server. Bare, qualified, and also
+/// with the names in `read_only_functions`.
+#[test]
+fn newer_built_ins_that_act_on_the_server_stay_refused() {
+    let listed = ReadOnlyContext {
+        allowed: [
+            "pg_restore_relation_stats",
+            "pg_clear_relation_stats",
+            "pg_restore_attribute_stats",
+            "pg_clear_attribute_stats",
+            "pg_stat_reset_backend_stats",
+            "pg_ls_summariesdir",
+        ]
+        .iter()
+        .map(|e| AllowedFunction::parse(e).unwrap())
+        .collect(),
+        ..Default::default()
+    };
+    for cx in [ReadOnlyContext::default(), listed] {
+        for (call, why) in [
+            ("pg_restore_relation_stats('schemaname', 'public', 'relname', 't')", ReadOnlyBlock::ServerAction),
+            ("pg_clear_relation_stats('public', 't')", ReadOnlyBlock::ServerAction),
+            ("pg_restore_attribute_stats('schemaname', 'public')", ReadOnlyBlock::ServerAction),
+            ("pg_clear_attribute_stats('public', 't', 'a', false)", ReadOnlyBlock::ServerAction),
+            ("pg_stat_reset_backend_stats(1)", ReadOnlyBlock::ServerAction),
+            ("* FROM pg_ls_summariesdir()", ReadOnlyBlock::ServerFile),
+        ] {
+            let qualified = call.replace("pg_", "pg_catalog.pg_");
+            for sql in [format!("SELECT {call}"), format!("SELECT {qualified}")] {
+                assert_eq!(classify(&sql).read_only_in(&cx), Err(why.clone()), "{sql} {cx:?}");
+            }
+        }
+    }
+    // Every such name, also one added later.
+    let names = allow::BUILTINS_18.lines();
+    let acting = names.filter(|n| SERVER_ACTIONS.contains(n) || SERVER_FILES.contains(n) || RUNS_CODE.contains(n));
+    let acting: Vec<&str> = acting.collect();
+    assert!(acting.len() >= 6, "{acting:?}");
+    for f in acting {
+        for sql in [format!("SELECT pg_catalog.{f}()"), format!("SELECT * FROM pg_catalog.{f}()")] {
+            assert!(classify(&sql).read_only().is_err(), "{sql}");
         }
     }
 }
@@ -2159,26 +2202,6 @@ fn allowed_extensions_follow_the_catalog() {
     assert_eq!(check("UPDATE t SET g = st_x(g)", &ready).0, Err(ReadOnlyBlock::Class(Class::Write)));
 }
 
-/// A PostgreSQL 17 built-in that PostgreSQL 18 removed is a built-in up to 17 only: on 18 a
-/// function of that name is the user's.
-#[test]
-fn built_ins_removed_later_are_not_built_ins_there() {
-    let on = |v: Option<u32>| ReadOnlyContext { server_major: v, ..Default::default() };
-    for sql in ["SELECT * FROM pg_timezone_abbrevs()", "SELECT * FROM pg_catalog.pg_timezone_abbrevs()"] {
-        let r = classify(sql);
-        for v in [None, Some(12), Some(17)] {
-            assert_eq!(r.read_only_in(&on(v)), Ok(()), "{sql} {v:?}");
-        }
-        assert!(matches!(r.read_only_in(&on(Some(18))), Err(ReadOnlyBlock::UnknownFunction(_))), "{sql}");
-    }
-    let allowed = ReadOnlyContext {
-        server_major: Some(18),
-        allowed: vec![AllowedFunction::parse("pg_timezone_abbrevs").unwrap()],
-        ..Default::default()
-    };
-    assert_eq!(classify("SELECT * FROM pg_timezone_abbrevs()").read_only_in(&allowed), Ok(()));
-}
-
 /// A qualified call of an allowed extension's function runs only when no function outside the
 /// extensions shares its schema and name: an overload of the user's may be the one picked.
 #[test]
@@ -2221,25 +2244,30 @@ fn an_overload_outside_the_extension_keeps_its_name_refused() {
 /// the first one found, and none is dropped when the statement around them is read.
 #[test]
 fn every_call_of_executed_and_planned_statements_counts() {
-    let on18 = ReadOnlyContext { server_major: Some(18), ..Default::default() };
-    let refused = |r: &Risk| matches!(r.read_only_in(&on18), Err(ReadOnlyBlock::UnknownFunction(f)) if f.contains("zz_unsafe") || f.contains("pg_timezone_abbrevs"));
+    let allow_a = ReadOnlyContext { allowed: vec![AllowedFunction::parse("a").unwrap()], ..Default::default() };
+    let refused = |r: &Risk| matches!(r.read_only_in(&allow_a), Err(ReadOnlyBlock::UnknownFunction(f)) if f.contains("zz_unsafe"));
     let mut p = Prepared::default();
-    p.classify("PREPARE p(int) AS SELECT uuidv7(), $1");
+    p.classify("PREPARE p(int) AS SELECT a(), $1");
     let r = p.classify("EXECUTE p(public.zz_unsafe())");
     assert!(refused(&r), "{r:?}");
     let mut p = Prepared::default();
     p.classify("PREPARE p(xml) AS SELECT public.zz_unsafe($1)");
-    let r = p.classify("EXPLAIN EXECUTE p(query_to_xml('SELECT uuidv7()', true, false, ''))");
+    let r = p.classify("EXPLAIN EXECUTE p(query_to_xml('SELECT a()', true, false, ''))");
     assert!(refused(&r), "{r:?}");
     let mut p = Prepared::default();
-    p.classify("PREPARE p AS SELECT pg_timezone_abbrevs()");
+    p.classify("PREPARE p AS SELECT a(), public.zz_unsafe()");
     for sql in ["EXECUTE p", "EXPLAIN EXECUTE p"] {
         assert!(refused(&p.clone().classify(sql)), "{sql}");
     }
-    let r = classify("SELECT uuidv7(), query_to_xml('SELECT public.zz_unsafe()', true, false, '')");
+    let r = classify("SELECT a(), query_to_xml('SELECT public.zz_unsafe()', true, false, '')");
     assert!(refused(&r), "{r:?}");
-    let r = classify("SELECT query_to_xml('SELECT uuidv7()', true, false, ''), public.zz_unsafe()");
+    let r = classify("SELECT query_to_xml('SELECT a()', true, false, ''), public.zz_unsafe()");
     assert!(refused(&r), "{r:?}");
-    let r = classify("SELECT uuidv7(); SELECT public.zz_unsafe()");
+    let r = classify("SELECT a(); SELECT public.zz_unsafe()");
     assert!(refused(&r), "{r:?}");
+    // What `a` alone calls runs.
+    assert_eq!(
+        classify("SELECT a(); SELECT query_to_xml('SELECT a()', true, false, '')").read_only_in(&allow_a),
+        Ok(())
+    );
 }

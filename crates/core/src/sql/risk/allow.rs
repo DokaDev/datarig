@@ -1,26 +1,23 @@
 //! What a read-only policy may still let run of the calls the classifier could not check
-//! ([`Risk::unchecked_calls`](super::Risk::unchecked_calls)): the built-ins a newer PostgreSQL
-//! adds, when the server is that new, and the functions an environment allows
+//! ([`Risk::unchecked_calls`](super::Risk::unchecked_calls)): the built-ins PostgreSQL 18
+//! adds, when a call qualifies them with `pg_catalog`, and the functions an environment allows
 //! (`read_only_functions`).
 //!
 //! The classifier itself knows PostgreSQL 17's built-ins only ([`super::BUILTINS`]), so its
-//! answer does not depend on the server and can be kept. The server's major version and the
-//! environment's list are applied when a read-only policy decides
-//! ([`super::Risk::read_only_in`]). Without them ([`ReadOnlyContext::default`]) nothing more
-//! runs than PostgreSQL 17's built-ins: an unknown or older server is never given more.
+//! answer does not depend on the server and can be kept. No server version is used: a call of
+//! a PostgreSQL 18 name qualified with `pg_catalog` is the built-in on PostgreSQL 18, and fails
+//! on an older server, which has no such function there (only a superuser can create one in
+//! `pg_catalog`). An unqualified one may be a function of another schema on an older server,
+//! so it runs only when the environment allows it. The environment's lists are applied when a
+//! read-only policy decides ([`super::Risk::read_only_in`]).
 
 /// The names of the functions PostgreSQL 18 adds to its catalog (the `pg_proc` rows of
 /// `pg_catalog` that initdb creates, `oid < 10000`) that PostgreSQL 17 does not have, one per
 /// line in byte order: the server's own list less [`super::BUILTINS`] (and less the names of
 /// [`super::RUNS_CODE`], none of which are new). Those that act on the server are in
 /// [`super::SERVER_ACTIONS`] and [`super::SERVER_FILES`] too, which a read-only policy refuses
-/// whatever the version.
+/// however they are called.
 pub const BUILTINS_18: &str = include_str!("builtins_18.txt");
-
-/// The PostgreSQL 17 built-ins PostgreSQL 18 no longer has (`pg_timezone_abbrevs` became
-/// `pg_timezone_abbrevs_zone` and `pg_timezone_abbrevs_abbrevs`): on PostgreSQL 18 or later a
-/// call of one is a call of a function that is not a built-in.
-pub const REMOVED_IN_18: &[&str] = &["pg_timezone_abbrevs"];
 
 /// Whether `name` (as PostgreSQL folds it) is a function PostgreSQL 18 adds ([`BUILTINS_18`]).
 pub fn builtin_18(name: &str) -> bool {
@@ -32,9 +29,6 @@ pub fn builtin_18(name: &str) -> bool {
 /// ([`super::Risk::read_only_in`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ReadOnlyContext {
-    /// The PostgreSQL server's major version (`server_version_num / 10000`), when the session
-    /// read it. `None` (not known, or not PostgreSQL) lets only PostgreSQL 17's built-ins run.
-    pub server_major: Option<u32>,
     /// The functions the environment allows on read-only (`read_only_functions`).
     pub allowed: Vec<AllowedFunction>,
     /// The functions of the extensions the environment allows on read-only
@@ -86,6 +80,9 @@ pub struct CatalogFunction {
 /// refusal adds to its reason.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CallHint {
+    /// An unqualified call of a built-in PostgreSQL 18 adds ([`BUILTINS_18`]): it runs called
+    /// as `pg_catalog.f()`, or added to `read_only_functions`.
+    NewerBuiltin,
     /// Nothing allows it: it could be added to `read_only_functions`.
     NotAllowed,
     /// The allowed extensions' functions are not read yet.
@@ -102,10 +99,10 @@ pub enum CallHint {
 
 impl ReadOnlyContext {
     /// Whether a call by `name` (its names as the parse tree gives them: `["f"]`, `["s", "f"]`,
-    /// `["db", "s", "f"]`) may run: a built-in of the server's version or an allowed function.
+    /// `["db", "s", "f"]`) may run: a built-in PostgreSQL 18 adds called in `pg_catalog`
+    /// (also with a database), or an allowed function.
     pub fn lets_run(&self, name: &[String]) -> bool {
-        let newer = self.server_major.is_some_and(|v| v >= 18)
-            && matches!(name, [f] | [_, f] | [_, _, f] if builtin_18(f) && catalog(name));
+        let newer = matches!(name, [s, f] | [_, s, f] if s == "pg_catalog" && builtin_18(f));
         newer || self.allows(name)
     }
 
@@ -136,6 +133,11 @@ impl ReadOnlyContext {
 
     /// What the refusal of a call by `name` should add to its reason.
     pub fn hint(&self, name: &[String]) -> CallHint {
+        if let [f] = name
+            && builtin_18(f)
+        {
+            return CallHint::NewerBuiltin;
+        }
         match &self.extensions {
             ExtensionLookup::None => CallHint::NotAllowed,
             ExtensionLookup::Pending => CallHint::ExtensionsPending,
@@ -150,15 +152,6 @@ impl ReadOnlyContext {
                 if missing.is_empty() { CallHint::NotAllowed } else { CallHint::NotInstalled(missing) }
             }
         }
-    }
-}
-
-/// Whether `name` is unqualified or in `pg_catalog` (also with a database).
-fn catalog(name: &[String]) -> bool {
-    match name {
-        [_] => true,
-        [s, _] | [_, s, _] => s == "pg_catalog",
-        _ => false,
     }
 }
 

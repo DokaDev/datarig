@@ -319,14 +319,9 @@ pub struct Risk {
     /// PostgreSQL 17 nor one of [`RUNS_CODE`] (as for [`Risk::unchecked_call`], whose name is
     /// the first of these), in the order written, each once: its names as the parse tree gives
     /// them (`["f"]`, `["s", "f"]`), already folded. What a read-only policy may still let run
-    /// ([`Risk::read_only_in`]): a newer server's built-ins and the environment's allowed
-    /// functions. MySQL leaves it empty.
+    /// ([`Risk::read_only_in`]): PostgreSQL 18's built-ins called in `pg_catalog` and the
+    /// environment's allowed functions. MySQL leaves it empty.
     pub unchecked_calls: Vec<Vec<String>>,
-    /// PostgreSQL: the calls of PostgreSQL 17 built-ins that a newer version no longer has
-    /// ([`allow::REMOVED_IN_18`]), as for [`Risk::unchecked_calls`]: on such a server the name
-    /// is no built-in's, so a read-only policy refuses them there unless the environment
-    /// allows them.
-    pub removed_calls: Vec<Vec<String>>,
     /// PostgreSQL: the server refuses to run it inside a transaction block (SQLSTATE 25001):
     /// `VACUUM`, `CREATE INDEX CONCURRENTLY`, `CREATE DATABASE`, `ALTER SYSTEM`, … (see
     /// [`no_tx_block`]). It takes effect at once and cannot be rolled back. Where whether it
@@ -486,7 +481,6 @@ impl Risk {
             implicit_commit: false,
             unchecked_call: None,
             unchecked_calls: Vec::new(),
-            removed_calls: Vec::new(),
             no_tx_block: false,
             adds_enum_value: false,
         }
@@ -517,9 +511,7 @@ impl Risk {
     /// The names of the first call [`Risk::read_only_in`] refuses in `cx` among
     /// [`Risk::unchecked_calls`], for [`ReadOnlyContext::hint`].
     pub fn refused_call_name(&self, cx: &ReadOnlyContext) -> Option<&[String]> {
-        let gone = cx.server_major.is_some_and(|v| v >= 18);
-        let removed = self.removed_calls.iter().filter(|_| gone).find(|name| !cx.allows(name));
-        self.unchecked_calls.iter().find(|name| !cx.lets_run(name)).or(removed).map(Vec::as_slice)
+        self.unchecked_calls.iter().find(|name| !cx.lets_run(name)).map(Vec::as_slice)
     }
 
     /// The worse of two risks (a statement read two ways, or a part of it).
@@ -542,7 +534,6 @@ impl Risk {
             implicit_commit: self.implicit_commit || o.implicit_commit,
             unchecked_call: self.unchecked_call.or(o.unchecked_call),
             unchecked_calls: union(self.unchecked_calls, o.unchecked_calls),
-            removed_calls: union(self.removed_calls, o.removed_calls),
             no_tx_block: self.no_tx_block || o.no_tx_block,
             adds_enum_value: self.adds_enum_value || o.adds_enum_value,
         }
@@ -558,8 +549,8 @@ impl Risk {
     }
 
     /// [`Risk::read_only`] where the calls of functions that are not PostgreSQL 17 built-ins
-    /// ([`Risk::unchecked_calls`]) may still run when `cx` lets them: a built-in of the
-    /// server's newer version ([`ReadOnlyContext::server_major`]) or a function the
+    /// ([`Risk::unchecked_calls`]) may still run when `cx` lets them: a built-in of
+    /// PostgreSQL 18 called in `pg_catalog` ([`allow::BUILTINS_18`]) or a function the
     /// environment allows ([`ReadOnlyContext::allowed`]). The first call that neither lets run
     /// is refused, named as written. With the default context the answer is
     /// [`Risk::read_only`]'s.
@@ -843,7 +834,6 @@ impl Prepared {
         // Every one counts, with those of what it wraps or executes (already in `risk`).
         if risk.class != Class::Ddl {
             risk.unchecked_calls = union(risk.unchecked_calls, unknown_functions(b));
-            risk.removed_calls = union(risk.removed_calls, removed_builtin_calls(b));
             risk.unchecked_call = risk.unchecked_call.or_else(|| risk.unchecked_calls.first().map(|n| n.join(".")));
         }
         risk.no_tx_block |= no_tx_block(kind, b);
@@ -926,7 +916,6 @@ impl Prepared {
                     // A function that is not a built-in, which the planner may run.
                     risk.unchecked_call = risk.unchecked_call.or(p.unchecked_call);
                     risk.unchecked_calls = union(risk.unchecked_calls, p.unchecked_calls);
-                    risk.removed_calls = union(risk.removed_calls, p.removed_calls);
                 }
                 // What it calls is not known (its name was forgotten, or never prepared here):
                 // as for its `EXECUTE`, after what its parameters do.
@@ -1581,25 +1570,6 @@ fn unknown_functions(v: &Value) -> Vec<Vec<String>> {
             if let Call::Func(name, call) = c
                 && !catalog_name(&name, |f| builtin(f) || RUNS_CODE.contains(&f))
                 && !builtin_cast(&name, call)
-            {
-                let name: Vec<String> = name.iter().map(|n| n.to_string()).collect();
-                if !found.contains(&name) {
-                    found.push(name);
-                }
-            }
-        }
-    });
-    found
-}
-
-/// The calls in `v` of a PostgreSQL 17 built-in that PostgreSQL 18 no longer has
-/// ([`allow::REMOVED_IN_18`]), unqualified or in `pg_catalog`, in the order written, each once.
-fn removed_builtin_calls(v: &Value) -> Vec<Vec<String>> {
-    let mut found: Vec<Vec<String>> = Vec::new();
-    walk(v, &mut |o| {
-        for c in calls(o) {
-            if let Call::Func(name, _) = c
-                && catalog_name(&name, |f| allow::REMOVED_IN_18.contains(&f))
             {
                 let name: Vec<String> = name.iter().map(|n| n.to_string()).collect();
                 if !found.contains(&name) {

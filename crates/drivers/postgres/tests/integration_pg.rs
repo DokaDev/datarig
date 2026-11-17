@@ -3590,16 +3590,21 @@ async fn server_major(c: &mut Conn) -> u32 {
     rows[0][0].as_deref().and_then(|v| v.parse().ok()).expect("a version")
 }
 
+/// The PostgreSQL 17 built-ins PostgreSQL 18 no longer has (`pg_timezone_abbrevs` became
+/// `pg_timezone_abbrevs_zone` and `pg_timezone_abbrevs_abbrevs`). The classifier keeps them as
+/// built-ins on every server.
+const LACKING_IN_18: &[&str] = &["pg_timezone_abbrevs"];
+
 /// The built-in functions of the server's major version as the classifier knows them:
 /// PostgreSQL 17's (`risk::BUILTINS`), and from 18 on those 18 adds
-/// (`risk::allow::BUILTINS_18`) less those it removed (`risk::allow::REMOVED_IN_18`), one per
-/// line in byte order.
+/// (`risk::allow::BUILTINS_18`) less those it no longer has ([`LACKING_IN_18`]), one per line
+/// in byte order.
 fn builtins_of(major: u32) -> String {
     use datarig_core::sql::risk::BUILTINS;
-    use datarig_core::sql::risk::allow::{BUILTINS_18, REMOVED_IN_18};
+    use datarig_core::sql::risk::allow::BUILTINS_18;
     let mut names: Vec<&str> = BUILTINS.lines().collect();
     if major >= 18 {
-        names.retain(|n| !REMOVED_IN_18.contains(n));
+        names.retain(|n| !LACKING_IN_18.contains(n));
         names.extend(BUILTINS_18.lines());
         names.sort_unstable();
     }
@@ -3608,7 +3613,7 @@ fn builtins_of(major: u32) -> String {
 
 /// The classifier's list of built-in functions (`risk::BUILTINS`, which a call may name
 /// without making a tab's prepared statements unknown, and from PostgreSQL 18 on
-/// `risk::allow::BUILTINS_18`, which a read-only policy lets run there) is exactly the
+/// `risk::allow::BUILTINS_18`, which a read-only policy lets run called in `pg_catalog`) is exactly the
 /// server's: every function of `pg_catalog` that initdb creates, less the ones that run SQL or
 /// code they are given (`risk::RUNS_CODE`). Each name of `RUNS_CODE`, `SERVER_FILES` and
 /// `SERVER_ACTIONS` is one of the server's built-ins (those PostgreSQL 18 adds from 18 on).
