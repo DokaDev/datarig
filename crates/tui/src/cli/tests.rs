@@ -23,9 +23,14 @@ fn cli_arguments() {
     assert!(parse(&["--config"]).is_err());
 }
 
+/// The summary says what datarig is and stays general: database engines are named on their
+/// own pages of the docs, not in a line that every new engine would have to change.
 #[test]
-fn help_names_every_supported_database() {
+fn help_summary_names_no_database_engine() {
     let first = HELP.lines().next().unwrap();
-    assert!(first.contains("PostgreSQL") && first.contains("MySQL"), "{first}");
+    assert!(first.contains("terminal database client"), "{first}");
+    for engine in ["PostgreSQL", "MySQL", "MariaDB", "SQLite"] {
+        assert!(!first.contains(engine), "{first}");
+    }
     assert!(!HELP.contains("for now"), "{HELP}");
 }
