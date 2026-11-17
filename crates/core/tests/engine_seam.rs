@@ -364,7 +364,11 @@ impl Collect<'_> {
                 }
             }
             syn::UseTree::Rename(r) => {
-                let from = r.ident.to_string();
+                // `use path::E::{self as A}` renames `E` itself.
+                let from = match (r.ident == "self", prefix.last()) {
+                    (true, Some(owner)) => owner.clone(),
+                    _ => r.ident.to_string(),
+                };
                 let enums = self.names.enums_of(&from);
                 if !enums.is_empty() {
                     for e in enums {
@@ -1169,7 +1173,7 @@ fn boolean_engine_tests_stay_within_budget() {
 fn every_violation_fixture_is_reported() {
     // (fixture, the path it is scanned as, what must be reported, with the line)
     type Case = (&'static str, &'static str, &'static [(Kind, usize)]);
-    let cases: [Case; 12] = [
+    let cases: [Case; 13] = [
         ("driver_engine_branch", "crates/drivers/mysql/src/session.rs", &[(Kind::Reference, 6), (Kind::Reference, 7)]),
         ("tui_if_let_dialect", "crates/tui/src/app/editor.rs", &[(Kind::BooleanTest, 6), (Kind::Reference, 6)]),
         ("catch_all_explain", "crates/core/src/sql/plan.rs", &[(Kind::CatchAll, 9)]),
@@ -1186,6 +1190,7 @@ fn every_violation_fixture_is_reported() {
         ("cfg_not_only_test", "crates/core/src/sql/split.rs", &[(Kind::BooleanTest, 7)]),
         ("alias_scopes", "crates/tui/src/app/plan.rs", &[(Kind::BooleanTest, 6), (Kind::Reference, 6)]),
         ("macro_forms", "crates/core/src/sql/complete.rs", &[(Kind::BooleanTest, 6), (Kind::BooleanTest, 7)]),
+        ("self_rename", "crates/core/src/sql/split.rs", &[(Kind::BooleanTest, 6)]),
     ];
     let mut missed = Vec::new();
     for (name, path, expected) in cases {
