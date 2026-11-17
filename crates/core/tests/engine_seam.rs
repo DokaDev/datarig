@@ -2,8 +2,8 @@
 //! sends the engines it does not name to a default branch.
 //!
 //! The scan parses every `.rs` file under the `src/` of every workspace member (test code
-//! skipped: `tests.rs`, `tests/` and `#[cfg(test)]` items may name engines) and reports, for the
-//! six engine enums (`EngineId`, `Dialect`, `EngineFacts`, `ExplainFormat`, `EditFormat`,
+//! skipped: `tests.rs`, `tests/`, `#[cfg(test)]` items and the files of modules declared under
+//! such a cfg may name engines) and reports, for the six engine enums (`EngineId`, `Dialect`, `EngineFacts`, `ExplainFormat`, `EditFormat`,
 //! `MonitorFormat`):
 //!
 //! - a reference to one of their variants outside the seam modules (construction or pattern);
@@ -145,13 +145,55 @@ fn walk(root: &Path, dir: &str, out: &mut Vec<String>) {
     }
 }
 
-/// The files the scan reads, relative to the workspace root.
-fn scanned_files(root: &Path) -> Vec<String> {
+/// The files the scan reads, relative to the workspace root, and the files it skips because
+/// their module is declared under a test-only cfg (`#[cfg(test)] mod fake;`).
+fn scanned_files(root: &Path) -> (Vec<String>, Vec<String>) {
     let mut files = Vec::new();
     for src in member_sources(root) {
         walk(root, &src, &mut files);
     }
-    files
+    let mut test_only = Vec::new();
+    for rel in &files {
+        test_only_modules(rel, &parse(rel, &read(root, rel)), &mut test_only);
+    }
+    let in_test_module = |rel: &str| test_only.iter().any(|m| under(rel, m) || rel == format!("{m}/mod.rs"));
+    let (skipped, files): (Vec<String>, Vec<String>) = files.into_iter().partition(|rel| in_test_module(rel));
+    (files, skipped)
+}
+
+/// The module paths (`dir/name`, no `.rs`) that file `rel` declares under a test-only cfg:
+/// their files, and every module below them, are test code.
+fn test_only_modules(rel: &str, file: &syn::File, out: &mut Vec<String>) {
+    fn items(dir: &str, list: &[syn::Item], out: &mut Vec<String>) {
+        for item in list {
+            let syn::Item::Mod(m) = item else { continue };
+            let here = format!("{dir}/{}", m.ident);
+            let path_attr = m.attrs.iter().find(|a| a.path().is_ident("path")).and_then(|a| match &a.meta {
+                syn::Meta::NameValue(nv) => match &nv.value {
+                    Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) => Some(s.value()),
+                    _ => None,
+                },
+                _ => None,
+            });
+            if is_test_only(&m.attrs) {
+                match path_attr {
+                    Some(p) => out.push(format!("{dir}/{}", p.trim_end_matches(".rs"))),
+                    None => out.push(here),
+                }
+            } else if let Some((_, inner)) = &m.content {
+                items(&here, inner, out);
+            }
+        }
+    }
+    // A `lib.rs`, `main.rs` or `mod.rs` holds the modules of its own directory; any other file
+    // those of the directory named after it.
+    let (dir, name) = rel.rsplit_once('/').expect("a file in a directory");
+    let dir = if matches!(name, "lib.rs" | "main.rs" | "mod.rs") {
+        dir.to_string()
+    } else {
+        format!("{dir}/{}", name.trim_end_matches(".rs"))
+    };
+    items(&dir, &file.items, out);
 }
 
 fn read(root: &Path, rel: &str) -> String {
@@ -762,6 +804,7 @@ fn scan_file(rel: &str, src: &str, variants: &Variants) -> Vec<Finding> {
 /// The whole workspace, once per test binary.
 struct Workspace {
     files: Vec<String>,
+    skipped: Vec<String>,
     variants: Variants,
     findings: Vec<Finding>,
 }
@@ -770,10 +813,10 @@ fn workspace() -> &'static Workspace {
     static WORKSPACE: std::sync::OnceLock<Workspace> = std::sync::OnceLock::new();
     WORKSPACE.get_or_init(|| {
         let root = workspace_root();
-        let files = scanned_files(&root);
+        let (files, skipped) = scanned_files(&root);
         let variants = engine_variants(&root, &files);
         let findings = files.iter().flat_map(|rel| scan_file(rel, &read(&root, rel), &variants)).collect();
-        Workspace { files, variants, findings }
+        Workspace { files, skipped, variants, findings }
     })
 }
 
@@ -883,6 +926,11 @@ fn the_scan_walks_every_workspace_member() {
         collect_all(&root, src, &mut all);
     }
     assert!(all.iter().any(|f| f.ends_with("/tests.rs")), "no tests.rs under any src/ to skip");
+    // So are the files of modules declared under a test-only cfg.
+    assert!(!ws.skipped.is_empty(), "no file of a test-only module was found to skip");
+    for f in &ws.skipped {
+        assert!(!ws.files.contains(f), "{f} is both scanned and skipped");
+    }
     // The four engine enums written today were found with their variants.
     for name in ["Dialect", "ExplainFormat", "EditFormat", "MonitorFormat"] {
         assert!(ws.variants.get(name).is_some_and(|v| v.len() >= 2), "the variants of {name} were not found");
