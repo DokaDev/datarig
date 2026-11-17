@@ -147,67 +147,73 @@ impl App {
     /// What the catalog of tab `tab`'s database says of the extensions `wanted` that profile
     /// `pid`'s environment allows on read-only, as the current connection's metadata session
     /// read them ([`App::ask_extension_functions`]): pending until it answers for this list.
-    /// A tab working in another database than the profile's own: failed, since the read is of
-    /// the profile's own database only.
+    /// The answer holds only for the database the metadata session said it read it in: failed
+    /// for a tab working in another one, and when the profile's settings name another (changed
+    /// since it connected, not reconnected).
     fn extension_lookup(&self, tab: TabId, pid: ProfileId, wanted: &[String]) -> ExtensionLookup {
         if wanted.is_empty() {
             return ExtensionLookup::None;
         }
-        if self.tabs.get(tab).is_some_and(|t| self.other_database(t).is_some()) {
+        let Some(t) = self.tabs.get(tab) else { return ExtensionLookup::Failed };
+        if self.other_database(t).is_some() {
             return ExtensionLookup::Failed;
         }
-        let database = self.own_database(pid);
         match self.conns.get(pid).and_then(|c| c.extension_functions.as_ref()) {
-            Some(r) if r.database == database && r.extensions == wanted => match &r.state {
+            Some(r) if r.extensions == wanted => match &r.state {
                 ExtensionState::Pending => ExtensionLookup::Pending,
                 ExtensionState::Failed => ExtensionLookup::Failed,
-                ExtensionState::Read(read) => ExtensionLookup::Read(read.clone()),
+                ExtensionState::Read { database, functions } => {
+                    // The profile's settings (none: the server's default, the one it read in).
+                    let configured = self.profile(pid).map(|p| p.endpoint().1).unwrap_or_default();
+                    let own = if configured.is_empty() { database.as_str() } else { configured.as_str() };
+                    let tab_db = t.context.database.as_deref().unwrap_or(own);
+                    match own == database && tab_db == database {
+                        true => ExtensionLookup::Read(functions.clone()),
+                        false => ExtensionLookup::Failed,
+                    }
+                }
             },
             _ => ExtensionLookup::Pending,
         }
     }
 
     /// Ask profile `pid`'s metadata session for the functions of the extensions its
-    /// environment allows on read-only (`read_only_extensions`), in the profile's own database:
+    /// environment allows on read-only (`read_only_extensions`), in the database it works in:
     /// on PostgreSQL, once connected, when the environment is read-only and lists any, unless
-    /// this connection asked for that database and list already (a failed read is asked again
-    /// on an explorer refresh, [`App::retry_extension_functions`], or a reconnect).
+    /// this connection asked for that list already (a failed read is asked again on an
+    /// explorer refresh, [`App::retry_extension_functions`], or a reconnect).
     pub(super) fn ask_extension_functions(&mut self, pid: ProfileId) {
         let postgres = self.profile(pid).is_some_and(|p| Dbms::of_driver(&p.driver) == Some(Dbms::Postgres));
         let rules = self.rules_of(pid);
         if !postgres || !rules.read_only || rules.read_only_extensions.is_empty() {
             return;
         }
-        let database = self.own_database(pid);
         let Some(c) = self.conns.get(pid) else { return };
-        if database.is_empty() || c.meta.is_none() || !c.connected {
+        if c.meta.is_none() || !c.connected {
             return;
         }
         let extensions = rules.read_only_extensions;
-        let asked = c.extension_functions.as_ref();
-        if asked.is_some_and(|r| r.database == database && r.extensions == extensions) {
+        if c.extension_functions.as_ref().is_some_and(|r| r.extensions == extensions) {
             return;
         }
         let state = ExtensionState::Pending;
-        self.conns.entry(pid).extension_functions =
-            Some(ExtensionRead { database, extensions: extensions.clone(), state });
+        self.conns.entry(pid).extension_functions = Some(ExtensionRead { extensions: extensions.clone(), state });
         self.send_meta(pid, DbCommand::LoadExtensionFunctions { extensions });
     }
 
     /// The metadata session of profile `pid` answered the read of `extensions`' functions: kept
-    /// when it is the one asked for the profile's own database and the environment still
-    /// lists those extensions; otherwise dropped, and the current list is asked for.
+    /// with the database it said it read them in, when it is the one asked and the environment
+    /// still lists those extensions; otherwise dropped, and the current list is asked for.
     pub(super) fn on_extension_functions(
         &mut self,
         pid: ProfileId,
         extensions: Vec<String>,
-        result: Result<datarig_core::sql::risk::ExtensionFunctions, datarig_core::driver::DbError>,
+        result: Result<(String, datarig_core::sql::risk::ExtensionFunctions), datarig_core::driver::DbError>,
     ) {
-        let database = self.own_database(pid);
         let current = self.rules_of(pid).read_only_extensions;
         let Some(c) = self.conns.get_mut(pid) else { return };
         let Some(r) = c.extension_functions.as_mut() else { return };
-        if r.database != database || r.extensions != extensions || !matches!(r.state, ExtensionState::Pending) {
+        if r.extensions != extensions || !matches!(r.state, ExtensionState::Pending) {
             return;
         }
         if extensions != current {
@@ -216,7 +222,7 @@ impl App {
             return self.ask_extension_functions(pid);
         }
         r.state = match result {
-            Ok(read) => ExtensionState::Read(read),
+            Ok((database, functions)) => ExtensionState::Read { database, functions },
             Err(_) => ExtensionState::Failed,
         };
     }

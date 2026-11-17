@@ -1397,7 +1397,9 @@ mod terminal {
         .await
         .expect("setup");
         let asked = ["pgcrypto".to_string(), "postgis".to_string()];
-        let read = crate::meta::extension_functions::load_extension_functions(&c, &asked).await.expect("read");
+        let (database, read) =
+            crate::meta::extension_functions::load_extension_functions(&c, &asked).await.expect("read");
+        assert_eq!(database, db, "the session's database");
         assert_eq!(read.installed, ["pgcrypto"], "postgis is not there");
         let f = |schema: &str, name: &str, extension: Option<&str>| CatalogFunction {
             schema: schema.into(),
@@ -1418,7 +1420,7 @@ mod terminal {
         assert!(ours.clone().all(|c| c.schema == "public" && c.extension.as_deref() == Some("pgcrypto")));
         // Nothing asked: nothing read.
         let none = crate::meta::extension_functions::load_extension_functions(&c, &[]).await.expect("read");
-        assert_eq!(none, datarig_core::sql::risk::ExtensionFunctions::default());
+        assert_eq!(none, (db.clone(), datarig_core::sql::risk::ExtensionFunctions::default()));
     }
 
     /// An interval read in binary, as the driver shows it, written again in ISO 8601

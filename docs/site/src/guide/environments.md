@@ -171,7 +171,9 @@ no fields for them, and saving the form keeps them as written. MySQL profiles ig
   connects (or at the first run, when the environment lists the extensions only later). A
   failed read is retried when you refresh the profile in the explorer (`r`) or reconnect. A tab
   working in another database of the server refuses the extensions' calls: they are read for
-  the profile's own database only.
+  the profile's own database only. After you change the profile's database, the calls are
+  refused until you reconnect: the functions read are those of the database it was connected
+  to.
 - A refused call says how to allow it, and `:session` lists what the profile's environment
   allows.
 - Allowed functions still run in the `READ ONLY` transaction, so the server refuses their

@@ -1448,11 +1448,12 @@ pub enum DbEvent {
         oids: Vec<u32>,
         result: Result<Vec<(u32, char)>, DbError>,
     },
-    /// The answer to [`DbCommand::LoadExtensionFunctions`] of `extensions`: those installed,
+    /// The answer to [`DbCommand::LoadExtensionFunctions`] of `extensions`: the database the
+    /// session read them in (`current_database()`, as the server said) with those installed,
     /// their functions and the other functions of the same names, or why they could not be read.
     ExtensionFunctions {
         extensions: Vec<String>,
-        result: Result<crate::sql::risk::ExtensionFunctions, DbError>,
+        result: Result<(String, crate::sql::risk::ExtensionFunctions), DbError>,
     },
     /// The answer to `DbCommand::LoadStructure`: the structure of `schema.table`, or why it
     /// could not be read (a table that no longer exists is the server's error).

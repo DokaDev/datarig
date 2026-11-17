@@ -100,11 +100,9 @@ pub enum NodeState {
 pub type TypeKindKey = (String, u64, super::tabs::TabId, u64, u32);
 
 /// What the metadata session said of the extensions the profile's environment allows on
-/// read-only ([`ProfileConn::extension_functions`]): for the database `database` (the
-/// profile's own) and the extensions `extensions` as asked.
+/// read-only ([`ProfileConn::extension_functions`]): of the extensions `extensions` as asked.
 #[derive(Clone, Debug)]
 pub struct ExtensionRead {
-    pub database: String,
     pub extensions: Vec<String>,
     pub state: ExtensionState,
 }
@@ -116,8 +114,9 @@ pub enum ExtensionState {
     Pending,
     /// The read failed: asked again on an explorer refresh or a reconnect.
     Failed,
-    /// The catalog's answer.
-    Read(datarig_core::sql::risk::ExtensionFunctions),
+    /// The catalog's answer, of the database `database` the metadata session said it read it
+    /// in (never the profile's settings, which may have changed since it connected).
+    Read { database: String, functions: datarig_core::sql::risk::ExtensionFunctions },
 }
 
 /// The connection of one profile.
@@ -166,7 +165,7 @@ pub struct ProfileConn {
     /// `None` while the answer has not come; `?` for a type the answer did not list (dropped).
     pub type_kinds: std::collections::HashMap<TypeKindKey, Option<char>>,
     /// The current attempt's read of the functions of the extensions the profile's environment
-    /// allows on read-only, of the profile's own database; `None` until asked.
+    /// allows on read-only, in the metadata session's database; `None` until asked.
     pub extension_functions: Option<ExtensionRead>,
     /// The server's databases (`DbCommand::LoadDatabases`), once asked: the names, or why they
     /// could not be read.

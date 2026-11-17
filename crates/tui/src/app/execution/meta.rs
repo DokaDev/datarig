@@ -293,11 +293,7 @@ impl App {
                 c.databases_asked = false;
                 self.use_answered(id, crate::app::cmdline::UseAsk::Databases, ok);
             }
-            DbEvent::Context { database, .. } => {
-                self.conns.entry(id).database = Some(database);
-                // The profile's own database is known now.
-                self.ask_extension_functions(id);
-            }
+            DbEvent::Context { database, .. } => self.conns.entry(id).database = Some(database),
             // The functions of the extensions a read-only environment allows.
             DbEvent::ExtensionFunctions { extensions, result } => self.on_extension_functions(id, extensions, result),
             // The kinds of types a tab's result has, of the profile's own database.
