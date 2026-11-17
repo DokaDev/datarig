@@ -505,11 +505,11 @@ impl Risk {
     }
 
     /// The first call a read-only policy refuses in `cx` ([`Risk::read_only_in`]), as written.
-    /// A refused call that is not in [`Risk::unchecked_calls`] (MySQL's) is refused whatever
-    /// `cx` says.
+    /// An unchecked call that is not in [`Risk::unchecked_calls`] (MySQL's, or one whose names
+    /// were not kept) is refused whatever `cx` says.
     fn refused_call(&self, cx: &ReadOnlyContext) -> Option<String> {
         match &self.unchecked_call {
-            Some(first) if self.unchecked_calls.is_empty() => Some(first.clone()),
+            Some(first) if !self.unchecked_calls.iter().any(|n| n.join(".") == *first) => Some(first.clone()),
             _ => self.refused_call_name(cx).map(|name| name.join(".")),
         }
     }
@@ -840,11 +840,11 @@ impl Prepared {
         // As on MySQL, a read-only policy refuses a call of a function that is not a known
         // built-in, whose effects cannot be checked (DDL only stores what it calls, and a
         // read-only policy refuses DDL anyway).
-        if risk.class != Class::Ddl && risk.unchecked_call.is_none() {
-            let calls = unknown_functions(b);
-            risk.unchecked_call = calls.first().map(|n| n.join("."));
-            risk.unchecked_calls = calls;
-            risk.removed_calls = removed_builtin_calls(b);
+        // Every one counts, with those of what it wraps or executes (already in `risk`).
+        if risk.class != Class::Ddl {
+            risk.unchecked_calls = union(risk.unchecked_calls, unknown_functions(b));
+            risk.removed_calls = union(risk.removed_calls, removed_builtin_calls(b));
+            risk.unchecked_call = risk.unchecked_call.or_else(|| risk.unchecked_calls.first().map(|n| n.join(".")));
         }
         risk.no_tx_block |= no_tx_block(kind, b);
         risk.adds_enum_value |= kind == "AlterEnumStmt" && text(&b["old_val"]).is_none_or(str::is_empty);
@@ -925,6 +925,8 @@ impl Prepared {
                     risk.runs_code |= p.runs_code;
                     // A function that is not a built-in, which the planner may run.
                     risk.unchecked_call = risk.unchecked_call.or(p.unchecked_call);
+                    risk.unchecked_calls = union(risk.unchecked_calls, p.unchecked_calls);
+                    risk.removed_calls = union(risk.removed_calls, p.removed_calls);
                 }
                 // What it calls is not known (its name was forgotten, or never prepared here):
                 // as for its `EXECUTE`, after what its parameters do.

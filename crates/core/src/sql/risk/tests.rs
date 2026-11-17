@@ -2203,3 +2203,31 @@ fn an_overload_outside_the_extension_keeps_its_name_refused() {
         }
     }
 }
+
+/// What an `EXECUTE` runs, its parameters, the prepared statement a plain `EXPLAIN EXECUTE`
+/// plans and the query a built-in runs from its text: every call of each counts, not only
+/// the first one found, and none is dropped when the statement around them is read.
+#[test]
+fn every_call_of_executed_and_planned_statements_counts() {
+    let on18 = ReadOnlyContext { server_major: Some(18), ..Default::default() };
+    let refused = |r: &Risk| matches!(r.read_only_in(&on18), Err(ReadOnlyBlock::UnknownFunction(f)) if f.contains("zz_unsafe") || f.contains("pg_timezone_abbrevs"));
+    let mut p = Prepared::default();
+    p.classify("PREPARE p(int) AS SELECT uuidv7(), $1");
+    let r = p.classify("EXECUTE p(public.zz_unsafe())");
+    assert!(refused(&r), "{r:?}");
+    let mut p = Prepared::default();
+    p.classify("PREPARE p(xml) AS SELECT public.zz_unsafe($1)");
+    let r = p.classify("EXPLAIN EXECUTE p(query_to_xml('SELECT uuidv7()', true, false, ''))");
+    assert!(refused(&r), "{r:?}");
+    let mut p = Prepared::default();
+    p.classify("PREPARE p AS SELECT pg_timezone_abbrevs()");
+    for sql in ["EXECUTE p", "EXPLAIN EXECUTE p"] {
+        assert!(refused(&p.clone().classify(sql)), "{sql}");
+    }
+    let r = classify("SELECT uuidv7(), query_to_xml('SELECT public.zz_unsafe()', true, false, '')");
+    assert!(refused(&r), "{r:?}");
+    let r = classify("SELECT query_to_xml('SELECT uuidv7()', true, false, ''), public.zz_unsafe()");
+    assert!(refused(&r), "{r:?}");
+    let r = classify("SELECT uuidv7(); SELECT public.zz_unsafe()");
+    assert!(refused(&r), "{r:?}");
+}
