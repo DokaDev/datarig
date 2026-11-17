@@ -407,20 +407,24 @@ impl Scan<'_> {
         }
     }
 
-    /// The engine variant an expression is (`E::V`, `E::V(..)`, `E::V { .. }`).
+    /// The first engine variant an expression names anywhere in it (`E::V`, `Some(E::V)`,
+    /// `(n, E::V)`): comparing with it is a test of that variant.
     fn expr_variant(&self, expr: &Expr) -> Option<(&'static str, String)> {
-        match expr {
-            Expr::Path(p) => self.variant(&p.path),
-            Expr::Call(c) => match &*c.func {
-                Expr::Path(p) => self.variant(&p.path),
-                _ => None,
-            },
-            Expr::Struct(s) => self.variant(&s.path),
-            Expr::Paren(p) => self.expr_variant(&p.expr),
-            Expr::Group(g) => self.expr_variant(&g.expr),
-            Expr::Reference(r) => self.expr_variant(&r.expr),
-            _ => None,
+        struct Find<'s, 'a> {
+            scan: &'s Scan<'a>,
+            found: Option<(&'static str, String)>,
         }
+        impl<'ast> Visit<'ast> for Find<'_, '_> {
+            fn visit_path(&mut self, p: &'ast syn::Path) {
+                if self.found.is_none() {
+                    self.found = self.scan.variant(p);
+                }
+                visit::visit_path(self, p);
+            }
+        }
+        let mut find = Find { scan: self, found: None };
+        find.visit_expr(expr);
+        find.found
     }
 
     fn reference(&mut self, span: Span, e: &str, v: &str) {
@@ -1172,7 +1176,7 @@ fn boolean_engine_tests_stay_within_budget() {
 fn every_violation_fixture_is_reported() {
     // (fixture, the path it is scanned as, what must be reported, with the line)
     type Case = (&'static str, &'static str, &'static [(Kind, usize)]);
-    let cases: [Case; 18] = [
+    let cases: [Case; 19] = [
         ("driver_engine_branch", "crates/drivers/mysql/src/session.rs", &[(Kind::Reference, 6), (Kind::Reference, 7)]),
         ("tui_if_let_dialect", "crates/tui/src/app/editor.rs", &[(Kind::BooleanTest, 6), (Kind::Reference, 6)]),
         ("catch_all_explain", "crates/core/src/sql/plan.rs", &[(Kind::CatchAll, 9)]),
@@ -1203,6 +1207,7 @@ fn every_violation_fixture_is_reported() {
         ),
         ("macro_metavar", "crates/core/src/sql/values.rs", &[(Kind::BooleanTest, 7), (Kind::BooleanTest, 13)]),
         ("macro_variant_import", "crates/core/src/sql/values.rs", &[(Kind::Alias, 5), (Kind::Alias, 13)]),
+        ("wrapped_eq", "crates/core/src/sql/values.rs", &[(Kind::BooleanTest, 5), (Kind::BooleanTest, 9)]),
     ];
     let mut missed = Vec::new();
     for (name, path, expected) in cases {
