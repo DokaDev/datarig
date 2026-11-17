@@ -111,3 +111,59 @@ fn a_system_versioned_table_is_a_table() {
     assert!(super::is_table("BASE TABLE") && super::is_table("SYSTEM VERSIONED"));
     assert!(!super::is_table("VIEW") && !super::is_table("SYSTEM VIEW") && !super::is_table("SEQUENCE"));
 }
+
+/// `EXTRA` as MariaDB writes it for invisible columns (a comma before `INVISIBLE`, read from
+/// MariaDB 11.4): the key metadata still sees the generated and `AUTO_INCREMENT` columns, the
+/// order keys the invisible ones, as the structure does.
+#[test]
+fn extra_with_commas_marks_invisible_in_keys_and_order_keys() {
+    use datarig_core::driver::keys::Generated;
+    let extras = [
+        ("id", "auto_increment, INVISIBLE"),
+        ("a", ""),
+        ("g", "VIRTUAL GENERATED, INVISIBLE"),
+        ("s", "STORED GENERATED, INVISIBLE"),
+        ("u", "on update current_timestamp(), INVISIBLE"),
+    ];
+    let s = |v: &str| Some(v.to_string());
+    let mut rows = vec![("L".to_string(), String::new(), String::new(), s("0"), None, None, None)];
+    for (n, (name, extra)) in (1..).zip(extras) {
+        rows.push(("C".into(), "shop".into(), "t".into(), s(&n.to_string()), s(name), s(extra), s("BASE TABLE")));
+    }
+    let k = super::keys::catalog(rows).unwrap();
+    let generated: Vec<(&str, Generated)> =
+        k.find(Some("shop"), "t").unwrap().columns.values().map(|c| (c.name.as_str(), c.generated)).collect();
+    assert_eq!(
+        generated,
+        [
+            ("id", Generated::AutoIncrement),
+            ("a", Generated::No),
+            ("g", Generated::Expression),
+            ("s", Generated::Expression),
+            ("u", Generated::No),
+        ]
+    );
+
+    let mut rows = vec![("T".to_string(), None, None, None, None, None)];
+    for (n, (name, extra)) in (1..).zip(extras) {
+        rows.push(("C".into(), s(name), s(&n.to_string()), s("int"), s("YES"), s(extra)));
+    }
+    let columns = super::order_keys::keys_of(rows).unwrap().columns.unwrap();
+    let invisible: Vec<(&str, bool)> = columns.iter().map(|c| (c.name.as_str(), c.invisible)).collect();
+    assert_eq!(invisible, [("id", true), ("a", false), ("g", true), ("s", true), ("u", true)]);
+}
+
+/// The words of `EXTRA`, MySQL's (spaces) and MariaDB's (commas too).
+#[test]
+fn extra_words_split_on_spaces_and_commas() {
+    fn words(e: &str) -> Vec<&str> {
+        super::extra_words(e).collect()
+    }
+    assert_eq!(
+        words("DEFAULT_GENERATED on update CURRENT_TIMESTAMP"),
+        ["DEFAULT_GENERATED", "on", "update", "CURRENT_TIMESTAMP"]
+    );
+    assert_eq!(words("auto_increment, INVISIBLE"), ["auto_increment", "INVISIBLE"]);
+    assert_eq!(words("VIRTUAL GENERATED,INVISIBLE"), ["VIRTUAL", "GENERATED", "INVISIBLE"]);
+    assert!(words("").is_empty() && words(" , ").is_empty());
+}
