@@ -2,8 +2,8 @@
 //! sends the engines it does not name to a default branch.
 //!
 //! The scan parses every `.rs` file under the `src/` of every workspace member (test code
-//! skipped: `tests.rs`, `tests/`, `#[cfg(test)]` items and the files of modules declared under
-//! such a cfg may name engines) and reports, for the six engine enums (`EngineId`, `Dialect`, `EngineFacts`, `ExplainFormat`, `EditFormat`,
+//! skipped: `tests.rs`, `tests/`, `#[cfg(test)]` items and files under an inner
+//! `#![cfg(test)]` may name engines) and reports, for the six engine enums (`EngineId`, `Dialect`, `EngineFacts`, `ExplainFormat`, `EditFormat`,
 //! `MonitorFormat`):
 //!
 //! - a reference to one of their variants outside the seam modules (construction or pattern);
@@ -145,70 +145,16 @@ fn walk(root: &Path, dir: &str, out: &mut Vec<String>) {
     }
 }
 
-/// The files the scan reads, relative to the workspace root, and the files it skips because
-/// their module is declared under a test-only cfg (`#[cfg(test)] mod fake;`).
-fn scanned_files(root: &Path) -> (Vec<String>, Vec<String>) {
+/// The files the scan reads, relative to the workspace root. Only `tests.rs` and `tests/` are
+/// left out here; test-only code inside a file (`#[cfg(test)]` items, or a whole file under an
+/// inner `#![cfg(test)]`) is skipped when the file is scanned. A module declaration never takes a
+/// file out: the same file may also be reached by a declaration that is not test-only.
+fn scanned_files(root: &Path) -> Vec<String> {
     let mut files = Vec::new();
     for src in member_sources(root) {
         walk(root, &src, &mut files);
     }
-    let mut test_only = Vec::new();
-    for rel in &files {
-        test_only_modules(rel, &parse(rel, &read(root, rel)), &mut test_only);
-    }
-    let in_test_module = |rel: &str| test_only.iter().any(|m| under(rel, m) || rel == format!("{m}/mod.rs"));
-    let (skipped, files): (Vec<String>, Vec<String>) = files.into_iter().partition(|rel| in_test_module(rel));
-    (files, skipped)
-}
-
-/// The module paths (`dir/name`, no `.rs`) that file `rel` declares under a test-only cfg:
-/// their files, and every module below them, are test code.
-fn test_only_modules(rel: &str, file: &syn::File, out: &mut Vec<String>) {
-    // `dir`: where the modules declared here live; `path_base`: what a `#[path]` here is
-    // relative to (the file's own directory at its top level, `dir` inside an inline module).
-    fn items(dir: &str, path_base: &str, list: &[syn::Item], out: &mut Vec<String>) {
-        for item in list {
-            let syn::Item::Mod(m) = item else { continue };
-            let here = format!("{dir}/{}", m.ident);
-            let path_attr = m.attrs.iter().find(|a| a.path().is_ident("path")).and_then(|a| match &a.meta {
-                syn::Meta::NameValue(nv) => match &nv.value {
-                    Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) => Some(s.value()),
-                    _ => None,
-                },
-                _ => None,
-            });
-            if is_test_only(&m.attrs) {
-                match path_attr {
-                    // `x.rs` and `x/mod.rs` are both the module `x`, with its children below `x/`.
-                    Some(p) => {
-                        let module = p.strip_suffix("/mod.rs").unwrap_or_else(|| p.trim_end_matches(".rs"));
-                        out.push(format!("{path_base}/{module}"));
-                    }
-                    None => out.push(here),
-                }
-            } else if let Some((_, inner)) = &m.content {
-                items(&here, &here, inner, out);
-            }
-        }
-    }
-    // A `lib.rs`, `main.rs` or `mod.rs` holds the modules of its own directory; any other file
-    // those of the directory named after it.
-    let (file_dir, name) = rel.rsplit_once('/').expect("a file in a directory");
-    let dir = if matches!(name, "lib.rs" | "main.rs" | "mod.rs") {
-        file_dir.to_string()
-    } else {
-        format!("{file_dir}/{}", name.trim_end_matches(".rs"))
-    };
-    // A file under an inner `#![cfg(test)]` is a test-only module itself.
-    if is_test_only(&file.attrs) {
-        out.push(match name {
-            "mod.rs" => file_dir.to_string(),
-            "lib.rs" | "main.rs" => rel.trim_end_matches(".rs").to_string(),
-            _ => dir.clone(),
-        });
-        return;
-    }
-    items(&dir, file_dir, &file.items, out);
+    files
 }
 
 fn read(root: &Path, rel: &str) -> String {
@@ -1005,7 +951,6 @@ fn scan_file(rel: &str, src: &str, variants: &Variants) -> Vec<Finding> {
 /// The whole workspace, once per test binary.
 struct Workspace {
     files: Vec<String>,
-    skipped: Vec<String>,
     variants: Variants,
     findings: Vec<Finding>,
 }
@@ -1014,10 +959,10 @@ fn workspace() -> &'static Workspace {
     static WORKSPACE: std::sync::OnceLock<Workspace> = std::sync::OnceLock::new();
     WORKSPACE.get_or_init(|| {
         let root = workspace_root();
-        let (files, skipped) = scanned_files(&root);
+        let files = scanned_files(&root);
         let variants = engine_variants(&root, &files);
         let findings = files.iter().flat_map(|rel| scan_file(rel, &read(&root, rel), &variants)).collect();
-        Workspace { files, skipped, variants, findings }
+        Workspace { files, variants, findings }
     })
 }
 
@@ -1127,33 +1072,14 @@ fn the_scan_walks_every_workspace_member() {
         collect_all(&root, src, &mut all);
     }
     assert!(all.iter().any(|f| f.ends_with("/tests.rs")), "no tests.rs under any src/ to skip");
-    // So are the files of modules declared under a test-only cfg, `#[path]` included.
-    assert!(!ws.skipped.is_empty(), "no file of a test-only module was found to skip");
-    let src = r#"
-        #[cfg(test)] mod fake;
-        #[cfg(test)] #[path = "edit_fake.rs"] mod by_path;
-        mod inner { #[cfg(test)] mod deep; #[cfg(test)] #[path = "x.rs"] mod y; }
-        #[cfg(any(test, unix))] mod product;
-        #[cfg(test)] #[path = "helpers/mod.rs"] mod helpers;
-    "#;
-    let mut found = Vec::new();
-    test_only_modules("crates/core/src/edit.rs", &parse("inline", src), &mut found);
-    assert_eq!(
-        found,
-        [
-            "crates/core/src/edit/fake",
-            "crates/core/src/edit_fake",
-            "crates/core/src/edit/inner/deep",
-            "crates/core/src/edit/inner/x",
-            "crates/core/src/helpers"
-        ]
-    );
-    found.clear();
-    test_only_modules("crates/core/src/edit/mod.rs", &parse("inline", src), &mut found);
-    assert_eq!(found[..2], ["crates/core/src/edit/fake", "crates/core/src/edit/edit_fake"]);
-    for f in &ws.skipped {
-        assert!(!ws.files.contains(f), "{f} is both scanned and skipped");
-    }
+    // Every other file under a member's src/ is scanned: no module declaration takes one out.
+    let expected: Vec<&String> =
+        all.iter().filter(|f| !f.split('/').any(|c| c == "tests" || c == "tests.rs")).collect();
+    let mut scanned: Vec<&String> = ws.files.iter().collect();
+    let mut expected = expected;
+    expected.sort();
+    scanned.sort();
+    assert_eq!(scanned, expected, "the files scanned are not every non-test file under src/");
     // The four engine enums written today were found with their variants.
     for name in ["Dialect", "ExplainFormat", "EditFormat", "MonitorFormat"] {
         assert!(ws.variants.get(name).is_some_and(|v| v.len() >= 2), "the variants of {name} were not found");
@@ -1243,13 +1169,6 @@ fn the_clean_fixture_passes() {
     // A file under an inner `#![cfg(test)]` is test code, whatever it holds.
     let found = scan_fixture("inner_cfg_test", "crates/tui/src/app/probe.rs");
     assert!(found.is_empty(), "a test-only file was reported: {found:?}");
-    let mut modules = Vec::new();
-    let src = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/engine_seam/fixtures/inner_cfg_test.rs"),
-    )
-    .expect("the fixture");
-    test_only_modules("crates/tui/src/app/probe.rs", &parse("inner_cfg_test", &src), &mut modules);
-    assert_eq!(modules, ["crates/tui/src/app/probe"]);
     // Scanned as any other module, its variants are references, but its only legacy markers
     // are test-only.
     let markers: Vec<String> = scan_fixture("clean", "crates/tui/src/app/clean.rs")

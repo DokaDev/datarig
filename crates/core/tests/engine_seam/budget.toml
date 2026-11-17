@@ -9,7 +9,7 @@
 "crates/bench/src/editor" = 1
 "crates/bench/src/export" = 1
 "crates/bench/src/monitor" = 1
-"crates/core/src/edit" = 2
+"crates/core/src/edit" = 3
 "crates/core/src/export" = 16
 "crates/core/src/monitor" = 14
 "crates/core/src/profile" = 2
