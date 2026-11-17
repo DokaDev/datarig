@@ -210,6 +210,21 @@ impl App {
         self.send_meta(pid, DbCommand::LoadExtensionFunctions { extensions });
     }
 
+    /// A run in tab `tab` was refused while the allowed extensions' functions are pending, and
+    /// profile `pid` is not connected (not yet, or closed for being idle): it connects as a run
+    /// would, and asks for them once connected.
+    pub(super) fn connect_for_extensions(&mut self, tab: TabId, pid: ProfileId) {
+        if !matches!(self.read_only_context(tab, pid).extensions, ExtensionLookup::Pending) {
+            return;
+        }
+        let closed = self.conns.get(pid).is_none_or(|c| {
+            c.meta.is_none() && c.connecting.is_none() && (c.resolved.is_none() || c.idle_closed.is_some())
+        });
+        if closed {
+            self.connect(pid);
+        }
+    }
+
     /// The metadata session of profile `pid` answered the read of `extensions`' functions: kept
     /// with the database it said it read them in, when it is the one asked and the environment
     /// still lists those extensions; otherwise dropped, and the current list is asked for.

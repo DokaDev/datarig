@@ -1169,6 +1169,44 @@ fn a_call_waiting_for_the_extensions_reopens_a_lost_metadata_session() {
     assert_eq!(run(&mut h, sql), [sql]);
 }
 
+/// A profile closed for being idle, or disconnected: a call waiting for the extensions'
+/// functions is refused as pending and connects the profile again as a run would (nothing is
+/// asked), which asks again once connected; the call runs after its answer.
+#[test]
+fn a_call_waiting_for_the_extensions_connects_a_closed_profile() {
+    use datarig_tui::app::action::Action;
+    let pending = "The functions of the allowed extensions are still being read: run it again in a moment";
+    let sql = "SELECT public.crypt('a', 'b')";
+    for idle in [true, false] {
+        let mut cfg = config(Some("prod"));
+        cfg.prefs.idle_disconnect = Some(Duration::from_secs(300));
+        let rules = Policy { read_only: true, read_only_extensions: vec!["pgcrypto".into()], ..Policy::default() };
+        cfg.policies.insert("prod", rules);
+        let mut h = Harness::with_config(&cfg, Lang::En);
+        h.db(DbEvent::Connected);
+        h.db(DbEvent::Catalog(Ok(catalog())));
+        assert_eq!(asked_extensions(&mut h), [vec!["pgcrypto".to_string()]]);
+        let id = h.app.profiles[0].id;
+        if idle {
+            h.advance(Duration::from_secs(300));
+            assert!(h.app.conns.get(id).unwrap().idle_closed.is_some(), "closed for being idle");
+        } else {
+            h.app.dispatch(Action::DisconnectCurrent);
+            assert!(h.app.conns.get(id).unwrap().meta.is_none(), "disconnected");
+        }
+        for _ in 0..2 {
+            assert!(run(&mut h, sql).is_empty(), "idle: {idle}");
+            assert_eq!(status(&h), Some(refused_call_with("prod", "public.crypt", sql, pending)), "idle: {idle}");
+            assert!(h.app.conns.get(id).unwrap().connecting.is_some(), "idle: {idle}: connecting again");
+            assert_eq!(h.overlay_kind(), None, "nothing is asked");
+        }
+        h.db(DbEvent::Connected);
+        assert_eq!(asked_extensions(&mut h), [vec!["pgcrypto".to_string()]], "asked again once connected");
+        extension_answer(&mut h, &["pgcrypto"], &["pgcrypto"], &[("public", "crypt", Some("pgcrypto"))]);
+        assert_eq!(run(&mut h, sql), [sql], "idle: {idle}");
+    }
+}
+
 /// An allowed extension the database does not have is named in the refusal; an answer for a
 /// list the environment no longer has is dropped.
 #[test]

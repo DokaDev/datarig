@@ -71,6 +71,7 @@ impl App {
         self.ask_extension_functions(pid);
         if let Some(refused) = self.read_only_refusal(id, pid, &statements) {
             self.unstage_run(id);
+            self.connect_for_extensions(id, pid);
             return self.tab_status(id, refused);
         }
         // What the run does to the open transaction (manual commit, a statement that cannot
@@ -112,6 +113,7 @@ impl App {
         self.ask_extension_functions(pid);
         if let Some(refused) = self.read_only_refusal(id, pid, &statements) {
             self.unstage_run(id);
+            self.connect_for_extensions(id, pid);
             return self.tab_status(id, refused);
         }
         let Some(t) = self.tabs.get(id) else { return };
