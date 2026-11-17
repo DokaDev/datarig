@@ -3,6 +3,105 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.41.2 (2026-11-17)
+
+A patch release that makes several checks stricter, so read the list before upgrading. On MySQL and MariaDB, applying edits fails on any server warning and is rolled back, `TIME` values are checked, the first-page row limit applies only to plain reads, counts and exports are refused inside your own SERIALIZABLE transaction, and a cancel is sent only when the server confirms the session (otherwise the tab's connection is closed). On PostgreSQL, a read-only profile refuses calls of functions that are not built-ins and typed settings of extensions, and a query holding a backslash or `U&` is not run again automatically. Startup SQL refuses settings that ask before they run, so a profile holding one stops connecting until it is removed.
+
+### Changed
+
+- Startup SQL now refuses any setting that asks before it runs when typed, whatever the value,
+  since Startup SQL runs without asking: on MySQL and MariaDB for example `foreign_key_checks`,
+  `unique_checks`, `sql_safe_updates`, `sql_log_bin`, `binlog_format` or `SET NAMES` of a
+  character set other than UTF-8, on PostgreSQL `session_replication_role`. A profile whose
+  Startup SQL (or preset) holds one no longer connects until it is removed; the profile form
+  and `:session` say which statement. MySQL `sql_mode` stays allowed in Startup SQL.
+- On a read-only PostgreSQL profile a typed setting of an extension or a custom one (such as
+  `SET app.tenant = '1'`, `RESET pgaudit.log` or `set_config('app.tenant', …)`) is refused,
+  and so are `RESET ALL` and `DISCARD ALL`; set such a setting in the profile's Startup SQL,
+  where it is still allowed.
+- Typed `SET session_replication_role`, `set_config()` of it and a `set_config()` whose
+  setting is not named with a constant ask before they run (on a read-only profile they are
+  refused).
+- Behind a transaction pooler, a PostgreSQL profile whose Startup SQL holds `SET ROLE` (or
+  `SET SESSION AUTHORIZATION`) no longer connects, since the role could not hold for the
+  session; before, it connected as the login role. Connect directly, or log in as that role.
+
+### Fixed
+
+- MySQL and MariaDB: applying edits now fails when the server answers any step with a warning
+  or a note, whatever the server's mode, and nothing is applied; the message shows the
+  server's warnings (up to five). Before, a server without strict mode could store a value it
+  had changed (text cut to the column's length, a character the column cannot hold, a date
+  made zero, a member of a SET dropped) and the Apply reported success. While the session's
+  `sql_notes` is off (or cannot be read), edits are not sent, since the server would then not
+  report a value it rounded: turn it on with `SET SESSION sql_notes = 1`. When undoing a failed
+  change leaves some of it in place (a table that does not take part in transactions, such as
+  MyISAM), the message says so instead of saying nothing was applied, and applying the same
+  edits again asks first. Each Apply reads `sql_notes` first, one more round trip.
+- MySQL and MariaDB: a value typed for a `TIME` column is checked before it is applied: `H:MM`
+  or `H:MM:SS` (such as `12:30` or `8:3:2`; hours up to three digits, a leading `-` allowed)
+  with at most as many digits of a second as the column keeps (the server would round the
+  others away without a warning), or either of them with days first (`1 10:00:00`,
+  `1 10:00`). Other forms, such as `123000` or `12:30.5`, are refused.
+- MySQL and MariaDB: a cancel of a running statement is now sent only once the server confirms
+  that it reaches the tab's own session (each datarig connection carries a `datarig_session`
+  connection attribute, read back from `performance_schema.session_account_connect_attrs`).
+  When that cannot be confirmed, datarig closes the tab's connection instead and says so; the
+  statement may then still finish on the server and, outside a transaction block, commit what
+  it changed, while an open transaction is rolled back. On MariaDB with `performance_schema`
+  off (its default) this is always the case, and so it is through proxies and load balancers
+  that share or reroute connections. A cancel that arrives before the statement is sent stops
+  it and keeps the connection. Opening a MySQL session takes one more round trip.
+- MySQL and MariaDB: a row count or an export inside your own open transaction is refused when
+  the transaction is at SERIALIZABLE or at a level datarig cannot tell (for example after
+  `SET TRANSACTION ISOLATION LEVEL …` for the next transaction, or after a stored procedure
+  ran). Before, it read every row with a shared lock that other sessions' writes waited for
+  until the transaction ended. End the transaction, or use another isolation level.
+- MySQL Monitor: cancelling or ending a session is now sent only on a monitor connection the
+  server confirms is direct, and only to a session that can be told apart from a later one given
+  the same id. This needs the session's thread to be readable: grant the monitoring account
+  `SELECT` on `performance_schema.threads`, then reopen the Monitor tab; otherwise nothing is sent
+  and the Monitor says so. When the connection cannot be confirmed (for example with
+  `performance_schema` off, or through a proxy or load balancer), the actions are shown dimmed
+  and not sent. The check before the action also compares the session's account.
+- MySQL and MariaDB: the row limit used to show the first page now applies only to plain reads.
+  A last statement that is not one, such as `SELECT … INTO OUTFILE`, `SELECT … INTO @variable`,
+  a `SELECT` that calls a stored or loadable function, an `EXECUTE` or a statement with an
+  executable comment (`/*! … */`), now runs to its end and its result is read in full. Before,
+  the limit stopped it after a page of rows, so a file was written in part or a function ran
+  for those rows only, while the run reported success. Your own `sql_select_limit` is kept.
+- MySQL and MariaDB: a read-only profile on a read replica that does not keep a session's
+  read-only setting (some cloud reader endpoints, such as some AWS Aurora readers) connects
+  again. datarig's own metadata and monitor sessions run there without it, as they only send
+  datarig's own reads, so the explorer and the Monitor work; `:session` shows this while they
+  are open, and `errors.log` records the values the server gave. Query tabs of such a profile
+  are still refused, before any Startup SQL runs, with "could not talk to the server (details
+  in errors.log)"; the line in `errors.log` names the values the server gave. The FAQ now says
+  where `errors.log` is.
+- PostgreSQL: a read-only profile now refuses, before sending it, a statement that calls a
+  function that is not one of PostgreSQL's own built-ins, including functions of extensions
+  (such as PostGIS or pgcrypto) and any function named with a schema other than `pg_catalog`;
+  `EXPLAIN` of such a call and `EXECUTE` of a statement prepared with one are refused too. A
+  read-only MySQL profile already refused such calls. The refusal now names the function, on
+  PostgreSQL and MySQL alike. A function reached through a view, a trigger, an operator, a cast
+  or attribute notation (`t.f`) is still stopped only by the read-only transaction.
+- PostgreSQL: copied and exported SQL, export chunks and DDL text write a string holding a
+  backslash as `E'…'`, so it reads the same whatever `standard_conforming_strings` is. A query
+  whose text holds a backslash anywhere (even in `E'…'` or a comment) or `U&`, which that
+  setting may read differently, is not run again by datarig: its next pages, its row count and
+  its value counts are refused (page it with `LIMIT` and `OFFSET`), and an export of the whole
+  result asks first. This includes a table tab whose filter holds a backslash. Startup SQL
+  refuses such a statement. The safety checks read a national string (`N'…'`) with that
+  setting off as the server does.
+- On PostgreSQL, the explorer, completion, key, table structure, sort key and DDL reads now name
+  every operator, function and type with its schema, so an operator of another schema on the
+  session's `search_path` that matches their argument types more closely is no longer used in
+  place of the server's own.
+- On PostgreSQL, the statements datarig writes around a result or a table filter to count rows
+  or count each value of a column now name their functions and operators with their schema
+  (`pg_catalog.count(*)`), so they do the same whatever the session's `search_path` holds. The
+  count shown in the run log reads `pg_catalog.count(*)` accordingly.
+
 ## 0.41.1 (2026-11-16)
 
 Table tabs get a query bar with small popups for the conditions, the order, the columns and the rows. On PostgreSQL, date, time and interval text typed or pasted into the grid is now applied only in a form that reads the same under any `DateStyle`, `TimeZone` and `IntervalStyle` (ISO dates, timestamps with an explicit offset or `Z`, ISO 8601 intervals) and is otherwise refused with the reason; columns of composite types and of multiranges the database defines take no typed or pasted values from the grid for now (only NULL or DEFAULT); and a cancel the server does not confirm now shows a warning in Messages. MariaDB, now tested in CI, gets a series of fixes.
