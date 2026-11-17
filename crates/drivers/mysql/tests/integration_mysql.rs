@@ -841,6 +841,51 @@ async fn order_keys_are_read_without_a_metadata_lock() {
     assert_eq!(keys_of(ev), Err(DbError::NotFound));
 }
 
+/// The keys read of one table (a table tab opening) opens no other table of the server: each
+/// catalog table it reads is filtered by the names as literals. On MariaDB, which has no data
+/// dictionary, a catalog table filtered by another's row is read by opening every table; one so
+/// opened could also make the read wait on that table's lock. The tables are in a database of
+/// the test's own that only an account of its own may see, read by a metadata session of that
+/// account: the other tests of this binary run at the same time, and on MariaDB a session of
+/// theirs opens every table its account may see when it reads the catalog.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_table_keys_read_opens_no_other_table() {
+    let test = "the_table_keys_read_opens_no_other_table";
+    let Some((url, admin)) = urls(test) else { return };
+    let alone = WHOLE_SERVER_CATALOG.lock().await;
+    let db = format!("zz_it_keysother_{}", std::process::id());
+    let _db = Cleanup { url: admin.clone(), sql: format!("DROP DATABASE IF EXISTS {db}") };
+    let account = Account::make(&admin, "keysother", "BY 'pw'").await.unwrap();
+    let mut side_admin = side(&admin).await;
+    for sql in [
+        format!("CREATE DATABASE {db}"),
+        format!(
+            "CREATE TABLE {db}.target (id INT PRIMARY KEY, email VARCHAR(40) NOT NULL UNIQUE, nick VARCHAR(40) UNIQUE)"
+        ),
+        format!("CREATE TABLE {db}.other (id INT PRIMARY KEY, v VARCHAR(40))"),
+        format!("INSERT INTO {db}.other VALUES (1, 'row 1')"),
+        format!("GRANT SELECT ON {db}.* TO '{}'@'%'", account.name),
+    ] {
+        side_admin.query_drop(&sql).await.unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+    let mut g = Conn::start(&as_user(&url, &account.name, "pw"), SessionRole::Meta, false, "keysother");
+    // Its own start reads the catalog and the keys of what it may see, both tables too.
+    g.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
+    g.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    side_admin.query_drop(format!("FLUSH TABLES {db}.other")).await.unwrap();
+    assert!(!is_open(&mut side_admin, &db, "other").await, "flushed");
+    g.session.send(DbCommand::LoadTableKeys { id: 1, schema: db.clone(), table: "target".into() });
+    let DbEvent::TableKeys { result, .. } = g.wait(|e| matches!(e, DbEvent::TableKeys { id: 1, .. }), 10).await else {
+        unreachable!()
+    };
+    let keys = result.expect("the keys");
+    assert_eq!(keys.primary_key, ["id"]);
+    assert_eq!(keys.unique_not_null, vec![vec!["email".to_string()]], "a NOT NULL unique key only");
+    assert!(!is_open(&mut side_admin, &db, "other").await, "the keys read opened another table");
+    side_admin.disconnect().await.unwrap();
+    drop(alone);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn sessions_are_set_up_on_the_server_by_role_and_policy() {
     let Some((url, admin)) = urls("sessions_are_set_up_on_the_server_by_role_and_policy") else { return };
