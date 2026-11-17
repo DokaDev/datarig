@@ -614,6 +614,15 @@ impl Scan<'_> {
         }
     }
 
+    /// `type name = ty`: reported when `ty` is an engine enum.
+    fn type_alias(&mut self, name: &proc_macro2::Ident, ty: &syn::Type) {
+        if let syn::Type::Path(p) = ty
+            && let Some(e) = p.path.segments.last().and_then(|s| engine_enum(&s.ident.to_string()))
+        {
+            self.report(name.span(), Kind::Alias, format!("`{name}` is another name for {e}"));
+        }
+    }
+
     fn enter_impl(&mut self, ty: &syn::Type) {
         let name = match ty {
             syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
@@ -776,12 +785,21 @@ impl<'ast> Visit<'ast> for Scan<'_> {
     }
 
     fn visit_item_type(&mut self, t: &'ast syn::ItemType) {
-        if let syn::Type::Path(p) = &*t.ty
-            && let Some(e) = p.path.segments.last().and_then(|s| engine_enum(&s.ident.to_string()))
-        {
-            self.report(t.ident.span(), Kind::Alias, format!("`{}` is another name for {e}", t.ident));
-        }
+        self.type_alias(&t.ident, &t.ty);
         visit::visit_item_type(self, t);
+    }
+
+    // An associated type is another name too: `impl X for Y { type D = Dialect; }`.
+    fn visit_impl_item_type(&mut self, t: &'ast syn::ImplItemType) {
+        self.type_alias(&t.ident, &t.ty);
+        visit::visit_impl_item_type(self, t);
+    }
+
+    fn visit_trait_item_type(&mut self, t: &'ast syn::TraitItemType) {
+        if let Some((_, ty)) = &t.default {
+            self.type_alias(&t.ident, ty);
+        }
+        visit::visit_trait_item_type(self, t);
     }
 
     fn visit_path(&mut self, p: &'ast syn::Path) {
@@ -1229,7 +1247,7 @@ fn boolean_engine_tests_stay_within_budget() {
 fn every_violation_fixture_is_reported() {
     // (fixture, the path it is scanned as, what must be reported, with the line)
     type Case = (&'static str, &'static str, &'static [(Kind, usize)]);
-    let cases: [Case; 21] = [
+    let cases: [Case; 22] = [
         ("driver_engine_branch", "crates/drivers/mysql/src/session.rs", &[(Kind::Reference, 6), (Kind::Reference, 7)]),
         ("tui_if_let_dialect", "crates/tui/src/app/editor.rs", &[(Kind::BooleanTest, 6), (Kind::Reference, 6)]),
         ("catch_all_explain", "crates/core/src/sql/plan.rs", &[(Kind::CatchAll, 9)]),
@@ -1263,6 +1281,7 @@ fn every_violation_fixture_is_reported() {
         ("wrapped_eq", "crates/core/src/sql/values.rs", &[(Kind::BooleanTest, 5), (Kind::BooleanTest, 9)]),
         ("slice_catch_all", "crates/core/src/sql/values.rs", &[(Kind::CatchAll, 7), (Kind::CatchAll, 14)]),
         ("qualified_self", "crates/tui/src/app/tx.rs", &[(Kind::Alias, 5)]),
+        ("assoc_type", "crates/tui/src/app/tx.rs", &[(Kind::Alias, 9), (Kind::Alias, 13)]),
     ];
     let mut missed = Vec::new();
     for (name, path, expected) in cases {
