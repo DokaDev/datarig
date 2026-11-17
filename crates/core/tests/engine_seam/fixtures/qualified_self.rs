@@ -4,3 +4,9 @@ use datarig_core::sql::dialect::Dialect;
 fn on_postgres(d: Dialect) -> bool {
     d == <Dialect>::Postgres
 }
+
+impl Dialect {
+    fn is_postgres(&self) -> bool {
+        *self == <Self>::Postgres
+    }
+}

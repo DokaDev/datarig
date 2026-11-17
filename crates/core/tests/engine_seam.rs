@@ -774,7 +774,10 @@ impl<'ast> Visit<'ast> for Scan<'_> {
 
     // `<E>::V` names a variant past the scan's paths: reported like another name for `E`.
     fn visit_qself(&mut self, q: &'ast syn::QSelf) {
-        if let Some(e) = type_engine(&q.ty) {
+        // `<Self>::..` inside an `impl` of an engine enum is that enum.
+        let is_self = matches!(&*q.ty, syn::Type::Path(p) if p.path.is_ident("Self"));
+        let self_enum = || engine_enum(&self.selves.last().cloned().flatten()?);
+        if let Some(e) = if is_self { self_enum() } else { type_engine(&q.ty) } {
             self.report(q.lt_token.span, Kind::Alias, format!("`<{e}>::..` names {e} through a qualified path"));
         }
         visit::visit_qself(self, q);
@@ -1286,7 +1289,7 @@ fn every_violation_fixture_is_reported() {
         ("macro_variant_import", "crates/core/src/sql/values.rs", &[(Kind::Alias, 5), (Kind::Alias, 13)]),
         ("wrapped_eq", "crates/core/src/sql/values.rs", &[(Kind::BooleanTest, 5), (Kind::BooleanTest, 9)]),
         ("slice_catch_all", "crates/core/src/sql/values.rs", &[(Kind::CatchAll, 7), (Kind::CatchAll, 14)]),
-        ("qualified_self", "crates/tui/src/app/tx.rs", &[(Kind::Alias, 5)]),
+        ("qualified_self", "crates/tui/src/app/tx.rs", &[(Kind::Alias, 5), (Kind::Alias, 10)]),
         ("assoc_type", "crates/tui/src/app/tx.rs", &[(Kind::Alias, 9), (Kind::Alias, 13), (Kind::Alias, 20)]),
     ];
     let mut missed = Vec::new();
