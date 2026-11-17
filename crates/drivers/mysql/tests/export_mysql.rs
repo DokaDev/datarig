@@ -784,7 +784,7 @@ async fn checked(c: &mut Conn, sql: &str) -> Result<(), DbError> {
 /// not report: until a transaction starts or ends, a count, an export and the allowlist's
 /// question are refused, so they never use it up and the user's next transaction runs with it
 /// (at `SERIALIZABLE` its read takes shared locks). In every spelling, a procedure's or an
-/// executable comment's included, and for the access mode too; never after a `SET TRANSACTION`
+/// executable comment's included (but MySQL 8's version comment on MariaDB, which skips it), and for the access mode too; never after a `SET TRANSACTION`
 /// the server refused, nor after a `SET` that only reads the variable.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_next_transactions_own_settings_are_never_used_up() {
@@ -810,15 +810,27 @@ async fn the_next_transactions_own_settings_are_never_used_up() {
         "/*!80000 SET TRANSACTION ISOLATION LEVEL SERIALIZABLE */",
     ] {
         c.ok(set).await;
-        assert_eq!(counted(&mut c, &count).await, Err(DbError::NextTransactionSet), "{set}");
-        assert_eq!(checked(&mut c, &all).await, Err(DbError::NextTransactionSet), "{set}");
-        for guard in [ExportGuard::Repeatable, ExportGuard::Confirmed, ExportGuard::Keyset] {
-            let (export, mut rx) = c.export(&all, guard, 2, 3);
-            assert!(drain(&mut rx).await.1.is_empty());
-            assert_eq!(c.exported(export).await.0, Err(DbError::NextTransactionSet), "{set} {guard:?}");
+        // MariaDB skips MySQL's version comments: that spelling sets nothing there, and the app
+        // knows it, so its reads go on.
+        let skipped = set.starts_with("/*!80000") && mariadb(&admin).await;
+        if skipped {
+            assert_eq!(counted(&mut c, &count).await, Ok(10), "{set}");
+            assert!(checked(&mut c, &all).await.is_ok(), "{set}");
+            for guard in [ExportGuard::Repeatable, ExportGuard::Confirmed, ExportGuard::Keyset] {
+                let (export, mut rx) = c.export(&all, guard, 2, 3);
+                drain(&mut rx).await;
+                assert!(c.exported(export).await.0.is_ok(), "{set} {guard:?}");
+            }
+        } else {
+            assert_eq!(counted(&mut c, &count).await, Err(DbError::NextTransactionSet), "{set}");
+            assert_eq!(checked(&mut c, &all).await, Err(DbError::NextTransactionSet), "{set}");
+            for guard in [ExportGuard::Repeatable, ExportGuard::Confirmed, ExportGuard::Keyset] {
+                let (export, mut rx) = c.export(&all, guard, 2, 3);
+                assert!(drain(&mut rx).await.1.is_empty());
+                assert_eq!(c.exported(export).await.0, Err(DbError::NextTransactionSet), "{set} {guard:?}");
+            }
         }
-        if set.starts_with("/*!80000") && mariadb(&admin).await {
-            // MariaDB skips MySQL's version comments: the refusals above are the app's caution.
+        if skipped {
             on_mariadb(
                 "the_next_transactions_own_settings_are_never_used_up",
                 "the server skips /*!80000 */, so that spelling leaves the next transaction as it was",
