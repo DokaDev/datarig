@@ -525,16 +525,21 @@ impl Scan<'_> {
                         }
                         _ => None,
                     };
-                    if let Some(v) = path_after
-                        && let Some(e) = self.resolve(&s, &v)
+                    if let Some(v) = &path_after
+                        && let Some(e) = self.resolve(&s, v)
                     {
-                        self.reference(id.span(), e, &v);
-                        // What these tokens do with the variant cannot be read: count them as
-                        // a branch on it (move such code into the seam, as a `match`).
+                        self.reference(id.span(), e, v);
+                    }
+                    // What these tokens do with an engine enum cannot be read (a branch on it,
+                    // another name for it): count each mention as a branch on it. Such code
+                    // belongs in the seam, as a `match`.
+                    let self_enum = || engine_enum(&self.selves.last().cloned().flatten()?);
+                    let mentioned = if s == "Self" && path_after.is_some() { self_enum() } else { engine_enum(&s) };
+                    if let Some(e) = mentioned {
                         self.report(
                             id.span(),
                             Kind::BooleanTest,
-                            format!("{e}::{v} in macro tokens the scan cannot read as Rust"),
+                            format!("{e} in macro tokens the scan cannot read as Rust"),
                         );
                     }
                     // `E::*` or `E::{..}`: an import of the variants.
@@ -1196,7 +1201,7 @@ fn every_violation_fixture_is_reported() {
             "crates/core/src/sql/format.rs",
             &[(Kind::CatchAll, 8), (Kind::CatchAll, 17), (Kind::CatchAll, 23), (Kind::CatchAll, 30)],
         ),
-        ("macro_metavar", "crates/core/src/sql/values.rs", &[(Kind::BooleanTest, 7)]),
+        ("macro_metavar", "crates/core/src/sql/values.rs", &[(Kind::BooleanTest, 7), (Kind::BooleanTest, 13)]),
         ("macro_variant_import", "crates/core/src/sql/values.rs", &[(Kind::Alias, 5), (Kind::Alias, 13)]),
     ];
     let mut missed = Vec::new();

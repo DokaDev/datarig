@@ -7,3 +7,11 @@ macro_rules! is_postgres {
         matches!($d, Dialect::Postgres)
     };
 }
+
+macro_rules! is_postgres_too {
+    ($d:expr) => {{
+        type D = Dialect;
+        let d = $d;
+        matches!(d, D::Postgres)
+    }};
+}
