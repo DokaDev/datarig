@@ -17,15 +17,16 @@
 //!   every rule itself.
 //!
 //! - another name for an engine enum or one of its variants (`use E as A`, `use E::{self as A}`,
-//!   `use E::V as A`, `type A = E`), anywhere: an alias would hide the enum from this scan.
+//!   `type A = E`, and any import of variants: `use E::V`, `use E::*`), anywhere: a variant is
+//!   always named through its own enum, so the scan never has to resolve names.
 //!
-//! `Self::V` inside an `impl` of an engine enum, `use E::*` and `use E::{V}` are resolved first. The sites that exist today are counted per area against
+//! `Self::V` inside an `impl` of an engine enum is resolved. The sites that exist today are counted per area against
 //! `engine_seam/budget.toml`: a count may only go down, and a count that went down lowers its
 //! budget in the same change. The fixtures in `engine_seam/fixtures/` (read as text, never
 //! compiled) prove that the scan reports each kind of violation.
 
 use proc_macro2::{Span, TokenStream, TokenTree};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use syn::parse::{ParseStream, Parser};
@@ -249,93 +250,16 @@ fn line(span: Span) -> usize {
     span.start().line
 }
 
-/// The engine variants one file names without their enum (`use E::V`, `use E::*`). An engine
-/// enum is only ever named by its own name: another name for it is itself reported.
-#[derive(Default)]
-struct Names {
-    bare: HashMap<String, (&'static str, String)>,
-}
-
-/// The engine enum a name is, if any.
+/// The engine enum a name is, if any. An engine enum is only ever named by its own name, and
+/// its variants only through it: another name for either is itself reported.
 fn engine_enum(name: &str) -> Option<&'static str> {
     ENGINE_ENUMS.iter().find(|e| **e == name).copied()
-}
-
-impl Names {
-    fn new(file: &syn::File, variants: &Variants) -> Names {
-        let mut names = Names::default();
-        Collect { names: &mut names, variants }.visit_file(file);
-        names
-    }
-
-    fn bare_of(&self, name: &str) -> Option<(&'static str, String)> {
-        self.bare.get(name).cloned()
-    }
-}
-
-struct Collect<'a> {
-    names: &'a mut Names,
-    variants: &'a Variants,
-}
-
-impl Collect<'_> {
-    fn tree(&mut self, prefix: &mut Vec<String>, tree: &syn::UseTree) {
-        let owner = prefix.last().and_then(|p| engine_enum(p));
-        match tree {
-            syn::UseTree::Path(p) => {
-                prefix.push(p.ident.to_string());
-                self.tree(prefix, &p.tree);
-                prefix.pop();
-            }
-            syn::UseTree::Group(g) => g.items.iter().for_each(|t| self.tree(prefix, t)),
-            syn::UseTree::Name(syn::UseName { ident }) | syn::UseTree::Rename(syn::UseRename { ident, .. }) => {
-                let as_name = match tree {
-                    syn::UseTree::Rename(r) => r.rename.to_string(),
-                    _ => ident.to_string(),
-                };
-                let v = ident.to_string();
-                if let Some(e) = owner.filter(|e| self.variants[e].contains(&v)) {
-                    self.names.bare.insert(as_name, (e, v));
-                }
-            }
-            syn::UseTree::Glob(_) => {
-                if let Some(e) = owner {
-                    for v in &self.variants[e] {
-                        self.names.bare.insert(v.clone(), (e, v.clone()));
-                    }
-                }
-            }
-        }
-    }
-}
-
-impl<'ast> Visit<'ast> for Collect<'_> {
-    // Test-only code is not scanned, so its imports name nothing for the code that is.
-    fn visit_item(&mut self, item: &'ast syn::Item) {
-        if !is_test_only(item_attrs(item)) {
-            visit::visit_item(self, item);
-        }
-    }
-
-    fn visit_item_use(&mut self, u: &'ast syn::ItemUse) {
-        self.tree(&mut Vec::new(), &u.tree);
-    }
-
-    // Imports inside a macro body that parses as Rust count too.
-    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
-        if let Ok(stmts) = syn::Block::parse_within.parse2(mac.tokens.clone()) {
-            stmts.iter().for_each(|st| self.visit_stmt(st));
-        } else if let Ok(exprs) = Punctuated::<Expr, Token![,]>::parse_terminated.parse2(mac.tokens.clone()) {
-            exprs.iter().for_each(|e| self.visit_expr(e));
-        }
-    }
 }
 
 /// The scan of one file.
 struct Scan<'a> {
     rel: &'a str,
     seam: bool,
-    names: Names,
     variants: &'a Variants,
     /// The type of each enclosing `impl` (`None` inside a trait).
     selves: Vec<Option<String>>,
@@ -360,7 +284,7 @@ impl Scan<'_> {
         let segs: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
         match segs.as_slice() {
             [] => None,
-            [one] => self.names.bare_of(one),
+            [_] => None,
             [.., owner, last] => self.resolve(owner, last).map(|e| (e, last.clone())),
         }
     }
@@ -378,12 +302,6 @@ impl Scan<'_> {
                 }
                 visit::visit_path(self, p);
             }
-            fn visit_pat_ident(&mut self, p: &'ast syn::PatIdent) {
-                if self.found.is_none() && p.subpat.is_none() {
-                    self.found = self.scan.names.bare_of(&p.ident.to_string());
-                }
-                visit::visit_pat_ident(self, p);
-            }
         }
         let mut find = Find { scan: self, found: None };
         find.visit_pat(pat);
@@ -391,15 +309,14 @@ impl Scan<'_> {
     }
 
     /// Whether a pattern matches every value here: `_`, `..` or a binding (lower case; `None`
-    /// or an imported variant names one value).
+    /// names one value).
     fn wildcard(&self, pat: &Pat) -> Option<Span> {
         match pat {
             Pat::Wild(w) => Some(w.underscore_token.span),
             Pat::Rest(r) => Some(r.dot2_token.spans[0]),
             Pat::Ident(i) if i.subpat.is_none() => {
                 let name = i.ident.to_string();
-                (name.starts_with(|c: char| c.is_lowercase() || c == '_') && !self.names.bare.contains_key(&name))
-                    .then(|| i.ident.span())
+                name.starts_with(|c: char| c.is_lowercase() || c == '_').then(|| i.ident.span())
             }
             _ => None,
         }
@@ -412,7 +329,6 @@ impl Scan<'_> {
             Pat::Path(p) => self.variant(&p.path).is_some(),
             Pat::TupleStruct(t) => self.variant(&t.path).is_some(),
             Pat::Struct(st) => self.variant(&st.path).is_some(),
-            Pat::Ident(i) => i.subpat.is_none() && self.names.bare.contains_key(&i.ident.to_string()),
             _ => false,
         };
         if names_variant {
@@ -751,9 +667,7 @@ impl<'ast> Visit<'ast> for Scan<'_> {
             let owner = prefix.last().and_then(|p| engine_enum(p));
             if let syn::UseTree::Rename(r) = tree {
                 let renamed = if r.ident == "self" { prefix.last().cloned() } else { Some(r.ident.to_string()) };
-                let enum_alias = renamed.as_deref().and_then(engine_enum);
-                let variant_alias = owner.filter(|e| scan.variants[e].contains(&r.ident.to_string()));
-                if let Some(e) = enum_alias.or(variant_alias) {
+                if let Some(e) = renamed.as_deref().and_then(engine_enum) {
                     scan.report(r.rename.span(), Kind::Alias, format!("`{}` is another name for {e}", r.rename));
                 }
             }
@@ -773,11 +687,15 @@ impl<'ast> Visit<'ast> for Scan<'_> {
                 syn::UseTree::Name(syn::UseName { ident }) | syn::UseTree::Rename(syn::UseRename { ident, .. }) => {
                     if let Some(e) = owner.filter(|e| scan.variants[e].contains(&ident.to_string())) {
                         scan.reference(ident.span(), e, &ident.to_string());
+                        let what = format!("`use {e}::{ident}` names the variant without its enum");
+                        scan.report(ident.span(), Kind::Alias, what);
                     }
                 }
                 syn::UseTree::Glob(g) => {
                     if let Some(e) = owner {
                         scan.reference(g.star_token.spans[0], e, "*");
+                        let what = format!("`use {e}::*` names its variants without their enum");
+                        scan.report(g.star_token.spans[0], Kind::Alias, what);
                     }
                 }
             }
@@ -821,15 +739,6 @@ impl<'ast> Visit<'ast> for Scan<'_> {
             self.marker(f.sig.ident.span(), &format!("{owner}::of_driver"));
         }
         visit::visit_impl_item_fn(self, f);
-    }
-
-    fn visit_pat_ident(&mut self, p: &'ast syn::PatIdent) {
-        if p.subpat.is_none()
-            && let Some((e, v)) = self.names.bare_of(&p.ident.to_string())
-        {
-            self.reference(p.ident.span(), e, &v);
-        }
-        visit::visit_pat_ident(self, p);
     }
 
     fn visit_ident(&mut self, i: &'ast proc_macro2::Ident) {
@@ -1060,8 +969,7 @@ fn scan_file(rel: &str, src: &str, variants: &Variants) -> Vec<Finding> {
     if is_test_only(&file.attrs) {
         return Vec::new();
     }
-    let names = Names::new(&file, variants);
-    let mut scan = Scan { rel, seam: in_seam(rel), names, variants, selves: Vec::new(), findings: Vec::new() };
+    let mut scan = Scan { rel, seam: in_seam(rel), variants, selves: Vec::new(), findings: Vec::new() };
     scan.visit_file(&file);
     scan.findings
 }
@@ -1237,14 +1145,14 @@ fn boolean_engine_tests_stay_within_budget() {
 fn every_violation_fixture_is_reported() {
     // (fixture, the path it is scanned as, what must be reported, with the line)
     type Case = (&'static str, &'static str, &'static [(Kind, usize)]);
-    let cases: [Case; 17] = [
+    let cases: [Case; 18] = [
         ("driver_engine_branch", "crates/drivers/mysql/src/session.rs", &[(Kind::Reference, 6), (Kind::Reference, 7)]),
         ("tui_if_let_dialect", "crates/tui/src/app/editor.rs", &[(Kind::BooleanTest, 6), (Kind::Reference, 6)]),
         ("catch_all_explain", "crates/core/src/sql/plan.rs", &[(Kind::CatchAll, 9)]),
         ("matches_dialect", "crates/core/src/sql/split.rs", &[(Kind::BooleanTest, 6)]),
         ("self_eq_in_impl", "crates/core/src/sql/dialect.rs", &[(Kind::BooleanTest, 7)]),
         ("alias_use", "crates/core/src/sql/lexer.rs", &[(Kind::Alias, 2)]),
-        ("glob_use", "crates/drivers/postgres/src/connect.rs", &[(Kind::Reference, 3), (Kind::CatchAll, 9)]),
+        ("glob_use", "crates/drivers/postgres/src/connect.rs", &[(Kind::Reference, 3), (Kind::Alias, 3)]),
         ("trait_default_body", SPEC_FILE, &[(Kind::DefaultBody, 7)]),
         (
             "non_wildcard_engine_ref",
@@ -1267,6 +1175,7 @@ fn every_violation_fixture_is_reported() {
             &[(Kind::CatchAll, 8), (Kind::CatchAll, 17), (Kind::CatchAll, 23), (Kind::CatchAll, 30)],
         ),
         ("macro_metavar", "crates/core/src/sql/values.rs", &[(Kind::BooleanTest, 7)]),
+        ("macro_variant_import", "crates/core/src/sql/values.rs", &[(Kind::Alias, 5)]),
     ];
     let mut missed = Vec::new();
     for (name, path, expected) in cases {

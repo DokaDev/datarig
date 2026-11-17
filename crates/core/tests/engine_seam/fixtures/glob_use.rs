@@ -1,4 +1,4 @@
-//! A glob import of the variants: the bare names are still engine variants.
+//! A glob import of the variants is reported: variants are named through their enum.
 use datarig_core::engine::EngineId;
 use datarig_core::engine::EngineId::*;
 

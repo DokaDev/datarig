@@ -61,5 +61,6 @@
 # Trait items with a default body in the seam's rule traits: none, ever.
 [default_bodies]
 
-# Other names for an engine enum or variant (`use E as A`, `type A = E`): none, ever.
+# Other names for an engine enum or variant (`use E as A`, `type A = E`, `use E::V`, `use E::*`):
+# none, ever.
 [aliases]
