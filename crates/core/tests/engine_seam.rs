@@ -602,10 +602,35 @@ impl<'ast> Visit<'ast> for Scan<'_> {
         let test_only = match stmt {
             syn::Stmt::Local(l) => is_test_only(&l.attrs),
             syn::Stmt::Macro(m) => is_test_only(&m.attrs),
-            _ => false,
+            syn::Stmt::Expr(e, _) => is_test_only(expr_attrs(e)),
+            syn::Stmt::Item(_) => false,
         };
         if !test_only {
             visit::visit_stmt(self, stmt);
+        }
+    }
+
+    fn visit_expr(&mut self, e: &'ast Expr) {
+        if !is_test_only(expr_attrs(e)) {
+            visit::visit_expr(self, e);
+        }
+    }
+
+    fn visit_arm(&mut self, a: &'ast syn::Arm) {
+        if !is_test_only(&a.attrs) {
+            visit::visit_arm(self, a);
+        }
+    }
+
+    fn visit_field_value(&mut self, f: &'ast syn::FieldValue) {
+        if !is_test_only(&f.attrs) {
+            visit::visit_field_value(self, f);
+        }
+    }
+
+    fn visit_variant(&mut self, v: &'ast syn::Variant) {
+        if !is_test_only(&v.attrs) {
+            visit::visit_variant(self, v);
         }
     }
 
@@ -734,9 +759,10 @@ impl<'ast> Visit<'ast> for Scan<'_> {
     }
 
     fn visit_expr_match(&mut self, m: &'ast syn::ExprMatch) {
-        let named = m.arms.iter().find_map(|a| self.pat_variant(&a.pat));
+        let arms: Vec<&syn::Arm> = m.arms.iter().filter(|a| !is_test_only(&a.attrs)).collect();
+        let named = arms.iter().find_map(|a| self.pat_variant(&a.pat));
         if let Some((e, v)) = named
-            && let Some(arm) = m.arms.iter().find(|a| self.catch_all(&a.pat))
+            && let Some(arm) = arms.iter().find(|a| self.catch_all(&a.pat))
         {
             let span = match &arm.pat {
                 Pat::Wild(w) => w.underscore_token.span,
@@ -784,6 +810,50 @@ impl<'ast> Visit<'ast> for Scan<'_> {
             self.other_macro(mac);
         }
         visit::visit_macro(self, mac);
+    }
+}
+
+/// The attributes of an expression (`#[cfg(test)] { .. }` as a statement, for one).
+fn expr_attrs(e: &Expr) -> &[Attribute] {
+    match e {
+        Expr::Array(x) => &x.attrs,
+        Expr::Assign(x) => &x.attrs,
+        Expr::Async(x) => &x.attrs,
+        Expr::Await(x) => &x.attrs,
+        Expr::Binary(x) => &x.attrs,
+        Expr::Block(x) => &x.attrs,
+        Expr::Break(x) => &x.attrs,
+        Expr::Call(x) => &x.attrs,
+        Expr::Cast(x) => &x.attrs,
+        Expr::Closure(x) => &x.attrs,
+        Expr::Const(x) => &x.attrs,
+        Expr::Continue(x) => &x.attrs,
+        Expr::Field(x) => &x.attrs,
+        Expr::ForLoop(x) => &x.attrs,
+        Expr::Group(x) => &x.attrs,
+        Expr::If(x) => &x.attrs,
+        Expr::Index(x) => &x.attrs,
+        Expr::Let(x) => &x.attrs,
+        Expr::Lit(x) => &x.attrs,
+        Expr::Loop(x) => &x.attrs,
+        Expr::Macro(x) => &x.attrs,
+        Expr::Match(x) => &x.attrs,
+        Expr::MethodCall(x) => &x.attrs,
+        Expr::Paren(x) => &x.attrs,
+        Expr::Path(x) => &x.attrs,
+        Expr::Range(x) => &x.attrs,
+        Expr::Reference(x) => &x.attrs,
+        Expr::Repeat(x) => &x.attrs,
+        Expr::Return(x) => &x.attrs,
+        Expr::Struct(x) => &x.attrs,
+        Expr::Try(x) => &x.attrs,
+        Expr::TryBlock(x) => &x.attrs,
+        Expr::Tuple(x) => &x.attrs,
+        Expr::Unary(x) => &x.attrs,
+        Expr::Unsafe(x) => &x.attrs,
+        Expr::While(x) => &x.attrs,
+        Expr::Yield(x) => &x.attrs,
+        _ => &[],
     }
 }
 

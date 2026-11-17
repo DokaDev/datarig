@@ -52,3 +52,20 @@ fn formatter() -> sqlformat::Dialect {
 fn in_tests_only(d: D) -> bool {
     matches!(d, D::Postgres)
 }
+
+/// Test-only statements, arms and fields inside product code: not scanned.
+fn checked(d: D) -> u8 {
+    #[cfg(test)]
+    {
+        assert!(matches!(d, D::Postgres));
+    }
+    #[cfg(test)]
+    if d == D::Postgres {
+        return 0;
+    }
+    match d {
+        #[cfg(test)]
+        _ if matches!(d, D::Postgres) => 0,
+        _ => 1,
+    }
+}
