@@ -3733,14 +3733,22 @@ async fn the_metadata_session_reads_a_tables_structure() {
     assert_eq!(hidden.columns.len(), 12);
 }
 
-/// Whether table `name` of `shop` is in the server's table cache: a table some session opened
-/// since it was flushed (`SHOW OPEN TABLES`). Unlike a count of the tables a session opened, the
-/// server's own dictionary tables and other tests' tables do not count.
-async fn is_open(a: &mut mysql_async::Conn, name: &str) -> bool {
+/// Whether table `name` of database `db` is in the server's table cache: a table some session
+/// opened since it was flushed (`SHOW OPEN TABLES`). Unlike a count of the tables a session
+/// opened, the server's own dictionary tables and other tests' tables do not count; any session
+/// that may see the table can have opened it, though (on MariaDB a catalog read opens every
+/// table its account may see).
+async fn is_open(a: &mut mysql_async::Conn, db: &str, name: &str) -> bool {
     let open: Vec<(String, String, u64, u64)> =
-        a.query(format!("SHOW OPEN TABLES FROM shop LIKE '{name}'")).await.unwrap();
+        a.query(format!("SHOW OPEN TABLES FROM {db} LIKE '{name}'")).await.unwrap();
     open.iter().any(|(_, table, _, _)| table == name)
 }
+
+/// Held by the tests that read the catalog of every database as the server's administrator
+/// while it runs, and by those that need a table no session of another test opens: the tests of
+/// this binary run at the same time, and on MariaDB such a read opens every table of the server.
+/// Every other test's account sees only `shop` and `datarig`.
+static WHOLE_SERVER_CATALOG: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Reading a table's structure opens no other table, and on MySQL not the table either (step 1
 /// is a guard against that, not a proof: on the metadata session, which is read-only, a read of
@@ -3769,19 +3777,40 @@ async fn a_structure_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
     };
     // 1. A guard: a new table out of the server's cache, no statistics of it cached, and the
     //    read opens nothing (a read-only session did not open it for its estimates either, so
-    //    this does not tell whether they are read).
-    let fresh = numbers(&admin, "structopen", 10).await;
-    side_admin.query_drop(format!("FLUSH TABLES {}", fresh.q())).await.unwrap();
-    read(structure_of(&mut m, &t.name).await, 2);
-    assert!(!is_open(&mut side_admin, &fresh.name).await, "flushed");
-    read(structure_of(&mut m, &fresh.name).await, 2);
+    //    this does not tell whether they are read). The table and the one read are in a
+    //    database of the test's own that only an account of its own may see, read by a
+    //    metadata session of that account: the other tests of this binary run at the same time,
+    //    and on MariaDB a session of theirs opens every table its account may see when it
+    //    reads the catalog.
+    let alone = WHOLE_SERVER_CATALOG.lock().await;
+    let db = format!("zz_it_structopen_{}", std::process::id());
+    let _db = Cleanup { url: admin.clone(), sql: format!("DROP DATABASE IF EXISTS {db}") };
+    let account = Account::make(&admin, "structopen", "BY 'pw'").await.unwrap();
+    for sql in [
+        format!("CREATE DATABASE {db}"),
+        format!("CREATE TABLE {db}.target (id INT PRIMARY KEY, v VARCHAR(40))"),
+        format!("CREATE TABLE {db}.fresh (id INT PRIMARY KEY, v VARCHAR(40))"),
+        format!("INSERT INTO {db}.fresh VALUES (1, 'row 1'), (2, 'row 2')"),
+        format!("GRANT SELECT ON {db}.* TO '{}'@'%'", account.name),
+    ] {
+        side_admin.query_drop(&sql).await.unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+    let mut g = Conn::start(&as_user(&url, &account.name, "pw"), SessionRole::Meta, false, "structopen");
+    // Its own start reads the catalog and the keys of what it may see, the new table too.
+    g.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
+    g.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    side_admin.query_drop(format!("FLUSH TABLES {db}.fresh")).await.unwrap();
+    read(structure_in(&mut g, &db, "target").await, 2);
+    assert!(!is_open(&mut side_admin, &db, "fresh").await, "flushed");
+    read(structure_in(&mut g, &db, "fresh").await, 2);
     if mariadb(&admin).await {
         // MariaDB keeps a table's columns in its definition file only: the catalog opens the
         // table to list them (briefly; steps 2 and 3 show it waits for no lock and keeps none).
         not_on_mariadb(test, "reading a table's columns opens that table's definition there");
     } else {
-        assert!(!is_open(&mut side_admin, &fresh.name).await, "the table was not opened");
+        assert!(!is_open(&mut side_admin, &db, "fresh").await, "the table was not opened");
     }
+    drop(alone);
     // 2. Another session holds `LOCK TABLES … WRITE`, and writes while the read runs.
     let mut lock = side(&admin).await;
     lock.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
@@ -4117,6 +4146,8 @@ fn verbatim(r: Result<datarig_core::driver::ddl::DdlSource, DbError>) -> (String
 async fn names_with_braces_are_read_like_any_other() {
     let test = "names_with_braces_are_read_like_any_other";
     let Some((_, admin)) = urls(test) else { return };
+    // Its metadata session reads the catalog of every database.
+    let _alone = WHOLE_SERVER_CATALOG.lock().await;
     let database = format!("zz_it_{{table}}{{name}}_{}", std::process::id());
     let table = "t {schema} o'k";
     let _drop = Cleanup { url: admin.clone(), sql: format!("DROP DATABASE IF EXISTS `{database}`") };
@@ -4943,9 +4974,9 @@ async fn the_keys_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
         );
     }
     read(keys_of(&mut m).await, &t.name);
-    assert!(!opens_none || !is_open(&mut side_admin, &fresh.name).await, "flushed");
+    assert!(!opens_none || !is_open(&mut side_admin, "shop", &fresh.name).await, "flushed");
     read(keys_of(&mut m).await, &fresh.name);
-    assert!(!opens_none || !is_open(&mut side_admin, &fresh.name).await, "no table was opened");
+    assert!(!opens_none || !is_open(&mut side_admin, "shop", &fresh.name).await, "no table was opened");
     // 1. Another session holds `LOCK TABLES … WRITE`, and writes while the read runs.
     let mut lock = side(&admin).await;
     lock.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
