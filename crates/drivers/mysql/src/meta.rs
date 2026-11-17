@@ -50,6 +50,14 @@ fn read_error(e: &mysql_async::Error) -> DbError {
     }
 }
 
+/// The words of `COLUMNS.EXTRA` (`auto_increment`, `VIRTUAL GENERATED`, `INVISIBLE`, ...).
+/// MariaDB separates its attributes with a comma too (`VIRTUAL GENERATED, INVISIBLE`,
+/// `auto_increment, INVISIBLE`, `on update current_timestamp(), INVISIBLE`): no word keeps it.
+/// Every reader of `EXTRA` goes through this one.
+pub(crate) fn extra_words(extra: &str) -> impl Iterator<Item = &str> {
+    extra.split(|c: char| c.is_whitespace() || c == ',').filter(|w| !w.is_empty())
+}
+
 /// `template` with each `{key}` of `values` replaced by its text, in one pass over the template:
 /// a value put in is never read again for a key (a quoted name that holds `{table}` stays that
 /// name), unlike one `str::replace` after another. A `{` that starts no key stays as it is.

@@ -324,7 +324,7 @@ pub(crate) fn model(
         .into_iter()
         .map(|mut c| {
             c.generation = c.generation.map(sql);
-            let generated = c.extra.as_deref().is_some_and(|e| words(e).any(|w| w == "DEFAULT_GENERATED"));
+            let generated = c.extra.as_deref().is_some_and(|e| super::extra_words(e).any(|w| w == "DEFAULT_GENERATED"));
             if generated {
                 c.default = c.default.map(sql);
             }
@@ -528,7 +528,7 @@ pub(crate) fn model(
 /// Column `c`: how it is filled (generated, `AUTO_INCREMENT`, its default) from `EXTRA`.
 fn column(c: RawColumn, mariadb: bool, d: Dialect) -> StructureColumn {
     let extra = c.extra.unwrap_or_default();
-    let has = |word: &str| words(&extra).any(|w| w.eq_ignore_ascii_case(word));
+    let has = |word: &str| super::extra_words(&extra).any(|w| w.eq_ignore_ascii_case(word));
     // MySQL puts some expressions in parentheses (`(`qty` * 2)`), others not: the model has
     // them without, as a check's condition.
     let generation = unwrapped(&c.generation.unwrap_or_default()).to_string();
@@ -578,7 +578,9 @@ fn default_text(value: Option<String>, data_type: &str, extra: &str, mariadb: bo
     let value = match value {
         None => None,
         Some(v) if mariadb => (!v.eq_ignore_ascii_case("NULL")).then_some(v),
-        Some(v) if words(extra).any(|w| w == "DEFAULT_GENERATED") && !current(&v) => Some(format!("({v})")),
+        Some(v) if super::extra_words(extra).any(|w| w == "DEFAULT_GENERATED") && !current(&v) => {
+            Some(format!("({v})"))
+        }
         Some(v) if current(&v) && matches!(data_type, "timestamp" | "datetime") => Some(v),
         Some(v) if is_number_type(data_type) => Some(v),
         Some(v) if data_type == "bit" && v.starts_with("b'") => Some(v),
@@ -587,7 +589,7 @@ fn default_text(value: Option<String>, data_type: &str, extra: &str, mariadb: bo
     };
     // `EXTRA` lists other words too (`DEFAULT_GENERATED`, `INVISIBLE`): only the word after
     // `on update` is the timestamp an `UPDATE` sets.
-    let mut w = words(extra);
+    let mut w = super::extra_words(extra);
     let on_update = loop {
         match w.next() {
             Some(a) if a.eq_ignore_ascii_case("on") => {
@@ -611,13 +613,6 @@ fn is_number_type(t: &str) -> bool {
 
 fn is_binary_type(t: &str) -> bool {
     matches!(t, "binary" | "varbinary" | "tinyblob" | "blob" | "mediumblob" | "longblob")
-}
-
-/// The words of `EXTRA`.
-fn words(extra: &str) -> impl Iterator<Item = &str> {
-    // MariaDB separates its attributes with a comma too (`VIRTUAL GENERATED, INVISIBLE`,
-    // `on update current_timestamp(), INVISIBLE`): no word keeps it.
-    extra.split(|c: char| c.is_whitespace() || c == ',').filter(|w| !w.is_empty())
 }
 
 /// `REFERENTIAL_CONSTRAINTS.DELETE_RULE` / `UPDATE_RULE` of foreign key `name`: a rule the model

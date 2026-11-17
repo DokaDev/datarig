@@ -138,7 +138,7 @@ pub(crate) fn catalog(rows: Vec<RawRow>) -> Result<KeyCatalog, DbError> {
         }
         for (n, c) in &t.columns {
             // `VIRTUAL GENERATED`, `STORED GENERATED` (not `DEFAULT_GENERATED`, a default).
-            let word = |w: &str| c.extra.split_whitespace().any(|e| e.eq_ignore_ascii_case(w));
+            let word = |w: &str| super::extra_words(&c.extra).any(|e| e.eq_ignore_ascii_case(w));
             if word("GENERATED") {
                 out.set_generated(id, *n, Generated::Expression);
             } else if word("auto_increment") {

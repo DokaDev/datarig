@@ -7612,6 +7612,56 @@ fn first_cells(rows: &[Vec<Cell>]) -> Vec<Option<String>> {
     rows.iter().map(|r| r[0].clone()).collect()
 }
 
+/// A MariaDB table whose generated and `AUTO_INCREMENT` columns are `INVISIBLE` (`EXTRA` then
+/// says `VIRTUAL GENERATED, INVISIBLE`, `auto_increment, INVISIBLE`): the key metadata marks them
+/// generated and auto-numbered, as for visible ones, and the table's order keys say which are
+/// invisible.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_invisible_generated_column_is_marked_in_keys_and_order_keys() {
+    use datarig_core::driver::keys::Generated;
+    let test = "an_invisible_generated_column_is_marked_in_keys_and_order_keys";
+    let Some((url, admin)) = urls(test) else { return };
+    if !mariadb(&url).await {
+        only_on_mariadb(test);
+        return;
+    }
+    let t = Table::make(
+        &admin,
+        "invisible_generated",
+        &["CREATE TABLE {t} (id INT AUTO_INCREMENT PRIMARY KEY INVISIBLE, a INT, \
+           g INT AS (a + 1) VIRTUAL INVISIBLE, s INT AS (a + 2) STORED INVISIBLE)"],
+    )
+    .await;
+    let mut m = Conn::start(&url, SessionRole::Meta, false, test);
+    match m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await {
+        DbEvent::Keys(Ok(k)) => {
+            let table = k.find(Some("shop"), &t.name).expect("the table");
+            let generated: Vec<(&str, Generated)> =
+                table.columns.values().map(|c| (c.name.as_str(), c.generated)).collect();
+            assert_eq!(
+                generated,
+                [
+                    ("id", Generated::AutoIncrement),
+                    ("a", Generated::No),
+                    ("g", Generated::Expression),
+                    ("s", Generated::Expression),
+                ],
+                "invisible generated and auto-numbered columns are marked"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    m.session.send(DbCommand::LoadTableKeys { id: 1, schema: "shop".into(), table: t.name.clone() });
+    let DbEvent::TableKeys { result, .. } = m.wait(|e| matches!(e, DbEvent::TableKeys { id: 1, .. }), 10).await else {
+        unreachable!()
+    };
+    let keys = result.expect("the keys");
+    assert_eq!(keys.primary_key, ["id"]);
+    let invisible: Vec<(String, bool)> =
+        keys.columns.expect("the columns").into_iter().map(|c| (c.name, c.invisible)).collect();
+    assert_eq!(invisible, [("id".into(), true), ("a".into(), false), ("g".into(), true), ("s".into(), true)]);
+}
+
 /// A MariaDB table with `INVISIBLE` columns (one plain with a default, one generated), as the
 /// app reads it: the catalog and the database's listing have it as a table; the structure has
 /// every column with its type, default and generation, and the keys read says which columns

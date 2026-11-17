@@ -107,7 +107,7 @@ fn columns_of(rows: &[ColumnRow], primary: &[String], foreign: &[String]) -> Opt
         let (name, type_name) = (name.clone()?, type_name.clone()?);
         // `EXTRA` lists words such as `auto_increment`, `DEFAULT_GENERATED`, `INVISIBLE`.
         let invisible =
-            extra.as_deref().is_some_and(|e| e.split_whitespace().any(|w| w.eq_ignore_ascii_case("INVISIBLE")));
+            extra.as_deref().is_some_and(|e| super::extra_words(e).any(|w| w.eq_ignore_ascii_case("INVISIBLE")));
         let column = CatalogColumn {
             primary_key: primary.contains(&name),
             foreign_key: foreign.contains(&name),
