@@ -477,6 +477,13 @@ async fn open(cfg: &Config, tls: &PgTls, route: Option<&Route>) -> Result<Opened
     Ok((client, done_rx, conn.abort_handle(), params))
 }
 
+/// The major version in a server's `server_version` (18 for "18.7 (Debian 18.7-1)", 9 for
+/// "9.6.24", 18 for "18beta1"): its leading number; `None` when it does not start with one.
+pub(crate) fn server_major(version: &str) -> Option<u32> {
+    let digits = version.trim_start().split(|c: char| !c.is_ascii_digit()).next()?;
+    digits.parse().ok().filter(|&major| major > 0)
+}
+
 /// Drive a connection until it ends and send why.
 async fn watch<S, T>(conn: tokio_postgres::Connection<S, T>, done: oneshot::Sender<DbError>)
 where
@@ -565,6 +572,14 @@ async fn run_session(
     // transaction: one may set them for the request that reads a page and commits, which sets
     // them back before the server reports anything.
     let blind = per_tx.as_ref().is_some_and(|(each, _)| !each.is_empty());
+    // The server a query session reached, as it said when the session opened (a read-only
+    // policy lets the built-ins of its version run there): another session of the profile may
+    // reach another server.
+    if role == SessionRole::Query
+        && let Some(major) = params.get("server_version").and_then(|(v, _)| server_major(&v))
+    {
+        let _ = events.send(DbEvent::ServerMajor(major));
+    }
     let text = (role == SessionRole::Query).then(|| {
         let text = crate::query::Events::new(events.clone(), params, blind);
         text.report();

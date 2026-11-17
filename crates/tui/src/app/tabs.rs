@@ -258,6 +258,10 @@ pub struct TabSession {
     pub rerun_ok: bool,
     /// `session` was opened read-only (its profile's policy was read-only then).
     pub read_only: bool,
+    /// The major version of the server `session` reached, as it said when it opened
+    /// (`DbEvent::ServerMajor`), with the generation of the session that said it: it holds for
+    /// that session only.
+    pub server_major: Option<(u64, u32)>,
     /// The running statements include an `EXPLAIN ANALYZE` of more than a read: the driver
     /// rolls back what it ran, and the tab says so when the run ends well.
     pub explain_rolled_back: bool,
@@ -383,6 +387,7 @@ impl TabSession {
             lock_wait: None,
             idle: None,
             session_pooled: false,
+            server_major: None,
             paging: Paging::None,
             run: super::runlog::RunLog::default(),
             steps: std::collections::BTreeMap::new(),

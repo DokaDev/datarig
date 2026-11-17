@@ -193,9 +193,6 @@ pub(crate) async fn meta_loop(client: Client, mut link: Link, events: UnboundedS
     let _ = events.send(DbEvent::Catalog(catalog));
     // The server's version, read once per connection: key metadata needs PostgreSQL 12.
     let Ok(version) = link.guard(None, server_version(&client)).await else { return };
-    if let Ok(v) = version {
-        let _ = events.send(DbEvent::ServerVersion(v));
-    }
     let Ok(keys) = link.guard(None, load_keys(&client, &version)).await else { return };
     let _ = events.send(DbEvent::Keys(keys));
     loop {

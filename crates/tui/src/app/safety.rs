@@ -126,7 +126,7 @@ impl App {
 
 impl App {
     /// What a read-only policy lets run in tab `tab` of profile `pid` beyond PostgreSQL 17's
-    /// built-ins: the built-ins of the server's version, once its metadata session read it,
+    /// built-ins: the built-ins of the server's version, once the tab's own session said it,
     /// and what the environment allows (`read_only_functions`, `read_only_extensions`).
     /// Nothing more on a profile that is not PostgreSQL's.
     pub(super) fn read_only_context(&self, tab: TabId, pid: ProfileId) -> ReadOnlyContext {
@@ -136,11 +136,20 @@ impl App {
         }
         let rules = self.rules_of(pid);
         ReadOnlyContext {
-            server_major: self.conns.get(pid).and_then(|c| c.server_version).map(|v| v / 10_000),
+            server_major: self.tab_server_major(tab),
             extensions: self.extension_lookup(tab, pid, &rules.read_only_extensions),
             allowed: rules.read_only_functions,
             wanted_extensions: rules.read_only_extensions,
         }
+    }
+
+    /// The major version of the server tab `tab`'s current session reached, as that session
+    /// said; `None` with no session or before it says. Another session of the profile (its
+    /// metadata session, a reconnect) may reach another server: its word does not count.
+    fn tab_server_major(&self, tab: TabId) -> Option<u32> {
+        let t = self.tabs.get(tab)?;
+        let (generation, major) = t.exec.server_major?;
+        (generation == t.exec.generation && t.exec.session.is_some()).then_some(major)
     }
 
     /// What the catalog of tab `tab`'s database says of the extensions `wanted` that profile

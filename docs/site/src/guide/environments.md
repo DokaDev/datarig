@@ -174,9 +174,12 @@ no fields for them, and saving the form keeps them as written. MySQL profiles ig
   session, such as opening connections of its own or writing files: never allow such a
   function (`dblink_exec`, for example).
 
-The built-ins PostgreSQL 18 adds (`uuidv7`, `uuidv4`, …) run on read-only profiles connected
-to a PostgreSQL 18 server, once the connection has read the server's version; on an older
-server they are refused as any other function that is not a built-in.
+The built-ins PostgreSQL 18 adds (`uuidv7`, `uuidv4`, …) run on read-only profiles in a tab
+whose own session reached a PostgreSQL 18 server, as that server said when the session opened
+(behind a load balancer the explorer's connection may reach another server). Until the tab's
+session has opened, on an older server, and when the version cannot be read, they are refused
+as any other function that is not a built-in: run the statement again once the tab is
+connected.
 
 ## Paging and locks
 

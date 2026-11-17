@@ -346,6 +346,11 @@ impl App {
                 t.exec.state = SessionState::Ready;
                 None
             }
+            // The server this session reached (a read-only policy lets its newer built-ins run).
+            DbEvent::ServerMajor(major) => {
+                t.exec.server_major = Some((t.exec.generation, major));
+                None
+            }
             // Said by the profile's metadata session (a query session connects as it does).
             DbEvent::ReadOnlyPerTransaction | DbEvent::Encryption(_) => None,
             // Only a metadata or monitor session opens with it (a query session is refused).
@@ -579,7 +584,6 @@ impl App {
             | DbEvent::Objects { .. }
             | DbEvent::Catalog(_)
             | DbEvent::Keys(_)
-            | DbEvent::ServerVersion(_)
             | DbEvent::Structure { .. }
             | DbEvent::Ddl { .. }
             | DbEvent::TableKeys { .. }

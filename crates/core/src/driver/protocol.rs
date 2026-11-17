@@ -1425,10 +1425,11 @@ pub enum DbEvent {
     },
     /// The completion catalog (schemas, relations, columns), or why it could not be read.
     Catalog(Result<Catalog, DbError>),
-    /// The server's version as PostgreSQL gives it (`server_version_num`: 180000 for 18.0),
-    /// sent by a PostgreSQL metadata session once it read it after `Catalog`, once per
-    /// connection. Other drivers never send it.
-    ServerVersion(u32),
+    /// The server's major version (18 for 18.7), as the server of a PostgreSQL query session
+    /// said it when the session opened (`server_version`): sent right before `Encryption` and
+    /// `Connected`, only when the version reads as one. Other sessions and drivers never send
+    /// it.
+    ServerMajor(u32),
     /// The key constraints of the tables (`DbCommand::LoadKeys`), or why they could not be
     /// read. Sent once after `Catalog` when the session connects, and again on request.
     Keys(Result<KeyCatalog, DbError>),

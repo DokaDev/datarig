@@ -1717,6 +1717,26 @@ async fn each_session_is_one_connection_named_after_its_role() {
     assert!(matches!(ev, DbEvent::Failed { id: 2, cancelled: false, .. }), "{ev:?}");
 }
 
+/// A query session says its server's major version as the server said it at start-up, before
+/// `Connected`; a metadata session never says it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_query_session_says_its_servers_major_version() {
+    let Some(url) = pg_url("a_query_session_says_its_servers_major_version") else { return };
+    let cfg = ConnectionConfig { name: "it".into(), dsn: Some(url.clone()), ..ConnectionConfig::test_db() };
+    let open = |role| {
+        let (tx, rx) = unbounded_channel();
+        Conn { session: PgDriver.connect(&cfg, role, opts(role), tx), rx }
+    };
+    let mut q = open(SessionRole::Query);
+    let said = q.wait(|e| matches!(e, DbEvent::ServerMajor(_) | DbEvent::Connected), 10).await;
+    let DbEvent::ServerMajor(major) = said else { panic!("before Connected: {said:?}") };
+    q.wait(|e| matches!(e, DbEvent::Connected), 10).await;
+    assert_eq!(major, server_major(&mut q).await);
+    let mut meta = open(SessionRole::Meta);
+    let ev = meta.wait(|e| matches!(e, DbEvent::ServerMajor(_) | DbEvent::Keys(_)), 30).await;
+    assert!(matches!(ev, DbEvent::Keys(_)), "{ev:?}");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn portal_paging_fetches_500_rows_per_page() {
     let Some(url) = pg_url("portal_paging_fetches_500_rows_per_page") else { return };

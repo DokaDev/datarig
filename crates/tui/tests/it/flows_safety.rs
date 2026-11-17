@@ -871,35 +871,45 @@ fn a_read_only_environment_runs_the_functions_it_allows() {
     assert_eq!(status(&h), Some(refused_call_with("default", "zz_f", sql, hint)));
 }
 
-/// The built-ins PostgreSQL 18 adds run on read-only once the metadata session said the server
-/// is that new, and only for the connection that said it: never before, never on an older
-/// server, and not after a reconnect until the new connection says it again.
+/// The built-ins PostgreSQL 18 adds run on read-only once the tab's own session said its
+/// server is that new, and only for that session: never before, never on an older server, not
+/// on the word of the metadata session (it may reach another server), and not after the tab's
+/// session reconnects until the new session says it again.
 #[test]
-fn newer_built_ins_run_on_read_only_once_the_server_says_its_version() {
+fn newer_built_ins_run_on_read_only_once_the_tabs_session_says_its_version() {
     use datarig_tui::app::action::Action;
     let sql = "SELECT uuidv7()";
     let refused = refused_call("prod", "uuidv7", sql);
     let mut h = connected(Some("prod"), Lang::En);
-    assert!(run(&mut h, sql).is_empty(), "the version is not known yet");
+    h.meta_db("local-pg", DbEvent::ServerMajor(18));
+    assert!(run(&mut h, sql).is_empty(), "no session of the tab yet");
     assert_eq!(status(&h), Some(refused.clone()));
-    h.meta_db("local-pg", DbEvent::ServerVersion(170_004));
+    assert_eq!(run(&mut h, "SELECT 1"), ["SELECT 1"]);
+    done(&mut h);
+    h.meta_db("local-pg", DbEvent::ServerMajor(18));
+    assert!(run(&mut h, sql).is_empty(), "the metadata session's server is not the tab's");
+    assert_eq!(status(&h), Some(refused.clone()));
+    h.tab_db(0, DbEvent::ServerMajor(17));
     assert!(run(&mut h, sql).is_empty(), "PostgreSQL 17 does not have it");
     assert_eq!(status(&h), Some(refused.clone()));
-    h.meta_db("local-pg", DbEvent::ServerVersion(180_000));
+    h.tab_db(0, DbEvent::ServerMajor(18));
     assert_eq!(run(&mut h, sql), [sql]);
     done(&mut h);
-    // A reconnect forgets it; the old connection's word does not count.
-    let id = h.app.profiles[0].id;
-    let old = h.app.conns.get(id).unwrap().generation;
+    // A reconnect forgets it; the old session's word does not count.
+    let tab = h.app.tab().id;
+    let old = h.app.tab().exec.generation;
     h.app.dispatch(Action::ReconnectCurrent);
-    assert_ne!(h.app.conns.get(id).unwrap().generation, old, "a new connection");
-    assert!(run(&mut h, sql).is_empty(), "not known for this connection");
+    assert_ne!(h.app.tab().exec.generation, old, "a new session");
+    assert!(run(&mut h, sql).is_empty(), "not known for this session");
     assert_eq!(status(&h), Some(refused.clone()));
-    let ev = DbEvent::ServerVersion(180_000);
-    h.app.on_app_event(AppEvent::Db { target: datarig_tui::app::EventTarget::Meta(id), generation: old, ev });
-    assert!(run(&mut h, sql).is_empty(), "the old connection's version is dropped");
+    assert_eq!(run(&mut h, "SELECT 1"), ["SELECT 1"]);
+    done(&mut h);
+    let ev = DbEvent::ServerMajor(18);
+    h.app.on_app_event(AppEvent::Db { target: datarig_tui::app::EventTarget::Tab(tab), generation: old, ev });
+    h.meta_db("local-pg", DbEvent::ServerMajor(18));
+    assert!(run(&mut h, sql).is_empty(), "the old session's version is dropped");
     assert_eq!(status(&h), Some(refused));
-    h.meta_db("local-pg", DbEvent::ServerVersion(180_000));
+    h.tab_db(0, DbEvent::ServerMajor(18));
     assert_eq!(run(&mut h, sql), [sql]);
 }
 

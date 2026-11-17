@@ -175,9 +175,6 @@ pub struct ProfileConn {
     /// (`DbEvent::Edit`); `None` until one says, when the driver's (`Capabilities::edit`)
     /// holds.
     pub edit: Option<Option<datarig_core::driver::EditFormat>>,
-    /// The current attempt's server version (`DbEvent::ServerVersion`, `server_version_num`),
-    /// as its PostgreSQL metadata session read it; `None` until it says, and always for MySQL.
-    pub server_version: Option<u32>,
     /// How the current attempt's metadata session's traffic goes (`DbEvent::Encryption`, sent
     /// right before `Connected`); `None` until it says.
     pub encryption: Option<datarig_core::tls::Encryption>,
@@ -227,7 +224,6 @@ impl ProfileConn {
             explain: None,
             edit: None,
             encryption: None,
-            server_version: None,
             read_only_unconfirmed: None,
             used: None,
             idle_closed: None,
@@ -328,7 +324,6 @@ impl ConnectionManager {
         let c = self.entry(id);
         c.generation = generation;
         c.encryption = None;
-        c.server_version = None;
         c.read_only_unconfirmed = None;
         c.explain = None;
         c.edit = None;
