@@ -10,8 +10,8 @@ guide/connections.html Connection profiles in datarig: host, port, user, databas
 guide/ssh-tunnels.html Reach a database through an SSH bastion host: datarig opens the tunnel itself, with a key, a password, the SSH agent or one-time codes, host key checks and tunnel presets.
 guide/tls.html Encrypt database connections with TLS (SSL): SSL modes, CA files, client certificates and keys, and what each connection reports.
 guide/poolers.html Use datarig behind a connection pooler, transaction pooling included: how a pooler is detected and what changes behind one.
-guide/environments.html How datarig keeps a database safe: statements that may do harm ask first, read-only profiles refuse writes, and paging leaves no lock or transaction open.
-guide/manual-commit.html Manual commit in datarig: changes wait in an open transaction until you commit or roll back; datarig never commits on its own.
+guide/environments.html How datarig keeps a database safe: statements that may do harm ask first, read-only profiles refuse writes, and paging leaves no lock or transaction open unless you ask for it.
+guide/manual-commit.html Manual commit in datarig: changes wait in an open transaction until you commit or roll back, and datarig never sends a COMMIT on its own.
 guide/startup-sql.html Startup SQL: named lists of settings that each query session of a connection profile starts with, such as timeouts and memory settings.
 guide/editor.html The SQL editor of datarig: vim keys, syntax highlighting, completion of schemas, tables and columns, a formatter, saved queries and your own editor.
 guide/results.html The results grid: paged results, search, an inspector for rows and cells, copying rows, and editing and transactions from the grid.
@@ -19,7 +19,7 @@ guide/filtering.html Filter and sort a table on the server from a query bar: WHE
 guide/export.html Export query results to a file: formats and their options, which rows are exported, and what happens when an export stops.
 guide/charts.html Draw query results as bar or line charts in the terminal, from the rows already fetched, without running anything again.
 guide/editing.html Edit table data in the grid: change cells, add and delete rows, paste ranges, then read the exact SQL statements before they are applied.
-guide/plans.html Read a query plan: EXPLAIN and EXPLAIN ANALYZE as a tree with each node's share of the time, a summary, and icicle, flame graph and treemap views.
+guide/plans.html Read a query plan: EXPLAIN and EXPLAIN ANALYZE as a tree with each node's share of the cost or time, a summary, and icicle, flame graph and treemap views.
 guide/monitoring.html Monitor a database server from the terminal: load, sessions, locks and replication, and cancel or end a session.
 guide/explorer.html The schema explorer: connections, databases, schemas and tables, row and size estimates, a table's structure and its DDL.
 guide/postgresql.html PostgreSQL in datarig: supported versions, connecting through SSH, TLS and poolers, read-only profiles, query plans and the server monitor.
