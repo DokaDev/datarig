@@ -351,6 +351,13 @@ impl Scan<'_> {
                     here.pop();
                 }
             }
+            Pat::Slice(sl) => {
+                for (at, e) in indices(&sl.elems) {
+                    here.push(Step::Part("[]".to_string(), at));
+                    self.variant_positions(e, here, out);
+                    here.pop();
+                }
+            }
             Pat::Struct(st) => {
                 for f in &st.fields {
                     if let syn::Member::Named(name) = &f.member {
@@ -360,7 +367,13 @@ impl Scan<'_> {
                     }
                 }
             }
-            _ => {}
+            // Any other pattern that names a variant inside: the variant stands here, so a
+            // wildcard here is a catch-all.
+            _ => {
+                if self.pat_variant(pat).is_some() {
+                    out.push(here.clone());
+                }
+            }
         }
     }
 
@@ -392,6 +405,7 @@ impl Scan<'_> {
         };
         match (step, pat) {
             (Step::Part(name, i), Pat::Tuple(t)) if name.is_empty() => part(&t.elems, i).ok().flatten(),
+            (Step::Part(name, i), Pat::Slice(sl)) if name == "[]" => part(&sl.elems, i).ok().flatten(),
             (Step::Part(name, i), Pat::TupleStruct(t)) if *name == last_name(&t.path) => {
                 part(&t.elems, i).ok().flatten()
             }
@@ -420,6 +434,32 @@ impl Scan<'_> {
                     self.found = self.scan.variant(p);
                 }
                 visit::visit_path(self, p);
+            }
+            // Test-only code inside the expression is not scanned here either.
+            fn visit_expr(&mut self, e: &'ast Expr) {
+                if !is_test_only(expr_attrs(e)) {
+                    visit::visit_expr(self, e);
+                }
+            }
+            fn visit_stmt(&mut self, st: &'ast syn::Stmt) {
+                if !stmt_is_test_only(st) {
+                    visit::visit_stmt(self, st);
+                }
+            }
+            fn visit_item(&mut self, i: &'ast syn::Item) {
+                if !is_test_only(item_attrs(i)) {
+                    visit::visit_item(self, i);
+                }
+            }
+            fn visit_arm(&mut self, a: &'ast syn::Arm) {
+                if !is_test_only(&a.attrs) {
+                    visit::visit_arm(self, a);
+                }
+            }
+            fn visit_field_value(&mut self, f: &'ast syn::FieldValue) {
+                if !is_test_only(&f.attrs) {
+                    visit::visit_field_value(self, f);
+                }
             }
         }
         let mut find = Find { scan: self, found: None };
@@ -632,13 +672,7 @@ impl<'ast> Visit<'ast> for Scan<'_> {
     }
 
     fn visit_stmt(&mut self, stmt: &'ast syn::Stmt) {
-        let test_only = match stmt {
-            syn::Stmt::Local(l) => is_test_only(&l.attrs),
-            syn::Stmt::Macro(m) => is_test_only(&m.attrs),
-            syn::Stmt::Expr(e, _) => is_test_only(expr_attrs(e)),
-            syn::Stmt::Item(_) => false,
-        };
-        if !test_only {
+        if !stmt_is_test_only(stmt) {
             visit::visit_stmt(self, stmt);
         }
     }
@@ -914,6 +948,15 @@ fn peel(pat: &Pat) -> &Pat {
     }
 }
 
+fn stmt_is_test_only(stmt: &syn::Stmt) -> bool {
+    match stmt {
+        syn::Stmt::Local(l) => is_test_only(&l.attrs),
+        syn::Stmt::Macro(m) => is_test_only(&m.attrs),
+        syn::Stmt::Expr(e, _) => is_test_only(expr_attrs(e)),
+        syn::Stmt::Item(i) => is_test_only(item_attrs(i)),
+    }
+}
+
 fn item_attrs(item: &syn::Item) -> &[Attribute] {
     match item {
         syn::Item::Const(i) => &i.attrs,
@@ -1176,7 +1219,7 @@ fn boolean_engine_tests_stay_within_budget() {
 fn every_violation_fixture_is_reported() {
     // (fixture, the path it is scanned as, what must be reported, with the line)
     type Case = (&'static str, &'static str, &'static [(Kind, usize)]);
-    let cases: [Case; 19] = [
+    let cases: [Case; 20] = [
         ("driver_engine_branch", "crates/drivers/mysql/src/session.rs", &[(Kind::Reference, 6), (Kind::Reference, 7)]),
         ("tui_if_let_dialect", "crates/tui/src/app/editor.rs", &[(Kind::BooleanTest, 6), (Kind::Reference, 6)]),
         ("catch_all_explain", "crates/core/src/sql/plan.rs", &[(Kind::CatchAll, 9)]),
@@ -1208,6 +1251,7 @@ fn every_violation_fixture_is_reported() {
         ("macro_metavar", "crates/core/src/sql/values.rs", &[(Kind::BooleanTest, 7), (Kind::BooleanTest, 13)]),
         ("macro_variant_import", "crates/core/src/sql/values.rs", &[(Kind::Alias, 5), (Kind::Alias, 13)]),
         ("wrapped_eq", "crates/core/src/sql/values.rs", &[(Kind::BooleanTest, 5), (Kind::BooleanTest, 9)]),
+        ("slice_catch_all", "crates/core/src/sql/values.rs", &[(Kind::CatchAll, 7), (Kind::CatchAll, 14)]),
     ];
     let mut missed = Vec::new();
     for (name, path, expected) in cases {

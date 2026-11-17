@@ -87,3 +87,14 @@ trait Probed {
         matches!(d, Dialect::Postgres)
     }
 }
+
+/// A comparison whose only engine variant is test-only: not a test of it.
+fn one(n: usize) -> bool {
+    n == {
+        #[cfg(test)]
+        {
+            let _ = Dialect::Postgres;
+        }
+        1
+    }
+}
