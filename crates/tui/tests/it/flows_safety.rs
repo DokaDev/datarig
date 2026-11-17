@@ -747,51 +747,66 @@ fn prepared_names_count_only_once_the_server_confirms_them() {
 /// A function can re-prepare a name on the server (plpgsql `EXECUTE 'DEALLOCATE
 /// pf'; EXECUTE 'PREPARE pf AS DELETE …'`), so after a statement that calls a function that is
 /// not a known built-in, whether it succeeded or failed, no name is known: the next `EXECUTE`
-/// asks under the default policy and is refused under a read-only one. Built-ins keep them.
+/// asks. Built-ins keep them. A read-only policy refuses such a call before sending it, naming
+/// the function, so the names stay known there.
 #[test]
 fn a_function_call_forgets_the_prepared_names() {
     use datarig_core::driver::DbError;
-    for policy in [None, Some("prod")] {
-        let mut h = connected(policy, Lang::En);
-        let refused = |h: &mut Harness, sql: &str| {
-            if policy.is_some() {
-                assert!(
-                    matches!(status(h), Some(Msg::SafetyReadOnlyBlocked { sql: s, .. }) if s == "EXECUTE pf"),
-                    "{sql}"
-                );
-            } else {
-                assert_eq!(asked(h), Some(vec![sql.lines().count() - 1]), "{sql}");
-                assert!(h.screen(160, 45).contains("runs a prepared statement not known to this tab"), "{sql}");
-                h.keys("n");
-            }
-        };
-        let prepare = |h: &mut Harness| {
-            assert_eq!(run(h, "PREPARE pf AS SELECT 1"), ["PREPARE pf AS SELECT 1"]);
-            done(h);
-            assert!(h.app.tab().exec.prepared.knows("pf"));
-        };
-        prepare(&mut h);
-        assert_eq!(run(&mut h, "SELECT zz_swap()"), ["SELECT zz_swap()"]);
-        done(&mut h);
-        assert!(run(&mut h, "EXECUTE pf").is_empty(), "{policy:?}: nothing is sent");
-        refused(&mut h, "EXECUTE pf");
-        // The call failed: it may have swapped the name before it did.
-        prepare(&mut h);
-        assert_eq!(run(&mut h, "SELECT public.zz_swap()"), ["SELECT public.zz_swap()"]);
-        let id = h.app.tab().exec.query_id;
-        h.tab_db(0, DbEvent::Failed { id, error: DbError::Server("ERROR: no".into()), cancelled: false });
-        assert!(run(&mut h, "EXECUTE pf").is_empty(), "{policy:?}: nothing is sent");
-        refused(&mut h, "EXECUTE pf");
-        // In one run, before anything is sent.
-        prepare(&mut h);
-        run_all(&mut h, "SELECT zz_swap();\nEXECUTE pf");
-        assert!(executes(&mut h).is_empty(), "{policy:?}");
-        refused(&mut h, "SELECT zz_swap();\nEXECUTE pf");
-        // A built-in keeps the names.
-        assert_eq!(run(&mut h, "SELECT lower('A'), now(), count(*) FROM shop.users").len(), 1);
-        done(&mut h);
-        assert_eq!(run(&mut h, "EXECUTE pf"), ["EXECUTE pf"], "{policy:?}");
-        done(&mut h);
+    let mut h = connected(None, Lang::En);
+    let asks = |h: &mut Harness, sql: &str| {
+        assert_eq!(asked(h), Some(vec![sql.lines().count() - 1]), "{sql}");
+        assert!(h.screen(160, 45).contains("runs a prepared statement not known to this tab"), "{sql}");
+        h.keys("n");
+    };
+    let prepare = |h: &mut Harness| {
+        assert_eq!(run(h, "PREPARE pf AS SELECT 1"), ["PREPARE pf AS SELECT 1"]);
+        done(h);
+        assert!(h.app.tab().exec.prepared.knows("pf"));
+    };
+    prepare(&mut h);
+    assert_eq!(run(&mut h, "SELECT zz_swap()"), ["SELECT zz_swap()"]);
+    done(&mut h);
+    assert!(run(&mut h, "EXECUTE pf").is_empty(), "nothing is sent");
+    asks(&mut h, "EXECUTE pf");
+    // The call failed: it may have swapped the name before it did.
+    prepare(&mut h);
+    assert_eq!(run(&mut h, "SELECT public.zz_swap()"), ["SELECT public.zz_swap()"]);
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(0, DbEvent::Failed { id, error: DbError::Server("ERROR: no".into()), cancelled: false });
+    assert!(run(&mut h, "EXECUTE pf").is_empty(), "nothing is sent");
+    asks(&mut h, "EXECUTE pf");
+    // In one run, before anything is sent.
+    prepare(&mut h);
+    run_all(&mut h, "SELECT zz_swap();\nEXECUTE pf");
+    assert!(executes(&mut h).is_empty());
+    asks(&mut h, "SELECT zz_swap();\nEXECUTE pf");
+    // A built-in keeps the names.
+    assert_eq!(run(&mut h, "SELECT lower('A'), now(), count(*) FROM shop.users").len(), 1);
+    done(&mut h);
+    assert_eq!(run(&mut h, "EXECUTE pf"), ["EXECUTE pf"]);
+    done(&mut h);
+
+    let mut h = connected(Some("prod"), Lang::En);
+    prepare(&mut h);
+    for (sql, function) in [("SELECT zz_swap()", "zz_swap"), ("SELECT public.zz_swap()", "public.zz_swap")] {
+        assert!(run(&mut h, sql).is_empty(), "{sql}: nothing is sent");
+        assert_eq!(status(&h), Some(refused_call("prod", function, sql)), "{sql}");
+    }
+    assert_eq!(run(&mut h, "SELECT lower('A'), now(), count(*) FROM shop.users").len(), 1);
+    done(&mut h);
+    assert_eq!(run(&mut h, "EXECUTE pf"), ["EXECUTE pf"], "the names stay known");
+    done(&mut h);
+}
+
+/// What a read-only `environment` says about `sql`, which calls `function`, not a built-in.
+fn refused_call(environment: &str, function: &str, sql: &str) -> Msg {
+    Msg::SafetyReadOnlyBlocked {
+        environment: environment.into(),
+        what: format!(
+            "this statement calls {function}, which is not a built-in, and a read-only profile refuses \
+             functions whose effects cannot be checked"
+        ),
+        sql: datarig_tui::app::runlog::excerpt(sql, 60),
     }
 }
 
@@ -826,8 +841,8 @@ fn copy_with_a_program_or_a_server_file_asks_or_is_refused() {
 }
 
 /// `ts_rewrite(tsquery, text)` runs the query it is given, which may re-prepare a
-/// name: after it no name is known, so the next `EXECUTE` asks under the default policy and is
-/// refused under a read-only one, with nothing sent.
+/// name: after it no name is known, so the next `EXECUTE` asks, with nothing sent. A read-only
+/// policy refuses the call itself when that query calls a function that is not a built-in.
 #[test]
 fn a_builtin_that_runs_the_query_it_is_given_forgets_the_prepared_names() {
     let swap = "SELECT ts_rewrite('a'::tsquery, 'SELECT ''a''::tsquery, ''b''::tsquery WHERE zz_swap() = 1')";
@@ -835,12 +850,16 @@ fn a_builtin_that_runs_the_query_it_is_given_forgets_the_prepared_names() {
         let mut h = connected(policy, Lang::En);
         assert_eq!(run(&mut h, "PREPARE pf AS SELECT 1"), ["PREPARE pf AS SELECT 1"]);
         done(&mut h);
-        assert_eq!(run(&mut h, swap), [swap], "{policy:?}: a read, sent at once");
-        done(&mut h);
-        assert!(run(&mut h, "EXECUTE pf").is_empty(), "{policy:?}: nothing is sent");
         if policy.is_some() {
-            assert!(matches!(status(&h), Some(Msg::SafetyReadOnlyBlocked { sql, .. }) if sql == "EXECUTE pf"));
+            // The query given as text calls a function that is not a built-in: refused, and
+            // the names stay known.
+            assert!(run(&mut h, swap).is_empty(), "nothing is sent");
+            assert_eq!(status(&h), Some(refused_call("prod", "zz_swap", swap)));
+            assert_eq!(run(&mut h, "EXECUTE pf"), ["EXECUTE pf"]);
         } else {
+            assert_eq!(run(&mut h, swap), [swap], "a read, sent at once");
+            done(&mut h);
+            assert!(run(&mut h, "EXECUTE pf").is_empty(), "nothing is sent");
             assert_eq!(asked(&h), Some(vec![0]));
             assert!(h.screen(160, 45).contains("runs a prepared statement not known to this tab"));
             h.keys("n");

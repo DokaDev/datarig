@@ -1655,19 +1655,22 @@ async fn a_text_explain_viewed_as_a_plan_keeps_its_options() {
     assert_eq!(obs.column(&format!("SELECT count(*) FROM {table}")).await, ["3"], "rolled back");
 }
 
-/// A read-only policy: the app refuses a DELETE and sends nothing; a writing function called
-/// from a SELECT reaches the server, which refuses it; nothing changes.
+/// A read-only policy: the app refuses a DELETE and a call of a function that is not a
+/// built-in, and sends nothing; a writing function reached through a view, which the app does
+/// not inspect, reaches the server, which refuses it; nothing changes.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_read_only_policy_holds_in_the_app_and_on_the_server() {
     let Some(url) = pg_url("a_read_only_policy_holds_in_the_app_and_on_the_server") else { return };
     let tag = format!("ro{}", std::process::id());
     let table = format!("public.it_ro_{tag}");
     let func = format!("public.it_ro_write_{tag}");
+    let view = format!("public.zz_it_ro_{tag}");
     let _guard = pg_clean::TableGuard::new(&url, &[&table]);
+    // `CASCADE`: the view that calls it goes with it.
     struct DropFunction(String, String);
     impl Drop for DropFunction {
         fn drop(&mut self) {
-            let _ = pg_clean::run_fresh(&self.0, &format!("DROP FUNCTION IF EXISTS {}()", self.1));
+            let _ = pg_clean::run_fresh(&self.0, &format!("DROP FUNCTION IF EXISTS {}() CASCADE", self.1));
         }
     }
     let _func = DropFunction(url.clone(), func.clone());
@@ -1681,7 +1684,16 @@ async fn a_read_only_policy_holds_in_the_app_and_on_the_server() {
     app.run(vec![format!("DELETE FROM {table} WHERE x = 1")]);
     assert!(app.tab().exec.running.is_none() && app.tab().exec.session.is_none(), "nothing was sent");
     assert!(matches!(app.status.as_ref().map(|n| &n.msg), Some(datarig_i18n::Msg::SafetyReadOnlyBlocked { .. })));
-    run_and_wait(&mut app, &mut rx, &format!("SELECT {func}()"), None).await;
+    app.run(vec![format!("SELECT {func}()")]);
+    assert!(app.tab().exec.running.is_none(), "refused before it is sent");
+    assert!(
+        matches!(app.status.as_ref().map(|n| &n.msg),
+            Some(datarig_i18n::Msg::SafetyReadOnlyBlocked { what, .. }) if what.contains(&func)),
+        "names the function: {:?}",
+        app.status
+    );
+    pg_clean::run_fresh(&url, &format!("CREATE VIEW {view} AS SELECT {func}() AS x")).unwrap();
+    run_and_wait(&mut app, &mut rx, &format!("SELECT * FROM {view}"), None).await;
     let error = match &app.tab().results {
         datarig_tui::app::Results::Error(e) => e.clone(),
         other => panic!("the server refuses it: {:?}", std::mem::discriminant(other)),
@@ -1694,7 +1706,8 @@ async fn a_read_only_policy_holds_in_the_app_and_on_the_server() {
 
 /// Adversarial probes on a real server: `EXPLAIN ("analyze") DELETE` asks and keeps the rows,
 /// and a read-only policy holds after a function turned the session's read-only default off:
-/// the app refuses the plain `set_config()`, and every transaction stays read-only.
+/// the app refuses the plain `set_config()` and a direct call of the function, and every
+/// transaction stays read-only when functions are reached through views it does not inspect.
 #[tokio::test(flavor = "multi_thread")]
 async fn adversarial_probes_on_a_real_server() {
     let Some(url) = pg_url("adversarial_probes_on_a_real_server") else { return };
@@ -1702,11 +1715,13 @@ async fn adversarial_probes_on_a_real_server() {
     let table = format!("public.it_vp_{tag}");
     let write = format!("public.it_vp_write_{tag}");
     let off = format!("public.it_vp_off_{tag}");
+    let (write_view, off_view) = (format!("public.zz_it_vp_write_{tag}"), format!("public.zz_it_vp_off_{tag}"));
     let _guard = pg_clean::TableGuard::new(&url, &[&table]);
+    // `CASCADE`: the view that calls it goes with it.
     struct DropFunction(String, String);
     impl Drop for DropFunction {
         fn drop(&mut self) {
-            let _ = pg_clean::run_fresh(&self.0, &format!("DROP FUNCTION IF EXISTS {}()", self.1));
+            let _ = pg_clean::run_fresh(&self.0, &format!("DROP FUNCTION IF EXISTS {}() CASCADE", self.1));
         }
     }
     let _fns = [&write, &off].map(|f| DropFunction(url.clone(), f.clone()));
@@ -1717,6 +1732,9 @@ async fn adversarial_probes_on_a_real_server() {
     let body = "SELECT set_config('default_transaction_read_only', 'off', false)";
     pg_clean::run_fresh(&url, &format!("CREATE FUNCTION {off}() RETURNS text LANGUAGE sql VOLATILE AS $${body}$$"))
         .unwrap();
+    for (view, f) in [(&write_view, &write), (&off_view, &off)] {
+        pg_clean::run_fresh(&url, &format!("CREATE VIEW {view} AS SELECT {f}() AS x")).unwrap();
+    }
     let mut obs = Observer::open(&url).await;
     let count = format!("SELECT count(*) FROM {table}");
     // (1) EXPLAIN with a quoted analyze option runs the DELETE: it asks, and the driver rolls it
@@ -1732,11 +1750,14 @@ async fn adversarial_probes_on_a_real_server() {
     app.run(vec!["SELECT set_config('default_transaction_read_only','off',false)".into()]);
     assert!(app.tab().exec.running.is_none(), "refused before it is sent");
     assert!(matches!(app.status.as_ref().map(|n| &n.msg), Some(datarig_i18n::Msg::SafetyReadOnlyBlocked { .. })));
-    // What the app cannot see: a function turns the default off.
-    run_and_wait(&mut app, &mut rx, &format!("SELECT {off}()"), None).await;
+    app.run(vec![format!("SELECT {off}()")]);
+    assert!(app.tab().exec.running.is_none(), "a function that is not a built-in: refused");
+    // What the app cannot see: a function reached through a view turns the default off.
+    run_and_wait(&mut app, &mut rx, &format!("SELECT * FROM {off_view}"), None).await;
     run_and_wait(&mut app, &mut rx, "SHOW default_transaction_read_only", None).await;
     assert_eq!(cell(&app, 0).as_deref(), Some("off"));
-    for sql in [format!("SELECT {write}()"), "BEGIN".into(), format!("SELECT {write}()"), "ROLLBACK".into()] {
+    let write = format!("SELECT * FROM {write_view}");
+    for sql in [write.clone(), "BEGIN".into(), write, "ROLLBACK".into()] {
         run_and_wait(&mut app, &mut rx, &sql, None).await;
         if sql.starts_with("SELECT") {
             // The failure of the last run is in its Messages (the rows of the

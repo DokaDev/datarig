@@ -148,7 +148,7 @@ const OWNED: &[(&str, Owner)] = &[
 /// What the classifier's risk says against a start-up setting: a write or code, or a danger
 /// other than changing a setting (which only a read-only environment refuses).
 pub(crate) fn judge(risk: &Risk) -> Result<(), SetProblem> {
-    if risk.writes || risk.runs_code || risk.unchecked_call {
+    if risk.writes || risk.runs_code || risk.unchecked_call.is_some() {
         return Err(SetProblem::Writes);
     }
     match risk.danger {

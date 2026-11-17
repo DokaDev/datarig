@@ -292,10 +292,12 @@ pub struct Risk {
     /// MySQL: the server commits the open transaction before it runs (DDL, `LOCK TABLES`,
     /// `START TRANSACTION`, `SET autocommit = 1`, …: see [`mysql`]).
     pub implicit_commit: bool,
-    /// MySQL: it calls a function that is not a built-in (a loadable function, or a stored one),
-    /// whose effects cannot be checked and which a read-only transaction does not fully stop,
-    /// so a read-only policy refuses it.
-    pub unchecked_call: bool,
+    /// It calls a function that is not a built-in, whose effects cannot be checked and which a
+    /// read-only transaction does not fully stop, so a read-only policy refuses it: the first
+    /// one, as written. MySQL: a loadable function, or a stored one. PostgreSQL: a function
+    /// called by a name that is neither a known built-in's nor one of [`RUNS_CODE`] (not in
+    /// DDL, which only stores it; not what a view, trigger, operator or cast calls).
+    pub unchecked_call: Option<String>,
     /// PostgreSQL: the server refuses to run it inside a transaction block (SQLSTATE 25001):
     /// `VACUUM`, `CREATE INDEX CONCURRENTLY`, `CREATE DATABASE`, `ALTER SYSTEM`, … (see
     /// [`no_tx_block`]). It takes effect at once and cannot be rolled back. Where whether it
@@ -309,7 +311,7 @@ pub struct Risk {
 }
 
 /// Why a read-only policy refuses a statement.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReadOnlyBlock {
     /// Its class may change data (or is unknown).
     Class(Class),
@@ -331,8 +333,8 @@ pub enum ReadOnlyBlock {
     ExecutableComment,
     /// Its form is not one the classifier knows ([`Danger::Unrecognized`]).
     Unrecognized,
-    /// It calls a function that is not a built-in ([`Risk::unchecked_call`]).
-    UnknownFunction,
+    /// It calls a function that is not a built-in ([`Risk::unchecked_call`]), named as written.
+    UnknownFunction(String),
     /// It prepares SQL given as text ([`Danger::DynamicSql`]).
     DynamicSql,
     /// It acts on the whole server ([`Danger::ServerCommand`]).
@@ -439,7 +441,7 @@ impl Risk {
             runs_code: false,
             session_path: false,
             implicit_commit: false,
-            unchecked_call: false,
+            unchecked_call: None,
             no_tx_block: false,
             adds_enum_value: false,
         }
@@ -472,7 +474,7 @@ impl Risk {
             runs_code: self.runs_code || o.runs_code,
             session_path: self.session_path || o.session_path,
             implicit_commit: self.implicit_commit || o.implicit_commit,
-            unchecked_call: self.unchecked_call || o.unchecked_call,
+            unchecked_call: self.unchecked_call.or(o.unchecked_call),
             no_tx_block: self.no_tx_block || o.no_tx_block,
             adds_enum_value: self.adds_enum_value || o.adds_enum_value,
         }
@@ -500,8 +502,8 @@ impl Risk {
             Some(Danger::Setting) => return Err(ReadOnlyBlock::Setting),
             _ => {}
         }
-        if self.unchecked_call {
-            return Err(ReadOnlyBlock::UnknownFunction);
+        if let Some(f) = &self.unchecked_call {
+            return Err(ReadOnlyBlock::UnknownFunction(f.clone()));
         }
         if self.read_write {
             return Err(ReadOnlyBlock::ReadWrite);
@@ -745,6 +747,12 @@ impl Prepared {
             || matches!(kind, "FetchStmt" | "ConstraintsSetStmt")
             || (kind == "TransactionStmt" && !quiet_transaction(b))
             || calls_code(b);
+        // As on MySQL, a read-only policy refuses a call of a function that is not a known
+        // built-in, whose effects cannot be checked (DDL only stores what it calls, and a
+        // read-only policy refuses DDL anyway).
+        if risk.class != Class::Ddl && risk.unchecked_call.is_none() {
+            risk.unchecked_call = unknown_function(b);
+        }
         risk.no_tx_block |= no_tx_block(kind, b);
         risk.adds_enum_value |= kind == "AlterEnumStmt" && text(&b["old_val"]).is_none_or(str::is_empty);
         risk
@@ -803,8 +811,11 @@ impl Prepared {
     /// statement with them may run a function the planner folds (an immutable or stable one
     /// called with constants): when the statement may run code the text does not show, the
     /// prepared names are forgotten, as for a plain `EXPLAIN` of a query that calls such a
-    /// function. The built-ins of [`SERVER_FILES`], [`SERVER_ACTIONS`] and those that run a
-    /// query given as text are volatile, which the planner never folds.
+    /// function, and a read-only policy refuses it when that function is not a built-in
+    /// ([`Risk::unchecked_call`]). A name the session does not know is planned as its `EXECUTE`
+    /// would run ([`Danger::UnknownPrepared`]). The built-ins of [`SERVER_FILES`],
+    /// [`SERVER_ACTIONS`] and those that run a query given as text are volatile, which the
+    /// planner never folds.
     fn plans(&mut self, query: &Value) -> Risk {
         let mut executes = Vec::new();
         let mut visit = |o: &serde_json::Map<String, Value>| executes.extend(o.get("ExecuteStmt").cloned());
@@ -814,9 +825,22 @@ impl Prepared {
         walk(query, &mut visit);
         let mut risk = Risk { explain: Explain::Plan, ..Risk::of(Class::Read) };
         for e in executes {
-            let prepared = text(&e["name"]).and_then(|name| self.0.get(name));
-            risk.runs_code |= prepared.is_some_and(|p| p.runs_code);
+            let prepared = text(&e["name"]).and_then(|name| self.0.get(name)).cloned();
             risk = self.runs_now(&e["params"], risk);
+            match prepared {
+                Some(p) => {
+                    risk.runs_code |= p.runs_code;
+                    // A function that is not a built-in, which the planner may run.
+                    risk.unchecked_call = risk.unchecked_call.or(p.unchecked_call);
+                }
+                // What it calls is not known (its name was forgotten, or never prepared here):
+                // as for its `EXECUTE`, after what its parameters do.
+                None => {
+                    risk.class = risk.class.max(Class::Unknown);
+                    risk.runs_code = true;
+                    risk.danger = risk.danger.or(Some(Danger::UnknownPrepared));
+                }
+            }
         }
         risk
     }
@@ -1325,11 +1349,34 @@ fn calls_code(v: &Value) -> bool {
     let mut found = false;
     walk(v, &mut |o| {
         found |= calls(o).iter().any(|c| match c {
-            Call::Func(name, _) => {
-                !matches!(name.as_slice(), [f] | ["pg_catalog", f] | [_, "pg_catalog", f] if builtin(f))
-            }
+            Call::Func(name, _) => !catalog_name(name, builtin),
             Call::Attribute(f, _) => RUNS_CODE.contains(f),
         });
+    });
+    found
+}
+
+/// Whether `name` (as written) is a built-in's for which `known` holds: unqualified, or in
+/// `pg_catalog` (also with a database).
+fn catalog_name(name: &[&str], known: impl Fn(&str) -> bool) -> bool {
+    matches!(name, [f] | ["pg_catalog", f] | [_, "pg_catalog", f] if known(f))
+}
+
+/// The first function `v` calls by name ([`Call::Func`]) that is neither a known built-in
+/// ([`builtin`]) nor one of [`RUNS_CODE`] (whose query text is classified already), as written
+/// (`f`, `s.f`): a name with a schema other than `pg_catalog`, a quoted name in another case,
+/// any name not in the lists.
+fn unknown_function(v: &Value) -> Option<String> {
+    let mut found = None;
+    walk(v, &mut |o| {
+        for c in calls(o) {
+            if let Call::Func(name, _) = c
+                && found.is_none()
+                && !catalog_name(&name, |f| builtin(f) || RUNS_CODE.contains(&f))
+            {
+                found = Some(name.join("."));
+            }
+        }
     });
     found
 }
@@ -1854,7 +1901,7 @@ pub enum TxStep {
 /// …). `must_open`: its dialect tells it runs inside the transaction whatever its risk says,
 /// unless it cannot (`DISCARD TEMP`, …).
 pub fn tx_step(risk: &Risk, plain_read: bool, must_open: bool) -> TxStep {
-    let calls = risk.runs_code || risk.unchecked_call;
+    let calls = risk.runs_code || risk.unchecked_call.is_some();
     if risk.class == Class::Tx || risk.rolls_back() || risk.no_tx_block || risk.implicit_commit {
         return TxStep::Outside;
     }

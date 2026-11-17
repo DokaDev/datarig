@@ -475,6 +475,8 @@ impl W<'_> {
 struct Call {
     /// Its name, upper case, without quotes.
     name: String,
+    /// Its name as the text writes it, with its database if any (`db.f`, `` `F` ``).
+    written: String,
     /// Written with its database (`db.f()`): a stored function.
     qualified: bool,
     /// How many arguments it is given (`None`: not known).
@@ -914,7 +916,8 @@ fn calls(ws: &[W]) -> Vec<Call> {
         {
             continue;
         }
-        out.push(Call { name, qualified, args: args[i + 1] });
+        let written = ws[first..=i].iter().map(|w| w.text).collect();
+        out.push(Call { name, written, qualified, args: args[i + 1] });
     }
     out
 }
@@ -1000,7 +1003,7 @@ fn with_calls(mut risk: Risk, ws: &[W], mode: MySqlMode) -> Risk {
             risk.danger = risk.danger.or(danger);
         } else if !schema {
             risk.runs_code = true;
-            risk.unchecked_call = true;
+            risk.unchecked_call = risk.unchecked_call.or(Some(c.written));
             // `EXPLAIN ANALYZE` runs it: what it writes where the rollback does not reach (a
             // MyISAM table) stays, so it asks like code it cannot see.
             if risk.explain == Explain::Analyze {
@@ -2091,7 +2094,7 @@ fn names_of(stmts: &[Vec<W>], hint: bool, mode: MySqlMode) -> Result<Vec<String>
     if risk.class != Class::Read || risk.writes || risk.read_write || risk.explain != Explain::No {
         return Err(NotRepeatable::Writes);
     }
-    if risk.runs_code || risk.unchecked_call {
+    if risk.runs_code || risk.unchecked_call.is_some() {
         return Err(NotRepeatable::UserFunction);
     }
     if let Some(c) = calls(ws).into_iter().find(|c| VOLATILE.contains(&c.name.as_str())) {

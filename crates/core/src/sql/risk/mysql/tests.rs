@@ -69,7 +69,7 @@ fn render(r: &Risk) -> String {
         (r.read_write, "rw"),
         (r.implicit_commit, "commit"),
         (r.runs_code, "code"),
-        (r.unchecked_call, "udf"),
+        (r.unchecked_call.is_some(), "udf"),
         (r.read_only().is_ok(), "ro"),
     ];
     out.extend(flags.iter().filter(|(on, _)| *on).map(|(_, f)| f.to_string()));
@@ -126,7 +126,7 @@ fn every_dangerous_statement_asks_and_read_only_refuses_what_is_not_a_read() {
         }
         if r.read_only().is_ok() {
             assert!(matches!(r.class, Class::Read | Class::Session | Class::Tx), "{sql}");
-            assert!(r.danger.is_none() && !r.read_write && !r.unchecked_call, "{sql}");
+            assert!(r.danger.is_none() && !r.read_write && r.unchecked_call.is_none(), "{sql}");
             assert!(r.class != Class::Session || r.safe_setting, "{sql}");
         }
     }
@@ -137,7 +137,8 @@ fn read_only_says_why_it_refuses() {
     let why = |sql: &str| risk(sql).read_only().err();
     assert_eq!(why("SELECT /*! 1 */"), Some(ReadOnlyBlock::ExecutableComment));
     assert_eq!(why("SELEC 1"), Some(ReadOnlyBlock::Unrecognized));
-    assert_eq!(why("SELECT sys_exec('x')"), Some(ReadOnlyBlock::UnknownFunction));
+    assert_eq!(why("SELECT sys_exec('x')"), Some(ReadOnlyBlock::UnknownFunction("sys_exec".into())));
+    assert_eq!(why("SELECT shop.`Udf`(1)"), Some(ReadOnlyBlock::UnknownFunction("shop.`Udf`".into())));
     assert_eq!(why("PREPARE s FROM 'SELECT 1'"), Some(ReadOnlyBlock::DynamicSql));
     assert_eq!(why("KILL 1"), Some(ReadOnlyBlock::ServerCommand));
     assert_eq!(why("XA START 'x'"), Some(ReadOnlyBlock::ServerCommand));
@@ -280,7 +281,7 @@ fn words_before_a_parenthesis_that_are_no_call_are_reserved() {
     // A non-reserved word may name a loadable function: before `(` it is a call, unless its place
     // makes it syntax.
     for sql in ["SELECT text('x')", "SELECT hash(1)", "SELECT list(1)", "SELECT a FROM t WHERE signed(a) = 1"] {
-        assert!(risk(sql).unchecked_call, "{sql}");
+        assert!(risk(sql).unchecked_call.is_some(), "{sql}");
     }
     for sql in [
         "SELECT * FROM t WHERE a = ANY (SELECT 1)",
@@ -289,7 +290,7 @@ fn words_before_a_parenthesis_that_are_no_call_are_reserved() {
         "SELECT * FROM JSON_TABLE('[1]', '$[*]' COLUMNS (x INT PATH '$')) AS j",
         "SELECT CAST(a AS SIGNED), CAST(a AS NCHAR(2)) FROM t",
     ] {
-        assert!(!risk(sql).unchecked_call, "{sql}");
+        assert!(risk(sql).unchecked_call.is_none(), "{sql}");
     }
 }
 
@@ -433,13 +434,13 @@ fn functions_mariadb_does_not_provide_are_unchecked_calls_there() {
     for name in NOT_ON_MARIADB.lines() {
         let sql = format!("SELECT {name}() FROM t");
         let mysql = classify(&sql, MODE);
-        assert!(!mysql.unchecked_call && !mysql.runs_code && mysql.read_only().is_ok(), "{sql}");
+        assert!(mysql.unchecked_call.is_none() && !mysql.runs_code && mysql.read_only().is_ok(), "{sql}");
         let maria = classify(&sql, MARIADB);
-        assert!(maria.unchecked_call && maria.runs_code, "{sql}");
-        assert_eq!(maria.read_only(), Err(ReadOnlyBlock::UnknownFunction), "{sql}");
+        assert!(maria.unchecked_call.is_some() && maria.runs_code, "{sql}");
+        assert_eq!(maria.read_only(), Err(ReadOnlyBlock::UnknownFunction(name.to_string())), "{sql}");
     }
     let quoted = classify("SELECT `ANY_VALUE`(a) FROM t GROUP BY b", MARIADB);
-    assert!(quoted.unchecked_call && quoted.read_only().is_err());
+    assert!(quoted.unchecked_call.is_some() && quoted.read_only().is_err());
     let r = classify("DO REGEXP_LIKE('a', 'b')", MARIADB);
     assert_eq!((r.class, r.danger), (Class::Procedural, Some(Danger::Procedural)));
     assert_eq!(render(&classify("DO REGEXP_LIKE('a', 'b')", MODE)), "read ro");
@@ -454,7 +455,7 @@ fn functions_mariadb_does_not_provide_are_unchecked_calls_there() {
     for sql in ["SELECT ABS(a), JSON_EXTRACT(j, '$.a'), REGEXP_SUBSTR(b, 'x') FROM t", "SELECT GROUP_CONCAT(b) FROM t"]
     {
         let r = classify(sql, MARIADB);
-        assert!(!r.unchecked_call && r.read_only().is_ok(), "{sql}");
+        assert!(r.unchecked_call.is_none() && r.read_only().is_ok(), "{sql}");
     }
     assert_eq!(classify("SELECT GET_LOCK('a', 0)", MARIADB).danger, Some(Danger::ServerAction));
 }
@@ -471,7 +472,7 @@ fn mariadb_geometry_constructors_are_built_ins_by_their_arguments() {
         "SELECT MULTIPOINT(POINT(1, 1)), MULTILINESTRING(g), MULTIPOLYGON(g), GEOMETRYCOLLECTION(g) FROM t",
     ] {
         let r = classify(sql, MARIADB);
-        assert!(!r.unchecked_call && r.read_only().is_ok(), "{sql}");
+        assert!(r.unchecked_call.is_none() && r.read_only().is_ok(), "{sql}");
     }
     for sql in [
         "SELECT POINT()",
@@ -483,8 +484,8 @@ fn mariadb_geometry_constructors_are_built_ins_by_their_arguments() {
         "SELECT GEOMCOLLECTION(POINT(1, 1))",
     ] {
         let r = classify(sql, MARIADB);
-        assert!(r.unchecked_call && r.read_only().is_err(), "{sql}");
-        assert!(!classify(sql, MODE).unchecked_call, "{sql}");
+        assert!(r.unchecked_call.is_some() && r.read_only().is_err(), "{sql}");
+        assert!(classify(sql, MODE).unchecked_call.is_none(), "{sql}");
     }
     for (name, _, _) in MARIADB_CONSTRUCTORS {
         assert!(NOT_ON_MARIADB.lines().any(|n| n == *name), "{name}");
