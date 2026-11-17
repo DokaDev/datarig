@@ -18,7 +18,7 @@
 //! transaction only. A statement that has no such form ([`NotLocal`]) is not sent there.
 
 use super::{Danger, ReadOnlyBlock, Risk, STACK, THREAD, classify, node, parse, text};
-use crate::sql::lexer::{Tok, lex};
+use crate::sql::lexer::{Tok, lex, reads_by_setting};
 use serde_json::Value;
 
 /// Why a statement cannot be a session's start-up setting.
@@ -45,6 +45,10 @@ pub enum SetProblem {
     Asks,
     /// MySQL: it reads as other settings in another sql mode (a backslash or a quote it has).
     ModeDependent,
+    /// PostgreSQL: it holds a backslash or a `U&` string, which may read as other statements or
+    /// values with `standard_conforming_strings` off than on
+    /// ([`crate::sql::lexer::reads_by_setting`]).
+    Backslash,
     /// A setting of the next (or current) transaction only (`transaction_isolation`,
     /// `transaction_deferrable`, MySQL's `@@transaction_isolation` without a scope): the session's
     /// own default is `default_transaction_*` or `SET SESSION CHARACTERISTICS AS TRANSACTION …`
@@ -82,7 +86,8 @@ pub enum Owner {
     Encoding,
     /// How the server writes values as text: the app reads them as its defaults write them.
     TextFormat,
-    /// How the app writes string literals (`''`, never a backslash escape) depends on it.
+    /// How the app reads and writes string literals for its own statements assumes the
+    /// server's default.
     Literals,
     /// The app names its sessions to tell them apart.
     SessionName,
@@ -178,6 +183,9 @@ pub(crate) fn judge(risk: &Risk) -> Result<(), SetProblem> {
 
 /// Whether PostgreSQL statement `sql` may be a session's start-up setting (see the module docs).
 pub fn session_set_pg(sql: &str) -> Result<SessionSet, SetProblem> {
+    if reads_by_setting(sql) {
+        return Err(SetProblem::Backslash);
+    }
     let risk = classify(sql);
     if matches!(risk.danger, Some(Danger::Unparsed | Danger::TooComplex)) {
         return Err(SetProblem::Unread);

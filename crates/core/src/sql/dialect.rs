@@ -106,18 +106,22 @@ impl Dialect {
         }
     }
 
-    /// `s` as a string literal. PostgreSQL: `'` doubled, written for
-    /// `standard_conforming_strings = on` (the default since 9.1), where a backslash is an
-    /// ordinary character. MySQL: `'` doubled, and (unless `NO_BACKSLASH_ESCAPES`, see
-    /// [`MySqlMode`]) a backslash doubled and a NUL written `\0`, as the server reads a
-    /// backslash as an escape.
+    /// `s` as a string literal. PostgreSQL: `'…'` with `'` doubled, or, when `s` holds a
+    /// backslash, `E'…'` with `'` and the backslash doubled, so that it reads the same whatever
+    /// `standard_conforming_strings` is (a plain string reads a backslash as an escape when it is
+    /// off). MySQL: `'` doubled, and (unless `NO_BACKSLASH_ESCAPES`, see [`MySqlMode`]) a
+    /// backslash doubled and a NUL written `\0`, as the server reads a backslash as an escape.
     pub fn quote_literal(self, s: &str) -> String {
+        if self == Self::Postgres && s.contains('\\') {
+            return format!("E'{}'", s.replace('\\', "\\\\").replace('\'', "''"));
+        }
         let open = LiteralOpen { prefix: 0, quote: '\'', backslash: self.backslash_strings() };
         format!("'{}'", self.literal_body(s, open))
     }
 
     /// A backslash escapes the next character in a plain `'…'` string (MySQL unless
-    /// `NO_BACKSLASH_ESCAPES`; never in PostgreSQL, see [`Dialect::quote_literal`]).
+    /// `NO_BACKSLASH_ESCAPES`; in PostgreSQL only with `standard_conforming_strings = off`,
+    /// which [`Dialect::quote_literal`] writes around).
     fn backslash_strings(self) -> bool {
         match self {
             Self::Postgres => false,

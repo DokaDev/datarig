@@ -84,6 +84,15 @@ impl Classifier {
         }
     }
 
+    /// [`Classifier::repeatable`] without PostgreSQL's rule on `standard_conforming_strings`
+    /// ([`repeat::plain_read`]), for [`Classifier::tx_step`].
+    fn plain_read(&self, sql: &str) -> Result<(), NotRepeatable> {
+        match self {
+            Self::Pg(_) => repeat::plain_read(sql),
+            Self::MySql(mode) => mysql::repeatable(sql, *mode),
+        }
+    }
+
     /// Whether `sql` reads the session's time zone ([`mysql::reads_zone`]): run again, its rows
     /// are those of the first run only while the zone is the same. Never on PostgreSQL.
     pub fn reads_zone(&self, sql: &str) -> bool {
@@ -105,7 +114,8 @@ impl Classifier {
     /// is open ([`TxStep`], [`super::tx_step`]), with what the session prepared so far (an
     /// `EXECUTE` has its statement's risk; one of a name not known to be prepared opens the
     /// transaction). A read runs outside only when it is one statement that the plain-`SELECT`
-    /// allowlist takes ([`Classifier::repeatable`]; on MySQL also one that only reads a
+    /// allowlist takes, but for its rule on `standard_conforming_strings`
+    /// ([`Classifier::repeatable`]; on MySQL also one that only reads a
     /// variable), or a `SHOW`, a `HELP`, a `DESCRIBE` or an `EXPLAIN` without `ANALYZE` that
     /// calls nothing. Several statements, a text that cannot be read and anything unknown open
     /// it.
@@ -116,7 +126,9 @@ impl Classifier {
         };
         let plain_read = match form {
             None => return TxStep::Opens,
-            Some(Form::Query) => match self.repeatable(sql) {
+            // The allowlist without its rule on standard_conforming_strings: a read runs outside
+            // a transaction as it did, and the classifier reads it both ways for what it writes.
+            Some(Form::Query) => match self.plain_read(sql) {
                 Ok(()) => true,
                 // A variable's value may differ on the next run; reading it changes nothing.
                 Err(NotRepeatable::Variable(_)) => matches!(self, Self::MySql(_)),

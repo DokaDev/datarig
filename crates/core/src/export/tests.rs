@@ -94,7 +94,7 @@ fn markdown_escapes_pipes_and_line_breaks() {
 fn sql_quotes_identifiers_and_literals() {
     assert_eq!(quote_ident("Order \"Items\""), "\"Order \"\"Items\"\"\"");
     assert_eq!(quote_literal("it's"), "'it''s'");
-    assert_eq!(quote_literal("back\\slash"), "'back\\slash'", "standard conforming strings");
+    assert_eq!(quote_literal("back\\slash"), "E'back\\\\slash'", "whatever standard_conforming_strings is");
     for n in ["0", "12", "-3", "1.5", ".5", "5.", "1e10", "-2.5E-3"] {
         assert!(sql_number(n), "{n}");
     }
@@ -127,7 +127,7 @@ fn sql_insert_names_the_table_or_a_placeholder() {
         sql_insert(PG, &target, &cols(), &rows()),
         "INSERT INTO \"shop\".\"order items\" (\"id\", \"name\", \"note\", \"ok\", \"doc\") VALUES (1, '陳大文 🐘', NULL, true, '{\"a\": [1, 2]}');\n\
          INSERT INTO \"shop\".\"order items\" (\"id\", \"name\", \"note\", \"ok\", \"doc\") VALUES (-2.5, '', 'tab\there\nnew \"line\"', false, NULL);\n\
-         INSERT INTO \"shop\".\"order items\" (\"id\", \"name\", \"note\", \"ok\", \"doc\") VALUES ('NaN', 'O''Reilly, Inc.', 'a|b\\c', NULL, 'not json');"
+         INSERT INTO \"shop\".\"order items\" (\"id\", \"name\", \"note\", \"ok\", \"doc\") VALUES ('NaN', 'O''Reilly, Inc.', E'a|b\\\\c', NULL, 'not json');"
     );
     let aliased = Target::Table { schema: "s", name: "t", columns: vec!["real_name"], overriding: false };
     assert_eq!(
@@ -137,7 +137,7 @@ fn sql_insert_names_the_table_or_a_placeholder() {
     );
     assert_eq!(
         sql_insert(PG, &Target::Unknown, &[col("n", Kind::Text)], &[vec![Some("\\x0102")]]),
-        "INSERT INTO <table> (\"n\") VALUES ('\\x0102');",
+        "INSERT INTO <table> (\"n\") VALUES (E'\\\\x0102');",
         "bytea as its hex input form"
     );
     assert_eq!(sql_insert(PG, &Target::Unknown, &[col("n", Kind::Text)], &[]), "");
@@ -416,8 +416,8 @@ fn mysql_values_are_mysql_literals() {
         assert_eq!(sql_value(d, Kind::Text, Some("é😀")), "'é😀'");
     }
     assert_eq!(sql_value(MY, Kind::Number, Some("18446744073709551615")), "18446744073709551615");
-    assert_eq!(sql_value(PG, Kind::Bytes, Some("\\x00ff")), r"'\x00ff'");
-    assert_eq!(sql_value(PG, Kind::Text, Some("a\\b")), r"'a\b'");
+    assert_eq!(sql_value(PG, Kind::Bytes, Some("\\x00ff")), r"E'\\x00ff'");
+    assert_eq!(sql_value(PG, Kind::Text, Some("a\\b")), r"E'a\\b'");
     let insert = sql_insert(
         MY,
         &Target::Table { schema: "shop", name: "t", columns: vec!["b", "n"], overriding: true },

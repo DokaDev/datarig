@@ -92,7 +92,11 @@ fn where_statements_run_on_postgres() {
         ("SHOW search_path", R),
         ("EXPLAIN SELECT 1", R),
         ("EXPLAIN (COSTS OFF) DELETE FROM t", R),
+        // A backslash does not open a transaction: the allowlist's rule on
+        // standard_conforming_strings is about running a text again, and the classifier reads it
+        // both ways for what it writes (the hidden DELETE below opens it).
         ("SELECT 'a\\b'", R),
+        ("SELECT E'a\\\\b'", R),
         ("SELECT nextval('s')", X),
         ("SELECT random()", X),
         ("SELECT pg_advisory_xact_lock(1)", X),

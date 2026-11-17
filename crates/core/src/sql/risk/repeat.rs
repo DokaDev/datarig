@@ -29,6 +29,10 @@
 //!   type or domain refuses it, since a domain's `CHECK` and a user type's input function are
 //!   code). Both lists are generated from the server and pinned to it by integration tests;
 //! * no `TABLESAMPLE` (its rows are chosen at random on every run);
+//! * no backslash and no `U&` anywhere in the text: with `standard_conforming_strings` off a
+//!   plain or national string reads a backslash as an escape (`'\n'`, `N'\', '`) and a `U&'…'`
+//!   string is rejected, and the allowlist reads the text with the setting on only. Wider than
+//!   needed on purpose (`E'\\n'` is refused too);
 //! * not over the classifier's caps, and a text the parser rejects is refused.
 //!
 //! **What only the server can tell** is asked right before the app runs the statement again or
@@ -57,7 +61,7 @@
 //! skipped rows again too (every expression of the select list, for every row skipped).
 
 use super::{Class, Danger, Explain, MAX_BYTES, MAX_DEPTH, STACK, THREAD, calls, depth, has, node, parse, walk};
-use crate::sql::lexer::{Tok, lex};
+use crate::sql::lexer::{Tok, lex, reads_by_setting};
 use serde_json::Value;
 
 /// Why the app may not run a statement again or count its rows.
@@ -106,6 +110,10 @@ pub enum NotRepeatable {
     Unreadable,
     /// MySQL: it reads or sets a variable (`@x`, `@@x`): its value may differ on the next run.
     Variable(String),
+    /// PostgreSQL: it holds a backslash or a `U&` string, which may read differently with
+    /// `standard_conforming_strings` off than on, the only way the allowlist reads it
+    /// ([`crate::sql::lexer::reads_by_setting`]).
+    Backslash,
 }
 
 impl NotRepeatable {
@@ -339,6 +347,25 @@ pub fn names(sql: &str) -> Result<Names, NotRepeatable> {
     if sql.len() > MAX_BYTES || depth(sql) > MAX_DEPTH {
         return Err(NotRepeatable::Unreadable);
     }
+    if reads_by_setting(sql) {
+        return Err(NotRepeatable::Backslash);
+    }
+    names_as_read(sql)
+}
+
+/// [`repeatable`] without its rule on `standard_conforming_strings` ([`NotRepeatable::Backslash`]):
+/// whether `sql` is a plain read, for where a statement runs once
+/// ([`super::Classifier::tx_step`]). The classifier reads a text both ways for what it writes
+/// and how dangerous it is.
+pub(crate) fn plain_read(sql: &str) -> Result<(), NotRepeatable> {
+    if sql.len() > MAX_BYTES || depth(sql) > MAX_DEPTH {
+        return Err(NotRepeatable::Unreadable);
+    }
+    names_as_read(sql).map(|_| ())
+}
+
+/// [`names`] after its checks of the text as a whole.
+fn names_as_read(sql: &str) -> Result<Names, NotRepeatable> {
     let shape = shape(sql).ok_or(NotRepeatable::Unreadable)?;
     if shape.statements != 1 {
         return Err(NotRepeatable::NotOne);

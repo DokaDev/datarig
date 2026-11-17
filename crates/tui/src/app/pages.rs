@@ -50,6 +50,7 @@ pub(super) fn why(r: &NotRepeatable) -> Msg {
         NotRepeatable::TxUnknown => Label::RepeatTxUnknown.into(),
         NotRepeatable::Unreadable => Label::RepeatUnreadable.into(),
         NotRepeatable::Variable(name) => Msg::RepeatVariable { name: name.clone() },
+        NotRepeatable::Backslash => Label::RepeatBackslash.into(),
     }
 }
 

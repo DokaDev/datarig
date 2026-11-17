@@ -184,7 +184,7 @@ CREATE TABLE \"My Schema\".\"order\" (
 
 ALTER TABLE \"My Schema\".\"order\" OWNER TO \"Owner \"\"x\"\"\";
 
-COMMENT ON COLUMN \"My Schema\".\"order\".\"Mixed Col\" IS 'a\\b';
+COMMENT ON COLUMN \"My Schema\".\"order\".\"Mixed Col\" IS E'a\\\\b';
 
 GRANT UPDATE (\"select\") ON TABLE \"My Schema\".\"order\" TO \"Report Role\" WITH GRANT OPTION;
 ";
