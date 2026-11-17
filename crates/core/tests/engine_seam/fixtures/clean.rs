@@ -69,3 +69,13 @@ fn checked(d: D) -> u8 {
         _ => 1,
     }
 }
+
+/// Test-only fields and parameters: not scanned.
+struct Probe {
+    #[cfg(test)]
+    mysql: bool,
+    #[cfg(test)]
+    mariadb: bool,
+}
+
+fn probe(#[cfg(test)] pg: bool) {}

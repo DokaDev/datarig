@@ -792,6 +792,9 @@ impl<'ast> Visit<'ast> for Scan<'_> {
     }
 
     fn visit_field(&mut self, f: &'ast syn::Field) {
+        if is_test_only(&f.attrs) {
+            return;
+        }
         if let Some(name) = &f.ident
             && (name == "mysql" || name == "pg")
             && is_bool(&f.ty)
@@ -802,6 +805,9 @@ impl<'ast> Visit<'ast> for Scan<'_> {
     }
 
     fn visit_pat_type(&mut self, p: &'ast syn::PatType) {
+        if is_test_only(&p.attrs) {
+            return;
+        }
         if let Pat::Ident(i) = &*p.pat
             && (i.ident == "mysql" || i.ident == "pg")
             && is_bool(&p.ty)
@@ -1150,4 +1156,12 @@ fn the_clean_fixture_passes() {
     let found = scan_fixture("clean", "crates/core/src/sql/clean.rs");
     let listed: Vec<String> = found.iter().map(|f| format!("    {f}")).collect();
     assert!(found.is_empty(), "the clean fixture was reported:\n{}", listed.join("\n"));
+    // Scanned as any other module, its variants are references, but its only legacy markers
+    // are test-only.
+    let markers: Vec<String> = scan_fixture("clean", "crates/tui/src/app/clean.rs")
+        .iter()
+        .filter(|f| f.kind == Kind::Marker)
+        .map(|f| format!("    {f}"))
+        .collect();
+    assert!(markers.is_empty(), "test-only markers were reported:\n{}", markers.join("\n"));
 }
