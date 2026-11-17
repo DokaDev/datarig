@@ -46,3 +46,9 @@ fn fresh(d: D) -> D {
 fn formatter() -> sqlformat::Dialect {
     sqlformat::Dialect::Generic
 }
+
+/// Built only for the tests: not scanned.
+#[cfg(all(unix, any(test, all(test, feature = "extra"))))]
+fn in_tests_only(d: D) -> bool {
+    matches!(d, D::Postgres)
+}

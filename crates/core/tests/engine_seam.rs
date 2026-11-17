@@ -212,17 +212,28 @@ fn in_seam(rel: &str) -> bool {
         && (parts[4] == "engine.rs" || (parts[4] == "engine" && parts.len() > 5))
 }
 
+/// Whether an item is compiled only into tests: a `#[cfg(..)]` that holds only when `test` does.
 fn is_test_only(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|a| {
-        if !a.path().is_ident("cfg") {
-            return false;
+    attrs.iter().any(|a| a.path().is_ident("cfg") && a.parse_args::<syn::Meta>().is_ok_and(|m| needs_test(&m)))
+}
+
+/// Whether a cfg predicate can hold only with `test`: `test`, an `all(..)` with such a part, an
+/// `any(..)` whose every part is such. Anything else (`not(..)`, a feature, a platform) can hold
+/// in a build that is no test.
+fn needs_test(meta: &syn::Meta) -> bool {
+    let parts = || {
+        meta.require_list()
+            .and_then(|l| l.parse_args_with(Punctuated::<syn::Meta, Token![,]>::parse_terminated))
+            .map(|p| p.into_iter().collect::<Vec<_>>())
+    };
+    match meta {
+        syn::Meta::Path(p) => p.is_ident("test"),
+        syn::Meta::List(l) if l.path.is_ident("all") => parts().is_ok_and(|p| p.iter().any(needs_test)),
+        syn::Meta::List(l) if l.path.is_ident("any") => {
+            parts().is_ok_and(|p| !p.is_empty() && p.iter().all(needs_test))
         }
-        let Ok(list) = a.meta.require_list() else { return false };
-        let text = list.tokens.to_string();
-        let text: String = text.split_whitespace().collect();
-        text == "test"
-            || (text.starts_with("all(") && text.split(['(', ',', ')']).any(|w| w == "test") && !text.contains("not("))
-    })
+        _ => false,
+    }
 }
 
 fn line(span: Span) -> usize {
@@ -911,7 +922,7 @@ fn boolean_engine_tests_stay_within_budget() {
 fn every_violation_fixture_is_reported() {
     // (fixture, the path it is scanned as, what must be reported, with the line)
     type Case = (&'static str, &'static str, &'static [(Kind, usize)]);
-    let cases: [Case; 9] = [
+    let cases: [Case; 10] = [
         ("driver_engine_branch", "crates/drivers/mysql/src/session.rs", &[(Kind::Reference, 6), (Kind::Reference, 7)]),
         ("tui_if_let_dialect", "crates/tui/src/app/editor.rs", &[(Kind::BooleanTest, 6), (Kind::Reference, 6)]),
         ("catch_all_explain", "crates/core/src/sql/plan.rs", &[(Kind::CatchAll, 9)]),
@@ -925,6 +936,7 @@ fn every_violation_fixture_is_reported() {
             "crates/tui/src/app/monitor.rs",
             &[(Kind::Reference, 8), (Kind::Reference, 9), (Kind::Marker, 13), (Kind::Marker, 14)],
         ),
+        ("cfg_not_only_test", "crates/core/src/sql/split.rs", &[(Kind::BooleanTest, 7)]),
     ];
     let mut missed = Vec::new();
     for (name, path, expected) in cases {
