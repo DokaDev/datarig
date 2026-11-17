@@ -435,6 +435,13 @@ impl Scan<'_> {
                 }
                 visit::visit_path(self, p);
             }
+            // A macro's operands are tokens: look for `E::V` in them (`dbg!(Dialect::Postgres)`).
+            // A `matches!` is a boolean test of its own, counted where it stands.
+            fn visit_macro(&mut self, m: &'ast syn::Macro) {
+                if self.found.is_none() && !m.path.is_ident("matches") {
+                    self.found = self.scan.tokens_variant(m.tokens.clone());
+                }
+            }
             // Test-only code inside the expression is not scanned here either.
             fn visit_expr(&mut self, e: &'ast Expr) {
                 if !is_test_only(expr_attrs(e)) {
@@ -465,6 +472,32 @@ impl Scan<'_> {
         let mut find = Find { scan: self, found: None };
         find.visit_expr(expr);
         find.found
+    }
+
+    /// The first `E::V` (or `Self::V` in an engine enum's `impl`) in tokens, groups included.
+    fn tokens_variant(&self, tokens: TokenStream) -> Option<(&'static str, String)> {
+        let flat: Vec<TokenTree> = tokens.into_iter().collect();
+        for (i, t) in flat.iter().enumerate() {
+            match t {
+                TokenTree::Group(g) => {
+                    if let Some(found) = self.tokens_variant(g.stream()) {
+                        return Some(found);
+                    }
+                }
+                TokenTree::Ident(id) => {
+                    if let (Some(TokenTree::Punct(a)), Some(TokenTree::Punct(b)), Some(TokenTree::Ident(v))) =
+                        (flat.get(i + 1), flat.get(i + 2), flat.get(i + 3))
+                        && a.as_char() == ':'
+                        && b.as_char() == ':'
+                        && let Some(e) = self.resolve(&id.to_string(), &v.to_string())
+                    {
+                        return Some((e, v.to_string()));
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
     }
 
     fn reference(&mut self, span: Span, e: &str, v: &str) {
@@ -1287,7 +1320,11 @@ fn every_violation_fixture_is_reported() {
         ),
         ("macro_metavar", "crates/core/src/sql/values.rs", &[(Kind::BooleanTest, 7), (Kind::BooleanTest, 13)]),
         ("macro_variant_import", "crates/core/src/sql/values.rs", &[(Kind::Alias, 5), (Kind::Alias, 13)]),
-        ("wrapped_eq", "crates/core/src/sql/values.rs", &[(Kind::BooleanTest, 5), (Kind::BooleanTest, 9)]),
+        (
+            "wrapped_eq",
+            "crates/core/src/sql/values.rs",
+            &[(Kind::BooleanTest, 5), (Kind::BooleanTest, 9), (Kind::BooleanTest, 13)],
+        ),
         ("slice_catch_all", "crates/core/src/sql/values.rs", &[(Kind::CatchAll, 7), (Kind::CatchAll, 14)]),
         ("qualified_self", "crates/tui/src/app/tx.rs", &[(Kind::Alias, 5), (Kind::Alias, 10)]),
         ("assoc_type", "crates/tui/src/app/tx.rs", &[(Kind::Alias, 9), (Kind::Alias, 13), (Kind::Alias, 20)]),
