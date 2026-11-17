@@ -4,7 +4,7 @@
 //! inside one under the driver's savepoint), and manual commit keeps the transaction open.
 //! A range pasted into a result goes through the same pipeline (read, laid over the rows as one
 //! step, planned, applied), and a paste of 1,000 keyed updates stays within its count of
-//! statements sent. Tables are `public.zz_apply_*` of this process, dropped when each test ends.
+//! statements sent. Tables are `public.it_apply_*` of this process, dropped when each test ends.
 
 #[allow(dead_code)]
 mod pg_clean;
@@ -46,12 +46,15 @@ struct Guard(String, String);
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        let _ = pg_clean::run_fresh(&self.0, &self.1);
+        if let Err(e) = pg_clean::run_fresh(&self.0, &self.1) {
+            // Never panic here: this may run while a failed assertion unwinds.
+            let _ = writeln!(std::io::stderr(), "warning: {}: {e}", self.1);
+        }
     }
 }
 
 fn table(test: &str) -> String {
-    format!("zz_apply_{test}_{}", std::process::id())
+    format!("it_apply_{test}_{}", std::process::id())
 }
 
 struct Conn {

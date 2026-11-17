@@ -884,7 +884,7 @@ mod terminal {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_statement_stale_twice_in_a_row_fails_once() {
         let Some(url) = pg_url("a_statement_stale_twice_in_a_row_fails_once") else { return };
-        let table = format!("public.it_stale_{}", std::process::id());
+        let table = format!("public.zz_stale_twice_{}", std::process::id());
         let _drop = TableGuard(url.clone(), table.clone());
         let (other, ..) = connect(&url).await;
         let other = Arc::new(other);
