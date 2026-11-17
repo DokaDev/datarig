@@ -195,6 +195,15 @@ fn test_only_modules(rel: &str, file: &syn::File, out: &mut Vec<String>) {
     } else {
         format!("{file_dir}/{}", name.trim_end_matches(".rs"))
     };
+    // A file under an inner `#![cfg(test)]` is a test-only module itself.
+    if is_test_only(&file.attrs) {
+        out.push(match name {
+            "mod.rs" => file_dir.to_string(),
+            "lib.rs" | "main.rs" => rel.trim_end_matches(".rs").to_string(),
+            _ => dir.clone(),
+        });
+        return;
+    }
     items(&dir, file_dir, &file.items, out);
 }
 
@@ -962,6 +971,9 @@ fn is_bool(ty: &syn::Type) -> bool {
 /// root, which decides whether the file is a seam module).
 fn scan_file(rel: &str, src: &str, variants: &Variants) -> Vec<Finding> {
     let file = parse(rel, src);
+    if is_test_only(&file.attrs) {
+        return Vec::new();
+    }
     let names = Names::new(&file, variants);
     let mut scan = Scan { rel, seam: in_seam(rel), names, variants, selves: Vec::new(), findings: Vec::new() };
     scan.visit_file(&file);
@@ -1198,6 +1210,16 @@ fn the_clean_fixture_passes() {
     let found = scan_fixture("clean", "crates/core/src/sql/clean.rs");
     let listed: Vec<String> = found.iter().map(|f| format!("    {f}")).collect();
     assert!(found.is_empty(), "the clean fixture was reported:\n{}", listed.join("\n"));
+    // A file under an inner `#![cfg(test)]` is test code, whatever it holds.
+    let found = scan_fixture("inner_cfg_test", "crates/tui/src/app/probe.rs");
+    assert!(found.is_empty(), "a test-only file was reported: {found:?}");
+    let mut modules = Vec::new();
+    let src = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/engine_seam/fixtures/inner_cfg_test.rs"),
+    )
+    .expect("the fixture");
+    test_only_modules("crates/tui/src/app/probe.rs", &parse("inner_cfg_test", &src), &mut modules);
+    assert_eq!(modules, ["crates/tui/src/app/probe"]);
     // Scanned as any other module, its variants are references, but its only legacy markers
     // are test-only.
     let markers: Vec<String> = scan_fixture("clean", "crates/tui/src/app/clean.rs")
