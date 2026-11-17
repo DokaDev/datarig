@@ -829,8 +829,9 @@ fn not_undone_sql(names: &[String], d: Dialect, mariadb: bool) -> String {
     let global = if mariadb { "" } else { " AND @@GLOBAL.partial_revokes = 0" };
     let me =
         "CONCAT(QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', 1)), '@', QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', -1)))";
+    let (bound, hints) = own_read_bounds(mariadb);
     format!(
-        "SELECT {OWN_READ_HINTS} CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME, ' (', COALESCE(t.ENGINE, t.TABLE_TYPE), ')') \
+        "{bound}SELECT {hints}CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME, ' (', COALESCE(t.ENGINE, t.TABLE_TYPE), ')') \
          FROM information_schema.TABLES t WHERE (t.TABLE_TYPE = 'VIEW' \
          OR UPPER(COALESCE(t.ENGINE, '')) NOT IN ('INNODB', 'NDBCLUSTER', 'NDB')) AND ({cond}) \
          UNION SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME, ' (trigger)') FROM information_schema.TABLES t \
@@ -2033,8 +2034,32 @@ fn outcome_of(sql: &str, mode: MySqlMode, affected: u64) -> Outcome {
 }
 
 /// A `SET_VAR` hint for the session's own catalog reads: they give up after 2 s behind a lock
-/// another session holds or waits for, and stop after 10 s (MariaDB reads the hint as a comment).
+/// another session holds or waits for, and stop after 10 s (MariaDB reads the hint as a comment:
+/// its reads take the same limits from [`own_read_bounds`]).
 const OWN_READ_HINTS: &str = "/*+ SET_VAR(lock_wait_timeout=2) MAX_EXECUTION_TIME(10000) */";
+
+/// The bounds of a catalog read of the session's own as written around its `SELECT`: MySQL's
+/// hints after it ([`OWN_READ_HINTS`], with the space that follows them), MariaDB's
+/// [`mariadb_bound`] before it with the same limits.
+fn own_read_bounds(mariadb: bool) -> (String, String) {
+    if mariadb { (mariadb_bound(Some(10), 2), String::new()) } else { (String::new(), format!("{OWN_READ_HINTS} ")) }
+}
+
+/// MariaDB's bound of a read of the app's own, written before it (`SET STATEMENT … FOR `; it
+/// reads MySQL's optimizer hints as a comment): it stops after `time_secs` seconds (no time limit
+/// of its own with `None`) and waits at most `lock_secs` seconds for a lock. Neither is ever
+/// longer than the session's own: a lock wait of 0 stays 0, a shorter time limit stays. In the
+/// statement's settings `@@SESSION.x` is the session's value before it.
+fn mariadb_bound(time_secs: Option<u32>, lock_secs: u32) -> String {
+    let lock = format!("lock_wait_timeout = LEAST(@@SESSION.lock_wait_timeout, {lock_secs})");
+    match time_secs {
+        Some(t) => format!(
+            "SET STATEMENT max_statement_time = IF(@@SESSION.max_statement_time = 0, {t}, \
+             LEAST(@@SESSION.max_statement_time, {t})), {lock} FOR "
+        ),
+        None => format!("SET STATEMENT {lock} FOR "),
+    }
+}
 
 /// Ask the server what only it can tell for the allowlist about `sql`, right before the app runs
 /// it again or counts it: whether a name it reads is a view (whose query may call anything) or a
@@ -2055,7 +2080,26 @@ async fn asked_server(
     let ask = check_sql(&names, Dialect::MySql(s.mode), &env.server);
     env.busy.store(true, Ordering::SeqCst);
     type Answer = (Option<String>, Option<String>, Option<String>, Option<String>, Option<String>);
-    let answer = link.guard(Some(env.killer), conn.query_first::<Answer, _>(ask)).await?;
+    let answer = match ask.as_slice() {
+        // MariaDB: the session's own values, then the lookup, bounded. A cancel between them
+        // leaves the lookup unsent.
+        [session, lookup] => {
+            type Session = (Option<String>, Option<String>, Option<String>, Option<String>);
+            match link.guard(Some(env.killer), conn.query_first::<Session, _>(session.as_str())).await? {
+                Ok(Some(_)) if env.asked.asked() => {
+                    idle(env, link).await;
+                    return Ok(Err(DbError::Cancelled));
+                }
+                Ok(Some((isolation, statement, lock, sort))) => link
+                    .guard(Some(env.killer), conn.query_first::<Option<String>, _>(lookup.as_str()))
+                    .await?
+                    .map(|view| Some((isolation, view.flatten(), statement, lock, sort))),
+                Ok(None) => Ok(None),
+                Err(e) => Err(e),
+            }
+        }
+        ask => link.guard(Some(env.killer), conn.query_first::<Answer, _>(ask.concat())).await?,
+    };
     let cancelled = env.asked.asked();
     idle(env, link).await;
     Ok(match answer {
@@ -2201,20 +2245,31 @@ fn name_parts(name: &str) -> Vec<String> {
 /// `BASE TABLE` and MariaDB's `SYSTEM VERSIONED`), compared without case; on MariaDB the session's lock wait too ([`Asked::lock`]).
 /// A name may be a table of the current database, a database's table (`db.t`), a column of a
 /// table (`t.c`, `db.t.c`) or an alias: every reading that can name a table is asked about.
-fn check_sql(names: &[String], d: Dialect, server: &Server) -> String {
+/// MySQL asks in one statement. MariaDB in two: the session's values first, unbounded (it reads
+/// no table), then the lookup bounded by [`mariadb_bound`], inside which `@@SESSION.x` would be
+/// the bound's value, not the session's.
+fn check_sql(names: &[String], d: Dialect, server: &Server) -> Vec<String> {
     let cond = name_condition(names, d);
-    let (limit, lock) = if server.mariadb {
-        ("max_statement_time", "@@SESSION.lock_wait_timeout")
-    } else {
-        ("max_execution_time", "NULL")
-    };
     let isolation = server.isolation_var();
-    format!(
-        "SELECT {OWN_READ_HINTS} @@SESSION.{isolation}, (SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME) \
+    let lookup = format!(
+        "(SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME) \
          FROM information_schema.TABLES t WHERE t.TABLE_TYPE NOT IN ('BASE TABLE', 'SYSTEM VERSIONED') \
-         AND ({cond}) LIMIT 1), \
-         @@SESSION.{limit}, {lock}, @@SESSION.max_sort_length"
-    )
+         AND ({cond}) LIMIT 1)"
+    );
+    if server.mariadb {
+        let (bound, _) = own_read_bounds(true);
+        return vec![
+            format!(
+                "SELECT @@SESSION.{isolation}, @@SESSION.max_statement_time, @@SESSION.lock_wait_timeout, \
+                 @@SESSION.max_sort_length"
+            ),
+            format!("{bound}SELECT {lookup}"),
+        ];
+    }
+    vec![format!(
+        "SELECT {OWN_READ_HINTS} @@SESSION.{isolation}, {lookup}, @@SESSION.max_execution_time, NULL, \
+         @@SESSION.max_sort_length"
+    )]
 }
 
 /// The rows of `information_schema.TABLES t` that `names` may name, without case: a bare name a

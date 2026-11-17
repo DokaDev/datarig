@@ -136,18 +136,15 @@ fn postgres_chunk_literals_read_the_same_whatever_standard_conforming_strings_is
 }
 
 #[test]
-fn mysql_chunks_write_the_comparison_out_with_a_lock_wait_hint() {
+fn mysql_chunks_write_the_comparison_out() {
     let c = cols();
     let key = ["id".to_string(), "name".to_string(), "data".to_string()];
     let k = Keyset::new(my(), "s", "t", &key, &c, &names(&c), true).unwrap();
-    assert_eq!(
-        k.first(),
-        "SELECT /*+ SET_VAR(lock_wait_timeout=5) */ * FROM `s`.`t` ORDER BY `id`, `name`, `data` LIMIT 10000"
-    );
+    assert_eq!(k.first(), "SELECT * FROM `s`.`t` ORDER BY `id`, `name`, `data` LIMIT 10000");
     let last = [Some("18446744073709551615".into()), Some("a\\b".into()), None, Some("0x00FF".into())];
     assert_eq!(
         k.after(&last).unwrap(),
-        "SELECT /*+ SET_VAR(lock_wait_timeout=5) */ * FROM `s`.`t` WHERE `id` > 18446744073709551615 OR \
+        "SELECT * FROM `s`.`t` WHERE `id` > 18446744073709551615 OR \
          (`id` = 18446744073709551615 AND (`name` > _utf8mb4 X'615C62' OR (`name` = _utf8mb4 X'615C62' AND \
          (`data` > X'00FF')))) ORDER BY `id`, `name`, `data` LIMIT 10000",
         "a backslash is read the same whatever NO_BACKSLASH_ESCAPES says"
@@ -211,4 +208,23 @@ fn a_prefix_key_is_not_used() {
     i.columns = vec!["`a`(10)".into()];
     s.indexes.push(i);
     assert_eq!(table_key(&s), Err(NotKeyset::Ordered("a".into())));
+}
+
+/// A chunk is a plain `SELECT` on every engine: the MySQL driver adds its bounds when it sends
+/// the chunk, after reading what it does (a bound written before the `SELECT`, as MariaDB's is,
+/// would not read as a read).
+#[test]
+fn keyset_chunk_select_is_plain() {
+    let c = cols();
+    let key = ["id".to_string()];
+    for d in [my(), PG] {
+        let k = Keyset::new(d, "s", "t", &key, &c, &names(&c), true).unwrap();
+        let first = k.first();
+        let after = k.after(&[Some("7".into()), Some("a".into()), None, Some("0x00".into())]).unwrap();
+        for sql in [first, after] {
+            let plain = if d == PG { "SELECT * FROM \"s\".\"t\" " } else { "SELECT * FROM `s`.`t` " };
+            assert!(sql.starts_with(plain), "{d:?}: {sql}");
+            assert!(!sql.contains("/*"), "{d:?}: {sql}");
+        }
+    }
 }

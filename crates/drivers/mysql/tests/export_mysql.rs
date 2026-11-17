@@ -911,3 +911,44 @@ async fn mariadb_invisible_and_versioned_tables_are_exported_whole() {
         assert_eq!(metadata_locks(&admin, &t.name).await, 0, "{}: the statement ended", t.name);
     }
 }
+
+/// A keyset chunk waits at most 5 s for a metadata lock on every server: MySQL through its
+/// optimizer hint, MariaDB (which reads the hint as a comment) through `SET STATEMENT … FOR`,
+/// never longer than the session's own wait. The text the server ran says which.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_mariadb_keyset_export_is_bounded() {
+    let test = "a_mariadb_keyset_export_is_bounded";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "kbound", 10).await;
+    let mut c = Conn::open(&url, SessionRole::Query, "kbound").await;
+    let id: u64 = c.rows("SELECT CONNECTION_ID()").await[0][0].as_deref().unwrap().parse().unwrap();
+    let DbEvent::Page { columns: Some(cols), .. } = c.run(&format!("SELECT * FROM {} LIMIT 1", t.q())).await else {
+        panic!("no columns")
+    };
+    let names = ["id".to_string(), "v".to_string()];
+    let k = Keyset::new(Dialect::MySql(Default::default()), "shop", &t.name, &names[..1], &cols, &names, true).unwrap();
+    let chunk = k.first();
+    let (export, mut rx) = c.export(&chunk, ExportGuard::Keyset, 2, 4);
+    let (_, rows, _) = drain(&mut rx).await;
+    assert_eq!(c.exported(export).await.0.unwrap().rows, 10);
+    assert_eq!(rows.len(), 10);
+    let plain = chunk.strip_prefix("SELECT ").unwrap();
+    let want = if mariadb(&admin).await {
+        on_mariadb(test, "the chunk is bounded by SET STATEMENT, the hint being a comment there");
+        format!("SET STATEMENT lock_wait_timeout = LEAST(@@SESSION.lock_wait_timeout, 5) FOR {chunk}")
+    } else {
+        format!("SELECT /*+ SET_VAR(lock_wait_timeout=5) */ {plain}")
+    };
+    let mut a = side(&admin).await;
+    let sent: Vec<String> = a
+        .exec(
+            "SELECT h.SQL_TEXT FROM performance_schema.events_statements_history h \
+             JOIN performance_schema.threads t ON t.THREAD_ID = h.THREAD_ID WHERE t.PROCESSLIST_ID = ? \
+             AND h.SQL_TEXT LIKE '%ORDER BY%' ORDER BY h.EVENT_ID",
+            (id,),
+        )
+        .await
+        .unwrap();
+    a.disconnect().await.unwrap();
+    assert_eq!(sent.last(), Some(&want), "{sent:?}");
+}

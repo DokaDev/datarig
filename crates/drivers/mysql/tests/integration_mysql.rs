@@ -8514,3 +8514,140 @@ async fn startup_statements_never_run_on_a_session_the_server_did_not_keep_read_
     assert_eq!(rows, Some(0), "the start-up statement ran");
     side.disconnect().await.unwrap();
 }
+
+/// MariaDB reads MySQL's optimizer hints as a comment, so the allowlist's lookup goes bounded by
+/// `SET STATEMENT … FOR`, and the session's own limits are read apart before it (inside it they
+/// would read as the bound's). A session that does not wait for locks and stops statements after
+/// 0.5 s keeps both for its bounded count: never a longer wait.
+#[tokio::test(flavor = "multi_thread")]
+async fn mariadb_own_reads_are_bounded_and_keep_the_sessions_shorter_limits() {
+    let test = "mariadb_own_reads_are_bounded_and_keep_the_sessions_shorter_limits";
+    let Some((url, admin)) = urls(test) else { return };
+    if !mariadb(&url).await {
+        only_on_mariadb(test);
+        return;
+    }
+    let _end = EndSessions { admin: admin.clone(), test };
+    let t = numbers(&admin, "ownbound", 50).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let evs = c.run(1, &["SELECT CONNECTION_ID()"]).await;
+    let id: u64 = page_of(&evs).1[0][0].as_deref().unwrap().parse().unwrap();
+    let rows = format!("SELECT * FROM {} WHERE (id > 10)", t.q());
+    let counted = format!("SELECT COUNT(*) FROM (\n{rows}\n) AS datarig_count");
+    let limit = Some(Duration::from_secs(30));
+    c.ok(2, "SET SESSION lock_wait_timeout = 0").await;
+    c.ok(3, "SET SESSION max_statement_time = 0.5").await;
+    assert_eq!(count_within(&mut c, 4, &counted, limit).await.0, Ok(40));
+    let mut a = side(&admin).await;
+    let ran = statements_of(&mut a, id).await;
+    let bound = "SET STATEMENT max_statement_time = IF(@@SESSION.max_statement_time = 0, 10, \
+                 LEAST(@@SESSION.max_statement_time, 10)), lock_wait_timeout = LEAST(@@SESSION.lock_wait_timeout, 2) \
+                 FOR SELECT ";
+    let lookup = ran.iter().position(|q| q.starts_with(bound)).unwrap_or_else(|| panic!("a bounded lookup: {ran:?}"));
+    let session = &ran[lookup - 1];
+    assert!(session.starts_with("SELECT @@SESSION."), "the session's own, unbounded: {ran:?}");
+    assert!(session.ends_with("@@SESSION.max_statement_time, @@SESSION.lock_wait_timeout, @@SESSION.max_sort_length"));
+    // The count went with the session's own limits as they were read: 0.5 s, no lock wait.
+    assert!(
+        ran[lookup + 1..]
+            .iter()
+            .any(|q| q.starts_with("SET STATEMENT max_statement_time = 0.5, lock_wait_timeout = 0 FOR")),
+        "{ran:?}"
+    );
+    // Behind a lock another session holds the count does not wait.
+    let mut b = side(&url).await;
+    b.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
+    let (got, took) = count_within(&mut c, 5, &counted, limit).await;
+    b.query_drop("UNLOCK TABLES").await.unwrap();
+    b.disconnect().await.unwrap();
+    assert!(matches!(got, Err(DbError::LockTimeout(_))), "{got:?}");
+    assert!(took < Duration::from_millis(900), "no wait: {took:?}");
+    let evs = c.run(6, &["SELECT @@SESSION.lock_wait_timeout, @@SESSION.max_statement_time"]).await;
+    let (_, values, _) = page_of(&evs);
+    assert_eq!(values[0][0].as_deref(), Some("0"), "the user's own stays");
+    assert_eq!(values[0][1].as_deref(), Some("0.500000"), "the user's own stays");
+    a.disconnect().await.unwrap();
+}
+
+/// On MariaDB the allowlist asks in two statements: the session's own values, then the lookup.
+/// A cancel that comes while the first one's answer is on its way finds nothing running at the
+/// server: the lookup is then not sent, the count is answered cancelled once, the session is idle
+/// again (a cancel now sends no kill) and goes on. A connection lost on the first statement ends
+/// the count once without the lookup, and the session is lost.
+#[tokio::test(flavor = "multi_thread")]
+async fn mariadb_a_cancel_or_a_lost_connection_between_the_allowlists_statements() {
+    let test = "mariadb_a_cancel_or_a_lost_connection_between_the_allowlists_statements";
+    let Some((url, admin)) = urls(test) else { return };
+    if !mariadb(&url).await {
+        only_on_mariadb(test);
+        return;
+    }
+    let _end = EndSessions { admin: admin.clone(), test };
+    let t = numbers(&admin, "between", 50).await;
+    let rows = format!("SELECT * FROM {} WHERE (id > 10)", t.q());
+    let counted = format!("SELECT COUNT(*) FROM (\n{rows}\n) AS datarig_count");
+    let count = |id| DbCommand::Count { id, sql: counted.clone(), limit: Some(Duration::from_secs(30)) };
+    // The first statement reads the session's values; only the lookup is bounded this way.
+    let (first, lookup) = ("@@SESSION.max_sort_length", "SET STATEMENT max_statement_time = IF(");
+    let one_answer = |evs: &[DbEvent]| evs.iter().filter(|e| matches!(e, DbEvent::Counted { .. })).count();
+
+    // A cancel while the first answer is held back.
+    let Some((mut c, tap)) = tapped(&url, test).await else { return };
+    tap.clear();
+    tap.hold_after(first);
+    c.session.send(count(1));
+    until("the session's values were asked", || tap.held()).await;
+    c.session.cancel();
+    until("the kill went out", || tap.written().contains("KILL QUERY")).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    tap.release();
+    assert_eq!(read_answer(&mut c).await, Err(DbError::Cancelled));
+    let written = tap.written();
+    assert!(!written.contains(lookup), "the lookup is not sent: {written}");
+    assert!(!written.contains("COUNT(*) FROM ("), "nor the count: {written}");
+    // Idle: a cancel now has nothing to kill.
+    tap.clear();
+    c.session.cancel();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!tap.written().contains("KILL QUERY"), "{}", tap.written());
+    let evs = c.run(2, &["SELECT 1"]).await;
+    assert_eq!(one_answer(&evs), 0, "answered once: {evs:?}");
+    assert_eq!(page_of(&evs).1, &vec![vec![Some("1".to_string())]]);
+    c.session.send(count(3));
+    assert_eq!(read_answer(&mut c).await, Ok(40), "the session goes on");
+    assert!(tap.written().contains(lookup), "a count not cancelled asks the lookup");
+
+    // The connection lost on the first statement: the session kills its own connection there.
+    let evs = c.run(4, &["SELECT CONNECTION_ID()"]).await;
+    let id = page_of(&evs).1[0][0].clone().unwrap();
+    let kill = format!("KILL {id} -- ");
+    assert!(kill.len() <= "SELECT @@SESSION.".len(), "{kill}");
+    tap.clear();
+    tap.swap("SELECT @@SESSION.", &kill);
+    c.session.send(count(5));
+    let mut evs = Vec::new();
+    loop {
+        let ev = c.next(20).await;
+        let lost = matches!(ev, DbEvent::Lost { .. });
+        evs.push(ev);
+        if lost {
+            break;
+        }
+    }
+    assert_eq!(one_answer(&evs), 1, "{evs:?}");
+    let answer = evs.iter().find_map(|e| match e {
+        DbEvent::Counted { id: 5, result, .. } => Some(result.clone()),
+        _ => None,
+    });
+    assert!(matches!(answer, Some(Err(ref e)) if *e != DbError::Cancelled), "{evs:?}");
+    let written = tap.written();
+    // (What was written is the text before the swap.)
+    assert!(
+        written.contains("@@SESSION.max_sort_length") && !written.contains(lookup),
+        "the lookup is not sent: {written}"
+    );
+    assert!(tokio::time::timeout(Duration::from_millis(500), c.rx.recv()).await.ok().flatten().is_none());
+    // Another session runs as ever.
+    let mut d = Conn::open(&url, SessionRole::Query, false, test).await;
+    assert_eq!(count_within(&mut d, 1, &counted, Some(Duration::from_secs(30))).await.0, Ok(40));
+}
