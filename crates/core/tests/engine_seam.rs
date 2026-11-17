@@ -552,7 +552,8 @@ impl Scan<'_> {
     }
 
     /// Engine variants and markers in tokens that do not parse as Rust; a macro call or a
-    /// group in them that does parse is scanned as Rust.
+    /// group in them that does parse is scanned as Rust. An engine variant named in tokens that
+    /// do not parse counts as a boolean test: the scan cannot tell how it is used.
     fn tokens(&mut self, tokens: TokenStream) {
         let flat: Vec<TokenTree> = tokens.into_iter().collect();
         let mut skip = 0;
@@ -597,6 +598,13 @@ impl Scan<'_> {
                         && let Some(e) = self.resolve(&s, &v)
                     {
                         self.reference(id.span(), e, &v);
+                        // What these tokens do with the variant cannot be read: count them as
+                        // a branch on it (move such code into the seam, as a `match`).
+                        self.report(
+                            id.span(),
+                            Kind::BooleanTest,
+                            format!("{e}::{v} in macro tokens the scan cannot read as Rust"),
+                        );
                     }
                 }
                 TokenTree::Literal(l) => {
@@ -1191,7 +1199,7 @@ fn boolean_engine_tests_stay_within_budget() {
 fn every_violation_fixture_is_reported() {
     // (fixture, the path it is scanned as, what must be reported, with the line)
     type Case = (&'static str, &'static str, &'static [(Kind, usize)]);
-    let cases: [Case; 16] = [
+    let cases: [Case; 17] = [
         ("driver_engine_branch", "crates/drivers/mysql/src/session.rs", &[(Kind::Reference, 6), (Kind::Reference, 7)]),
         ("tui_if_let_dialect", "crates/tui/src/app/editor.rs", &[(Kind::BooleanTest, 6), (Kind::Reference, 6)]),
         ("catch_all_explain", "crates/core/src/sql/plan.rs", &[(Kind::CatchAll, 9)]),
@@ -1216,6 +1224,7 @@ fn every_violation_fixture_is_reported() {
         ("macro_alias", "crates/core/src/sql/split.rs", &[(Kind::Alias, 3)]),
         ("alias_reexport", "crates/core/src/sql.rs", &[(Kind::Alias, 2), (Kind::Alias, 5)]),
         ("nested_catch_all", "crates/core/src/sql/format.rs", &[(Kind::CatchAll, 8), (Kind::CatchAll, 17)]),
+        ("macro_metavar", "crates/core/src/sql/values.rs", &[(Kind::BooleanTest, 7)]),
     ];
     let mut missed = Vec::new();
     for (name, path, expected) in cases {
