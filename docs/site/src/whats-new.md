@@ -84,7 +84,8 @@ A patch release that makes several checks stricter, so read the list before upgr
   `EXPLAIN` of such a call and `EXECUTE` of a statement prepared with one are refused too. A
   read-only MySQL profile already refused such calls. The refusal now names the function, on
   PostgreSQL and MySQL alike. A function reached through a view, a trigger, an operator, a cast
-  or attribute notation (`t.f`) is still stopped only by the read-only transaction. Until a
+  or attribute notation (`t.f`) is not checked by this rule; the read-only transaction then
+  stops only what it would write in the session's own database. Until a
   per-environment allow list ships in the next patch, run queries that need such functions
   (for example PostGIS `ST_*` or pgcrypto) from a profile that is not read-only.
 - PostgreSQL: copied and exported SQL, export chunks and DDL text write a string holding a
