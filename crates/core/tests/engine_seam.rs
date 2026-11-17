@@ -17,8 +17,8 @@
 //!   every rule itself.
 //!
 //! - another name for an engine enum or one of its variants (`use E as A`, `use E::{self as A}`,
-//!   `type A = E`, and any import of variants: `use E::V`, `use E::*`), anywhere: a variant is
-//!   always named through its own enum, so the scan never has to resolve names.
+//!   `type A = E`, `<E>::V`, and any import of variants: `use E::V`, `use E::*`), anywhere: a
+//!   variant is always named as `E::V`, so the scan never has to resolve names.
 //!
 //! `Self::V` inside an `impl` of an engine enum is resolved. The sites that exist today are counted per area against
 //! `engine_seam/budget.toml`: a count may only go down, and a count that went down lowers its
@@ -765,6 +765,16 @@ impl<'ast> Visit<'ast> for Scan<'_> {
         walk(self, &mut Vec::new(), &u.tree);
     }
 
+    // `<E>::V` names a variant past the scan's paths: reported like another name for `E`.
+    fn visit_qself(&mut self, q: &'ast syn::QSelf) {
+        if let syn::Type::Path(p) = &*q.ty
+            && let Some(e) = p.path.segments.last().and_then(|s| engine_enum(&s.ident.to_string()))
+        {
+            self.report(q.lt_token.span, Kind::Alias, format!("`<{e}>::..` names {e} through a qualified path"));
+        }
+        visit::visit_qself(self, q);
+    }
+
     fn visit_item_type(&mut self, t: &'ast syn::ItemType) {
         if let syn::Type::Path(p) = &*t.ty
             && let Some(e) = p.path.segments.last().and_then(|s| engine_enum(&s.ident.to_string()))
@@ -1219,7 +1229,7 @@ fn boolean_engine_tests_stay_within_budget() {
 fn every_violation_fixture_is_reported() {
     // (fixture, the path it is scanned as, what must be reported, with the line)
     type Case = (&'static str, &'static str, &'static [(Kind, usize)]);
-    let cases: [Case; 20] = [
+    let cases: [Case; 21] = [
         ("driver_engine_branch", "crates/drivers/mysql/src/session.rs", &[(Kind::Reference, 6), (Kind::Reference, 7)]),
         ("tui_if_let_dialect", "crates/tui/src/app/editor.rs", &[(Kind::BooleanTest, 6), (Kind::Reference, 6)]),
         ("catch_all_explain", "crates/core/src/sql/plan.rs", &[(Kind::CatchAll, 9)]),
@@ -1252,6 +1262,7 @@ fn every_violation_fixture_is_reported() {
         ("macro_variant_import", "crates/core/src/sql/values.rs", &[(Kind::Alias, 5), (Kind::Alias, 13)]),
         ("wrapped_eq", "crates/core/src/sql/values.rs", &[(Kind::BooleanTest, 5), (Kind::BooleanTest, 9)]),
         ("slice_catch_all", "crates/core/src/sql/values.rs", &[(Kind::CatchAll, 7), (Kind::CatchAll, 14)]),
+        ("qualified_self", "crates/tui/src/app/tx.rs", &[(Kind::Alias, 5)]),
     ];
     let mut missed = Vec::new();
     for (name, path, expected) in cases {
