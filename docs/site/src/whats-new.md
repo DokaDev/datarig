@@ -12,7 +12,7 @@ A patch release that lifts the refusal of extension functions on read-only Postg
 - A read-only PostgreSQL environment can allow functions that are not built-ins with
   `read_only_functions` (such as `["st_x", "public.crypt"]`: a bare name allows that function
   in any schema, a name with its schema only calls written with that schema) and every function
-  of the extensions in `read_only_extensions` (such as `["postgis"]`), both set in the
+  of chosen extensions with `read_only_extensions = ["postgis"]`, both set in the
   environment's `[policy.<name>]` table. An extension's function stays refused when a function
   outside the allowed extensions has the same name. A refused call says why, and names
   `read_only_functions` where adding the function would allow it; `:session` lists what is
