@@ -310,6 +310,13 @@ impl Collect<'_> {
 }
 
 impl<'ast> Visit<'ast> for Collect<'_> {
+    // Test-only code is not scanned, so its imports name nothing for the code that is.
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !is_test_only(item_attrs(item)) {
+            visit::visit_item(self, item);
+        }
+    }
+
     fn visit_item_use(&mut self, u: &'ast syn::ItemUse) {
         self.tree(&mut Vec::new(), &u.tree);
     }
@@ -448,6 +455,10 @@ impl Scan<'_> {
         if let Some(span) = self.wildcard(pat) {
             return Some(span);
         }
+        // Each alternative of `a | b` stands at this same position, the root included.
+        if let Pat::Or(o) = pat {
+            return o.cases.iter().find_map(|c| self.wildcard_at(c, at));
+        }
         let (step, rest) = at.split_first()?;
         let part = |elems: &Punctuated<Pat, Token![,]>, i: usize| -> Result<Option<Span>, ()> {
             // Past a `..` the index no longer lines up: count it as covered.
@@ -459,7 +470,6 @@ impl Scan<'_> {
             elems.iter().nth(i).map(|p| self.wildcard_at(p, rest)).ok_or(())
         };
         match (step, pat) {
-            (_, Pat::Or(o)) => o.cases.iter().find_map(|c| self.wildcard_at(c, at)),
             (Step::Part(name, i), Pat::Tuple(t)) if name.is_empty() => part(&t.elems, *i).ok().flatten(),
             (Step::Part(name, i), Pat::TupleStruct(t)) if *name == last_name(&t.path) => {
                 part(&t.elems, *i).ok().flatten()
@@ -631,25 +641,7 @@ impl<'ast> Visit<'ast> for Scan<'_> {
     fn visit_attribute(&mut self, _: &'ast Attribute) {}
 
     fn visit_item(&mut self, item: &'ast syn::Item) {
-        let attrs: &[Attribute] = match item {
-            syn::Item::Const(i) => &i.attrs,
-            syn::Item::Enum(i) => &i.attrs,
-            syn::Item::Fn(i) => &i.attrs,
-            syn::Item::Impl(i) => &i.attrs,
-            syn::Item::Macro(i) => &i.attrs,
-            syn::Item::Mod(i) => &i.attrs,
-            syn::Item::Static(i) => &i.attrs,
-            syn::Item::Struct(i) => &i.attrs,
-            syn::Item::Trait(i) => &i.attrs,
-            syn::Item::Type(i) => &i.attrs,
-            syn::Item::Union(i) => &i.attrs,
-            syn::Item::Use(i) => &i.attrs,
-            syn::Item::ExternCrate(i) => &i.attrs,
-            syn::Item::ForeignMod(i) => &i.attrs,
-            syn::Item::TraitAlias(i) => &i.attrs,
-            _ => &[],
-        };
-        if !is_test_only(attrs) {
+        if !is_test_only(item_attrs(item)) {
             visit::visit_item(self, item);
         }
     }
@@ -957,6 +949,27 @@ fn peel(pat: &Pat) -> &Pat {
     }
 }
 
+fn item_attrs(item: &syn::Item) -> &[Attribute] {
+    match item {
+        syn::Item::Const(i) => &i.attrs,
+        syn::Item::Enum(i) => &i.attrs,
+        syn::Item::Fn(i) => &i.attrs,
+        syn::Item::Impl(i) => &i.attrs,
+        syn::Item::Macro(i) => &i.attrs,
+        syn::Item::Mod(i) => &i.attrs,
+        syn::Item::Static(i) => &i.attrs,
+        syn::Item::Struct(i) => &i.attrs,
+        syn::Item::Trait(i) => &i.attrs,
+        syn::Item::Type(i) => &i.attrs,
+        syn::Item::Union(i) => &i.attrs,
+        syn::Item::Use(i) => &i.attrs,
+        syn::Item::ExternCrate(i) => &i.attrs,
+        syn::Item::ForeignMod(i) => &i.attrs,
+        syn::Item::TraitAlias(i) => &i.attrs,
+        _ => &[],
+    }
+}
+
 fn trait_item_attrs(item: &syn::TraitItem) -> &[Attribute] {
     match item {
         syn::TraitItem::Const(i) => &i.attrs,
@@ -1223,7 +1236,11 @@ fn every_violation_fixture_is_reported() {
         ("self_rename", "crates/core/src/sql/split.rs", &[(Kind::Alias, 2)]),
         ("macro_alias", "crates/core/src/sql/split.rs", &[(Kind::Alias, 3)]),
         ("alias_reexport", "crates/core/src/sql.rs", &[(Kind::Alias, 2), (Kind::Alias, 5)]),
-        ("nested_catch_all", "crates/core/src/sql/format.rs", &[(Kind::CatchAll, 8), (Kind::CatchAll, 17)]),
+        (
+            "nested_catch_all",
+            "crates/core/src/sql/format.rs",
+            &[(Kind::CatchAll, 8), (Kind::CatchAll, 17), (Kind::CatchAll, 23)],
+        ),
         ("macro_metavar", "crates/core/src/sql/values.rs", &[(Kind::BooleanTest, 7)]),
     ];
     let mut missed = Vec::new();
@@ -1253,6 +1270,9 @@ fn the_clean_fixture_passes() {
     // under a one-letter name.
     let found = scan_fixture("unrelated_enum", "crates/tui/src/app/chart.rs");
     assert!(found.is_empty(), "an unrelated enum was reported: {found:?}");
+    // A test-only import names nothing for the code around it.
+    let found = scan_fixture("test_import", "crates/tui/src/app/chart.rs");
+    assert!(found.is_empty(), "a test-only import changed what product code names: {found:?}");
     // A file under an inner `#![cfg(test)]` is test code, whatever it holds.
     let found = scan_fixture("inner_cfg_test", "crates/tui/src/app/probe.rs");
     assert!(found.is_empty(), "a test-only file was reported: {found:?}");

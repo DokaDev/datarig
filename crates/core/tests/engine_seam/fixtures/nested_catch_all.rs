@@ -17,3 +17,9 @@ fn width(d: Dialect, n: usize) -> usize {
         (_, n) => n,
     }
 }
+
+fn root_alternative(d: Dialect) -> bool {
+    match d {
+        Dialect::Postgres | _ => false,
+    }
+}
