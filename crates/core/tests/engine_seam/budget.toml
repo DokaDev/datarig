@@ -44,9 +44,9 @@
 [catch_alls]
 "crates/core/src/edit" = 1
 "crates/core/src/monitor" = 1
-"crates/core/src/query" = 2
+"crates/core/src/query" = 5
 "crates/core/src/sql" = 4
-"crates/tui/src/app" = 2
+"crates/tui/src/app" = 3
 
 # `matches!`, `==`, `!=`, `if let` and `let .. else` on an engine variant (seam modules included).
 [boolean_tests]

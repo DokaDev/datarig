@@ -383,24 +383,96 @@ impl Scan<'_> {
         find.found
     }
 
-    /// Whether a pattern matches every value (`_`, a binding, a tuple of those).
-    fn catch_all(&self, pat: &Pat) -> bool {
+    /// Whether a pattern matches every value here: `_`, `..` or a binding (lower case; `None`
+    /// or an imported variant names one value).
+    fn wildcard(&self, pat: &Pat) -> Option<Span> {
         match pat {
-            Pat::Wild(_) | Pat::Rest(_) => true,
-            Pat::Ident(i) => match &i.subpat {
-                Some((_, sub)) => self.catch_all(sub),
-                // A binding is lower case; `None` or an imported variant names one value.
-                None => {
-                    let name = i.ident.to_string();
-                    name.starts_with(|c: char| c.is_lowercase() || c == '_') && !self.names.bare.contains_key(&name)
-                }
-            },
-            Pat::Tuple(t) => t.elems.iter().all(|p| self.catch_all(p)),
-            Pat::Paren(p) => self.catch_all(&p.pat),
-            Pat::Reference(r) => self.catch_all(&r.pat),
-            Pat::Type(t) => self.catch_all(&t.pat),
-            Pat::Or(o) => o.cases.iter().any(|p| self.catch_all(p)),
+            Pat::Wild(w) => Some(w.underscore_token.span),
+            Pat::Rest(r) => Some(r.dot2_token.spans[0]),
+            Pat::Ident(i) if i.subpat.is_none() => {
+                let name = i.ident.to_string();
+                (name.starts_with(|c: char| c.is_lowercase() || c == '_') && !self.names.bare.contains_key(&name))
+                    .then(|| i.ident.span())
+            }
+            _ => None,
+        }
+    }
+
+    /// The positions in a pattern where an engine variant is named.
+    fn variant_positions(&self, pat: &Pat, here: &mut Vec<Step>, out: &mut Vec<Vec<Step>>) {
+        let pat = peel(pat);
+        let names_variant = match pat {
+            Pat::Path(p) => self.variant(&p.path).is_some(),
+            Pat::TupleStruct(t) => self.variant(&t.path).is_some(),
+            Pat::Struct(st) => self.variant(&st.path).is_some(),
+            Pat::Ident(i) => i.subpat.is_none() && self.names.bare.contains_key(&i.ident.to_string()),
             _ => false,
+        };
+        if names_variant {
+            out.push(here.clone());
+            return;
+        }
+        match pat {
+            Pat::Or(o) => o.cases.iter().for_each(|c| self.variant_positions(c, here, out)),
+            Pat::Tuple(t) => {
+                for (i, e) in t.elems.iter().enumerate() {
+                    here.push(Step::Part(String::new(), i));
+                    self.variant_positions(e, here, out);
+                    here.pop();
+                }
+            }
+            Pat::TupleStruct(t) => {
+                for (i, e) in t.elems.iter().enumerate() {
+                    here.push(Step::Part(last_name(&t.path), i));
+                    self.variant_positions(e, here, out);
+                    here.pop();
+                }
+            }
+            Pat::Struct(st) => {
+                for f in &st.fields {
+                    if let syn::Member::Named(name) = &f.member {
+                        here.push(Step::Field(last_name(&st.path), name.to_string()));
+                        self.variant_positions(&f.pat, here, out);
+                        here.pop();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Where `pat` matches every value at position `at`: `_` or a binding there or above it, or
+    /// a `..` that may cover it.
+    fn wildcard_at(&self, pat: &Pat, at: &[Step]) -> Option<Span> {
+        let pat = peel(pat);
+        if let Some(span) = self.wildcard(pat) {
+            return Some(span);
+        }
+        let (step, rest) = at.split_first()?;
+        let part = |elems: &Punctuated<Pat, Token![,]>, i: usize| -> Result<Option<Span>, ()> {
+            // Past a `..` the index no longer lines up: count it as covered.
+            if let Some(r) = elems.iter().position(|p| matches!(p, Pat::Rest(_)))
+                && i >= r
+            {
+                return Ok(self.wildcard(&elems[r]));
+            }
+            elems.iter().nth(i).map(|p| self.wildcard_at(p, rest)).ok_or(())
+        };
+        match (step, pat) {
+            (_, Pat::Or(o)) => o.cases.iter().find_map(|c| self.wildcard_at(c, at)),
+            (Step::Part(name, i), Pat::Tuple(t)) if name.is_empty() => part(&t.elems, *i).ok().flatten(),
+            (Step::Part(name, i), Pat::TupleStruct(t)) if *name == last_name(&t.path) => {
+                part(&t.elems, *i).ok().flatten()
+            }
+            (Step::Field(name, field), Pat::Struct(st)) if *name == last_name(&st.path) => {
+                let named = st.fields.iter().find(|f| matches!(&f.member, syn::Member::Named(m) if m == field));
+                match (named, &st.rest) {
+                    (Some(f), _) => self.wildcard_at(&f.pat, rest),
+                    (None, Some(r)) => Some(r.dot2_token.spans[0]),
+                    (None, None) => None,
+                }
+            }
+            _ => None,
         }
     }
 
@@ -795,17 +867,17 @@ impl<'ast> Visit<'ast> for Scan<'_> {
         visit::visit_pat_type(self, p);
     }
 
+    // A catch-all is a `_`, `..` or binding at a position where another arm names an engine
+    // variant: `Some(_)` beside `Some(Dialect::Postgres)`, `(_, n)` beside `(Dialect::Postgres, 0)`.
     fn visit_expr_match(&mut self, m: &'ast syn::ExprMatch) {
         let arms: Vec<&syn::Arm> = m.arms.iter().filter(|a| !is_test_only(&a.attrs)).collect();
         let named = arms.iter().find_map(|a| self.pat_variant(&a.pat));
-        if let Some((e, v)) = named
-            && let Some(arm) = arms.iter().find(|a| self.catch_all(&a.pat))
-        {
-            let span = match &arm.pat {
-                Pat::Wild(w) => w.underscore_token.span,
-                Pat::Ident(i) => i.ident.span(),
-                _ => m.match_token.span,
-            };
+        let mut positions = Vec::new();
+        for arm in &arms {
+            self.variant_positions(&arm.pat, &mut Vec::new(), &mut positions);
+        }
+        let caught = arms.iter().find_map(|arm| positions.iter().find_map(|at| self.wildcard_at(&arm.pat, at)));
+        if let (Some((e, v)), Some(span)) = (named, caught) {
             self.report(span, Kind::CatchAll, format!("catch-all arm in a match naming {e}::{v}"));
         }
         visit::visit_expr_match(self, m);
@@ -847,6 +919,33 @@ impl<'ast> Visit<'ast> for Scan<'_> {
             self.other_macro(mac);
         }
         visit::visit_macro(self, mac);
+    }
+}
+
+/// One step into a pattern: the n-th part of a tuple (no name) or of a tuple variant `P(..)`, or
+/// a named field of `P { .. }`.
+#[derive(Clone, Debug, PartialEq)]
+enum Step {
+    Part(String, usize),
+    Field(String, String),
+}
+
+fn last_name(path: &syn::Path) -> String {
+    path.segments.last().map(|s| s.ident.to_string()).unwrap_or_default()
+}
+
+/// A pattern without the wrappers that do not change what it matches (`(p)`, `&p`, `p: T`,
+/// `x @ p`).
+fn peel(pat: &Pat) -> &Pat {
+    match pat {
+        Pat::Paren(p) => peel(&p.pat),
+        Pat::Reference(r) => peel(&r.pat),
+        Pat::Type(t) => peel(&t.pat),
+        Pat::Ident(i) => match &i.subpat {
+            Some((_, sub)) => peel(sub),
+            None => pat,
+        },
+        _ => pat,
     }
 }
 
@@ -1092,7 +1191,7 @@ fn boolean_engine_tests_stay_within_budget() {
 fn every_violation_fixture_is_reported() {
     // (fixture, the path it is scanned as, what must be reported, with the line)
     type Case = (&'static str, &'static str, &'static [(Kind, usize)]);
-    let cases: [Case; 15] = [
+    let cases: [Case; 16] = [
         ("driver_engine_branch", "crates/drivers/mysql/src/session.rs", &[(Kind::Reference, 6), (Kind::Reference, 7)]),
         ("tui_if_let_dialect", "crates/tui/src/app/editor.rs", &[(Kind::BooleanTest, 6), (Kind::Reference, 6)]),
         ("catch_all_explain", "crates/core/src/sql/plan.rs", &[(Kind::CatchAll, 9)]),
@@ -1116,6 +1215,7 @@ fn every_violation_fixture_is_reported() {
         ("self_rename", "crates/core/src/sql/split.rs", &[(Kind::Alias, 2)]),
         ("macro_alias", "crates/core/src/sql/split.rs", &[(Kind::Alias, 3)]),
         ("alias_reexport", "crates/core/src/sql.rs", &[(Kind::Alias, 2), (Kind::Alias, 5)]),
+        ("nested_catch_all", "crates/core/src/sql/format.rs", &[(Kind::CatchAll, 8), (Kind::CatchAll, 17)]),
     ];
     let mut missed = Vec::new();
     for (name, path, expected) in cases {
