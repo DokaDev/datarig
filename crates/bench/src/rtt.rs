@@ -103,8 +103,6 @@ impl WiredSession {
                 DbEvent::Language(_) | DbEvent::Explain(_) | DbEvent::Edit(_) => {}
                 // A PostgreSQL session says its date settings as the server reported them.
                 DbEvent::TextStyle(_) => {}
-                // And the server's version, as the server said it at start-up.
-                DbEvent::ServerMajor(_) => {}
                 DbEvent::Connected => return Ok(()),
                 ev => return Err(format!("connect: {ev:?}")),
             }

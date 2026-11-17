@@ -102,22 +102,3 @@ fn a_server_message_keeps_a_position_in_the_statement_sent_and_the_hint() {
     assert_eq!(server_message(text(), Some(&inner), None), ServerMessage::from(text()));
     assert_eq!(server_message(text(), None, None), ServerMessage::from(text()));
 }
-
-#[test]
-fn the_major_version_is_the_leading_number_of_server_version() {
-    for (version, major) in [
-        ("18.7 (Debian 18.7-1.pgdg13+1)", Some(18)),
-        ("17.11", Some(17)),
-        ("18beta1", Some(18)),
-        ("19devel", Some(19)),
-        ("9.6.24", Some(9)),
-        (" 16.4", Some(16)),
-        ("", None),
-        ("unknown", None),
-        ("v18.1", None),
-        ("0.1", None),
-        ("99999999999999999999.1", None),
-    ] {
-        assert_eq!(server_major(version), major, "{version:?}");
-    }
-}

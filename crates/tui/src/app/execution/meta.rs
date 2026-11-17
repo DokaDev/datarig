@@ -280,9 +280,9 @@ impl App {
                 self.status = Some(Notice::new(Msg::CatalogFailed { error: text }, Level::Error));
             }
             DbEvent::Keys(Ok(keys)) => self.conns.entry(id).keys = Keys::Loaded(keys),
-            // Only a query session sets its path per transaction, and says its server's version.
+            // Only a query session sets its path per transaction.
             // Only query sessions keep prepared statements.
-            DbEvent::ContextPerTransaction | DbEvent::StatementCacheOff | DbEvent::ServerMajor(_) => {}
+            DbEvent::ContextPerTransaction | DbEvent::StatementCacheOff => {}
             DbEvent::Databases(result) => {
                 let c = self.conns.entry(id);
                 let ok = result.is_ok();

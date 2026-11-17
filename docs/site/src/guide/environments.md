@@ -174,12 +174,13 @@ no fields for them, and saving the form keeps them as written. MySQL profiles ig
   session, such as opening connections of its own or writing files: never allow such a
   function (`dblink_exec`, for example).
 
-The built-ins PostgreSQL 18 adds (`uuidv7`, `uuidv4`, …) run on read-only profiles in a tab
-whose own session reached a PostgreSQL 18 server, as that server said when the session opened
-(behind a load balancer the explorer's connection may reach another server). Until the tab's
-session has opened, on an older server, and when the version cannot be read, they are refused
-as any other function that is not a built-in: run the statement again once the tab is
-connected.
+The built-ins PostgreSQL 18 adds (`uuidv7`, `uuidv4`, …) run on read-only profiles when the
+call names `pg_catalog`: `pg_catalog.uuidv7()`. On PostgreSQL 18 that is the built-in; on an
+older server `pg_catalog` has no such function, so the call fails. Without `pg_catalog`
+(`uuidv7()`) the call is refused, since on an older server it may find a function of that name
+in another schema, and the refusal says how to call it; to allow the unqualified call, add the
+name to `read_only_functions`. The server's version plays no part. Those of them that act on the
+server (writing or resetting statistics, listing its files) are refused however they are called.
 
 ## Paging and locks
 

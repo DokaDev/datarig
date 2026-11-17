@@ -115,7 +115,8 @@ impl App {
             let mut what = self.i18n.msg(&blocked_msg(&why)).to_string();
             // A call the context could let run: what would.
             if let (ReadOnlyBlock::UnknownFunction(_), Some(name)) = (&why, risk.refused_call_name(&cx)) {
-                let hint = self.i18n.msg(&hint_msg(&cx.hint(name), self.environment_name(pid))).to_string();
+                let hint = hint_msg(&cx.hint(name), name, self.environment_name(pid));
+                let hint = self.i18n.msg(&hint).to_string();
                 what = self.i18n.msg(&Msg::SafetyBlockedWithHint { what, hint }).to_string();
             }
             let sql = super::runlog::excerpt(sql, 60);
@@ -126,8 +127,8 @@ impl App {
 
 impl App {
     /// What a read-only policy lets run in tab `tab` of profile `pid` beyond PostgreSQL 17's
-    /// built-ins: the built-ins of the server's version, once the tab's own session said it,
-    /// and what the environment allows (`read_only_functions`, `read_only_extensions`).
+    /// built-ins: what the environment allows (`read_only_functions`, `read_only_extensions`),
+    /// and PostgreSQL 18's built-ins called in `pg_catalog`, which need no server version.
     /// Nothing more on a profile that is not PostgreSQL's.
     pub(super) fn read_only_context(&self, tab: TabId, pid: ProfileId) -> ReadOnlyContext {
         let postgres = self.profile(pid).is_some_and(|p| Dbms::of_driver(&p.driver) == Some(Dbms::Postgres));
@@ -136,20 +137,10 @@ impl App {
         }
         let rules = self.rules_of(pid);
         ReadOnlyContext {
-            server_major: self.tab_server_major(tab),
             extensions: self.extension_lookup(tab, pid, &rules.read_only_extensions),
             allowed: rules.read_only_functions,
             wanted_extensions: rules.read_only_extensions,
         }
-    }
-
-    /// The major version of the server tab `tab`'s current session reached, as that session
-    /// said; `None` with no session or before it says. Another session of the profile (its
-    /// metadata session, a reconnect) may reach another server: its word does not count.
-    fn tab_server_major(&self, tab: TabId) -> Option<u32> {
-        let t = self.tabs.get(tab)?;
-        let (generation, major) = t.exec.server_major?;
-        (generation == t.exec.generation && t.exec.session.is_some()).then_some(major)
     }
 
     /// What the catalog of tab `tab`'s database says of the extensions `wanted` that profile
@@ -385,10 +376,11 @@ fn risk_text(i18n: &I18n, d: &Dangerous, why: Why) -> String {
     parts.join(" · ")
 }
 
-/// What a refusal of a call adds ([`ReadOnlyContext::hint`]), for environment `environment`
-/// (`None`: the default rules).
-fn hint_msg(hint: &CallHint, environment: Option<String>) -> Msg {
+/// What a refusal of a call by `name` adds ([`ReadOnlyContext::hint`]), for environment
+/// `environment` (`None`: the default rules).
+fn hint_msg(hint: &CallHint, name: &[String], environment: Option<String>) -> Msg {
     match (hint, environment) {
+        (CallHint::NewerBuiltin, _) => Msg::SafetyHintNewerBuiltin { function: name.join(".") },
         (CallHint::NotAllowed, Some(environment)) => Msg::SafetyHintNotAllowed { environment },
         (CallHint::NotAllowed, None) => Msg::Label(Label::SafetyHintNotAllowedDefault),
         (CallHint::ExtensionsPending, _) => Msg::Label(Label::SafetyHintExtensionsPending),

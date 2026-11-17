@@ -871,45 +871,20 @@ fn a_read_only_environment_runs_the_functions_it_allows() {
     assert_eq!(status(&h), Some(refused_call_with("default", "zz_f", sql, hint)));
 }
 
-/// The built-ins PostgreSQL 18 adds run on read-only once the tab's own session said its
-/// server is that new, and only for that session: never before, never on an older server, not
-/// on the word of the metadata session (it may reach another server), and not after the tab's
-/// session reconnects until the new session says it again.
+/// The built-ins PostgreSQL 18 adds run on read-only called in `pg_catalog`, with no server
+/// version: unqualified, they are refused with a hint saying how to call them, unless the
+/// environment allows them.
 #[test]
-fn newer_built_ins_run_on_read_only_once_the_tabs_session_says_its_version() {
-    use datarig_tui::app::action::Action;
-    let sql = "SELECT uuidv7()";
-    let refused = refused_call("prod", "uuidv7", sql);
+fn newer_built_ins_run_on_read_only_qualified_with_pg_catalog() {
     let mut h = connected(Some("prod"), Lang::En);
-    h.meta_db("local-pg", DbEvent::ServerMajor(18));
-    assert!(run(&mut h, sql).is_empty(), "no session of the tab yet");
-    assert_eq!(status(&h), Some(refused.clone()));
-    assert_eq!(run(&mut h, "SELECT 1"), ["SELECT 1"]);
-    done(&mut h);
-    h.meta_db("local-pg", DbEvent::ServerMajor(18));
-    assert!(run(&mut h, sql).is_empty(), "the metadata session's server is not the tab's");
-    assert_eq!(status(&h), Some(refused.clone()));
-    h.tab_db(0, DbEvent::ServerMajor(17));
-    assert!(run(&mut h, sql).is_empty(), "PostgreSQL 17 does not have it");
-    assert_eq!(status(&h), Some(refused.clone()));
-    h.tab_db(0, DbEvent::ServerMajor(18));
+    let sql = "SELECT pg_catalog.uuidv7()";
     assert_eq!(run(&mut h, sql), [sql]);
     done(&mut h);
-    // A reconnect forgets it; the old session's word does not count.
-    let tab = h.app.tab().id;
-    let old = h.app.tab().exec.generation;
-    h.app.dispatch(Action::ReconnectCurrent);
-    assert_ne!(h.app.tab().exec.generation, old, "a new session");
-    assert!(run(&mut h, sql).is_empty(), "not known for this session");
-    assert_eq!(status(&h), Some(refused.clone()));
-    assert_eq!(run(&mut h, "SELECT 1"), ["SELECT 1"]);
-    done(&mut h);
-    let ev = DbEvent::ServerMajor(18);
-    h.app.on_app_event(AppEvent::Db { target: datarig_tui::app::EventTarget::Tab(tab), generation: old, ev });
-    h.meta_db("local-pg", DbEvent::ServerMajor(18));
-    assert!(run(&mut h, sql).is_empty(), "the old session's version is dropped");
-    assert_eq!(status(&h), Some(refused));
-    h.tab_db(0, DbEvent::ServerMajor(18));
+    let sql = "SELECT uuidv7()";
+    assert!(run(&mut h, sql).is_empty());
+    let hint = "It is a built-in of PostgreSQL 18: call it as pg_catalog.uuidv7() or add it to read_only_functions";
+    assert_eq!(status(&h), Some(refused_call_with("prod", "uuidv7", sql, hint)));
+    let mut h = connected_allowing(&["uuidv7"], &[]);
     assert_eq!(run(&mut h, sql), [sql]);
 }
 

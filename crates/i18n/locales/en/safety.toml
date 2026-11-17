@@ -71,6 +71,7 @@
 "safety.blocked.locks" = "this statement takes locks that block other sessions"
 "safety.blocked.file_access" = "this statement reads or writes a file"
 "safety.blocked.with_hint" = "{what}. {hint}"
+"safety.hint.newer_builtin" = "It is a built-in of PostgreSQL 18: call it as pg_catalog.{function}() or add it to read_only_functions"
 "safety.hint.not_allowed" = "To allow it, add it to read_only_functions of the environment \"{environment}\""
 "safety.hint.not_allowed_default" = "To allow it, add it to read_only_functions of [policy.default]"
 "safety.hint.extensions_pending" = "The functions of the allowed extensions are still being read: run it again in a moment"

@@ -69,6 +69,7 @@
 "safety.blocked.locks" = "이 문은 다른 세션을 막는 잠금을 잡습니다"
 "safety.blocked.file_access" = "이 문은 파일을 읽거나 씁니다"
 "safety.blocked.with_hint" = "{what}. {hint}"
+"safety.hint.newer_builtin" = "PostgreSQL 18의 내장 함수입니다: pg_catalog.{function}()으로 호출하거나 read_only_functions에 추가하세요"
 "safety.hint.not_allowed" = "허용하려면 환경 \"{environment}\"의 read_only_functions에 추가하세요"
 "safety.hint.not_allowed_default" = "허용하려면 [policy.default]의 read_only_functions에 추가하세요"
 "safety.hint.extensions_pending" = "허용된 확장 기능의 함수를 아직 읽는 중입니다: 잠시 후 다시 실행하세요"
