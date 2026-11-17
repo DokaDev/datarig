@@ -335,6 +335,7 @@ impl Scan<'_> {
             out.push(here.clone());
             return;
         }
+        let before = out.len();
         match pat {
             Pat::Or(o) => o.cases.iter().for_each(|c| self.variant_positions(c, here, out)),
             Pat::Tuple(t) => {
@@ -360,20 +361,17 @@ impl Scan<'_> {
             }
             Pat::Struct(st) => {
                 for f in &st.fields {
-                    if let syn::Member::Named(name) = &f.member {
-                        here.push(Step::Field(last_name(&st.path), name.to_string()));
-                        self.variant_positions(&f.pat, here, out);
-                        here.pop();
-                    }
+                    here.push(Step::Field(last_name(&st.path), member_name(&f.member)));
+                    self.variant_positions(&f.pat, here, out);
+                    here.pop();
                 }
             }
-            // Any other pattern that names a variant inside: the variant stands here, so a
-            // wildcard here is a catch-all.
-            _ => {
-                if self.pat_variant(pat).is_some() {
-                    out.push(here.clone());
-                }
-            }
+            _ => {}
+        }
+        // A pattern that names a variant somewhere no position was found for (any other kind
+        // of pattern): the variant stands here, so a wildcard here is a catch-all.
+        if out.len() == before && self.pat_variant(pat).is_some() {
+            out.push(here.clone());
         }
     }
 
@@ -410,7 +408,7 @@ impl Scan<'_> {
                 part(&t.elems, i).ok().flatten()
             }
             (Step::Field(name, field), Pat::Struct(st)) if *name == last_name(&st.path) => {
-                let named = st.fields.iter().find(|f| matches!(&f.member, syn::Member::Named(m) if m == field));
+                let named = st.fields.iter().find(|f| member_name(&f.member) == *field);
                 match (named, &st.rest) {
                     (Some(f), _) => self.wildcard_at(&f.pat, rest),
                     (None, Some(r)) => Some(r.dot2_token.spans[0]),
@@ -1003,6 +1001,14 @@ fn indices(elems: &Punctuated<Pat, Token![,]>) -> Vec<(Index, &Pat)> {
         .collect()
 }
 
+/// A field's name, or its index for a tuple variant written with braces (`Some { 0: p }`).
+fn member_name(m: &syn::Member) -> String {
+    match m {
+        syn::Member::Named(n) => n.to_string(),
+        syn::Member::Unnamed(i) => i.index.to_string(),
+    }
+}
+
 fn last_name(path: &syn::Path) -> String {
     path.segments.last().map(|s| s.ident.to_string()).unwrap_or_default()
 }
@@ -1339,7 +1345,11 @@ fn every_violation_fixture_is_reported() {
             "crates/core/src/sql/values.rs",
             &[(Kind::BooleanTest, 5), (Kind::BooleanTest, 9), (Kind::BooleanTest, 13)],
         ),
-        ("slice_catch_all", "crates/core/src/sql/values.rs", &[(Kind::CatchAll, 7), (Kind::CatchAll, 14)]),
+        (
+            "slice_catch_all",
+            "crates/core/src/sql/values.rs",
+            &[(Kind::CatchAll, 7), (Kind::CatchAll, 14), (Kind::CatchAll, 22)],
+        ),
         ("qualified_self", "crates/tui/src/app/tx.rs", &[(Kind::Alias, 5), (Kind::Alias, 10)]),
         (
             "assoc_type",
