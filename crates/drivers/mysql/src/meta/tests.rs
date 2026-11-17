@@ -109,5 +109,12 @@ fn fill_reads_each_place_once() {
 #[test]
 fn a_system_versioned_table_is_a_table() {
     assert!(super::is_table("BASE TABLE") && super::is_table("SYSTEM VERSIONED"));
-    assert!(!super::is_table("VIEW") && !super::is_table("SYSTEM VIEW") && !super::is_table("SEQUENCE"));
+    assert!(!super::is_table("VIEW") && !super::is_table("SYSTEM VIEW"));
+}
+
+/// A MariaDB sequence (`TABLE_TYPE` `SEQUENCE`) is listed with the tables, as its DDL is read
+/// (`SHOW CREATE TABLE`), never with the views.
+#[test]
+fn a_mariadb_sequence_is_a_table() {
+    assert!(super::is_table("SEQUENCE"));
 }
