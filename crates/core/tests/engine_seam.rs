@@ -179,7 +179,11 @@ fn test_only_modules(rel: &str, file: &syn::File, out: &mut Vec<String>) {
             });
             if is_test_only(&m.attrs) {
                 match path_attr {
-                    Some(p) => out.push(format!("{path_base}/{}", p.trim_end_matches(".rs"))),
+                    // `x.rs` and `x/mod.rs` are both the module `x`, with its children below `x/`.
+                    Some(p) => {
+                        let module = p.strip_suffix("/mod.rs").unwrap_or_else(|| p.trim_end_matches(".rs"));
+                        out.push(format!("{path_base}/{module}"));
+                    }
                     None => out.push(here),
                 }
             } else if let Some((_, inner)) = &m.content {
@@ -1116,6 +1120,7 @@ fn the_scan_walks_every_workspace_member() {
         #[cfg(test)] #[path = "edit_fake.rs"] mod by_path;
         mod inner { #[cfg(test)] mod deep; #[cfg(test)] #[path = "x.rs"] mod y; }
         #[cfg(any(test, unix))] mod product;
+        #[cfg(test)] #[path = "helpers/mod.rs"] mod helpers;
     "#;
     let mut found = Vec::new();
     test_only_modules("crates/core/src/edit.rs", &parse("inline", src), &mut found);
@@ -1125,7 +1130,8 @@ fn the_scan_walks_every_workspace_member() {
             "crates/core/src/edit/fake",
             "crates/core/src/edit_fake",
             "crates/core/src/edit/inner/deep",
-            "crates/core/src/edit/inner/x"
+            "crates/core/src/edit/inner/x",
+            "crates/core/src/helpers"
         ]
     );
     found.clear();
