@@ -282,20 +282,22 @@ fn line(span: Span) -> usize {
     span.start().line
 }
 
-/// The names one file gives the engine enums and their variants.
+/// The names one file gives the engine enums and their variants. They are file-wide, not per
+/// scope: a name given to several enums in different scopes stands for each of them, so reusing
+/// a name can add findings but never hide one.
 #[derive(Default)]
 struct Names {
-    /// A name of an engine enum in this file (itself, `use E as A`, `type A = E`).
-    enums: HashMap<String, &'static str>,
-    /// A variant named without its enum (`use E::V`, `use E::*`).
-    bare: HashMap<String, (&'static str, String)>,
+    /// The engine enums a name stands for in this file (itself, `use E as A`, `type A = E`).
+    enums: HashMap<String, Vec<&'static str>>,
+    /// The variants a name stands for without its enum (`use E::V`, `use E::*`).
+    bare: HashMap<String, Vec<(&'static str, String)>>,
 }
 
 impl Names {
     fn new(file: &syn::File, variants: &Variants) -> Names {
         let mut names = Names::default();
         for name in ENGINE_ENUMS {
-            names.enums.insert(name.to_string(), name);
+            names.add_enum(name.to_string(), name);
         }
         // Aliases first (twice: an alias may name another alias), then the variants they reach.
         for _ in 0..2 {
@@ -303,6 +305,28 @@ impl Names {
         }
         Collect { names: &mut names, variants, variants_pass: true }.visit_file(file);
         names
+    }
+
+    fn add_enum(&mut self, name: String, e: &'static str) {
+        let list = self.enums.entry(name).or_default();
+        if !list.contains(&e) {
+            list.push(e);
+        }
+    }
+
+    fn add_bare(&mut self, name: String, variant: (&'static str, String)) {
+        let list = self.bare.entry(name).or_default();
+        if !list.contains(&variant) {
+            list.push(variant);
+        }
+    }
+
+    fn enums_of(&self, name: &str) -> Vec<&'static str> {
+        self.enums.get(name).cloned().unwrap_or_default()
+    }
+
+    fn bare_of(&self, name: &str) -> Option<(&'static str, String)> {
+        self.bare.get(name).and_then(|list| list.first().cloned())
     }
 }
 
@@ -314,7 +338,7 @@ struct Collect<'a> {
 
 impl Collect<'_> {
     fn tree(&mut self, prefix: &mut Vec<String>, tree: &syn::UseTree) {
-        let owner = prefix.last().and_then(|p| self.names.enums.get(p).copied());
+        let owners = prefix.last().map(|p| self.names.enums_of(p)).unwrap_or_default();
         match tree {
             syn::UseTree::Path(p) => {
                 prefix.push(p.ident.to_string());
@@ -322,31 +346,33 @@ impl Collect<'_> {
                 prefix.pop();
             }
             syn::UseTree::Group(g) => g.items.iter().for_each(|t| self.tree(prefix, t)),
-            syn::UseTree::Name(n) => {
-                if let (true, Some(e)) = (self.variants_pass, owner) {
-                    let v = n.ident.to_string();
-                    if self.variants[e].contains(&v) {
-                        self.names.bare.insert(v.clone(), (e, v));
-                    }
+            syn::UseTree::Name(n) if self.variants_pass => {
+                let v = n.ident.to_string();
+                for e in owners.into_iter().filter(|e| self.variants[e].contains(&v)) {
+                    self.names.add_bare(v.clone(), (e, v.clone()));
                 }
             }
             syn::UseTree::Rename(r) => {
                 let from = r.ident.to_string();
-                if let Some(e) = self.names.enums.get(&from).copied() {
-                    self.names.enums.insert(r.rename.to_string(), e);
-                } else if let (true, Some(e)) = (self.variants_pass, owner)
-                    && self.variants[e].contains(&from)
-                {
-                    self.names.bare.insert(r.rename.to_string(), (e, from));
-                }
-            }
-            syn::UseTree::Glob(_) => {
-                if let (true, Some(e)) = (self.variants_pass, owner) {
-                    for v in &self.variants[e] {
-                        self.names.bare.insert(v.clone(), (e, v.clone()));
+                let enums = self.names.enums_of(&from);
+                if !enums.is_empty() {
+                    for e in enums {
+                        self.names.add_enum(r.rename.to_string(), e);
+                    }
+                } else if self.variants_pass {
+                    for e in owners.into_iter().filter(|e| self.variants[e].contains(&from)) {
+                        self.names.add_bare(r.rename.to_string(), (e, from.clone()));
                     }
                 }
             }
+            syn::UseTree::Glob(_) if self.variants_pass => {
+                for e in owners {
+                    for v in &self.variants[e] {
+                        self.names.add_bare(v.clone(), (e, v.clone()));
+                    }
+                }
+            }
+            syn::UseTree::Name(_) | syn::UseTree::Glob(_) => {}
         }
     }
 }
@@ -358,9 +384,10 @@ impl<'ast> Visit<'ast> for Collect<'_> {
     fn visit_item_type(&mut self, t: &'ast syn::ItemType) {
         if let syn::Type::Path(p) = &*t.ty
             && let Some(last) = p.path.segments.last()
-            && let Some(e) = self.names.enums.get(&last.ident.to_string()).copied()
         {
-            self.names.enums.insert(t.ident.to_string(), e);
+            for e in self.names.enums_of(&last.ident.to_string()) {
+                self.names.add_enum(t.ident.to_string(), e);
+            }
         }
     }
 }
@@ -381,10 +408,14 @@ impl Scan<'_> {
         self.findings.push(Finding { path: self.rel.to_string(), line: line(span), kind, what });
     }
 
-    /// The engine enum `Self` stands for here.
-    fn self_enum(&self) -> Option<&'static str> {
-        let ty = self.selves.last()?.as_ref()?;
-        self.names.enums.get(ty).copied()
+    /// The engine enum `owner::variant` names, if any (`owner` an enum, an alias or `Self`).
+    fn resolve(&self, owner: &str, variant: &str) -> Option<&'static str> {
+        let enums = if owner == "Self" {
+            self.selves.last().cloned().flatten().map(|ty| self.names.enums_of(&ty)).unwrap_or_default()
+        } else {
+            self.names.enums_of(owner)
+        };
+        enums.into_iter().find(|e| self.variants[e].contains(variant))
     }
 
     /// The engine variant a path names (`E::V`, `Alias::V`, `Self::V`, an imported `V`).
@@ -392,11 +423,8 @@ impl Scan<'_> {
         let segs: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
         match segs.as_slice() {
             [] => None,
-            [one] => self.names.bare.get(one).cloned(),
-            [.., owner, last] => {
-                let e = if owner == "Self" { self.self_enum()? } else { self.names.enums.get(owner).copied()? };
-                self.variants[e].contains(last).then(|| (e, last.clone()))
-            }
+            [one] => self.names.bare_of(one),
+            [.., owner, last] => self.resolve(owner, last).map(|e| (e, last.clone())),
         }
     }
 
@@ -415,7 +443,7 @@ impl Scan<'_> {
             }
             fn visit_pat_ident(&mut self, p: &'ast syn::PatIdent) {
                 if self.found.is_none() && p.subpat.is_none() {
-                    self.found = self.scan.names.bare.get(&p.ident.to_string()).cloned();
+                    self.found = self.scan.names.bare_of(&p.ident.to_string());
                 }
                 visit::visit_pat_ident(self, p);
             }
@@ -534,11 +562,10 @@ impl Scan<'_> {
                         }
                         _ => None,
                     };
-                    if let Some(v) = path_after {
-                        let e = if s == "Self" { self.self_enum() } else { self.names.enums.get(&s).copied() };
-                        if let Some(e) = e.filter(|e| self.variants[e].contains(&v)) {
-                            self.reference(id.span(), e, &v);
-                        }
+                    if let Some(v) = path_after
+                        && let Some(e) = self.resolve(&s, &v)
+                    {
+                        self.reference(id.span(), e, &v);
                     }
                 }
                 TokenTree::Literal(l) => {
@@ -659,7 +686,7 @@ impl<'ast> Visit<'ast> for Scan<'_> {
 
     fn visit_item_use(&mut self, u: &'ast syn::ItemUse) {
         fn walk(scan: &mut Scan<'_>, prefix: &mut Vec<String>, tree: &syn::UseTree) {
-            let owner = prefix.last().and_then(|p| scan.names.enums.get(p).copied());
+            let owners = prefix.last().map(|p| scan.names.enums_of(p)).unwrap_or_default();
             match tree {
                 syn::UseTree::Path(p) => {
                     if (p.ident == "Scheme" || p.ident == "Dbms")
@@ -674,12 +701,12 @@ impl<'ast> Visit<'ast> for Scan<'_> {
                 }
                 syn::UseTree::Group(g) => g.items.iter().for_each(|t| walk(scan, prefix, t)),
                 syn::UseTree::Name(syn::UseName { ident }) | syn::UseTree::Rename(syn::UseRename { ident, .. }) => {
-                    if let Some(e) = owner.filter(|e| scan.variants[e].contains(&ident.to_string())) {
+                    if let Some(e) = owners.into_iter().find(|e| scan.variants[e].contains(&ident.to_string())) {
                         scan.reference(ident.span(), e, &ident.to_string());
                     }
                 }
                 syn::UseTree::Glob(g) => {
-                    if let Some(e) = owner {
+                    if let Some(&e) = owners.first() {
                         scan.reference(g.star_token.spans[0], e, "*");
                     }
                 }
@@ -719,7 +746,7 @@ impl<'ast> Visit<'ast> for Scan<'_> {
 
     fn visit_pat_ident(&mut self, p: &'ast syn::PatIdent) {
         if p.subpat.is_none()
-            && let Some((e, v)) = self.names.bare.get(&p.ident.to_string()).cloned()
+            && let Some((e, v)) = self.names.bare_of(&p.ident.to_string())
         {
             self.reference(p.ident.span(), e, &v);
         }
@@ -1040,7 +1067,7 @@ fn boolean_engine_tests_stay_within_budget() {
 fn every_violation_fixture_is_reported() {
     // (fixture, the path it is scanned as, what must be reported, with the line)
     type Case = (&'static str, &'static str, &'static [(Kind, usize)]);
-    let cases: [Case; 10] = [
+    let cases: [Case; 11] = [
         ("driver_engine_branch", "crates/drivers/mysql/src/session.rs", &[(Kind::Reference, 6), (Kind::Reference, 7)]),
         ("tui_if_let_dialect", "crates/tui/src/app/editor.rs", &[(Kind::BooleanTest, 6), (Kind::Reference, 6)]),
         ("catch_all_explain", "crates/core/src/sql/plan.rs", &[(Kind::CatchAll, 9)]),
@@ -1055,6 +1082,7 @@ fn every_violation_fixture_is_reported() {
             &[(Kind::Reference, 8), (Kind::Reference, 9), (Kind::Marker, 13), (Kind::Marker, 14)],
         ),
         ("cfg_not_only_test", "crates/core/src/sql/split.rs", &[(Kind::BooleanTest, 7)]),
+        ("alias_scopes", "crates/tui/src/app/plan.rs", &[(Kind::BooleanTest, 6), (Kind::Reference, 6)]),
     ];
     let mut missed = Vec::new();
     for (name, path, expected) in cases {
