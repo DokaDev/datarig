@@ -1,4 +1,4 @@
-# SSH tunnels
+# SSH tunnels and bastion hosts
 
 A profile can reach its database through one SSH bastion. datarig opens the tunnel itself (in
 Rust, without the `ssh` program) and dials every connection of the profile through

@@ -1,6 +1,6 @@
 [book]
-title = "datarig"
-description = "A terminal database client for PostgreSQL and MySQL"
+title = "datarig: a terminal database client"
+description = "A terminal database client and SQL editor (TUI): browse, query, edit and monitor your databases. Keyboard-first, light, fast and safe by default."
 language = "en"
 src = "src"
 

@@ -180,6 +180,14 @@ mdbook serve docs/site
   `SCREENS` in `tests/book_screens.rs`, generate it with the `book_screens` command above, and
   show it in a text block that includes `../screens/<name>.txt`. After a snapshot changes, the
   screens are regenerated the same way.
+- Every page has a line in `docs/site/descriptions.txt`: the description search results show
+  for it. The build writes it into the page and lists the page in `sitemap.xml`, and fails for
+  a page without a line.
+- Adding a database engine: a page of its own in the user guide (listed in `SUMMARY.md`, with
+  its line in `docs/site/descriptions.txt`), its badge in the README's line of database badges,
+  and its topic on the GitHub repository. Engines are named there and on pages about them only:
+  the README's first paragraph, the site's title and description and the repository's
+  description stay general.
 - CI builds the site on every push and pull request and checks every link and anchor offline.
   The site is deployed only from a stable release tag, by the release workflow.
 

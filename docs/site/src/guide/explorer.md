@@ -1,4 +1,4 @@
-# Explorer
+# Schema explorer
 
 The explorer on the left lists, in sections that open and close (and stay closed across
 restarts): **Connections**, **Tunnels** ([SSH tunnels](ssh-tunnels.md)), **Environments**

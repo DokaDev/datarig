@@ -1,4 +1,4 @@
-# TLS
+# TLS and SSL
 
 PostgreSQL and MySQL connections are encrypted with TLS 1.2 or 1.3 (rustls with `ring`) as
 the profile's **SSL mode** says, in each database's own words. The profile form's Advanced

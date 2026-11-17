@@ -1,4 +1,4 @@
-# Results
+# Results grid
 
 A run's results open in the results pane below the editor. Each row result gets a result tab
 of its own, before the Plan, Chart and Messages tabs (Messages holds each statement's outcome). While

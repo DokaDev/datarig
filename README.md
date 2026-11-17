@@ -6,7 +6,8 @@
 
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=fff)](https://dokadev.github.io/datarig/introduction.html#status) [![MySQL 8.0+](https://img.shields.io/badge/MySQL_8.0%2B-4479A1?logo=mysql&logoColor=fff)](https://dokadev.github.io/datarig/guide/mysql.html)
 
-A full-featured database client that lives in your terminal: light, fast, and safe by default.
+datarig is a terminal database client and SQL editor (TUI): browse, query, edit and monitor
+your databases. Keyboard-first, light, fast and safe by default.
 
 ![Editing a table in datarig: a cell is changed, the Changes tab shows the exact SQL, and Apply asks first](https://dokadev.github.io/datarig/demo/hero.gif)
 
@@ -30,9 +31,9 @@ git clone https://github.com/DokaDev/datarig && cd datarig && cargo install --lo
 - **Safe by default.** Changes made in the grid stay pending until you have read the exact
   statements they run. Dangerous statements ask first. A read-only profile refuses writes before
   anything is sent, and on PostgreSQL the server enforces it too.
-- **Full-featured.** PostgreSQL and MySQL, several connections side by side with their own tabs,
-  a schema explorer, a SQL editor with vim keys and completion, a results grid with search,
-  editing, export and charts, query plans in several views, SSH tunnels, TLS and poolers.
+- **Full-featured.** Several connections side by side with their own tabs, a schema explorer,
+  a SQL editor with vim keys and completion, a results grid with search, editing, export and
+  charts, query plans in several views, a server monitor, SSH tunnels, TLS and poolers.
 - **Light and fast.** One native binary. Results are paged explicitly instead of loaded whole,
   and paging leaves no transaction, lock or snapshot open on the server. CI holds memory,
   latency and startup time to [budgets](https://github.com/DokaDev/datarig/blob/main/docs/perf.md).

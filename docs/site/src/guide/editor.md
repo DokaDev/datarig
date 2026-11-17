@@ -1,4 +1,4 @@
-# Editor
+# SQL editor
 
 Each console and table tab has a SQL editor with vim keys, syntax highlighting, completion and
 a formatter you run yourself. The statement under the cursor is marked in the gutter.

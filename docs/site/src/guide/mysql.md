@@ -1,4 +1,4 @@
-# MySQL
+# MySQL and MariaDB
 
 **Versions.** MySQL 8.0, 8.4 and 9.x. CI runs the driver's tests against MySQL 8.4. MySQL 5.7
 and older are refused with their version. MariaDB 10.6 and newer is a best effort: it connects
