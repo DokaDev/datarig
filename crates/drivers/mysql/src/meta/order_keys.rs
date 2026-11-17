@@ -2,7 +2,10 @@
 //! table tab appends as its tie-breaker. Asked for by the app on its own (a table tab opening),
 //! so it must never disturb another session: one `information_schema` statement on `TABLES`,
 //! `STATISTICS` (no `CARDINALITY`) and `COLUMNS`, which the data dictionary answers without
-//! opening the table, in autocommit like every read of the metadata session.
+//! opening the table, in autocommit like every read of the metadata session. Each is filtered
+//! by the schema's and the table's names as literals, none joined on another's row: MariaDB,
+//! which has no data dictionary, reads a catalog table it cannot filter so by opening every
+//! table of the server (slow, and it can wait on another table's lock).
 //!
 //! A unique key counts when every part is a whole column (no expression, no prefix); the
 //! primary key always, another one when all its columns are `NOT NULL`.
@@ -20,10 +23,8 @@ use std::collections::BTreeMap;
 const SQL: &str = "SELECT 'T', NULL, NULL, NULL, NULL, NULL
 FROM information_schema.TABLES t WHERE t.TABLE_SCHEMA = {schema} AND t.TABLE_NAME = {table}
 UNION ALL
-SELECT 'K', x.INDEX_NAME, CAST(x.SEQ_IN_INDEX AS CHAR), x.COLUMN_NAME, CAST(x.SUB_PART AS CHAR), c.IS_NULLABLE
+SELECT 'K', x.INDEX_NAME, CAST(x.SEQ_IN_INDEX AS CHAR), x.COLUMN_NAME, CAST(x.SUB_PART AS CHAR), NULL
 FROM information_schema.STATISTICS x
-LEFT JOIN information_schema.COLUMNS c
-  ON c.TABLE_SCHEMA = x.TABLE_SCHEMA AND c.TABLE_NAME = x.TABLE_NAME AND c.COLUMN_NAME = x.COLUMN_NAME
 WHERE x.TABLE_SCHEMA = {schema} AND x.TABLE_NAME = {table} AND x.NON_UNIQUE = 0
 UNION ALL
 SELECT 'C', c.COLUMN_NAME, CAST(c.ORDINAL_POSITION AS CHAR), c.COLUMN_TYPE, c.IS_NULLABLE, c.EXTRA
@@ -34,7 +35,8 @@ FROM information_schema.KEY_COLUMN_USAGE u
 WHERE u.TABLE_SCHEMA = {schema} AND u.TABLE_NAME = {table} AND u.REFERENCED_TABLE_NAME IS NOT NULL";
 
 /// One row: `T` (the table is there); `K` with a unique key's name, the part's place, its
-/// column (none for an expression), its prefix length and whether the column takes NULL; `C`
+/// column (none for an expression) and its prefix length (whether the column takes NULL is
+/// its `C` row's); `C`
 /// with a column's name, place, type, whether it takes NULL and its extra (`INVISIBLE`, …); or
 /// `F` with a column of a foreign key in the fourth place.
 type RawRow = (String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>);
@@ -51,15 +53,15 @@ pub(crate) fn keys_of(rows: Vec<RawRow>) -> Result<OrderKeys, DbError> {
     if !rows.iter().any(|r| r.0 == "T") {
         return Err(DbError::NotFound);
     }
-    // Per key: (place, column, prefix, nullable) of each part.
-    type Part = (u32, Option<String>, Option<String>, Option<String>);
+    // Per key: (place, column, prefix) of each part.
+    type Part = (u32, Option<String>, Option<String>);
     let mut parts: BTreeMap<String, Vec<Part>> = BTreeMap::new();
     let mut rows_c = Vec::new();
     let mut foreign = Vec::new();
-    for (kind, index, seq, column, prefix, nullable) in rows {
+    for (kind, index, seq, column, prefix, extra) in rows {
         match kind.as_str() {
             "C" => {
-                rows_c.push((index, seq, column, prefix, nullable));
+                rows_c.push((index, seq, column, prefix, extra));
                 continue;
             }
             "F" => {
@@ -72,7 +74,7 @@ pub(crate) fn keys_of(rows: Vec<RawRow>) -> Result<OrderKeys, DbError> {
         let (Some(index), Some(seq)) = (index, seq.and_then(|s| s.parse::<u32>().ok())) else {
             return Err(DbError::Server("key metadata: a unique key part".to_string().into()));
         };
-        parts.entry(index).or_default().push((seq, column, prefix, nullable));
+        parts.entry(index).or_default().push((seq, column, prefix));
     }
     let mut keys = OrderKeys::default();
     let primary: Vec<String> =
@@ -86,12 +88,18 @@ pub(crate) fn keys_of(rows: Vec<RawRow>) -> Result<OrderKeys, DbError> {
         let columns: Vec<String> = p.iter().filter_map(|x| x.1.clone()).collect();
         if index == "PRIMARY" {
             keys.primary_key = columns;
-        } else if p.iter().all(|x| x.3.as_deref() == Some("NO")) {
+        } else if p.iter().all(|x| x.1.as_deref().is_some_and(|c| not_null(&rows_c, c))) {
             keys.unique_not_null.push(columns);
         }
     }
     keys.unique_not_null.sort();
     Ok(keys)
+}
+
+/// Whether column `name` is `NOT NULL` by its `C` row (names compared as the server does,
+/// regardless of case). A column not listed (no privilege on it) is not known to be.
+fn not_null(rows: &[ColumnRow], name: &str) -> bool {
+    rows.iter().any(|r| r.0.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(name)) && r.3.as_deref() == Some("NO"))
 }
 
 /// A `C` row's name, place, type, whether it takes NULL and extra.
@@ -140,28 +148,55 @@ pub(crate) async fn load_order_keys(
 mod tests {
     use super::*;
 
-    fn part(index: &str, seq: &str, col: Option<&str>, prefix: Option<&str>, nullable: &str) -> RawRow {
+    fn part(index: &str, seq: &str, col: Option<&str>, prefix: Option<&str>) -> RawRow {
         let s = |v: &str| Some(v.to_string());
-        ("K".into(), s(index), s(seq), col.map(str::to_string), prefix.map(str::to_string), s(nullable))
+        ("K".into(), s(index), s(seq), col.map(str::to_string), prefix.map(str::to_string), None)
     }
 
+    /// Whether a part's column takes NULL is read from the table's columns (`C` rows), names
+    /// compared regardless of case; a column not listed (no privilege on it) is not known to be
+    /// `NOT NULL`.
     #[test]
     fn whole_column_keys_count_and_nullable_ones_only_as_the_primary_key() {
         let t: RawRow = ("T".into(), None, None, None, None, None);
         let rows = vec![
             t.clone(),
-            part("PRIMARY", "2", Some("b"), None, "NO"),
-            part("PRIMARY", "1", Some("a"), None, "NO"),
-            part("email", "1", Some("email"), None, "NO"),
-            part("nick", "1", Some("nick"), None, "YES"),
-            part("pre", "1", Some("name"), Some("10"), "NO"),
-            part("fn", "1", None, None, "NO"),
+            part("PRIMARY", "2", Some("b"), None),
+            part("PRIMARY", "1", Some("a"), None),
+            part("email", "1", Some("email"), None),
+            part("nick", "1", Some("nick"), None),
+            part("pre", "1", Some("name"), Some("10")),
+            part("fn", "1", None, None),
+            part("hidden", "1", Some("secret"), None),
+            column("a", "1", "int", "NO", ""),
+            column("b", "2", "int", "NO", ""),
+            column("Email", "3", "varchar(80)", "NO", ""),
+            column("nick", "4", "varchar(80)", "YES", ""),
+            column("name", "5", "varchar(80)", "NO", ""),
         ];
         let k = keys_of(rows).unwrap();
         assert_eq!(k.primary_key, ["a", "b"]);
         assert_eq!(k.unique_not_null, vec![vec!["email".to_string()]]);
         assert_eq!(keys_of(vec![t]).unwrap(), OrderKeys { columns: Some(Vec::new()), ..OrderKeys::default() });
         assert_eq!(keys_of(Vec::new()), Err(DbError::NotFound));
+    }
+
+    /// Each catalog table of the statement is filtered by the schema's and the table's names as
+    /// literals, none joined on another's row: MariaDB reads a catalog table it cannot filter so
+    /// by opening every table of the server.
+    #[test]
+    fn every_catalog_table_is_filtered_by_the_names_as_literals() {
+        let sql = statement(MySqlMode::default(), "shop", "items").split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(!sql.contains(" JOIN "), "{sql}");
+        for (table, filter) in [
+            ("TABLES t", "t.TABLE_SCHEMA = 'shop' AND t.TABLE_NAME = 'items'"),
+            ("STATISTICS x", "x.TABLE_SCHEMA = 'shop' AND x.TABLE_NAME = 'items'"),
+            ("COLUMNS c", "c.TABLE_SCHEMA = 'shop' AND c.TABLE_NAME = 'items'"),
+            ("KEY_COLUMN_USAGE u", "u.TABLE_SCHEMA = 'shop' AND u.TABLE_NAME = 'items'"),
+        ] {
+            assert_eq!(sql.matches(&format!("information_schema.{table}")).count(), 1, "{table}: {sql}");
+            assert!(sql.contains(&format!("information_schema.{table} WHERE {filter}")), "{table}: {sql}");
+        }
     }
 
     fn column(name: &str, place: &str, type_name: &str, nullable: &str, extra: &str) -> RawRow {
@@ -178,7 +213,7 @@ mod tests {
             column("owner", "3", "bigint unsigned", "YES", ""),
             column("id", "1", "int", "NO", "auto_increment"),
             column("note", "2", "varchar(20)", "YES", "INVISIBLE"),
-            part("PRIMARY", "1", Some("id"), None, "NO"),
+            part("PRIMARY", "1", Some("id"), None),
             fk,
         ];
         let cols = keys_of(rows).unwrap().columns.unwrap();
