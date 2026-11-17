@@ -23,3 +23,10 @@ fn root_alternative(d: Dialect) -> bool {
         Dialect::Postgres | _ => false,
     }
 }
+
+fn last(n: usize, d: Dialect) -> usize {
+    match (n, d) {
+        (.., Dialect::Postgres) => 1,
+        (.., _) => n,
+    }
+}

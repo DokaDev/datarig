@@ -422,15 +422,15 @@ impl Scan<'_> {
         match pat {
             Pat::Or(o) => o.cases.iter().for_each(|c| self.variant_positions(c, here, out)),
             Pat::Tuple(t) => {
-                for (i, e) in t.elems.iter().enumerate() {
-                    here.push(Step::Part(String::new(), i));
+                for (at, e) in indices(&t.elems) {
+                    here.push(Step::Part(String::new(), at));
                     self.variant_positions(e, here, out);
                     here.pop();
                 }
             }
             Pat::TupleStruct(t) => {
-                for (i, e) in t.elems.iter().enumerate() {
-                    here.push(Step::Part(last_name(&t.path), i));
+                for (at, e) in indices(&t.elems) {
+                    here.push(Step::Part(last_name(&t.path), at));
                     self.variant_positions(e, here, out);
                     here.pop();
                 }
@@ -460,19 +460,22 @@ impl Scan<'_> {
             return o.cases.iter().find_map(|c| self.wildcard_at(c, at));
         }
         let (step, rest) = at.split_first()?;
-        let part = |elems: &Punctuated<Pat, Token![,]>, i: usize| -> Result<Option<Span>, ()> {
-            // Past a `..` the index no longer lines up: count it as covered.
-            if let Some(r) = elems.iter().position(|p| matches!(p, Pat::Rest(_)))
-                && i >= r
-            {
-                return Ok(self.wildcard(&elems[r]));
-            }
+        // The part at `at`, or the `..` that covers it.
+        let part = |elems: &Punctuated<Pat, Token![,]>, at: &Index| -> Result<Option<Span>, ()> {
+            let len = elems.len();
+            let dots = elems.iter().position(|p| matches!(p, Pat::Rest(_)));
+            let i = match (*at, dots) {
+                (Index::Front(i), Some(r)) if i >= r => return Ok(self.wildcard(&elems[r])),
+                (Index::Back(k), Some(r)) if k >= len - 1 - r => return Ok(self.wildcard(&elems[r])),
+                (Index::Front(i), _) => i,
+                (Index::Back(k), _) => len.checked_sub(k + 1).ok_or(())?,
+            };
             elems.iter().nth(i).map(|p| self.wildcard_at(p, rest)).ok_or(())
         };
         match (step, pat) {
-            (Step::Part(name, i), Pat::Tuple(t)) if name.is_empty() => part(&t.elems, *i).ok().flatten(),
+            (Step::Part(name, i), Pat::Tuple(t)) if name.is_empty() => part(&t.elems, i).ok().flatten(),
             (Step::Part(name, i), Pat::TupleStruct(t)) if *name == last_name(&t.path) => {
-                part(&t.elems, *i).ok().flatten()
+                part(&t.elems, i).ok().flatten()
             }
             (Step::Field(name, field), Pat::Struct(st)) if *name == last_name(&st.path) => {
                 let named = st.fields.iter().find(|f| matches!(&f.member, syn::Member::Named(m) if m == field));
@@ -926,8 +929,30 @@ impl<'ast> Visit<'ast> for Scan<'_> {
 /// a named field of `P { .. }`.
 #[derive(Clone, Debug, PartialEq)]
 enum Step {
-    Part(String, usize),
+    Part(String, Index),
     Field(String, String),
+}
+
+/// Where a part of a tuple stands: counted from the front, or from the back for a part after a
+/// `..` (`(.., d)`: the last part, whatever the length).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Index {
+    Front(usize),
+    Back(usize),
+}
+
+/// The parts of a tuple pattern with where each stands (the `..` itself included).
+fn indices(elems: &Punctuated<Pat, Token![,]>) -> Vec<(Index, &Pat)> {
+    let dots = elems.iter().position(|p| matches!(p, Pat::Rest(_)));
+    let len = elems.len();
+    elems
+        .iter()
+        .enumerate()
+        .map(|(i, p)| match dots {
+            Some(r) if i > r => (Index::Back(len - 1 - i), p),
+            _ => (Index::Front(i), p),
+        })
+        .collect()
 }
 
 fn last_name(path: &syn::Path) -> String {
@@ -1239,7 +1264,7 @@ fn every_violation_fixture_is_reported() {
         (
             "nested_catch_all",
             "crates/core/src/sql/format.rs",
-            &[(Kind::CatchAll, 8), (Kind::CatchAll, 17), (Kind::CatchAll, 23)],
+            &[(Kind::CatchAll, 8), (Kind::CatchAll, 17), (Kind::CatchAll, 23), (Kind::CatchAll, 30)],
         ),
         ("macro_metavar", "crates/core/src/sql/values.rs", &[(Kind::BooleanTest, 7)]),
     ];
@@ -1270,6 +1295,9 @@ fn the_clean_fixture_passes() {
     // under a one-letter name.
     let found = scan_fixture("unrelated_enum", "crates/tui/src/app/chart.rs");
     assert!(found.is_empty(), "an unrelated enum was reported: {found:?}");
+    // Parts after a `..` are matched from the back: naming every engine there is exhaustive.
+    let found = scan_fixture("rest_then_engine", "crates/core/src/sql/format.rs");
+    assert!(found.is_empty(), "an exhaustive match after `..` was reported: {found:?}");
     // A test-only import names nothing for the code around it.
     let found = scan_fixture("test_import", "crates/tui/src/app/chart.rs");
     assert!(found.is_empty(), "a test-only import changed what product code names: {found:?}");
