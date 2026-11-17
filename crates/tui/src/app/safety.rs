@@ -181,7 +181,9 @@ impl App {
     /// environment allows on read-only (`read_only_extensions`), in the database it works in:
     /// on PostgreSQL, once connected, when the environment is read-only and lists any, unless
     /// this connection asked for that list already (a failed read is asked again on an
-    /// explorer refresh, [`App::retry_extension_functions`], or a reconnect).
+    /// explorer refresh, [`App::retry_extension_functions`], or a reconnect). A metadata
+    /// session lost before it answered for this list reopens, to ask again once connected
+    /// (the run that asks is still refused as pending).
     pub(super) fn ask_extension_functions(&mut self, pid: ProfileId) {
         let postgres = self.profile(pid).is_some_and(|p| Dbms::of_driver(&p.driver) == Some(Dbms::Postgres));
         let rules = self.rules_of(pid);
@@ -189,10 +191,17 @@ impl App {
             return;
         }
         let Some(c) = self.conns.get(pid) else { return };
+        let extensions = rules.read_only_extensions;
+        let answered = c
+            .extension_functions
+            .as_ref()
+            .is_some_and(|r| r.extensions == extensions && !matches!(r.state, ExtensionState::Pending));
+        if c.meta.is_none() && c.connecting.is_none() && c.idle_closed.is_none() && !answered {
+            return self.reopen_meta(pid);
+        }
         if c.meta.is_none() || !c.connected {
             return;
         }
-        let extensions = rules.read_only_extensions;
         if c.extension_functions.as_ref().is_some_and(|r| r.extensions == extensions) {
             return;
         }

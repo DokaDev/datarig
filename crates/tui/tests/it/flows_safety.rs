@@ -1097,6 +1097,78 @@ fn an_extensions_answer_after_the_database_changed_is_dropped() {
     assert!(asked_extensions(&mut h).is_empty(), "not asked again of the same session");
 }
 
+/// The answer of a connection whose sessions were lost holds for the database it was read
+/// in only: with the profile's host and database edited since, a call is refused as not read
+/// for this database until a reconnect, which asks again and refuses it as pending meanwhile.
+#[test]
+fn a_lost_connections_answer_does_not_hold_for_an_edited_profile() {
+    use datarig_core::driver::DbError;
+    use datarig_tui::app::action::Action;
+    let sql = "SELECT public.crypt('a', 'b')";
+    let pending = "The functions of the allowed extensions are still being read: run it again in a moment";
+    let failed = "The functions of the allowed extensions could not be read for this database";
+    for reconnect in [true, false] {
+        let mut h = connected_allowing(&[], &["pgcrypto"]);
+        asked_extensions(&mut h);
+        extension_answer(&mut h, &["pgcrypto"], &["pgcrypto"], &[("public", "crypt", Some("pgcrypto"))]);
+        assert_eq!(run(&mut h, sql), [sql]);
+        done(&mut h);
+        h.meta_db("local-pg", DbEvent::Lost { error: DbError::Closed });
+        h.tab_db(0, DbEvent::Lost { error: DbError::Closed });
+        h.app.profiles[0].host = "other-host".into();
+        h.app.profiles[0].database = "sales".into();
+        if reconnect {
+            h.app.dispatch(Action::ReconnectCurrent);
+            h.db(DbEvent::Connected);
+            assert_eq!(asked_extensions(&mut h), [vec!["pgcrypto".to_string()]], "asked again");
+        }
+        assert!(run(&mut h, sql).is_empty(), "reconnect: {reconnect}");
+        let hint = if reconnect { pending } else { failed };
+        assert_eq!(status(&h), Some(refused_call_with("prod", "public.crypt", sql, hint)), "reconnect: {reconnect}");
+    }
+}
+
+/// The metadata session lost before it answered: a reconnect asks again, and the call runs
+/// once the new connection answers.
+#[test]
+fn a_reconnect_asks_again_for_the_extensions_a_lost_session_did_not_answer() {
+    use datarig_tui::app::action::Action;
+    let mut h = connected_allowing(&[], &["pgcrypto"]);
+    asked_extensions(&mut h);
+    h.meta_db("local-pg", DbEvent::Lost { error: datarig_core::driver::DbError::Closed });
+    h.app.dispatch(Action::ReconnectCurrent);
+    h.db(DbEvent::Connected);
+    assert_eq!(asked_extensions(&mut h), [vec!["pgcrypto".to_string()]], "asked again");
+    extension_answer(&mut h, &["pgcrypto"], &["pgcrypto"], &[("public", "crypt", Some("pgcrypto"))]);
+    let sql = "SELECT public.crypt('a', 'b')";
+    assert_eq!(run(&mut h, sql), [sql]);
+}
+
+/// The metadata session lost before it answered, with the tab's session still open: a call
+/// waiting for the extensions' functions is refused as pending and reopens the metadata
+/// session, which asks again once connected; the call runs after its answer.
+#[test]
+fn a_call_waiting_for_the_extensions_reopens_a_lost_metadata_session() {
+    let mut h = connected_allowing(&[], &["pgcrypto"]);
+    asked_extensions(&mut h);
+    let sql = "SELECT 1";
+    assert_eq!(run(&mut h, sql), [sql], "the tab's session opens");
+    done(&mut h);
+    let id = h.app.profiles[0].id;
+    let old = h.app.conns.get(id).unwrap().generation;
+    h.meta_db("local-pg", DbEvent::Lost { error: datarig_core::driver::DbError::Closed });
+    let sql = "SELECT public.crypt('a', 'b')";
+    assert!(run(&mut h, sql).is_empty());
+    let pending = "The functions of the allowed extensions are still being read: run it again in a moment";
+    assert_eq!(status(&h), Some(refused_call_with("prod", "public.crypt", sql, pending)));
+    let c = h.app.conns.get(id).unwrap();
+    assert!(c.meta.is_some() && c.generation != old, "the metadata session reopens");
+    h.meta_db("local-pg", DbEvent::Connected);
+    assert_eq!(asked_extensions(&mut h), [vec!["pgcrypto".to_string()]], "asked again once connected");
+    extension_answer(&mut h, &["pgcrypto"], &["pgcrypto"], &[("public", "crypt", Some("pgcrypto"))]);
+    assert_eq!(run(&mut h, sql), [sql]);
+}
+
 /// An allowed extension the database does not have is named in the refusal; an answer for a
 /// list the environment no longer has is dropped.
 #[test]
