@@ -550,6 +550,23 @@ pub const KEYS: &[KeyDoc] = &[
     ),
     key(
         "policy.<env>",
+        "read_only_functions",
+        "[]",
+        "a list of function names as written in a statement: `[\"st_x\", \"public.crypt\"]`",
+        "PostgreSQL: the functions that run on read-only although they are not built-ins. A name \
+         without a schema allows it in any schema and every overload; with a schema, only calls \
+         written with that schema. See Environments, Allowing functions on read-only.",
+    ),
+    key(
+        "policy.<env>",
+        "read_only_extensions",
+        "[]",
+        "a list of extension names: `[\"postgis\", \"pgcrypto\"]`",
+        "PostgreSQL: the extensions whose functions run on read-only, as the connected \
+         database's catalog lists them.",
+    ),
+    key(
+        "policy.<env>",
         "confirm",
         "\"destructive\"",
         "`\"destructive\"`, `\"writes\"`",

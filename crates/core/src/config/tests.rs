@@ -1804,6 +1804,102 @@ lock_wait = "30s"
     assert_eq!(save_all(Prefs::default(), &envs), text);
 }
 
+/// `read_only_functions` and `read_only_extensions`: entries read as written (a function as in
+/// a statement, an extension as named), a wrong entry is an error naming the key and the
+/// entry, and a save keeps them as written, also when another item changes.
+#[test]
+fn read_only_functions_and_extensions_are_read_and_written() {
+    let cfg = parse(
+        r#"
+[policy.prod]
+read_only = true
+read_only_functions = ["st_x", "public.crypt", "\"MyFn\"", "App.Fn"]
+read_only_extensions = ["postgis", "PgCrypto"]
+
+[policy.default]
+read_only_functions = ["st_y"]
+"#,
+    )
+    .unwrap();
+    let prod = cfg.policies.get(Some("prod")).unwrap();
+    let names: Vec<(Option<&str>, &str, &str)> =
+        prod.read_only_functions.iter().map(|f| (f.schema.as_deref(), f.name.as_str(), f.entry.as_str())).collect();
+    assert_eq!(
+        names,
+        [
+            (None, "st_x", "st_x"),
+            (Some("public"), "crypt", "public.crypt"),
+            (None, "MyFn", "\"MyFn\""),
+            (Some("app"), "fn", "App.Fn"),
+        ]
+    );
+    assert_eq!(prod.read_only_extensions, ["postgis", "PgCrypto"], "as written");
+    assert_eq!(cfg.policies.get(None).unwrap().read_only_functions[0].entry, "st_y");
+    assert!(parse("[policy.dev]\n").unwrap().policies.get(Some("dev")).unwrap().read_only_functions.is_empty());
+    for (text, key, value) in [
+        ("read_only_functions = [\"st_x()\"]", "read_only_functions", "\"st_x()\""),
+        ("read_only_functions = [\"a.b.c\"]", "read_only_functions", "\"a.b.c\""),
+        ("read_only_functions = [\"\"]", "read_only_functions", "\"\""),
+        ("read_only_functions = [\"f; DROP TABLE t\"]", "read_only_functions", "\"f; DROP TABLE t\""),
+        ("read_only_functions = [1]", "read_only_functions", "1"),
+        ("read_only_functions = \"st_x\"", "read_only_functions", "\"st_x\""),
+        ("read_only_extensions = [\" \"]", "read_only_extensions", "\" \""),
+        ("read_only_extensions = \"postgis\"", "read_only_extensions", "\"postgis\""),
+    ] {
+        let e = parse(&format!("[policy.x]\n{text}\n")).unwrap_err();
+        let ConfigError::Value { key: k, value: v, allowed, .. } = &e else { panic!("{text}: {e:?}") };
+        assert_eq!((k.as_str(), v.as_str()), (format!("policy.x.{key}").as_str(), value), "{text}");
+        assert!(allowed.is_some_and(|a| a.contains("\"st_x\"") || a.contains("\"postgis\"")), "{text}: {e:?}");
+    }
+
+    // A save that changes another item keeps them as written; one that changes them writes
+    // them; back to none removes them.
+    let path = temp_file("read-only-functions");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let text = "version = 2\n\n[policy.prod]\nread_only = true\n# vouched for\nread_only_functions = [ \"st_x\",  \"\\\"MyFn\\\"\" ]\nread_only_extensions = ['postgis']\n";
+    std::fs::write(&path, text).unwrap();
+    let (cfg, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    let save_envs = |envs: &[crate::policy::Environment]| {
+        save(
+            &path,
+            Settings { version: 2, ..settings("en") },
+            Some(Profiles {
+                connections: &cfg.connections,
+                tunnels: &cfg.tunnels,
+                sessions: None,
+                environments: Some(envs),
+                default_rules: None,
+                folders: &cfg.folders,
+                last_used: None,
+            }),
+        )
+        .unwrap();
+        std::fs::read_to_string(&path).unwrap()
+    };
+    let mut envs = cfg.policies.environments().to_vec();
+    assert_eq!(save_envs(&envs), text, "unchanged");
+    envs[0].policy.confirm = crate::policy::Confirm::Writes;
+    let out = save_envs(&envs);
+    assert!(
+        out.contains(
+            "# vouched for\nread_only_functions = [ \"st_x\",  \"\\\"MyFn\\\"\" ]\nread_only_extensions = ['postgis']\n"
+        ),
+        "{out}"
+    );
+    let (back, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    assert!(back.policies.environments()[0].same_settings(&envs[0]));
+    envs[0].policy.read_only_functions.push(AllowedFunction::parse("public.crypt").unwrap());
+    envs[0].policy.read_only_extensions.clear();
+    let out = save_envs(&envs);
+    assert!(out.contains("read_only_functions = [\"st_x\", '\"MyFn\"', \"public.crypt\"]\n"), "{out}");
+    assert!(!out.contains("read_only_extensions"), "{out}");
+    let (back, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    assert!(back.policies.environments()[0].same_settings(&envs[0]));
+}
+
 /// `commit`, `tx_idle_warning` and `tx_idle_rollback`: read with their defaults when left out,
 /// garbage and too-short times are errors naming the item, and a save writes them only when
 /// they differ from the default (an existing file without them stays as it is).

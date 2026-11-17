@@ -79,7 +79,7 @@
 pub mod doc;
 
 use crate::fault::{Fault, FaultKind};
-use crate::policy::{self, Policies, Policy};
+use crate::policy::{self, AllowedFunction, Policies, Policy};
 use crate::profile::color::ProfileColor;
 use crate::profile::folder::{FolderPath, Folders};
 use crate::profile::session::{self, Dbms, SessionMap, SessionPreset, SessionPresetId, SessionRef, SessionSection};
@@ -183,6 +183,10 @@ struct PolicySection {
     #[serde(default)]
     read_only: Option<toml::Value>,
     #[serde(default)]
+    read_only_functions: Option<toml::Value>,
+    #[serde(default)]
+    read_only_extensions: Option<toml::Value>,
+    #[serde(default)]
     confirm: Option<String>,
     #[serde(default)]
     commit: Option<toml::Value>,
@@ -217,6 +221,8 @@ impl PolicySection {
             ("paging_idle_timeout", self.paging_idle_timeout.clone()),
             ("spill_limit", self.spill_limit.clone()),
             ("read_only", self.read_only.clone()),
+            ("read_only_functions", self.read_only_functions.clone()),
+            ("read_only_extensions", self.read_only_extensions.clone()),
             ("confirm", s(&self.confirm)),
             ("commit", self.commit.clone()),
             ("tx_idle_warning", self.tx_idle_warning.clone()),
@@ -267,6 +273,12 @@ const COUNT_TIMEOUT_VALUES: &str = "\"30s\", \"2m\", \"1h\" (1s to 24h), \"off\"
 /// Default of `[results] count_timeout`.
 pub const COUNT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// `read_only_functions`' values, for errors.
+const FUNCTIONS: &str = "[\"st_x\", \"public.crypt\", \"\\\"MyFn\\\"\"]";
+
+/// `read_only_extensions`' values, for errors.
+const EXTENSIONS: &str = "[\"postgis\", \"pgcrypto\"]";
+
 /// `lock_wait`'s literal values, for errors.
 const LOCK_WAIT: &str = "\"5s\", \"30s\", \"1m\" (1s to 24h), \"off\"";
 
@@ -289,6 +301,23 @@ fn policy_item(name: &str, key: &str, v: &toml::Value, e: &mut policy::Environme
             e.policy.spill_limit = Some(policy::parse_size(v).map_err(|x| err(&x).allowed(Some(SIZES)))?);
         }
         "read_only" => e.policy.read_only = v.as_bool().ok_or_else(|| err(v).allowed(Some("true, false")))?,
+        // A list of entries; a wrong one is named (a value that is not a list, as written).
+        "read_only_functions" | "read_only_extensions" => {
+            let Some(items) = v.as_array() else {
+                let allowed = if key == "read_only_functions" { FUNCTIONS } else { EXTENSIONS };
+                return Err(err(v).allowed(Some(allowed)));
+            };
+            if key == "read_only_functions" {
+                let list: Result<Vec<_>, _> =
+                    items.iter().map(|v| v.as_str().and_then(AllowedFunction::parse).ok_or(v)).collect();
+                e.policy.read_only_functions = list.map_err(|x| err(x).allowed(Some(FUNCTIONS)))?;
+            } else {
+                let named = |v: &str| !v.trim().is_empty();
+                let list: Result<Vec<_>, _> =
+                    items.iter().map(|v| v.as_str().filter(|x| named(x)).map(str::to_string).ok_or(v)).collect();
+                e.policy.read_only_extensions = list.map_err(|x| err(x).allowed(Some(EXTENSIONS)))?;
+            }
+        }
         "confirm" => {
             let c = v.as_str().and_then(policy::Confirm::parse);
             e.policy.confirm = c.ok_or_else(|| err(&raw).allowed(Some("destructive, writes")))?;
@@ -2387,6 +2416,7 @@ fn to_toml(v: &Value) -> Option<toml::Value> {
         Value::InlineTable(t) => {
             t.iter().map(|(k, v)| to_toml(v).map(|v| (k.to_string(), v))).collect::<Option<_>>().map(toml::Value::Table)
         }
+        Value::Array(a) => a.iter().map(to_toml).collect::<Option<_>>().map(toml::Value::Array),
         _ => None,
     }
 }
@@ -2404,7 +2434,7 @@ fn env_of(name: &str, t: &dyn toml_edit::TableLike) -> Option<policy::Environmen
 
 /// The items of an environment, in the file's key order: what each is in `e`, as written, and
 /// whether that is its default (an item at its default is left out).
-fn env_items(e: &policy::Environment) -> [(&'static str, Value, bool); 13] {
+fn env_items(e: &policy::Environment) -> [(&'static str, Value, bool); 15] {
     let d = Policy::default();
     let p = &e.policy;
     let size = |l: policy::SpillLimit| -> Value {
@@ -2418,6 +2448,16 @@ fn env_items(e: &policy::Environment) -> [(&'static str, Value, bool); 13] {
         ("color", e.color.clone().unwrap_or_default().into(), e.color.is_none()),
         ("badge", e.badge.clone().unwrap_or_default().into(), e.badge.is_none()),
         ("read_only", p.read_only.into(), p.read_only == d.read_only),
+        (
+            "read_only_functions",
+            p.read_only_functions.iter().map(|f| f.entry.as_str()).collect::<toml_edit::Array>().into(),
+            p.read_only_functions.is_empty(),
+        ),
+        (
+            "read_only_extensions",
+            p.read_only_extensions.iter().collect::<toml_edit::Array>().into(),
+            p.read_only_extensions.is_empty(),
+        ),
         ("confirm", p.confirm.as_str().into(), p.confirm == d.confirm),
         ("commit", p.commit.as_str().into(), p.commit == d.commit),
         ("tx_idle_warning", policy::format_timeout(p.tx_idle_warning).into(), p.tx_idle_warning == d.tx_idle_warning),
@@ -2491,6 +2531,8 @@ fn same_item(key: &str, a: &policy::Environment, b: &policy::Environment) -> boo
         "color" => a.color.is_some() == b.color.is_some() && a.display_color() == b.display_color(),
         "badge" => a.badge == b.badge,
         "read_only" => p.read_only == q.read_only,
+        "read_only_functions" => p.read_only_functions == q.read_only_functions,
+        "read_only_extensions" => p.read_only_extensions == q.read_only_extensions,
         "confirm" => p.confirm == q.confirm,
         "commit" => p.commit == q.commit,
         "tx_idle_warning" => p.tx_idle_warning == q.tx_idle_warning,

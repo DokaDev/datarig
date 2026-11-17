@@ -11,7 +11,8 @@
   environment with `confirm = "writes"` asks before every write too.
 - **What is refused.** Before sending a statement, a read-only profile refuses anything that is
   not a read, transaction control or a safe session setting, and any call of a function by a
-  name that is not a built-in's, naming the function. A cast of a quoted value written as a call
+  name that is not a built-in's, naming the function (on PostgreSQL an environment may allow
+  some: see [Allowing functions on read-only](#allowing-functions-on-read-only)). A cast of a quoted value written as a call
   to a built-in type (`uuid('…')`, `pg_catalog.jsonb('{}')`) is a cast, not a call; with any
   other argument (`uuid(t.c)`) it is taken as a call, since a function of that name may run
   instead. Built-ins that act on the server (reading or listing its files, resetting or writing
@@ -95,6 +96,8 @@ An environment is a `[policy.<env>]` table, every key optional:
 ```toml
 [policy.prod]
 read_only = true
+read_only_functions = ["st_x", "public.crypt"]
+read_only_extensions = ["postgis"]
 confirm = "writes"
 commit = "manual"
 color = "red"
@@ -114,6 +117,8 @@ policy = "prod"
 | Key | Values | Default |
 |---|---|---|
 | `read_only` | `true`, `false` | `false` |
+| `read_only_functions` | PostgreSQL: functions as written in a statement, `["st_x", "public.crypt"]` | none |
+| `read_only_extensions` | PostgreSQL: extension names, `["postgis", "pgcrypto"]` | none |
 | `confirm` | `"destructive"`, `"writes"` | `"destructive"` |
 | `commit` | `"auto"`, `"manual"` | `"auto"` |
 | `tx_idle_warning` | a duration of at least 10 s, or `"off"` | `"5m"` |
@@ -145,6 +150,37 @@ The idle-transaction keys are explained on [Manual commit](manual-commit.md#sett
 fallback to the default rules. Its explorer line shows the environment mark in the error colour,
 connecting is refused with a notice that names the missing environment, and a connected profile
 whose environment was deleted or renamed away runs nothing until another one is picked.
+
+### Allowing functions on read-only
+
+A read-only PostgreSQL profile refuses calls of functions that are not built-ins. An
+environment (or `[policy.default]`) may allow some in the config file; the environment form has
+no fields for them, and saving the form keeps them as written. MySQL profiles ignore both keys.
+
+- `read_only_functions` lists functions as you would write them in a statement, quoted as in
+  SQL: `"st_x"`, `"public.crypt"`, `"\"MyFn\""`. An entry without a schema allows that name in
+  any schema and every overload of it, so you vouch for all of them; an entry with a schema
+  allows only calls written with that schema (`public.crypt(…)`, not `crypt(…)`).
+- `read_only_extensions` lists extensions: every function of each, in the connected database,
+  as its catalog lists them when the connection opens. An extension's function runs only when
+  no other function has its name (in the call's schema, or in any schema for a call without
+  one); otherwise call it with its schema. While the functions are being read, when reading
+  them failed, or when the database does not have the extension, such a call is refused, and
+  the refusal says which.
+- A refused call says how to allow it, and `:session` lists what the profile's environment
+  allows.
+- Allowed functions still run in the `READ ONLY` transaction, so the server refuses their
+  changes to data in the database. That does not stop what a function does outside the
+  session, such as opening connections of its own or writing files: never allow such a
+  function (`dblink_exec`, for example).
+
+The built-ins PostgreSQL 18 adds (`uuidv7`, `uuidv4`, …) run on read-only profiles when the
+call names `pg_catalog`: `pg_catalog.uuidv7()`. On PostgreSQL 18 that is the built-in; on an
+older server `pg_catalog` has no such function, so the call fails. Without `pg_catalog`
+(`uuidv7()`) the call is refused, since on an older server it may find a function of that name
+in another schema, and the refusal says how to call it; to allow the unqualified call, add the
+name to `read_only_functions`. The server's version plays no part. Those of them that act on the
+server (writing or resetting statistics, listing its files) are refused however they are called.
 
 ## Paging and locks
 

@@ -266,6 +266,8 @@
 "session_view.title_new" = "세션 설정: 새 프로필 (폼의 저장하지 않은 값)"
 "session_view.keys" = "j/k 스크롤 · Esc 닫기"
 "session_view.read_only" = "읽기 전용 환경: 읽기 전용 세션이 바꿀 수 있는 설정만 허용합니다"
+"session_view.read_only_functions" = "읽기 전용에서 허용된 함수: {list}"
+"session_view.read_only_extensions" = "읽기 전용에서 허용된 확장 기능: {list}"
 "session_view.read_only_unconfirmed_meta" = "서버가 메타데이터 세션을 읽기 전용으로 유지하지 않았지만 세션은 실행됩니다 (앱 자체의 고정 구문만 보냅니다): {detail}"
 "session_view.read_only_unconfirmed_monitor" = "서버가 모니터 세션을 읽기 전용으로 유지하지 않았지만 세션은 실행됩니다 (앱 자체의 고정 구문만 보냅니다): {detail}"
 "session_view.server_setting" = "서버 설정"

@@ -65,6 +65,14 @@
 //!   `{ postgres = "<name>", mysql = "<name>" }` (either may be left out; see
 //!   [`crate::profile::session`]). A profile may name its own (`session = "<name>"`) or none
 //!   (`session = "none"`). No default (none).
+//! * `read_only_functions` (PostgreSQL only): the functions a read-only policy lets run although
+//!   they are not built-ins, each written as in a statement (`"st_x"`, `"public.crypt"`,
+//!   `"\"MyFn\""`: [`AllowedFunction::parse`]). One without a schema is the name in any schema
+//!   and every overload; one with a schema only calls written with that schema. No default
+//!   (none).
+//! * `read_only_extensions` (PostgreSQL only): the extensions (`"postgis"`) whose functions a
+//!   read-only policy lets run, as the connected database's catalog lists them. No default
+//!   (none).
 //! * `color` — the environment's color: one of the profile colors' 12 names or `#rrggbb`
 //!   ([`crate::profile::color`]). No default (no color).
 //! * `badge` — a short text the tabs and the status bar show for its profiles (`"PROD"`): no
@@ -81,6 +89,7 @@
 pub use crate::driver::PagingMode;
 use crate::profile::color::ProfileColor;
 pub use crate::profile::session::SessionMap;
+pub use crate::sql::risk::AllowedFunction;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -142,6 +151,12 @@ pub struct Policy {
     /// The session preset of each database its profiles start with (a profile may name its
     /// own, or none).
     pub session: SessionMap,
+    /// PostgreSQL: the functions a read-only policy lets run although they are not built-ins
+    /// (`read_only_functions`), as written.
+    pub read_only_functions: Vec<AllowedFunction>,
+    /// PostgreSQL: the extensions whose functions a read-only policy lets run
+    /// (`read_only_extensions`), as written.
+    pub read_only_extensions: Vec<String>,
 }
 
 impl Default for Policy {
@@ -158,6 +173,8 @@ impl Default for Policy {
             idle_disconnect: None,
             lock_wait: None,
             session: SessionMap::default(),
+            read_only_functions: Vec::new(),
+            read_only_extensions: Vec::new(),
         }
     }
 }

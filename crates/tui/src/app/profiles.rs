@@ -666,6 +666,9 @@ pub struct ProfileForm {
     pub env_lock_wait: TextInput,
     /// The session preset of each database the environment's profiles start with.
     pub env_session: policy::SessionMap,
+    /// `read_only_functions` and `read_only_extensions`: set in the config file only, kept as
+    /// they are when the form is saved.
+    pub env_read_only_calls: (Vec<policy::AllowedFunction>, Vec<String>),
     /// The Startup SQL form: the preset's database and its statements, one per row; a profile
     /// form's own startup SQL is `session_sql` too.
     pub session_dbms: Dbms,
@@ -978,6 +981,7 @@ impl ProfileForm {
             env_idle_disconnect: TextInput::default(),
             env_lock_wait: TextInput::default(),
             env_session: policy::SessionMap::default(),
+            env_read_only_calls: Default::default(),
             session_dbms: Dbms::Postgres,
             session_sql: StatementList::new(Dbms::of_driver(&c.driver), &c.session_sql),
             session_ref: c.session.clone(),
@@ -1083,6 +1087,7 @@ impl ProfileForm {
         f.env_spill = TextInput::new(&rules.spill_limit.map(policy::format_size).unwrap_or_default());
         f.set_session_limits(&rules);
         f.env_session = rules.session.clone();
+        f.env_read_only_calls = (rules.read_only_functions.clone(), rules.read_only_extensions.clone());
         f.section = Section::Advanced;
         f.focus = Field::Name;
         f
@@ -1138,6 +1143,7 @@ impl ProfileForm {
         f.env_spill = TextInput::new(&p.spill_limit.map(policy::format_size).unwrap_or_default());
         f.set_session_limits(p);
         f.env_session = p.session.clone();
+        f.env_read_only_calls = (p.read_only_functions.clone(), p.read_only_extensions.clone());
         f.focus = Field::EnvReadOnly;
         f
     }
@@ -1202,6 +1208,8 @@ impl ProfileForm {
             idle_disconnect,
             lock_wait,
             session: self.env_session.clone(),
+            read_only_functions: self.env_read_only_calls.0.clone(),
+            read_only_extensions: self.env_read_only_calls.1.clone(),
         })
     }
 

@@ -25,7 +25,8 @@
 use super::overlay::RunConfirm;
 use super::*;
 use datarig_core::policy::{Confirm, Policy, UnknownEnvironment};
-use datarig_core::sql::risk::{Class, Danger, NoWhere, ReadOnlyBlock, Why};
+use datarig_core::profile::session::Dbms;
+use datarig_core::sql::risk::{CallHint, Class, Danger, ExtensionLookup, NoWhere, ReadOnlyBlock, ReadOnlyContext, Why};
 
 /// A statement of a run that asks before it runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,10 +107,18 @@ impl App {
                 Level::Error,
             ));
         }
+        let cx = self.read_only_context(tab, pid);
         let mut classifier = self.classifier(tab);
         statements.iter().find_map(|sql| {
-            let why = classifier.classify(sql).read_only().err()?;
-            let what = self.i18n.msg(&blocked_msg(&why)).to_string();
+            let risk = classifier.classify(sql);
+            let why = risk.read_only_in(&cx).err()?;
+            let mut what = self.i18n.msg(&blocked_msg(&why)).to_string();
+            // A call the context could let run: what would.
+            if let (ReadOnlyBlock::UnknownFunction(_), Some(name)) = (&why, risk.refused_call_name(&cx)) {
+                let hint = hint_msg(&cx.hint(name), name, self.environment_name(pid));
+                let hint = self.i18n.msg(&hint).to_string();
+                what = self.i18n.msg(&Msg::SafetyBlockedWithHint { what, hint }).to_string();
+            }
             let sql = super::runlog::excerpt(sql, 60);
             Some(Notice::new(Msg::SafetyReadOnlyBlocked { environment: environment.clone(), what, sql }, Level::Error))
         })
@@ -117,6 +126,30 @@ impl App {
 }
 
 impl App {
+    /// What a read-only policy lets run in tab `tab` of profile `pid` beyond PostgreSQL 17's
+    /// built-ins: what the environment allows (`read_only_functions`, `read_only_extensions`),
+    /// and PostgreSQL 18's built-ins called in `pg_catalog`, which need no server version.
+    /// Nothing more on a profile that is not PostgreSQL's.
+    pub(super) fn read_only_context(&self, tab: TabId, pid: ProfileId) -> ReadOnlyContext {
+        let postgres = self.profile(pid).is_some_and(|p| Dbms::of_driver(&p.driver) == Some(Dbms::Postgres));
+        if !postgres {
+            return ReadOnlyContext::default();
+        }
+        let rules = self.rules_of(pid);
+        ReadOnlyContext {
+            extensions: self.extension_lookup(tab, pid, &rules.read_only_extensions),
+            allowed: rules.read_only_functions,
+            wanted_extensions: rules.read_only_extensions,
+        }
+    }
+
+    /// What the catalog of tab `tab`'s database says of the extensions `wanted` that profile
+    /// `pid`'s environment allows on read-only. Not read yet: pending while any is listed, so
+    /// none of their functions runs.
+    fn extension_lookup(&self, _tab: TabId, _pid: ProfileId, wanted: &[String]) -> ExtensionLookup {
+        if wanted.is_empty() { ExtensionLookup::None } else { ExtensionLookup::Pending }
+    }
+
     /// Why `statements` cannot run at all in tab `tab`, whatever the environment: `COPY … FROM
     /// STDIN` and `COPY … TO STDOUT` need the COPY protocol, which the app does not carry yet
     /// (sent, the first broke the tab's connection).
@@ -341,6 +374,22 @@ fn risk_text(i18n: &I18n, d: &Dangerous, why: Why) -> String {
         parts.push(i18n.label(Label::SafetyWhyExplain).to_string());
     }
     parts.join(" · ")
+}
+
+/// What a refusal of a call by `name` adds ([`ReadOnlyContext::hint`]), for environment
+/// `environment` (`None`: the default rules).
+fn hint_msg(hint: &CallHint, name: &[String], environment: Option<String>) -> Msg {
+    match (hint, environment) {
+        (CallHint::NewerBuiltin, _) => Msg::SafetyHintNewerBuiltin { function: name.join(".") },
+        (CallHint::NotAllowed, Some(environment)) => Msg::SafetyHintNotAllowed { environment },
+        (CallHint::NotAllowed, None) => Msg::Label(Label::SafetyHintNotAllowedDefault),
+        (CallHint::ExtensionsPending, _) => Msg::Label(Label::SafetyHintExtensionsPending),
+        (CallHint::ExtensionsFailed, _) => Msg::Label(Label::SafetyHintExtensionsFailed),
+        (CallHint::NotInstalled(list), _) => {
+            Msg::SafetyHintNotInstalled { count: list.len() as u64, list: list.join(", ") }
+        }
+        (CallHint::SharedName, _) => Msg::Label(Label::SafetyHintSharedName),
+    }
 }
 
 /// What a read-only environment says about a statement it refuses.

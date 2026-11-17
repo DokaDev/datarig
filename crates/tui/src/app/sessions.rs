@@ -326,8 +326,21 @@ impl App {
         });
         let who = [cfg.name.as_str(), &dbms, &place].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>();
         let mut head = vec![SessionLine::Text(who.join(" · "), Tone::Strong)];
-        if rules.as_ref().is_ok_and(|r| r.read_only) {
+        if let Ok(r) = rules.as_ref()
+            && r.read_only
+        {
             head.push(SessionLine::Text(label(Label::SessionViewReadOnly), Tone::Warning));
+            // What runs there although it is not a built-in (PostgreSQL only), as written.
+            if Dbms::of_driver(&cfg.driver) == Some(Dbms::Postgres) {
+                let functions = r.read_only_functions.iter().map(|f| f.entry.as_str()).collect::<Vec<_>>();
+                let mut said = |m: Msg| head.push(SessionLine::Text(self.i18n.msg(&m).to_string(), Tone::Muted));
+                if !functions.is_empty() {
+                    said(Msg::SessionViewReadOnlyFunctions { list: functions.join(", ") });
+                }
+                if !r.read_only_extensions.is_empty() {
+                    said(Msg::SessionViewReadOnlyExtensions { list: r.read_only_extensions.join(", ") });
+                }
+            }
         }
         // Each metadata and monitor session of the profile that runs although the server did
         // not keep it read-only, once per distinct line: only while that session is open.

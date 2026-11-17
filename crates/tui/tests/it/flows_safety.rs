@@ -806,16 +806,113 @@ fn a_function_call_forgets_the_prepared_names() {
     done(&mut h);
 }
 
-/// What a read-only `environment` says about `sql`, which calls `function`, not a built-in.
+/// What a read-only `environment` says about `sql`, which calls `function`, not a built-in
+/// that nothing allows.
 fn refused_call(environment: &str, function: &str, sql: &str) -> Msg {
+    let hint = format!("To allow it, add it to read_only_functions of the environment \"{environment}\"");
+    refused_call_with(environment, function, sql, &hint)
+}
+
+/// [`refused_call`] with `hint` as what the refusal adds.
+fn refused_call_with(environment: &str, function: &str, sql: &str, hint: &str) -> Msg {
     Msg::SafetyReadOnlyBlocked {
         environment: environment.into(),
         what: format!(
             "this statement calls {function}, which is not a built-in, and a read-only profile refuses \
-             functions whose effects cannot be checked"
+             functions whose effects cannot be checked. {hint}"
         ),
         sql: datarig_tui::app::runlog::excerpt(sql, 60),
     }
+}
+
+/// Connected to the test profile in `prod` (read-only), which allows `functions` and the
+/// functions of `extensions` on read-only.
+fn connected_allowing(functions: &[&str], extensions: &[&str]) -> Harness {
+    use datarig_core::sql::risk::AllowedFunction;
+    let mut cfg = config(Some("prod"));
+    let rules = Policy {
+        read_only: true,
+        read_only_functions: functions.iter().map(|f| AllowedFunction::parse(f).expect("an entry")).collect(),
+        read_only_extensions: extensions.iter().map(|e| e.to_string()).collect(),
+        ..Policy::default()
+    };
+    cfg.policies.insert("prod", rules);
+    let mut h = Harness::with_config(&cfg, Lang::En);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["public".into(), "shop".into()])));
+    h.db(DbEvent::Catalog(Ok(catalog())));
+    h
+}
+
+/// A read-only environment's `read_only_functions` run although they are not built-ins; a
+/// call of any other function in the same statement is refused, named, with how to allow it.
+#[test]
+fn a_read_only_environment_runs_the_functions_it_allows() {
+    let mut h = connected_allowing(&["st_x", "public.crypt"], &[]);
+    for sql in ["SELECT st_x(1)", "SELECT postgis.st_x(1), public.crypt('a', 'b')"] {
+        assert_eq!(run(&mut h, sql), [sql], "allowed: sent");
+        done(&mut h);
+    }
+    for (sql, function) in [("SELECT st_x(1), zz_f()", "zz_f"), ("SELECT crypt('a', 'b')", "crypt")] {
+        assert!(run(&mut h, sql).is_empty(), "{sql}: nothing is sent");
+        assert_eq!(status(&h), Some(refused_call("prod", function, sql)), "{sql}");
+    }
+    // The default rules say where they are.
+    let mut cfg = config(None);
+    let functions = vec![datarig_core::sql::risk::AllowedFunction::parse("st_x").unwrap()];
+    cfg.policies.insert("default", Policy { read_only: true, read_only_functions: functions, ..Policy::default() });
+    let mut h = Harness::with_config(&cfg, Lang::En);
+    h.db(DbEvent::Connected);
+    assert_eq!(run(&mut h, "SELECT st_x(1)"), ["SELECT st_x(1)"]);
+    done(&mut h);
+    let sql = "SELECT zz_f()";
+    assert!(run(&mut h, sql).is_empty());
+    let hint = "To allow it, add it to read_only_functions of [policy.default]";
+    assert_eq!(status(&h), Some(refused_call_with("default", "zz_f", sql, hint)));
+}
+
+/// The built-ins PostgreSQL 18 adds run on read-only called in `pg_catalog`, with no server
+/// version: unqualified, they are refused with a hint saying how to call them, unless the
+/// environment allows them.
+#[test]
+fn newer_built_ins_run_on_read_only_qualified_with_pg_catalog() {
+    let mut h = connected(Some("prod"), Lang::En);
+    let sql = "SELECT pg_catalog.uuidv7()";
+    assert_eq!(run(&mut h, sql), [sql]);
+    done(&mut h);
+    let sql = "SELECT uuidv7()";
+    assert!(run(&mut h, sql).is_empty());
+    let hint = "It is a built-in of PostgreSQL 18: call it as pg_catalog.uuidv7() or add it to read_only_functions";
+    assert_eq!(status(&h), Some(refused_call_with("prod", "uuidv7", sql, hint)));
+    let mut h = connected_allowing(&["uuidv7"], &[]);
+    assert_eq!(run(&mut h, sql), [sql]);
+}
+
+/// While the functions of the extensions an environment allows are not read, a call that is
+/// not a built-in is refused, saying so.
+#[test]
+fn a_call_waits_for_the_allowed_extensions_functions() {
+    let mut h = connected_allowing(&[], &["postgis"]);
+    let sql = "SELECT st_x(1)";
+    assert!(run(&mut h, sql).is_empty());
+    let hint = "The functions of the allowed extensions are still being read: run it again in a moment";
+    assert_eq!(status(&h), Some(refused_call_with("prod", "st_x", sql, hint)));
+}
+
+/// `:session` of a read-only profile says which functions and extensions run there, as
+/// written.
+#[test]
+fn the_session_view_lists_what_read_only_allows() {
+    let mut h = connected_allowing(&["st_x", "\"MyFn\""], &["postgis", "pgcrypto"]);
+    h.command("session");
+    let screen = h.screen(120, 40);
+    for line in ["Functions allowed on read-only: st_x, \"MyFn\"", "Extensions allowed on read-only: postgis, pgcrypto"]
+    {
+        assert!(screen.contains(line), "{line}\n{screen}");
+    }
+    let mut h = connected(Some("prod"), Lang::En);
+    h.command("session");
+    assert!(!h.screen(120, 40).contains("allowed on read-only"), "none allowed: no line");
 }
 
 /// `COPY … FROM/TO PROGRAM` runs a command on the server and `COPY … FROM/TO
