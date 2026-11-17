@@ -7,9 +7,11 @@
 //! * [`TableGuard`] drops the tables when the test ends, on a fresh connection, also when an
 //!   assertion panics.
 //! * [`sweep_stale`] runs once per test process before the first test uses the database: it
-//!   drops `public.it_%` tables left by earlier runs that were killed before their guard ran.
-//!   A table whose process id still names a connected `application_name` belongs to a test
-//!   that runs right now and is kept. So that this holds at every moment of a live process
+//!   drops `public.it_%` tables left by earlier runs that were killed before their guard ran,
+//!   all in one statement (a table that inherits from another goes with it). A table whose
+//!   process id still names a connected `application_name` belongs to a test that runs right
+//!   now and is kept. A partition goes with its table, never on its own name (its name ends in
+//!   its own number, not the process id). So that this holds at every moment of a live process
 //!   (test runs may go in parallel), each process then holds one connection for its whole
 //!   life, tagged with its process id ([`keep_alive`]), before any of its tests creates a
 //!   table.
@@ -129,18 +131,19 @@ pub fn sweep_stale(url: &str) {
     static SWEEP: Once = Once::new();
     SWEEP.call_once(|| {
         let sql = r"DO $$
-DECLARE r record;
+DECLARE stale text;
 BEGIN
-  FOR r IN
-    SELECT c.relname FROM pg_catalog.pg_class c
+  SELECT string_agg(format('public.%I', c.relname), ', ') INTO stale
+    FROM pg_catalog.pg_class c
     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND c.relname LIKE 'it\_%'
+    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND NOT c.relispartition
+      AND c.relname LIKE 'it\_%'
       AND NOT EXISTS (
         SELECT 1 FROM pg_catalog.pg_stat_activity a
-        WHERE a.application_name LIKE '%' || substring(c.relname FROM '([0-9]+)$'))
-  LOOP
-    EXECUTE format('DROP TABLE IF EXISTS public.%I', r.relname);
-  END LOOP;
+        WHERE a.application_name LIKE '%' || substring(c.relname FROM '([0-9]+)$'));
+  IF stale IS NOT NULL THEN
+    EXECUTE 'DROP TABLE IF EXISTS ' || stale;
+  END IF;
 END $$";
         if let Err(e) = run_fresh(url, sql) {
             let _ = writeln!(std::io::stderr(), "warning: sweeping stale it_ tables: {e}");
@@ -162,7 +165,14 @@ fn keep_alive(url: &str) {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let opts = ConnectOptions::new(1, SessionRole::Query, &format!("it-keep{}", std::process::id()));
             let _session = PgDriver.connect(&cfg, SessionRole::Query, opts, tx);
-            let connected = matches!(rx.recv().await, Some(DbEvent::Connected));
+            // Other events (the connection's encryption) come first.
+            let connected = loop {
+                match rx.recv().await {
+                    Some(DbEvent::Connected) => break true,
+                    Some(DbEvent::ConnectFailed { .. }) | None => break false,
+                    Some(_) => {}
+                }
+            };
             let _ = ready_tx.send(connected);
             std::future::pending::<()>().await;
         });

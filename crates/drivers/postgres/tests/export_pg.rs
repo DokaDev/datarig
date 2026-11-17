@@ -2,7 +2,7 @@
 //! every row streams into a bounded channel the reader drains (the session waits for it), a
 //! keyset's chunks read every row of a table once in key order, a cancel and a reader that
 //! stops end the statement and leave nothing open, inside the user's block it reads there under
-//! a savepoint, and the allowlist's server side is asked first. Tables are `public.zz_export_*`
+//! a savepoint, and the allowlist's server side is asked first. Tables are `public.it_export_*`
 //! of this process, dropped when each test ends.
 
 #[allow(dead_code)]
@@ -45,7 +45,10 @@ struct Guard(String, String);
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        let _ = pg_clean::run_fresh(&self.0, &self.1);
+        if let Err(e) = pg_clean::run_fresh(&self.0, &self.1) {
+            // Never panic here: this may run while a failed assertion unwinds.
+            let _ = writeln!(std::io::stderr(), "warning: {}: {e}", self.1);
+        }
     }
 }
 
@@ -153,7 +156,7 @@ async fn drain(rx: &mut Receiver<ExportBatch>) -> (Vec<ColumnMeta>, Vec<Vec<Cell
 }
 
 fn table(test: &str) -> String {
-    format!("public.zz_export_{test}_{}", std::process::id())
+    format!("public.it_export_{test}_{}", std::process::id())
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -4634,7 +4634,11 @@ struct TableGuard(String, String);
 
 impl Drop for TableGuard {
     fn drop(&mut self) {
-        let _ = pg_clean::run_fresh(&self.0, &format!("DROP TABLE IF EXISTS {}", self.1));
+        let sql = format!("DROP TABLE IF EXISTS {}", self.1);
+        if let Err(e) = pg_clean::run_fresh(&self.0, &sql) {
+            // Never panic here: this may run while a failed assertion unwinds.
+            let _ = writeln!(std::io::stderr(), "warning: {sql}: {e}");
+        }
     }
 }
 
@@ -7024,7 +7028,7 @@ impl Conn {
 async fn a_bounded_count_is_told_apart_when_stopped_cancelled_or_lost() {
     let Some(url) = pg_url("a_bounded_count_is_told_apart_when_stopped_cancelled_or_lost") else { return };
     let pid = std::process::id();
-    let table = format!("public.zz_bounded_{pid}");
+    let table = format!("public.it_bounded_{pid}");
     let _guard = TableGuard(url.clone(), table.clone());
     let tag = format!("bounded{pid}");
     let (mut q, mut b) = tagged(&url, &tag).await;
@@ -7103,7 +7107,7 @@ async fn a_bounded_count_is_told_apart_when_stopped_cancelled_or_lost() {
 async fn an_estimate_takes_no_lock_beyond_access_share() {
     let Some(url) = pg_url("an_estimate_takes_no_lock_beyond_access_share") else { return };
     let pid = std::process::id();
-    let table = format!("public.zz_estimate_{pid}");
+    let table = format!("public.it_estimate_{pid}");
     let _guard = TableGuard(url.clone(), table.clone());
     let tag = format!("estimate{pid}");
     let (mut q, mut b) = tagged(&url, &tag).await;
@@ -7170,7 +7174,7 @@ async fn a_bounded_read_runs_nothing_the_search_path_can_shadow() {
     let pid = std::process::id();
     let schema = format!("zz_shadow_{pid}");
     let _schema = SchemaGuard::new(&url, &schema);
-    let table = format!("public.zz_shadowt_{pid}");
+    let table = format!("public.it_shadowt_{pid}");
     let _guard = TableGuard(url.clone(), table.clone());
     let mut b = Conn::open(&url, SessionRole::Query).await;
     let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
@@ -7241,7 +7245,7 @@ async fn a_bounded_read_runs_nothing_the_search_path_can_shadow() {
 async fn a_bounded_read_whose_commit_fails_is_no_answer() {
     let Some(url) = pg_url("a_bounded_read_whose_commit_fails_is_no_answer") else { return };
     let pid = std::process::id();
-    let table = format!("public.zz_commitf_{pid}");
+    let table = format!("public.it_commitf_{pid}");
     let _guard = TableGuard(url.clone(), table.clone());
     let mut b = Conn::open(&url, SessionRole::Query).await;
     let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
@@ -7293,7 +7297,7 @@ async fn a_bounded_read_whose_commit_fails_is_no_answer() {
 async fn a_bounded_read_whose_begin_fails_never_runs() {
     let Some(url) = pg_url("a_bounded_read_whose_begin_fails_never_runs") else { return };
     let pid = std::process::id();
-    let table = format!("public.zz_beginf_{pid}");
+    let table = format!("public.it_beginf_{pid}");
     let _guard = TableGuard(url.clone(), table.clone());
     let mut b = Conn::open(&url, SessionRole::Query).await;
     let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
@@ -7337,7 +7341,7 @@ async fn a_bounded_read_whose_begin_fails_never_runs() {
 async fn bounded_reads_take_no_predicate_lock_under_a_serializable_default() {
     let Some(url) = pg_url("bounded_reads_take_no_predicate_lock_under_a_serializable_default") else { return };
     let pid = std::process::id();
-    let (table, other) = (format!("public.zz_siread_{pid}"), format!("public.zz_sireadw_{pid}"));
+    let (table, other) = (format!("public.it_siread_{pid}"), format!("public.it_sireadw_{pid}"));
     let (_guard, _other) = (TableGuard(url.clone(), table.clone()), TableGuard(url.clone(), other.clone()));
     let mut b = Conn::open(&url, SessionRole::Query).await;
     let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 100) g");
@@ -7374,7 +7378,7 @@ async fn bounded_reads_take_no_predicate_lock_under_a_serializable_default() {
 async fn an_exact_count_takes_no_predicate_lock_under_a_serializable_default() {
     let Some(url) = pg_url("an_exact_count_takes_no_predicate_lock_under_a_serializable_default") else { return };
     let pid = std::process::id();
-    let (table, other) = (format!("public.zz_xsiread_{pid}"), format!("public.zz_xsireadw_{pid}"));
+    let (table, other) = (format!("public.it_xsiread_{pid}"), format!("public.it_xsireadw_{pid}"));
     let (_guard, _other) = (TableGuard(url.clone(), table.clone()), TableGuard(url.clone(), other.clone()));
     let mut b = Conn::open(&url, SessionRole::Query).await;
     let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 100) g");
@@ -7413,7 +7417,7 @@ async fn an_exact_count_takes_no_predicate_lock_under_a_serializable_default() {
 async fn a_cancel_is_for_the_last_run_sent_before_it() {
     let Some(url) = pg_url("a_cancel_is_for_the_last_run_sent_before_it") else { return };
     let pid = std::process::id();
-    let table = format!("public.zz_cancelfor_{pid}");
+    let table = format!("public.it_cancelfor_{pid}");
     let _guard = TableGuard(url.clone(), table.clone());
     let tag = format!("cancelfor{pid}");
     let (mut q, mut b) = tagged(&url, &tag).await;
@@ -7461,9 +7465,9 @@ async fn a_cancel_is_for_the_last_run_sent_before_it() {
 async fn a_cancel_of_a_count_in_a_held_portal_is_for_the_last_one_sent() {
     let Some(url) = pg_url("a_cancel_of_a_count_in_a_held_portal_is_for_the_last_one_sent") else { return };
     let pid = std::process::id();
-    let (paged, locked) = (format!("public.zz_cancelp_{pid}"), format!("public.zz_cancell_{pid}"));
+    let (paged, locked) = (format!("public.it_cancelp_{pid}"), format!("public.it_cancell_{pid}"));
     // A count keeps its read lock until the portal's transaction ends: the second lock is on another table.
-    let again = format!("public.zz_cancela_{pid}");
+    let again = format!("public.it_cancela_{pid}");
     let _guards = (
         TableGuard(url.clone(), paged.clone()),
         TableGuard(url.clone(), locked.clone()),
@@ -7523,7 +7527,7 @@ async fn a_cancel_of_a_count_in_a_held_portal_is_for_the_last_one_sent() {
 async fn a_bounded_read_stopped_by_someone_else_is_no_cancel_of_the_users() {
     let Some(url) = pg_url("a_bounded_read_stopped_by_someone_else_is_no_cancel_of_the_users") else { return };
     let pid = std::process::id();
-    let table = format!("public.zz_stopped_{pid}");
+    let table = format!("public.it_stopped_{pid}");
     let _guard = TableGuard(url.clone(), table.clone());
     let tag = format!("stopped{pid}");
     let (mut q, mut b) = tagged(&url, &tag).await;
@@ -7552,7 +7556,7 @@ async fn a_bounded_read_stopped_by_someone_else_is_no_cancel_of_the_users() {
 async fn a_server_time_limit_is_no_cancel_of_the_users() {
     let Some(url) = pg_url("a_server_time_limit_is_no_cancel_of_the_users") else { return };
     let pid = std::process::id();
-    let table = format!("public.zz_nocancel_{pid}");
+    let table = format!("public.it_nocancel_{pid}");
     let _guard = TableGuard(url.clone(), table.clone());
     let mut b = Conn::open(&url, SessionRole::Query).await;
     let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
@@ -7611,7 +7615,7 @@ async fn a_server_time_limit_is_no_cancel_of_the_users() {
 async fn a_bounded_read_is_a_query_of_its_own() {
     let Some(url) = pg_url("a_bounded_read_is_a_query_of_its_own") else { return };
     let pid = std::process::id();
-    let table = format!("public.zz_ownq_{pid}");
+    let table = format!("public.it_ownq_{pid}");
     let _guard = TableGuard(url.clone(), table.clone());
     let mut b = Conn::open(&url, SessionRole::Query).await;
     let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
@@ -7651,7 +7655,7 @@ async fn a_bounded_read_is_a_query_of_its_own() {
 async fn a_bounded_read_never_leaves_its_transaction_open() {
     let Some(url) = pg_url("a_bounded_read_never_leaves_its_transaction_open") else { return };
     let pid = std::process::id();
-    let table = format!("public.zz_ownend_{pid}");
+    let table = format!("public.it_ownend_{pid}");
     let _guard = TableGuard(url.clone(), table.clone());
     let mut b = Conn::open(&url, SessionRole::Query).await;
     let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
@@ -7701,7 +7705,7 @@ async fn a_bounded_read_never_leaves_its_transaction_open() {
 async fn a_bounded_count_is_refused_when_the_transaction_state_is_unknown() {
     let Some(url) = pg_url("a_bounded_count_is_refused_when_the_transaction_state_is_unknown") else { return };
     let pid = std::process::id();
-    let table = format!("public.zz_unsure_{pid}");
+    let table = format!("public.it_unsure_{pid}");
     let _guard = TableGuard(url.clone(), table.clone());
     let mut b = Conn::open(&url, SessionRole::Query).await;
     let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
@@ -7739,7 +7743,7 @@ async fn an_exact_count_and_an_export_are_refused_when_the_transaction_state_is_
     let test = "an_exact_count_and_an_export_are_refused_when_the_transaction_state_is_unknown";
     let Some(url) = pg_url(test) else { return };
     let pid = std::process::id();
-    let table = format!("public.zz_xunsure_{pid}");
+    let table = format!("public.it_xunsure_{pid}");
     let _guard = TableGuard(url.clone(), table.clone());
     let mut b = Conn::open(&url, SessionRole::Query).await;
     let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
@@ -7784,7 +7788,7 @@ async fn an_exact_count_and_an_export_are_refused_when_the_transaction_state_is_
 async fn a_failed_exact_count_ends_its_transaction_or_the_session() {
     let Some(url) = pg_url("a_failed_exact_count_ends_its_transaction_or_the_session") else { return };
     let pid = std::process::id();
-    let table = format!("public.zz_xclean_{pid}");
+    let table = format!("public.it_xclean_{pid}");
     let _guard = TableGuard(url.clone(), table.clone());
     let mut b = Conn::open(&url, SessionRole::Query).await;
     let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
@@ -7836,7 +7840,7 @@ async fn a_failed_exact_count_ends_its_transaction_or_the_session() {
 async fn an_exact_count_does_not_wait_for_a_safe_snapshot() {
     let Some(url) = pg_url("an_exact_count_does_not_wait_for_a_safe_snapshot") else { return };
     let pid = std::process::id();
-    let (table, other) = (format!("public.zz_xdefer_{pid}"), format!("public.zz_xdeferw_{pid}"));
+    let (table, other) = (format!("public.it_xdefer_{pid}"), format!("public.it_xdeferw_{pid}"));
     let (_guard, _other) = (TableGuard(url.clone(), table.clone()), TableGuard(url.clone(), other.clone()));
     let mut b = Conn::open(&url, SessionRole::Query).await;
     let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 100) g");
@@ -7869,7 +7873,7 @@ async fn an_exact_count_does_not_wait_for_a_safe_snapshot() {
 async fn a_late_answer_does_not_change_what_stopped_a_bounded_read() {
     let Some(url) = pg_url("a_late_answer_does_not_change_what_stopped_a_bounded_read") else { return };
     let pid = std::process::id();
-    let table = format!("public.zz_lateans_{pid}");
+    let table = format!("public.it_lateans_{pid}");
     let _guard = TableGuard(url.clone(), table.clone());
     let mut b = Conn::open(&url, SessionRole::Query).await;
     let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
@@ -7966,7 +7970,7 @@ async fn the_proxy_rewords_a_message_cut_across_reads() {
 async fn a_stop_said_in_another_language_is_the_servers_words() {
     let Some(url) = pg_url("a_stop_said_in_another_language_is_the_servers_words") else { return };
     let pid = std::process::id();
-    let table = format!("public.zz_translated_{pid}");
+    let table = format!("public.it_translated_{pid}");
     let _guard = TableGuard(url.clone(), table.clone());
     let mut b = Conn::open(&url, SessionRole::Query).await;
     let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
@@ -8052,7 +8056,7 @@ async fn a_stop_said_in_another_language_is_the_servers_words() {
 async fn a_cancel_during_a_counts_cleanup_changes_nothing() {
     let Some(url) = pg_url("a_cancel_during_a_counts_cleanup_changes_nothing") else { return };
     let pid = std::process::id();
-    let table = format!("public.zz_cleanup_{pid}");
+    let table = format!("public.it_cleanup_{pid}");
     let _guard = TableGuard(url.clone(), table.clone());
     let mut b = Conn::open(&url, SessionRole::Query).await;
     let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
@@ -8432,8 +8436,8 @@ async fn a_group_count_takes_no_predicate_lock_under_a_serializable_default() {
     use datarig_core::driver::ValueKind;
     let Some(url) = pg_url("a_group_count_takes_no_predicate_lock_under_a_serializable_default") else { return };
     let pid = std::process::id();
-    let name = format!("zz_gsiread_{pid}");
-    let (table, other) = (format!("public.{name}"), format!("public.zz_gsireadw_{pid}"));
+    let name = format!("it_gsiread_{pid}");
+    let (table, other) = (format!("public.{name}"), format!("public.it_gsireadw_{pid}"));
     let (_guard, _other) = (TableGuard(url.clone(), table.clone()), TableGuard(url.clone(), other.clone()));
     let mut b = Conn::open(&url, SessionRole::Query).await;
     let setup = format!("CREATE TABLE {table} AS SELECT g AS id, (g % 3)::text AS k FROM generate_series(1, 300) g");
@@ -8464,7 +8468,7 @@ async fn a_group_count_is_bounded_and_told_apart_when_stopped_cancelled_or_locke
     use datarig_core::driver::ValueKind;
     let Some(url) = pg_url("a_group_count_is_bounded_and_told_apart_when_stopped_cancelled_or_locked") else { return };
     let pid = std::process::id();
-    let name = format!("zz_group_{pid}");
+    let name = format!("it_group_{pid}");
     let table = format!("public.{name}");
     let _guard = TableGuard(url.clone(), table.clone());
     let tag = format!("group{pid}");
@@ -8532,7 +8536,7 @@ async fn a_group_count_decodes_values_as_the_grid_does() {
     use datarig_core::driver::{ArrayElement, ValueKind};
     let Some(url) = pg_url("a_group_count_decodes_values_as_the_grid_does") else { return };
     let pid = std::process::id();
-    let name = format!("zz_group_values_{pid}");
+    let name = format!("it_group_values_{pid}");
     let table = format!("public.{name}");
     let _guard = TableGuard(url.clone(), table.clone());
     let mut q = Conn::open(&url, SessionRole::Query).await;
@@ -8599,7 +8603,7 @@ async fn a_group_count_while_paging_keeps_the_portal() {
     use datarig_core::driver::ValueKind;
     let Some(url) = pg_url("a_group_count_while_paging_keeps_the_portal") else { return };
     let pid = std::process::id();
-    let name = format!("zz_group_paged_{pid}");
+    let name = format!("it_group_paged_{pid}");
     let table = format!("public.{name}");
     let _guard = TableGuard(url.clone(), table.clone());
     let mut c = Conn::open(&url, SessionRole::Query).await;
@@ -8707,7 +8711,7 @@ async fn a_group_count_sends_arrays_whose_binary_form_is_longer_than_their_text(
     use datarig_core::driver::{ArrayElement, ValueKind};
     let Some(url) = pg_url("a_group_count_sends_arrays_whose_binary_form_is_longer_than_their_text") else { return };
     let pid = std::process::id();
-    let name = format!("zz_group_arrays_{pid}");
+    let name = format!("it_group_arrays_{pid}");
     let table = format!("public.{name}");
     let _guard = TableGuard(url.clone(), table.clone());
     let mut q = Conn::open(&url, SessionRole::Query).await;
@@ -8772,7 +8776,7 @@ async fn bit_strings_are_sent_by_a_group_count_up_to_the_preview_of_their_bytes(
     use datarig_core::driver::ValueKind;
     let Some(url) = pg_url("bit_strings_are_sent_by_a_group_count_up_to_the_preview_of_their_bytes") else { return };
     let pid = std::process::id();
-    let name = format!("zz_group_bits_{pid}");
+    let name = format!("it_group_bits_{pid}");
     let table = format!("public.{name}");
     let _guard = TableGuard(url.clone(), table.clone());
     let mut q = Conn::open(&url, SessionRole::Query).await;
@@ -8838,7 +8842,7 @@ async fn a_group_count_in_the_users_block_keeps_the_blocks_work() {
     use datarig_core::driver::{ArrayElement, ValueKind};
     let Some(url) = pg_url("a_group_count_in_the_users_block_keeps_the_blocks_work") else { return };
     let pid = std::process::id();
-    let name = format!("zz_group_kept_{pid}");
+    let name = format!("it_group_kept_{pid}");
     let table = format!("public.{name}");
     let _guard = TableGuard(url.clone(), table.clone());
     let mut q = Conn::open(&url, SessionRole::Query).await;
@@ -8865,7 +8869,7 @@ async fn a_group_count_in_the_users_block_leaves_no_portal() {
     use datarig_core::driver::ValueKind;
     let Some(url) = pg_url("a_group_count_in_the_users_block_leaves_no_portal") else { return };
     let pid = std::process::id();
-    let name = format!("zz_group_portals_{pid}");
+    let name = format!("it_group_portals_{pid}");
     let table = format!("public.{name}");
     let _guard = TableGuard(url.clone(), table.clone());
     let mut q = Conn::open(&url, SessionRole::Query).await;
@@ -8919,7 +8923,7 @@ async fn a_cancel_between_a_group_counts_preparation_and_its_run_is_kept() {
     use datarig_core::driver::ValueKind;
     let Some(url) = pg_url("a_cancel_between_a_group_counts_preparation_and_its_run_is_kept") else { return };
     let pid = std::process::id();
-    let name = format!("zz_group_gap_{pid}");
+    let name = format!("it_group_gap_{pid}");
     let table = format!("public.{name}");
     let _guard = TableGuard(url.clone(), table.clone());
     let mut b = Conn::open(&url, SessionRole::Query).await;
