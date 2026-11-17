@@ -16,3 +16,5 @@ trait HasToo {
 fn on_postgres(d: Dialect) -> bool {
     d == <u8 as Has>::D::Postgres
 }
+
+type P = (Dialect);

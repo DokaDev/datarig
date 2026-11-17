@@ -616,9 +616,7 @@ impl Scan<'_> {
 
     /// `type name = ty`: reported when `ty` is an engine enum.
     fn type_alias(&mut self, name: &proc_macro2::Ident, ty: &syn::Type) {
-        if let syn::Type::Path(p) = ty
-            && let Some(e) = p.path.segments.last().and_then(|s| engine_enum(&s.ident.to_string()))
-        {
+        if let Some(e) = type_engine(ty) {
             self.report(name.span(), Kind::Alias, format!("`{name}` is another name for {e}"));
         }
     }
@@ -776,9 +774,7 @@ impl<'ast> Visit<'ast> for Scan<'_> {
 
     // `<E>::V` names a variant past the scan's paths: reported like another name for `E`.
     fn visit_qself(&mut self, q: &'ast syn::QSelf) {
-        if let syn::Type::Path(p) = &*q.ty
-            && let Some(e) = p.path.segments.last().and_then(|s| engine_enum(&s.ident.to_string()))
-        {
+        if let Some(e) = type_engine(&q.ty) {
             self.report(q.lt_token.span, Kind::Alias, format!("`<{e}>::..` names {e} through a qualified path"));
         }
         visit::visit_qself(self, q);
@@ -973,6 +969,16 @@ fn peel(pat: &Pat) -> &Pat {
             None => pat,
         },
         _ => pat,
+    }
+}
+
+/// The engine enum a type is, through parentheses: `Dialect`, `crate::sql::Dialect`, `(Dialect)`.
+fn type_engine(ty: &syn::Type) -> Option<&'static str> {
+    match ty {
+        syn::Type::Paren(p) => type_engine(&p.elem),
+        syn::Type::Group(g) => type_engine(&g.elem),
+        syn::Type::Path(p) => p.path.segments.last().and_then(|s| engine_enum(&s.ident.to_string())),
+        _ => None,
     }
 }
 
@@ -1281,7 +1287,7 @@ fn every_violation_fixture_is_reported() {
         ("wrapped_eq", "crates/core/src/sql/values.rs", &[(Kind::BooleanTest, 5), (Kind::BooleanTest, 9)]),
         ("slice_catch_all", "crates/core/src/sql/values.rs", &[(Kind::CatchAll, 7), (Kind::CatchAll, 14)]),
         ("qualified_self", "crates/tui/src/app/tx.rs", &[(Kind::Alias, 5)]),
-        ("assoc_type", "crates/tui/src/app/tx.rs", &[(Kind::Alias, 9), (Kind::Alias, 13)]),
+        ("assoc_type", "crates/tui/src/app/tx.rs", &[(Kind::Alias, 9), (Kind::Alias, 13), (Kind::Alias, 20)]),
     ];
     let mut missed = Vec::new();
     for (name, path, expected) in cases {
