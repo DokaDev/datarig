@@ -839,6 +839,20 @@ impl<'ast> Visit<'ast> for Scan<'_> {
             let span = p.segments.last().map(|s| s.ident.span()).unwrap_or_else(Span::call_site);
             self.reference(span, e, &v);
         }
+        // `Alias::<E>::V`: a variant of `E` reached through a generic type, another name for `E`.
+        if let Some(last) = p.segments.last() {
+            let through = p.segments.iter().take(p.segments.len() - 1).find_map(|s| match &s.arguments {
+                syn::PathArguments::AngleBracketed(a) => a.args.iter().find_map(|g| match g {
+                    syn::GenericArgument::Type(ty) => type_engine(ty),
+                    _ => None,
+                }),
+                _ => None,
+            });
+            if let Some(e) = through.filter(|e| self.variants[e].contains(&last.ident.to_string())) {
+                let what = format!("`..::<{e}>::{}` names {e} through a generic type", last.ident);
+                self.report(last.ident.span(), Kind::Alias, what);
+            }
+        }
         let segs: Vec<String> = p.segments.iter().map(|s| s.ident.to_string()).collect();
         if let [.., owner, last] = segs.as_slice() {
             let owner =
@@ -1327,7 +1341,11 @@ fn every_violation_fixture_is_reported() {
         ),
         ("slice_catch_all", "crates/core/src/sql/values.rs", &[(Kind::CatchAll, 7), (Kind::CatchAll, 14)]),
         ("qualified_self", "crates/tui/src/app/tx.rs", &[(Kind::Alias, 5), (Kind::Alias, 10)]),
-        ("assoc_type", "crates/tui/src/app/tx.rs", &[(Kind::Alias, 9), (Kind::Alias, 13), (Kind::Alias, 20)]),
+        (
+            "assoc_type",
+            "crates/tui/src/app/tx.rs",
+            &[(Kind::Alias, 9), (Kind::Alias, 13), (Kind::Alias, 20), (Kind::Alias, 25)],
+        ),
     ];
     let mut missed = Vec::new();
     for (name, path, expected) in cases {

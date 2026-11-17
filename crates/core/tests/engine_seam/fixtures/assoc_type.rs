@@ -18,3 +18,9 @@ fn on_postgres(d: Dialect) -> bool {
 }
 
 type P = (Dialect);
+
+type Identity<T> = T;
+
+fn through_identity(d: Dialect) -> bool {
+    d == Identity::<Dialect>::Postgres
+}
