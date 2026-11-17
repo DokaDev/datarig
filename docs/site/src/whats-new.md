@@ -3,6 +3,35 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.41.3 (2026-11-17)
+
+A patch release that lifts the refusal of extension functions on read-only PostgreSQL profiles that 0.41.2 brought in: an environment can now allow chosen functions with `read_only_functions` and every function of chosen extensions with `read_only_extensions`, for example `read_only_extensions = ["postgis"]` in its `[policy.<name>]` table. Read-only profiles also accept a cast written as a call with a quoted value (`uuid('…')`) and the PostgreSQL 18 built-ins when the call names `pg_catalog`.
+
+### Added
+
+- A read-only PostgreSQL environment can allow functions that are not built-ins with
+  `read_only_functions` (such as `["st_x", "public.crypt"]`: a bare name allows that function
+  in any schema, a name with its schema only calls written with that schema) and every function
+  of the extensions in `read_only_extensions` (such as `["postgis"]`), both set in the
+  environment's `[policy.<name>]` table. A refused call says why, and names
+  `read_only_functions` where adding the function would allow it; `:session` lists what is
+  allowed. MySQL and MariaDB profiles ignore both settings.
+- The functions of the extensions in `read_only_extensions` are read from the profile's own
+  database when it connects. While they are being read, when the read failed, and in a tab
+  working in another database, a call that only an extension would allow is refused with the
+  reason. A refresh of the profile in the explorer reads them again after a failure.
+
+### Fixed
+
+- A read-only PostgreSQL profile no longer refuses a cast written as a call to a built-in type
+  with one quoted value, such as `uuid('…')` or `pg_catalog.jsonb('{}')`. With anything else
+  inside (a column, an expression) it is still a function call.
+- A read-only PostgreSQL profile now runs the built-ins PostgreSQL 18 adds when the call
+  names `pg_catalog`, such as `pg_catalog.uuidv7()`. Called without it (`uuidv7()`), they are
+  refused with a hint saying how to call them, unless `read_only_functions` or an allowed
+  extension lists them. The PostgreSQL 18 functions that write or clear statistics (such as
+  `pg_restore_relation_stats`) stay refused however they are called.
+
 ## 0.41.2 (2026-11-17)
 
 A patch release that makes several checks stricter, so read the list before upgrading. Read-only PostgreSQL profiles now refuse calls of functions that are not PostgreSQL built-ins, which includes extension functions such as PostGIS (`ST_*`) and pgcrypto; until a per-environment allow list ships in the next patch, use a profile that is not read-only for those queries. On MySQL and MariaDB, applying edits fails on any server warning and is undone where the table allows, `TIME` values are checked, the first-page row limit applies only to plain reads, counts and exports are refused inside your own SERIALIZABLE transaction, and a cancel is sent only when the server confirms the session (otherwise the tab's connection is closed). On PostgreSQL, a read-only profile also refuses typed settings of extensions, and a query holding a backslash or `U&` is not run again automatically. Startup SQL refuses settings that ask before they run, so a profile holding one stops connecting until it is removed.

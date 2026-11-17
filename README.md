@@ -4,7 +4,7 @@
 
 [![Docs](https://img.shields.io/badge/docs-dokadev.github.io%2Fdatarig-informational)](https://dokadev.github.io/datarig/) [![Ask DeepWiki](https://img.shields.io/badge/Ask-DeepWiki-20B2AA)](https://deepwiki.com/DokaDev/datarig) [![Built With Ratatui](https://img.shields.io/badge/Built_With_Ratatui-000?logo=ratatui&logoColor=fff)](https://ratatui.rs/) [![Rust 1.93+](https://img.shields.io/badge/rust-1.93%2B-orange?logo=rust)](https://www.rust-lang.org/)
 
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=fff)](https://dokadev.github.io/datarig/introduction.html#status) [![MySQL 8.0+](https://img.shields.io/badge/MySQL_8.0%2B-4479A1?logo=mysql&logoColor=fff)](https://dokadev.github.io/datarig/guide/mysql.html)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=fff)](https://dokadev.github.io/datarig/guide/postgresql.html) [![MySQL 8.0+](https://img.shields.io/badge/MySQL_8.0%2B-4479A1?logo=mysql&logoColor=fff)](https://dokadev.github.io/datarig/guide/mysql.html)
 
 datarig is a terminal database client and SQL editor (TUI): browse, query, edit and monitor
 your databases. Keyboard-first, light, fast and safe by default.
