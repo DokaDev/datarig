@@ -588,10 +588,15 @@ impl Scan<'_> {
                 continue;
             }
             match t {
-                TokenTree::Group(g) => match Punctuated::<Expr, Token![,]>::parse_terminated.parse2(g.stream()) {
-                    Ok(exprs) => exprs.iter().for_each(|e| self.visit_expr(e)),
-                    Err(_) => self.tokens(g.stream()),
-                },
+                TokenTree::Group(g) => {
+                    if let Ok(exprs) = Punctuated::<Expr, Token![,]>::parse_terminated.parse2(g.stream()) {
+                        exprs.iter().for_each(|e| self.visit_expr(e));
+                    } else if let Ok(stmts) = syn::Block::parse_within.parse2(g.stream()) {
+                        stmts.iter().for_each(|st| self.visit_stmt(st));
+                    } else {
+                        self.tokens(g.stream());
+                    }
+                }
                 TokenTree::Ident(id) => {
                     let s = id.to_string();
                     if s == "mariadb" || s == "is_mysql" {
@@ -1195,7 +1200,11 @@ fn every_violation_fixture_is_reported() {
         ),
         ("cfg_not_only_test", "crates/core/src/sql/split.rs", &[(Kind::BooleanTest, 7)]),
         ("alias_scopes", "crates/tui/src/app/plan.rs", &[(Kind::BooleanTest, 6), (Kind::Reference, 6)]),
-        ("macro_forms", "crates/core/src/sql/complete.rs", &[(Kind::BooleanTest, 6), (Kind::BooleanTest, 7)]),
+        (
+            "macro_forms",
+            "crates/core/src/sql/complete.rs",
+            &[(Kind::BooleanTest, 6), (Kind::BooleanTest, 7), (Kind::BooleanTest, 15)],
+        ),
         ("self_rename", "crates/core/src/sql/split.rs", &[(Kind::BooleanTest, 6)]),
     ];
     let mut missed = Vec::new();

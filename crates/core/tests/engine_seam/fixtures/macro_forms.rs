@@ -7,3 +7,12 @@ fn flags(d: Dialect) -> Vec<bool> {
     all.extend(odd_macro!(=> [matches!(d, Dialect::MySql(_))]));
     all
 }
+
+macro_rules! check {
+    () => {
+        fn check(d: Dialect) -> bool {
+            let x = d;
+            x == Dialect::Postgres
+        }
+    };
+}
