@@ -579,6 +579,7 @@ impl App {
             | DbEvent::Objects { .. }
             | DbEvent::Catalog(_)
             | DbEvent::Keys(_)
+            | DbEvent::ServerVersion(_)
             | DbEvent::Structure { .. }
             | DbEvent::Ddl { .. }
             | DbEvent::TableKeys { .. }

@@ -70,6 +70,13 @@
 "safety.blocked.server_command" = "this statement acts on the whole database server"
 "safety.blocked.locks" = "this statement takes locks that block other sessions"
 "safety.blocked.file_access" = "this statement reads or writes a file"
+"safety.blocked.with_hint" = "{what}. {hint}"
+"safety.hint.not_allowed" = "To allow it, add it to read_only_functions of the environment \"{environment}\""
+"safety.hint.not_allowed_default" = "To allow it, add it to read_only_functions of [policy.default]"
+"safety.hint.extensions_pending" = "The functions of the allowed extensions are still being read: run it again in a moment"
+"safety.hint.extensions_failed" = "The functions of the allowed extensions could not be read for this database"
+"safety.hint.not_installed" = { one = "This database does not have the allowed extension {list}", other = "This database does not have {count} of the allowed extensions: {list}" }
+"safety.hint.shared_name" = "Another function has this name, so the server may pick it: call the extension's function with its schema (no other function of that schema may have its name)"
 "safety.why_outside_tx" = "runs outside a transaction, at once: can't be rolled back"
 "safety.why_commits_itself" = "commits by itself: runs outside, at once; can't be rolled back"
 "safety.why_implicit_commit" = { one = "first commits the open transaction: {count} statement ({rows})", other = "first commits the open transaction: {count} statements ({rows})" }
