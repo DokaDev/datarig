@@ -8,3 +8,12 @@ pub trait CancelRules: Sync {
         5
     }
 }
+
+pub trait TxRules: Sync {
+    fn rollback_wait(&self) -> u64;
+    /// A test helper: not a default answer, and not scanned.
+    #[cfg(test)]
+    fn probe(&self) -> bool {
+        matches!(crate::sql::dialect::Dialect::default(), crate::sql::dialect::Dialect::Postgres)
+    }
+}

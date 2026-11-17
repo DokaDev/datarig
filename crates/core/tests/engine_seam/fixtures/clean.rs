@@ -79,3 +79,11 @@ struct Probe {
 }
 
 fn probe(#[cfg(test)] pg: bool) {}
+
+trait Probed {
+    /// A test helper: not scanned.
+    #[cfg(test)]
+    fn probe(d: D) -> bool {
+        matches!(d, D::Postgres)
+    }
+}

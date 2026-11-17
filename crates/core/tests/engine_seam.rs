@@ -631,10 +631,38 @@ impl<'ast> Visit<'ast> for Scan<'_> {
             syn::Item::Type(i) => &i.attrs,
             syn::Item::Union(i) => &i.attrs,
             syn::Item::Use(i) => &i.attrs,
+            syn::Item::ExternCrate(i) => &i.attrs,
+            syn::Item::ForeignMod(i) => &i.attrs,
+            syn::Item::TraitAlias(i) => &i.attrs,
             _ => &[],
         };
         if !is_test_only(attrs) {
             visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_trait_item(&mut self, item: &'ast syn::TraitItem) {
+        if !is_test_only(trait_item_attrs(item)) {
+            visit::visit_trait_item(self, item);
+        }
+    }
+
+    fn visit_foreign_item(&mut self, item: &'ast syn::ForeignItem) {
+        let attrs: &[Attribute] = match item {
+            syn::ForeignItem::Fn(i) => &i.attrs,
+            syn::ForeignItem::Static(i) => &i.attrs,
+            syn::ForeignItem::Type(i) => &i.attrs,
+            syn::ForeignItem::Macro(i) => &i.attrs,
+            _ => &[],
+        };
+        if !is_test_only(attrs) {
+            visit::visit_foreign_item(self, item);
+        }
+    }
+
+    fn visit_field_pat(&mut self, f: &'ast syn::FieldPat) {
+        if !is_test_only(&f.attrs) {
+            visit::visit_field_pat(self, f);
         }
     }
 
@@ -696,7 +724,7 @@ impl<'ast> Visit<'ast> for Scan<'_> {
     fn visit_item_trait(&mut self, t: &'ast syn::ItemTrait) {
         self.selves.push(None);
         if self.rel == SPEC_FILE {
-            for item in &t.items {
+            for item in t.items.iter().filter(|i| !is_test_only(trait_item_attrs(i))) {
                 let (span, name) = match item {
                     syn::TraitItem::Fn(f) if f.default.is_some() => (f.sig.ident.span(), f.sig.ident.to_string()),
                     syn::TraitItem::Const(c) if c.default.is_some() => (c.ident.span(), c.ident.to_string()),
@@ -869,6 +897,16 @@ impl<'ast> Visit<'ast> for Scan<'_> {
             self.other_macro(mac);
         }
         visit::visit_macro(self, mac);
+    }
+}
+
+fn trait_item_attrs(item: &syn::TraitItem) -> &[Attribute] {
+    match item {
+        syn::TraitItem::Const(i) => &i.attrs,
+        syn::TraitItem::Fn(i) => &i.attrs,
+        syn::TraitItem::Type(i) => &i.attrs,
+        syn::TraitItem::Macro(i) => &i.attrs,
+        _ => &[],
     }
 }
 
@@ -1148,6 +1186,10 @@ fn every_violation_fixture_is_reported() {
         }
     }
     assert!(missed.is_empty(), "violations the scan missed:\n{}", missed.join("\n"));
+    // The second trait of that fixture (from line 12) has only a test-only method: no finding.
+    let extra: Vec<String> =
+        scan_fixture("trait_default_body", SPEC_FILE).iter().filter(|f| f.line >= 12).map(|f| f.to_string()).collect();
+    assert!(extra.is_empty(), "a test-only trait method was reported: {extra:?}");
 }
 
 #[test]
