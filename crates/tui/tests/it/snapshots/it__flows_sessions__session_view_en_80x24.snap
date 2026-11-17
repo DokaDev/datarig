@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/it/flows_sessions.rs
+assertion_line: 1166
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ ╭ Session settings: local-pg ──────────────────────────────────────────────╮  "
@@ -19,8 +20,8 @@ expression: "h.draw(w, ht).backend()"
 "│ │   SET work_mem = '256MB'                                                 │ │"
 "│ │     behind a pooler: per transaction as SET LOCAL work_mem = '256MB'     │ │"
 "│ │   SET ROLE reporting                                                     │ │"
-"│ │     behind a pooler: not sent (it changes who the session is)            │t│"
-"│ │                                                                          │ │"
+"│ │     behind a transaction pooler: the profile does not connect (it        │t│"
+"│ │                                                            ↓ 1 more line │ │"
 "│ │ Applied in this order: a later setting of the same name wins             │ │"
 "│ │                                                                          │ │"
 "│ │                                [ Close ]                                 │ │"

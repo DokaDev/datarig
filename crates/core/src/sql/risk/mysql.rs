@@ -1876,8 +1876,11 @@ pub fn session_set(sql: &str) -> Result<SessionSet, SetProblem> {
         MySqlMode { ansi_quotes: true, no_backslash_escapes: true, ..d },
     ];
     // Nor is the server: a call of a function MariaDB does not provide counts as on MariaDB.
-    let engines = modes.iter().flat_map(|m| [*m, MySqlMode { mariadb: true, ..*m }]);
-    let risk = engines.map(|m| classify(sql, m)).reduce(worse).unwrap_or_else(unrecognized);
+    let read = |sql: &str| {
+        let engines = modes.iter().flat_map(|m| [*m, MySqlMode { mariadb: true, ..*m }]);
+        engines.map(|m| classify(sql, m)).reduce(worse).unwrap_or_else(unrecognized)
+    };
+    let risk = read(sql);
     let shapes =
         guarded(|| vec![Err(SetProblem::Unread)], || modes.iter().map(|m| set_shape(sql, *m)).collect::<Vec<_>>());
     if let Some(Err(p)) = shapes.iter().find(|s| s.is_err()) {
@@ -1886,7 +1889,12 @@ pub fn session_set(sql: &str) -> Result<SessionSet, SetProblem> {
     if shapes.windows(2).any(|w| w[0] != w[1]) {
         return Err(SetProblem::ModeDependent);
     }
-    super::session_set::judge(&risk)?;
+    // `sql_mode` asks when typed, but a session may start with it (the classifier then reads
+    // the session in that mode): only when nothing else of the statement asks.
+    match super::session_set::judge(&risk) {
+        Err(SetProblem::Asks) if super::session_set::judge(&read(&without_sql_mode(sql))).is_ok() => {}
+        judged => judged?,
+    }
     let settings = shapes.into_iter().next().and_then(Result::ok).unwrap_or_default();
     let settings: Vec<(String, String)> =
         settings.into_iter().filter_map(|(name, value)| Some((name?, value))).collect();
@@ -1900,6 +1908,27 @@ pub fn session_set(sql: &str) -> Result<SessionSet, SetProblem> {
         return Err(SetProblem::IdleValue);
     }
     Ok(SessionSet { risk, per_transaction: None, settings })
+}
+
+/// `sql` with each name of `sql_mode` (`sql_mode`, `` `sql_mode` ``, `@@[scope.]sql_mode`) in
+/// place of `sql_notes`, a setting that does not ask: what else of it asks, read as
+/// [`session_set`] reads it.
+fn without_sql_mode(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    for t in lex_in(sql, Dialect::MySql(MySqlMode::default())) {
+        let text = &sql[t.start..t.end];
+        let lower = text.to_ascii_lowercase();
+        let renamed = match t.kind {
+            Tok::Ident | Tok::Keyword if lower == "sql_mode" => Some("sql_notes".to_string()),
+            Tok::QuotedIdent if lower == "`sql_mode`" => Some("`sql_notes`".to_string()),
+            Tok::Variable if lower == "@@sql_mode" || (lower.starts_with("@@") && lower.ends_with(".sql_mode")) => {
+                Some(format!("{}sql_notes", &text[..text.len() - "sql_mode".len()]))
+            }
+            _ => None,
+        };
+        out.push_str(renamed.as_deref().unwrap_or(text));
+    }
+    out
 }
 
 /// [`session_set`]'s check of the statement's form in sql mode `mode`: what it sets, in order

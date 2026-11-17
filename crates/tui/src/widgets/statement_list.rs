@@ -87,7 +87,7 @@ impl StatementList {
         let note = match (self.dbms, self.statement(i)) {
             (Some(dbms), Some(s)) => match Classifier::session_set(dbms.language(), &s) {
                 Err(p) => Some(Note::Refused(p)),
-                Ok(set) => set.risk.read_only().err().map(Note::ReadOnly),
+                Ok(set) => set.read_only().err().map(Note::ReadOnly),
             },
             _ => None,
         };

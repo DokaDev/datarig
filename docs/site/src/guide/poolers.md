@@ -39,7 +39,8 @@ share, so behind a pooler datarig keeps them inside each transaction:
   own timer still closes the tab's session. A Startup SQL's `idle_session_timeout` is not sent
   there either, so the environment's `idle_disconnect` stays the limit.
 - **Startup SQL** statements go first in every transaction as `SET LOCAL`; statements that have
-  no such form are not sent, and the tab names them (see
+  no such form are not sent, and the tab names them; one that changes who the session is
+  (`SET ROLE`, `SET SESSION AUTHORIZATION`) keeps the profile from connecting (see
   [Startup SQL](startup-sql.md#behind-a-connection-pooler)).
 - Statements that cannot run in a transaction (`VACUUM`, `CREATE INDEX CONCURRENTLY`, …),
   `CALL`, `DO`, and your own `SET` and `RESET` run without these per-transaction settings.

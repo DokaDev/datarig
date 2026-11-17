@@ -259,6 +259,7 @@
 "session.driver" = "{name} has session settings, and its driver {driver} has no Startup SQL"
 "session.failed" = "{name}: {statement} failed, so the session was closed: {error} ({sql})"
 "session.per_transaction" = "{name} is behind a connection pooler: its session settings go first in each transaction (SET LOCAL), not on the shared connection"
+"session.pooled_identity" = "behind a transaction pooler SET ROLE (or SET SESSION AUTHORIZATION) cannot hold for the session, so statements would run as the login role: connect directly, or log in as that role"
 "session.pooled_refused" = { one = "{name} is behind a connection pooler: {count} session setting was not sent, as it cannot be set for one transaction there (:session says why): {sql}", other = "{name} is behind a connection pooler: {count} session settings were not sent, as they cannot be set for one transaction there (:session says why): {sql}" }
 "session.source.global" = "app setting"
 "session.source.default_rules" = "default rules"
@@ -281,6 +282,7 @@
 "session_view.skipped" = "Not used: {source} (the profile says startup = \"none\")"
 "session_view.no_statements" = "No startup statements"
 "session_view.pooled_local" = "behind a pooler: per transaction as {sql}"
+"session_view.pooled_identity" = "behind a transaction pooler: the profile does not connect (it changes who the session is)"
 "session_view.pooled_refused" = "behind a pooler: not sent ({reason})"
 "session_view.not_local.form" = "only a plain SET name = value has a form for one transaction"
 "session_view.not_local.identity" = "it changes who the session is"

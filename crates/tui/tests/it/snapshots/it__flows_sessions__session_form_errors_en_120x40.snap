@@ -1,6 +1,6 @@
 ---
 source: crates/tui/tests/it/flows_sessions.rs
-assertion_line: 473
+assertion_line: 520
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -18,9 +18,9 @@ expression: "h.draw(w, ht).backend()"
 "│    ◇ bro│                                                                                                  │         │"
 "│      sta│ Name        none                                reserved: it means none                          │         │"
 "│    ◇ fk_│ Database    PostgreSQL ▾   ←/→ change · Enter list                                               │         │"
-"│  ▸ ◇ my_│ Statements    1 SET work_mem = '1MB'                                                           × │         │"
-"│  ▸ ◇ rep│               2 RESET work_mem                                                                 × │         │"
-"│         │                 only SET of the session's own settings                                           │         │"
+"│      sta│ Statements    1 SET work_mem = '1MB'                                                           × │         │"
+"│  ▸ ◇ my_│               2 RESET work_mem                                                                 × │         │"
+"│  ▸ ◇ rep│                 only SET of the session's own settings                                           │         │"
 "│         │               3 DELETE FROM t                                                                  × │         │"
 "│         │                 only SET of the session's own settings                                           │         │"
 "│         │               + Add statement  one per row · Enter adds · Ctrl+D deletes                         │         │"

@@ -9,16 +9,22 @@
   updates or deletes, `DO` and `CALL`, `COPY` to or from server files or programs, server-side
   built-ins that act on files or other backends, and any text the parser rejects. An
   environment with `confirm = "writes"` asks before every write too.
-- **What is refused.** Before sending a statement, a read-only profile refuses anything that
-  is not a read, transaction control or a safe session setting, and any call of a function by
-  a name that is not a built-in's, naming the function. Every transaction of a read-only
-  profile is opened `READ ONLY`, so the server refuses the session's own changes to data in
-  the database, also those of a function the check does not see (one reached through a view,
-  a trigger, an operator, a cast or attribute notation such as `t.f`, or one that shares a
-  built-in's name in another schema of the search path). It does not stop what such a
-  function does outside the session or the database, such as opening a connection of its
-  own or writing a file: that is why calls of functions that are not built-ins are refused
-  before sending. (MySQL works differently; see [MySQL](mysql.md#read-only-profiles).)
+- **What is refused.** Before sending a statement, a read-only profile refuses anything that is
+  not a read, transaction control or a safe session setting, and any call of a function by a
+  name that is not a built-in's, naming the function. On PostgreSQL a typed setting of an
+  extension or a custom one (a name with a `.`: `SET app.tenant = '1'`, `SET LOCAL pgaudit.log =
+  'none'`, `RESET pgaudit.log`, `set_config()` of one) is refused too, and so are `RESET ALL`
+  and `DISCARD ALL`, which would reset such settings as well; set such a setting in the
+  profile's [Startup SQL](startup-sql.md), where it is allowed. A `set_config()` whose setting
+  is not named with a constant asks before it runs. `set_config()` follows the same list of safe
+  settings as `SET`. Every transaction of a read-only profile is opened `READ ONLY`, so the
+  server refuses the session's own changes to data in the database, also those of a function the
+  check does not see (one reached through a view, a trigger, an operator, a cast or attribute
+  notation such as `t.f`, or one that shares a built-in's name in another schema of the search
+  path). It does not stop what such a function does outside the session or the database, such as
+  opening a connection of its own or writing a file: that is why calls of functions that are not
+  built-ins are refused before sending. (MySQL works differently; see
+  [MySQL](mysql.md#read-only-profiles).)
 - **Editing data.** A read-only environment refuses [editing a result](editing.md) ("Read-only:
   the connection's environment is read-only"), and so does a tab whose session opened while it
   was. With `confirm = "writes"` an Apply shows its statements in the Apply dialog before

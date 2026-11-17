@@ -6805,7 +6805,7 @@ async fn a_failing_start_up_statement_fails_the_connect() {
     use datarig_core::driver::SessionStatement;
     let Some(url) = pg_url("a_failing_start_up_statement_fails_the_connect") else { return };
     let tag = format!("sessf{}", std::process::id());
-    let st = |sql: &str| SessionStatement { sql: sql.into(), per_transaction: None };
+    let st = |sql: &str| SessionStatement { sql: sql.into(), per_transaction: None, identity: false };
     let sql = vec![st("SET work_mem = '7MB'"), st("SET work_mem = 'lots'"), st("SET statement_timeout = '1s'")];
     match starting(&url, SessionRole::Query, &tag, sql, None).await {
         Err(DbError::SessionSql { index: 1, statement, error }) => {

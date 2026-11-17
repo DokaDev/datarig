@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/it/flows_sessions.rs
+assertion_line: 940
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -17,9 +18,9 @@ expression: "h.draw(w, ht).backend()"
 "│    ◇ bro│ SSL mode          disable ▾   ←/→ change · Enter list                                            │         │"
 "│      sta│ CA file                                               PEM; checks the server's certificate       │         │"
 "│    ◇ fk_│ Client cert                                           PEM, sent when the server asks             │         │"
-"│  ▸ ◇ my_│ Client key  ╭ Startup SQL ─────────────────────────────────────────────────────────╮             │         │"
-"│  ▸ ◇ rep│ Statement ca│ › type to filter                                                     │             │         │"
-"│         │ Environment │                                                                      │             │         │"
+"│      sta│ Client key  ╭ Startup SQL ─────────────────────────────────────────────────────────╮             │         │"
+"│  ▸ ◇ my_│ Statement ca│ › type to filter                                                     │             │         │"
+"│  ▸ ◇ rep│ Environment │                                                                      │             │         │"
 "│         │ Startup SQL │ Environment's (reporting)  the Startup SQL its environment maps for… │             │         │"
 "│         │ Own startup │ None                       no Startup SQL, even if the environment … │           × │         │"
 "│         │             │ broken                     2 statements                              │             │         │"

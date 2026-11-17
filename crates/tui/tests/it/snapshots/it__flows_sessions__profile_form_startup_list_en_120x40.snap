@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/it/flows_sessions.rs
+assertion_line: 980
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -17,9 +18,9 @@ expression: "h.draw(w, ht).backend()"
 "│    ◇ bro│ CA file                                               PEM; checks the server's certificate       │         │"
 "│      sta│ Client cert                                           PEM, sent when the server asks             │         │"
 "│    ◇ fk_│ Client key                                            PEM, without a passphrase                  │         │"
-"│  ▸ ◇ my_│ Statement cache   ‹ on ›  ←/→ change · off behind PgBouncer in transaction mode                  │         │"
-"│  ▸ ◇ rep│ Environment       ○ prod ▾   Enter list · standard rules                                         │         │"
-"│         │ Startup SQL       Environment's (reporting) ▾   Enter list                                       │         │"
+"│      sta│ Statement cache   ‹ on ›  ←/→ change · off behind PgBouncer in transaction mode                  │         │"
+"│  ▸ ◇ my_│ Environment       ○ prod ▾   Enter list · standard rules                                         │         │"
+"│  ▸ ◇ rep│ Startup SQL       Environment's (reporting) ▾   Enter list                                       │         │"
 "│         │ Own startup SQL     1 SET work_mem = '1MB'                                                     × │         │"
 "│         │                     2 SET search_path = x                                                      × │         │"
 "│         │                       search_path: the tab's schema sets it. Change it with :use                 │         │"

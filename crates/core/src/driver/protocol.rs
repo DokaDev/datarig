@@ -348,6 +348,11 @@ pub enum DbError {
     /// ([`super::ConnectOptions::session_sql`]), `statement`, failed: the session was closed
     /// before `Connected`. Why, as the server said it.
     SessionSql { index: usize, statement: String, error: Box<DbError> },
+    /// PostgreSQL behind a pooler: a start-up statement changes who the session is (`SET ROLE`,
+    /// `SET SESSION AUTHORIZATION`), which cannot hold for the session there (a statement that
+    /// runs outside a transaction would run as the login role). Comes as
+    /// [`DbError::SessionSql`]'s error; nothing was sent.
+    PooledIdentity,
 }
 
 /// Why a request to stop the running statement did not stop it ([`DbError::CancelNotTaken`]).
@@ -437,6 +442,7 @@ impl DbError {
             | DbError::NextTransactionSet
             | DbError::LockingRead
             | DbError::CancelUnconfirmed
+            | DbError::PooledIdentity
             | DbError::CancelNotTaken(
                 CancelFailure::Refused
                 | CancelFailure::KeptSending

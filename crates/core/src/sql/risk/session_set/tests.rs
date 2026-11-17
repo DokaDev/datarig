@@ -30,7 +30,7 @@ fn pg_allows_session_sets_with_their_transaction_form() {
     for (sql, local) in cases {
         let s = pg(sql).unwrap_or_else(|e| panic!("{sql}: {e:?}"));
         assert_eq!(s.per_transaction, Some(Ok(local.to_string())), "{sql}");
-        assert!(s.risk.read_only().is_ok(), "{sql}: a safe setting");
+        assert!(s.read_only().is_ok(), "{sql}: a safe setting");
     }
 }
 
@@ -134,9 +134,43 @@ fn the_servers_idle_limit_is_a_presets_to_set() {
 #[test]
 fn pg_read_only_refusal_is_the_classifiers() {
     // Not on the read-only allowlist: allowed as a setting, refused by a read-only environment.
-    let s = pg("SET session_replication_role = replica").unwrap();
+    let s = pg("SET synchronous_commit = off").unwrap();
     assert!(s.risk.read_only().is_err());
     assert!(pg("SET work_mem = '1MB'").unwrap().risk.read_only().is_ok());
+    // A setting of an extension or a custom one is refused typed, allowed as a start-up setting.
+    let s = pg("SET app.tenant = '1'").unwrap();
+    assert_eq!(s.risk.read_only(), Err(ReadOnlyBlock::CustomSetting("app.tenant".into())));
+    assert_eq!(s.read_only(), Ok(()));
+}
+
+/// A setting that asks before it runs when typed is no start-up setting: start-up statements
+/// run without asking. Other settings still are, and MySQL's `sql_mode` too (the classifier
+/// reads the session in the mode it sets), but not with another that asks.
+#[test]
+fn settings_that_ask_when_typed_are_refused() {
+    for sql in [
+        "SET foreign_key_checks = 0",
+        "SET sql_log_bin = 0",
+        "SET sql_mode = '', foreign_key_checks = 0",
+        "SET SESSION foreign_key_checks = 0, sql_mode = ''",
+        "SET @@session.sql_mode = '', @@session.unique_checks = 0",
+        "SET @@sql_mode = '', sql_log_bin = 0",
+    ] {
+        assert_eq!(mysql(sql).map(|_| ()), Err(SetProblem::Asks), "{sql}");
+    }
+    for sql in [
+        "SET sql_mode = 'ANSI_QUOTES'",
+        "SET SESSION sql_mode = ''",
+        "SET @@session.sql_mode = 'TRADITIONAL'",
+        "SET @@sql_mode = '', SESSION SQL_MODE = ''",
+        "SET sql_mode = '', @x = 1, max_execution_time = 1000",
+    ] {
+        let s = mysql(sql).unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+        assert!(s.risk.read_only().is_err(), "{sql}: not on the read-only allowlist");
+    }
+    assert_eq!(pg("SET session_replication_role = replica").map(|_| ()), Err(SetProblem::Asks));
+    assert!(pg("SET work_mem = '64MB'").is_ok());
+    assert!(mysql("SET SESSION max_heap_table_size = 16777216").is_ok());
 }
 
 #[test]
@@ -212,10 +246,8 @@ fn mysql_refuses_the_settings_the_app_keeps() {
 #[test]
 fn mysql_reads_with_ansi_quotes_too() {
     // Under ANSI_QUOTES `"x"` is a name: the setting is then assigned a column, not a string.
-    // Either reading must be a plain setting; a risky one is refused only in read-only.
-    let s = mysql("SET SESSION foreign_key_checks = 0").unwrap();
-    assert_eq!(s.risk.danger, Some(Danger::Setting));
-    assert!(s.risk.read_only().is_err());
+    // Either reading must be a plain setting; one that asks when typed is refused in any.
+    assert_eq!(mysql("SET SESSION foreign_key_checks = 0").map(|_| ()), Err(SetProblem::Asks));
     assert_eq!(mysql("SET x = (SELECT 1); DROP TABLE t"), Err(SetProblem::NotOne));
 }
 

@@ -29,7 +29,7 @@ the app renames the old names in place once what they say changes.
 
 The explorer's **Startup SQL** section lists the presets with their database and how many
 statements and profiles each has (the statements in the warning colour when one changes a setting
-a read-only environment refuses, such as MySQL's `foreign_key_checks = 0`), and under each
+a read-only environment refuses, such as MySQL's `wait_timeout`), and under each
 preset the first statement that is not allowed and why. `n` makes one, `e` edits, `c` copies,
 `d` deletes, `t` tests, and `Enter` or `l` lists the profiles that use it (their own or through
 their environment). The `/` filter finds a preset by its name or a statement. The command line
@@ -126,7 +126,10 @@ an error shows the words its connect would refuse with.
   `SET @var = …`, `SET SESSION TRANSACTION …`. Not `SET LOCAL`, a plain `SET TRANSACTION`,
   `SET GLOBAL` or `PERSIST`, `RESET`, `DISCARD`, a query or a call such as `set_config()`, nor
   several statements in one item. In a read-only environment only the settings a read-only
-  session may change at all.
+  session may change at all, and on PostgreSQL a setting of an extension or a custom one (a
+  name with a `.`, such as `SET app.tenant = '1'` for row-level security policies): a read-only
+  profile refuses that one typed (set or reset, and `RESET ALL` or `DISCARD ALL` too), so the
+  Startup SQL is where it goes.
 - **Not datarig's own settings.** What datarig manages itself is refused, with why and where to
   set it instead:
   - MySQL's `interactive_timeout`: it has no effect on an open session; set `wait_timeout`
@@ -147,10 +150,17 @@ an error shows the words its connect would refuse with.
   transaction only are refused too, with where the session's default is: PostgreSQL's
   `transaction_isolation` and `transaction_deferrable` (use `default_transaction_isolation`, …),
   MySQL's `SET @@transaction_isolation` without a scope (use `SET SESSION …`).
+- **Nothing that asks when typed.** A setting that asks before it runs when you type it is
+  refused, since Startup SQL runs without asking: MySQL's `foreign_key_checks = 0`,
+  `unique_checks`, `sql_log_bin` and the others of its kind, and PostgreSQL's
+  `session_replication_role`. MySQL's `sql_mode` stays allowed (see [Details](#details)), but
+  not in a statement that also sets one of those.
 - **MySQL in every sql mode.** A statement is read with and without `ANSI_QUOTES` and
   `NO_BACKSLASH_ESCAPES`; what any reading refuses is refused.
 - **Who the session is.** `SET ROLE` is allowed in a read-only environment (every transaction
-  stays `READ ONLY` whatever the role); `SET SESSION AUTHORIZATION` is not.
+  stays `READ ONLY` whatever the role); `SET SESSION AUTHORIZATION` is not. Behind a
+  transaction pooler either one keeps the profile from connecting (see
+  [Behind a connection pooler](#behind-a-connection-pooler)).
 - **Errors are the profile's.** A preset name that does not exist, a preset for the other
   database, or a statement that is not allowed: the profile does not connect and says which
   preset or statement, from where, and why. It never connects without the preset instead.
@@ -167,10 +177,13 @@ session. Each `SET` goes first in every transaction as `SET LOCAL` instead, and 
 Statements that cannot run in a transaction, `CALL`, `DO`, and your own `SET` and `RESET` run
 without them.
 
+A statement that changes who the session is (`SET ROLE`, `SET SESSION AUTHORIZATION`) cannot
+hold for the session there: set per transaction, a statement run outside one would run as the
+login role. Such a profile does not connect behind a transaction pooler, and the tab names the
+statement. Connect directly, or log in as that role instead.
+
 These are not sent there at all (the profile still connects, and the tab names what was not
-sent): statements that change who the session is (`SET ROLE`, `SET SESSION AUTHORIZATION`:
-a statement run outside a transaction would run as someone else), statements with no
-`SET LOCAL` form (`SET SESSION CHARACTERISTICS …`), defaults of the session's transactions
+sent): statements with no `SET LOCAL` form (`SET SESSION CHARACTERISTICS …`), defaults of the session's transactions
 (`default_transaction_isolation`, `default_transaction_deferrable`), and values that depend on
 what the pooled connection did before (`temp_buffers`, PostgreSQL 17's `transaction_timeout`),
 and `idle_session_timeout` (the server counts it only outside a transaction, and set for the

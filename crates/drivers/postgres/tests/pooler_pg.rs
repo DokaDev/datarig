@@ -771,8 +771,8 @@ async fn behind_a_pooler_the_lock_wait_limit_is_per_transaction_and_no_idle_limi
 
 /// A query session with start-up statements behind the pooler: each goes first in every
 /// transaction as `SET LOCAL` (in order: a later one of the same setting wins), one with no such
-/// form (`SET ROLE`) is not sent and said so (`SessionPerTransaction`, before `Connected`), and
-/// the session still connects; another client going round the pooled server connections finds
+/// form (`SET SESSION CHARACTERISTICS …`) is not sent and said so (`SessionPerTransaction`,
+/// before `Connected`), and the session still connects; another client going round the pooled server connections finds
 /// the server's settings on each (nothing stays). A value the server refuses fails the connect
 /// there too.
 #[tokio::test(flavor = "multi_thread")]
@@ -789,14 +789,14 @@ async fn behind_a_pooler_start_up_statements_are_per_transaction() {
     let profile = ConnectionConfig {
         session_sql: vec![
             "SET work_mem = '7MB'".into(),
-            "SET ROLE datarig".into(),
+            "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED".into(),
             "SET statement_timeout = '45s'".into(),
             "SET work_mem TO '9MB'".into(),
         ],
         ..ConnectionConfig::default()
     };
     let sql = plan(&profile, &Default::default(), Defaults::default(), &[]).unwrap().statements();
-    assert_eq!(sql[1].per_transaction, None, "an identity has no form for one transaction");
+    assert_eq!(sql[1].per_transaction, None, "no form for one transaction");
     let tag = format!("pools{}", std::process::id());
     for cache in [false, true] {
         let opts = ConnectOptions::new(PAGE, SessionRole::Query, &tag).statement_cache(cache).session_sql(sql.clone());
@@ -826,9 +826,6 @@ async fn behind_a_pooler_start_up_statements_are_per_transaction() {
             let DbEvent::Page { rows, .. } = q.run(id, &read).await else { panic!("{setting}") };
             assert_eq!(rows[0][0].as_deref(), Some(want), "cache {cache}: a query sees it");
         }
-        // Not sent: the session's user stays the login's.
-        let DbEvent::Page { rows, .. } = q.run(20, "SELECT current_user::text").await else { panic!("user") };
-        assert_eq!(rows[0][0].as_deref(), Some("datarig"));
         let mut id = 30;
         for _ in 0..8 {
             id += 1;
@@ -843,6 +840,7 @@ async fn behind_a_pooler_start_up_statements_are_per_transaction() {
     let bad = vec![SessionStatement {
         sql: "SET work_mem = 'lots'".into(),
         per_transaction: Some("SET LOCAL work_mem = 'lots'".into()),
+        identity: false,
     }];
     let cfg = ConnectionConfig { name: "pooler".into(), dsn: Some(url.clone()), ..ConnectionConfig::default() };
     let (tx, mut rx) = unbounded_channel();
@@ -868,6 +866,41 @@ async fn behind_a_pooler_start_up_statements_are_per_transaction() {
     }
 }
 
+/// Behind the pooler a start-up statement that changes who the session is (`SET ROLE`, `SET
+/// SESSION AUTHORIZATION`) cannot hold for the session: set per transaction, a statement that
+/// runs outside one would run as the login role. The connect fails, naming it, before anything
+/// is set.
+#[tokio::test(flavor = "multi_thread")]
+async fn behind_a_pooler_a_start_up_set_role_fails_the_connect() {
+    use datarig_core::profile::session::{Defaults, plan};
+    let Some(url) = pooler_url("behind_a_pooler_a_start_up_set_role_fails_the_connect") else { return };
+    let tag = format!("poolrole{}", std::process::id());
+    for identity in ["SET ROLE datarig", "SET SESSION AUTHORIZATION datarig"] {
+        let profile = ConnectionConfig {
+            session_sql: vec!["SET work_mem = '7MB'".into(), identity.into()],
+            ..ConnectionConfig::default()
+        };
+        let sql = plan(&profile, &Default::default(), Defaults::default(), &[]).unwrap().statements();
+        let opts = ConnectOptions::new(PAGE, SessionRole::Query, &tag).session_sql(sql);
+        let cfg = ConnectionConfig { name: "pooler".into(), dsn: Some(url.clone()), ..ConnectionConfig::default() };
+        let (tx, mut rx) = unbounded_channel();
+        let _s = PgDriver.connect(&cfg, SessionRole::Query, opts, tx);
+        loop {
+            match tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.expect("an answer") {
+                Some(DbEvent::ConnectFailed { error: DbError::SessionSql { index: 1, statement, error }, .. }) => {
+                    assert_eq!(statement, identity);
+                    assert_eq!(*error, DbError::PooledIdentity);
+                    break;
+                }
+                Some(DbEvent::Connected) => panic!("connected with {identity} behind a pooler"),
+                Some(DbEvent::ConnectFailed { error, .. }) => panic!("{error:?}"),
+                Some(_) => {}
+                None => panic!("closed"),
+            }
+        }
+    }
+}
+
 /// A start-up statement that sets the lock wait limit behind the pooler overrides the
 /// environment's in every transaction: after the environment's `SET LOCAL lock_timeout`, in the
 /// session's own transactions, and in the one opened only for the search path around a `DO`
@@ -889,10 +922,12 @@ async fn behind_a_pooler_a_start_up_lock_wait_overrides_the_environments_in_ever
         SessionStatement {
             sql: "SET lock_timeout = '3s'".into(),
             per_transaction: Some("SET LOCAL lock_timeout = '3s'".into()),
+            identity: false,
         },
         SessionStatement {
             sql: "SET statement_timeout = '45s'".into(),
             per_transaction: Some("SET LOCAL statement_timeout = '45s'".into()),
+            identity: false,
         },
     ];
     let tag = format!("poolo{}", std::process::id());

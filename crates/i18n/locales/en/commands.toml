@@ -68,6 +68,7 @@
 "set.local" = "SET LOCAL ends with its transaction: write SET"
 "set.writes" = "it may change data or run code"
 "set.danger" = "it is dangerous"
+"set.asks" = "typed, it asks before it runs; Startup SQL runs without asking, so it may not hold it"
 "set.reason.interactive" = "{setting} has no effect on an open session. Set wait_timeout (not in a read-only environment), or the environment's idle_disconnect"
 "set.reason.tx_idle_rollback" = "{setting}: datarig warns about an idle manual-commit transaction, rolls it back itself and keeps the session; it sets this per transaction, 30 s later, only as a backstop. Set the environment's tx_idle_rollback"
 "set.reason.read_only" = "{setting}: read-only is the environment's guarantee. Set the environment's read_only"

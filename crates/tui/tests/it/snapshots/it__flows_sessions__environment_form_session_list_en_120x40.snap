@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/it/flows_sessions.rs
+assertion_line: 1058
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -17,9 +18,9 @@ expression: "h.draw(w, ht).backend()"
 "│    ◇ bro│ Badge                                                    shown on its tabs, e.g. PROD            │         │"
 "│      sta│ Read-only            ‹ off ›  ←/→ change · only reads run; the server refuses writes too         │         │"
 "│    ◇ fk_│ Confirm              ‹dangerous statements only (default)› before every write   ←/→ change       │         │"
-"│  ▸ ◇ my_│ Commit      ╭ Startup SQL (MySQL) ─────────────────────────────────────────────────╮ut a transa… │         │"
-"│  ▸ ◇ rep│ Idle warning│ › type to filter                                                     │nsaction: 5… │         │"
-"│         │ Idle rollbac│                                                                      │on: 30m, off │         │"
+"│      sta│ Commit      ╭ Startup SQL (MySQL) ─────────────────────────────────────────────────╮ut a transa… │         │"
+"│  ▸ ◇ my_│ Idle warning│ › type to filter                                                     │nsaction: 5… │         │"
+"│  ▸ ◇ rep│ Idle rollbac│                                                                      │on: 30m, off │         │"
 "│         │ Paging      │ None    its profiles start without Startup SQL                       │ou page      │         │"
 "│         │ Paging idle │ fk_off  1 statement                                                  │ff           │         │"
 "│         │ Spill limit │ my_ro   1 statement                                                  │, 2GB or off │         │"

@@ -17,7 +17,7 @@
 //! `SESSION`) and checked by parsing it again: the same setting, the same value, now for the
 //! transaction only. A statement that has no such form ([`NotLocal`]) is not sent there.
 
-use super::{Danger, Risk, STACK, THREAD, classify, node, parse, text};
+use super::{Danger, ReadOnlyBlock, Risk, STACK, THREAD, classify, node, parse, text};
 use crate::sql::lexer::{Tok, lex};
 use serde_json::Value;
 
@@ -39,6 +39,10 @@ pub enum SetProblem {
     Writes,
     /// It is dangerous in a way no start-up setting may be.
     Danger(Danger),
+    /// It changes a setting that asks before it runs when typed ([`Danger::Setting`]: MySQL's
+    /// `foreign_key_checks = 0`, PostgreSQL's `session_replication_role`, …): start-up
+    /// statements run without asking, so none may hold one.
+    Asks,
     /// MySQL: it reads as other settings in another sql mode (a backslash or a quote it has).
     ModeDependent,
     /// A setting of the next (or current) transaction only (`transaction_isolation`,
@@ -130,6 +134,19 @@ pub struct SessionSet {
     pub settings: Vec<(String, String)>,
 }
 
+impl SessionSet {
+    /// Whether a read-only environment lets a session start with it: what [`Risk::read_only`]
+    /// allows, and a setting of an extension or a custom one too
+    /// ([`ReadOnlyBlock::CustomSetting`], refused typed): the profile's owner put it there, as
+    /// row-level security policies read it (`SET app.tenant = '…'`).
+    pub fn read_only(&self) -> Result<(), ReadOnlyBlock> {
+        match self.risk.read_only() {
+            Err(ReadOnlyBlock::CustomSetting(_)) => Ok(()),
+            other => other,
+        }
+    }
+}
+
 /// PostgreSQL's settings the app keeps itself.
 const OWNED: &[(&str, Owner)] = &[
     ("search_path", Owner::Schema),
@@ -145,14 +162,15 @@ const OWNED: &[(&str, Owner)] = &[
     ("extra_float_digits", Owner::TextFormat),
 ];
 
-/// What the classifier's risk says against a start-up setting: a write or code, or a danger
-/// other than changing a setting (which only a read-only environment refuses).
+/// What the classifier's risk says against a start-up setting: a write or code, or any danger
+/// (a setting that asks when typed too: start-up statements run without asking).
 pub(crate) fn judge(risk: &Risk) -> Result<(), SetProblem> {
     if risk.writes || risk.runs_code || risk.unchecked_call.is_some() {
         return Err(SetProblem::Writes);
     }
     match risk.danger {
-        None | Some(Danger::Setting) => Ok(()),
+        None => Ok(()),
+        Some(Danger::Setting) => Err(SetProblem::Asks),
         Some(Danger::Unparsed | Danger::TooComplex | Danger::Unrecognized) => Err(SetProblem::Unread),
         Some(d) => Err(SetProblem::Danger(d)),
     }

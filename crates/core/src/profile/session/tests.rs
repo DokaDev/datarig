@@ -188,13 +188,13 @@ fn read_only_allows_only_safe_settings() {
     let mut c = profile("postgres");
     c.session_sql = vec!["SET work_mem = '1MB'".into()];
     assert!(plan(&c, &rules, Defaults::default(), &[]).is_ok());
-    c.session_sql = vec!["SET session_replication_role = replica".into()];
+    c.session_sql = vec!["SET synchronous_commit = off".into()];
     assert_eq!(
         plan(&c, &rules, Defaults::default(), &[]),
         Err(SessionError::ReadOnly {
             source: Source::Profile,
             index: 1,
-            statement: "SET session_replication_role = replica".into(),
+            statement: "SET synchronous_commit = off".into(),
             block: ReadOnlyBlock::Setting,
         })
     );
@@ -206,8 +206,31 @@ fn read_only_allows_only_safe_settings() {
     let mut m = profile("mysql");
     m.session_sql = vec!["SET SESSION lock_wait_timeout = 3, innodb_lock_wait_timeout = 3".into()];
     assert!(plan(&m, &rules, Defaults::default(), &[]).is_ok());
+    // A setting of an extension or a custom one, as row-level security policies read it.
+    c.session_sql = vec!["SET app.tenant = '1'".into()];
+    assert!(plan(&c, &rules, Defaults::default(), &[]).is_ok());
+    let custom = SessionPreset::new("tenant", Dbms::Postgres, vec!["SET app.tenant = '1'".into()]);
+    assert_eq!(custom.read_only_refused(), None);
+    let idle = SessionPreset::new("idle", Dbms::MySql, vec!["SET SESSION wait_timeout = 600".into()]);
+    assert_eq!(idle.read_only_refused(), Some((1, ReadOnlyBlock::Setting)));
+}
+
+/// A setting that asks before it runs when typed is refused in any environment, in a preset
+/// and in the profile's own statements: start-up statements run without asking.
+#[test]
+fn settings_that_ask_when_typed_are_refused_everywhere() {
     let risky = SessionPreset::new("fk", Dbms::MySql, vec!["SET foreign_key_checks = 0".into()]);
-    assert_eq!(risky.read_only_refused(), Some((1, ReadOnlyBlock::Setting)));
+    assert_eq!(risky.problem(), Some((1, SetProblem::Asks)));
+    let mut m = profile("mysql");
+    m.session_sql = vec!["SET sql_log_bin = 0".into()];
+    for rules in [Policy::default(), Policy { read_only: true, ..Policy::default() }] {
+        match plan(&m, &rules, Defaults::default(), &[]) {
+            Err(SessionError::Statement { source: Source::Profile, index: 1, problem, .. }) => {
+                assert_eq!(problem, SetProblem::Asks)
+            }
+            other => panic!("{other:?}"),
+        }
+    }
 }
 
 #[test]
