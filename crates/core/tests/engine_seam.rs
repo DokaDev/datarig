@@ -400,6 +400,15 @@ impl<'ast> Visit<'ast> for Collect<'_> {
     fn visit_item_use(&mut self, u: &'ast syn::ItemUse) {
         self.tree(&mut Vec::new(), &u.tree);
     }
+
+    // Names given inside a macro body that parses as Rust count too.
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        if let Ok(stmts) = syn::Block::parse_within.parse2(mac.tokens.clone()) {
+            stmts.iter().for_each(|st| self.visit_stmt(st));
+        } else if let Ok(exprs) = Punctuated::<Expr, Token![,]>::parse_terminated.parse2(mac.tokens.clone()) {
+            exprs.iter().for_each(|e| self.visit_expr(e));
+        }
+    }
     fn visit_item_type(&mut self, t: &'ast syn::ItemType) {
         if let syn::Type::Path(p) = &*t.ty
             && let Some(last) = p.path.segments.last()
@@ -1184,7 +1193,7 @@ fn boolean_engine_tests_stay_within_budget() {
 fn every_violation_fixture_is_reported() {
     // (fixture, the path it is scanned as, what must be reported, with the line)
     type Case = (&'static str, &'static str, &'static [(Kind, usize)]);
-    let cases: [Case; 13] = [
+    let cases: [Case; 14] = [
         ("driver_engine_branch", "crates/drivers/mysql/src/session.rs", &[(Kind::Reference, 6), (Kind::Reference, 7)]),
         ("tui_if_let_dialect", "crates/tui/src/app/editor.rs", &[(Kind::BooleanTest, 6), (Kind::Reference, 6)]),
         ("catch_all_explain", "crates/core/src/sql/plan.rs", &[(Kind::CatchAll, 9)]),
@@ -1206,6 +1215,7 @@ fn every_violation_fixture_is_reported() {
             &[(Kind::BooleanTest, 6), (Kind::BooleanTest, 7), (Kind::BooleanTest, 15)],
         ),
         ("self_rename", "crates/core/src/sql/split.rs", &[(Kind::BooleanTest, 6)]),
+        ("macro_alias", "crates/core/src/sql/split.rs", &[(Kind::BooleanTest, 6)]),
     ];
     let mut missed = Vec::new();
     for (name, path, expected) in cases {
