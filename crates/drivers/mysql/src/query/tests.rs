@@ -201,6 +201,7 @@ fn mariadb_does_not_count_a_mysql8_set_transaction_comment() {
         "/*!100000 SET TRANSACTION READ ONLY */",
         "/*!5070012 SET TRANSACTION READ ONLY */",
         "/*!80000 '*/ SET TRANSACTION READ ONLY /*' */",
+        "/*!80000 -- ignored */ SET TRANSACTION READ ONLY",
         "/*!80000 SET TRANSACTION READ ONLY */ /*!50601 SET TRANSACTION READ ONLY */",
         "/*!80000 SET TRANSACTION READ ONLY",
         "SELECT 1 /*!80000 , 2 */",
