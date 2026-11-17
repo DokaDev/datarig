@@ -13,7 +13,8 @@ A patch release that lifts the refusal of extension functions on read-only Postg
   `read_only_functions` (such as `["st_x", "public.crypt"]`: a bare name allows that function
   in any schema, a name with its schema only calls written with that schema) and every function
   of the extensions in `read_only_extensions` (such as `["postgis"]`), both set in the
-  environment's `[policy.<name>]` table. A refused call says why, and names
+  environment's `[policy.<name>]` table. An extension's function stays refused when a function
+  outside the allowed extensions has the same name. A refused call says why, and names
   `read_only_functions` where adding the function would allow it; `:session` lists what is
   allowed. MySQL and MariaDB profiles ignore both settings.
 - The functions of the extensions in `read_only_extensions` are read from the profile's own
@@ -30,7 +31,8 @@ A patch release that lifts the refusal of extension functions on read-only Postg
   names `pg_catalog`, such as `pg_catalog.uuidv7()`. Called without it (`uuidv7()`), they are
   refused with a hint saying how to call them, unless `read_only_functions` or an allowed
   extension lists them. The PostgreSQL 18 functions that write or clear statistics (such as
-  `pg_restore_relation_stats`) stay refused however they are called.
+  `pg_restore_relation_stats`) and `pg_ls_summariesdir()`, which lists server files, stay
+  refused however they are called.
 
 ## 0.41.2 (2026-11-17)
 
