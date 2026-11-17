@@ -415,6 +415,17 @@ impl Scan<'_> {
                     (None, None) => None,
                 }
             }
+            // A tuple variant spelt both ways across arms: `V(p)` and `V { 0: p }`.
+            (Step::Part(name, Index::Front(i) | Index::Both(i, _)), Pat::Struct(st))
+                if *name == last_name(&st.path) =>
+            {
+                let field = [Step::Field(name.clone(), i.to_string())];
+                self.wildcard_at(pat, &[&field[..], rest].concat())
+            }
+            (Step::Field(name, field), Pat::TupleStruct(t)) if *name == last_name(&t.path) => {
+                let i: usize = field.parse().ok()?;
+                part(&t.elems, &Index::Front(i)).ok().flatten()
+            }
             _ => None,
         }
     }
@@ -1348,7 +1359,7 @@ fn every_violation_fixture_is_reported() {
         (
             "slice_catch_all",
             "crates/core/src/sql/values.rs",
-            &[(Kind::CatchAll, 7), (Kind::CatchAll, 14), (Kind::CatchAll, 22)],
+            &[(Kind::CatchAll, 7), (Kind::CatchAll, 14), (Kind::CatchAll, 22), (Kind::CatchAll, 29)],
         ),
         ("qualified_self", "crates/tui/src/app/tx.rs", &[(Kind::Alias, 5), (Kind::Alias, 10)]),
         (

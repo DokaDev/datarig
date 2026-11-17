@@ -22,3 +22,11 @@ fn braced(d: Option<Dialect>) -> bool {
         _ => false,
     }
 }
+
+fn mixed_spelling(d: Option<Dialect>) -> bool {
+    match d {
+        Some(Dialect::Postgres) => true,
+        Some { 0: _ } => false,
+        None => false,
+    }
+}
