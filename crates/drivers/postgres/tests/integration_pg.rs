@@ -3583,16 +3583,42 @@ async fn on_this_server(c: &mut Conn, names: &str) -> String {
     names.lines().filter(|n| !lacking.contains(n)).collect::<Vec<_>>().join("\n")
 }
 
+/// The server's major version (`server_version_num / 10000`).
+async fn server_major(c: &mut Conn) -> u32 {
+    let sql = "SELECT current_setting('server_version_num')::int / 10000";
+    let DbEvent::Page { rows, .. } = c.run(8, sql).await else { panic!("{sql}") };
+    rows[0][0].as_deref().and_then(|v| v.parse().ok()).expect("a version")
+}
+
+/// The built-in functions of the server's major version as the classifier knows them:
+/// PostgreSQL 17's (`risk::BUILTINS`), and from 18 on those 18 adds
+/// (`risk::allow::BUILTINS_18`) less those it removed (`risk::allow::REMOVED_IN_18`), one per
+/// line in byte order.
+fn builtins_of(major: u32) -> String {
+    use datarig_core::sql::risk::BUILTINS;
+    use datarig_core::sql::risk::allow::{BUILTINS_18, REMOVED_IN_18};
+    let mut names: Vec<&str> = BUILTINS.lines().collect();
+    if major >= 18 {
+        names.retain(|n| !REMOVED_IN_18.contains(n));
+        names.extend(BUILTINS_18.lines());
+        names.sort_unstable();
+    }
+    names.join("\n")
+}
+
 /// The classifier's list of built-in functions (`risk::BUILTINS`, which a call may name
-/// without making a tab's prepared statements unknown) is exactly the server's: every function
-/// of `pg_catalog` that initdb creates, less the ones that run SQL or code they are given
-/// (`risk::RUNS_CODE`). Each name of `RUNS_CODE`, `SERVER_FILES` and `SERVER_ACTIONS` is one of
-/// the server's built-ins.
+/// without making a tab's prepared statements unknown, and from PostgreSQL 18 on
+/// `risk::allow::BUILTINS_18`, which a read-only policy lets run there) is exactly the
+/// server's: every function of `pg_catalog` that initdb creates, less the ones that run SQL or
+/// code they are given (`risk::RUNS_CODE`). Each name of `RUNS_CODE`, `SERVER_FILES` and
+/// `SERVER_ACTIONS` is one of the server's built-ins (those PostgreSQL 18 adds from 18 on).
 #[tokio::test(flavor = "multi_thread")]
 async fn the_builtin_functions_are_the_servers() {
-    use datarig_core::sql::risk::{BUILTINS, RUNS_CODE, SERVER_ACTIONS, SERVER_FILES};
+    use datarig_core::sql::risk::allow::builtin_18;
+    use datarig_core::sql::risk::{RUNS_CODE, SERVER_ACTIONS, SERVER_FILES};
     let Some(url) = pg_url("the_builtin_functions_are_the_servers") else { return };
     let mut c = Conn::open(&url, SessionRole::Query).await;
+    let major = server_major(&mut c).await;
     let list = |names: &[&str]| names.iter().map(|n| format!("'{n}'")).collect::<Vec<_>>().join(", ");
     let catalog = "FROM pg_proc WHERE pronamespace = 'pg_catalog'::regnamespace AND oid < 10000";
     let sql = format!(
@@ -3601,9 +3627,11 @@ async fn the_builtin_functions_are_the_servers() {
         list(RUNS_CODE)
     );
     let DbEvent::Page { rows, .. } = c.run(1, &sql).await else { panic!("{sql}") };
-    assert_eq!(rows[0][0].as_deref(), Some(on_this_server(&mut c, BUILTINS).await.as_str()));
+    assert_eq!(rows[0][0].as_deref(), Some(on_this_server(&mut c, &builtins_of(major)).await.as_str()));
     for (what, names) in [("RUNS_CODE", RUNS_CODE), ("SERVER_FILES", SERVER_FILES), ("SERVER_ACTIONS", SERVER_ACTIONS)]
     {
+        let names: Vec<&str> = names.iter().copied().filter(|n| major >= 18 || !builtin_18(n)).collect();
+        let names = names.as_slice();
         let sql = format!(
             "SELECT string_agg(n, ',' ORDER BY n) FROM unnest(ARRAY[{}]::text[]) n \
              WHERE NOT EXISTS (SELECT {catalog} AND proname = n)",
@@ -3612,6 +3640,21 @@ async fn the_builtin_functions_are_the_servers() {
         let DbEvent::Page { rows, .. } = c.run(2, &sql).await else { panic!("{sql}") };
         assert_eq!(rows[0][0], None, "{what} names functions the server does not have");
     }
+}
+
+/// The built-in types a call may name as a cast of a string constant
+/// (`risk::BUILTIN_TYPES`) are exactly the server's base, range and multirange types of
+/// `pg_catalog` that initdb creates.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_builtin_types_are_the_servers() {
+    use datarig_core::sql::risk::BUILTIN_TYPES;
+    let Some(url) = pg_url("the_builtin_types_are_the_servers") else { return };
+    let mut c = Conn::open(&url, SessionRole::Query).await;
+    let sql = "SELECT string_agg(typname::text COLLATE \"C\", E'\\n' ORDER BY typname::text COLLATE \"C\") \
+               FROM pg_type WHERE typnamespace = 'pg_catalog'::regnamespace AND oid < 10000 \
+               AND typtype IN ('b', 'r', 'm', 'e', 'd') AND typname NOT LIKE '\\_%'";
+    let DbEvent::Page { rows, .. } = c.run(1, sql).await else { panic!("{sql}") };
+    assert_eq!(rows[0][0].as_deref(), Some(BUILTIN_TYPES.trim_end()));
 }
 
 /// The allowlist's volatile built-ins (`risk::repeat::VOLATILE`, which the app never runs
@@ -3676,6 +3719,9 @@ async fn every_volatile_builtin_was_read() {
         "clock_timestamp",
         "current_query",
         "gen_random_uuid",
+        // PostgreSQL 18.
+        "uuidv4",
+        "uuidv7",
         "pg_nextoid",
         "pg_sleep",
         "pg_sleep_for",
@@ -3740,6 +3786,11 @@ async fn every_volatile_builtin_was_read() {
         "pg_database_collation_actual_version",
         "pg_database_size",
         "pg_get_backend_memory_contexts",
+        // PostgreSQL 18.
+        "pg_get_aios",
+        "pg_get_loaded_modules",
+        "pg_get_sequence_data",
+        "pg_get_shmem_allocations_numa",
         "pg_get_multixact_members",
         "pg_get_shmem_allocations",
         "pg_get_wait_events",

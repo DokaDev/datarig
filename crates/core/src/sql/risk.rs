@@ -106,12 +106,14 @@
 //! (`1 <> 0`, `true AND true`, `random() < 2`), which matches every row or none. Other
 //! conditions that happen to be always true (`id > 0`) are not recognised.
 
+pub mod allow;
 mod classifier;
 pub mod mysql;
 pub mod path_names;
 pub mod repeat;
 pub mod session_set;
 
+pub use allow::{AllowedFunction, CallHint, CatalogFunction, ExtensionFunctions, ExtensionLookup, ReadOnlyContext};
 pub use classifier::Classifier;
 pub use session_set::{NotLocal, Owner, SessionSet, SetProblem};
 
@@ -313,6 +315,18 @@ pub struct Risk {
     /// called by a name that is neither a known built-in's nor one of [`RUNS_CODE`] (not in
     /// DDL, which only stores it; not what a view, trigger, operator or cast calls).
     pub unchecked_call: Option<String>,
+    /// PostgreSQL: every function called by a name that is not a known built-in's of
+    /// PostgreSQL 17 nor one of [`RUNS_CODE`] (as for [`Risk::unchecked_call`], whose name is
+    /// the first of these), in the order written, each once: its names as the parse tree gives
+    /// them (`["f"]`, `["s", "f"]`), already folded. What a read-only policy may still let run
+    /// ([`Risk::read_only_in`]): a newer server's built-ins and the environment's allowed
+    /// functions. MySQL leaves it empty.
+    pub unchecked_calls: Vec<Vec<String>>,
+    /// PostgreSQL: the calls of PostgreSQL 17 built-ins that a newer version no longer has
+    /// ([`allow::REMOVED_IN_18`]), as for [`Risk::unchecked_calls`]: on such a server the name
+    /// is no built-in's, so a read-only policy refuses them there unless the environment
+    /// allows them.
+    pub removed_calls: Vec<Vec<String>>,
     /// PostgreSQL: the server refuses to run it inside a transaction block (SQLSTATE 25001):
     /// `VACUUM`, `CREATE INDEX CONCURRENTLY`, `CREATE DATABASE`, `ALTER SYSTEM`, … (see
     /// [`no_tx_block`]). It takes effect at once and cannot be rolled back. Where whether it
@@ -471,6 +485,8 @@ impl Risk {
             session_path: false,
             implicit_commit: false,
             unchecked_call: None,
+            unchecked_calls: Vec::new(),
+            removed_calls: Vec::new(),
             no_tx_block: false,
             adds_enum_value: false,
         }
@@ -486,6 +502,24 @@ impl Risk {
 
     fn session(safe: bool) -> Self {
         Self { safe_setting: safe, ..Self::of(Class::Session) }
+    }
+
+    /// The first call a read-only policy refuses in `cx` ([`Risk::read_only_in`]), as written.
+    /// A refused call that is not in [`Risk::unchecked_calls`] (MySQL's) is refused whatever
+    /// `cx` says.
+    fn refused_call(&self, cx: &ReadOnlyContext) -> Option<String> {
+        match &self.unchecked_call {
+            Some(first) if self.unchecked_calls.is_empty() => Some(first.clone()),
+            _ => self.refused_call_name(cx).map(|name| name.join(".")),
+        }
+    }
+
+    /// The names of the first call [`Risk::read_only_in`] refuses in `cx` among
+    /// [`Risk::unchecked_calls`], for [`ReadOnlyContext::hint`].
+    pub fn refused_call_name(&self, cx: &ReadOnlyContext) -> Option<&[String]> {
+        let gone = cx.server_major.is_some_and(|v| v >= 18);
+        let removed = self.removed_calls.iter().filter(|_| gone).find(|name| !cx.allows(name));
+        self.unchecked_calls.iter().find(|name| !cx.lets_run(name)).or(removed).map(Vec::as_slice)
     }
 
     /// The worse of two risks (a statement read two ways, or a part of it).
@@ -507,6 +541,8 @@ impl Risk {
             session_path: self.session_path || o.session_path,
             implicit_commit: self.implicit_commit || o.implicit_commit,
             unchecked_call: self.unchecked_call.or(o.unchecked_call),
+            unchecked_calls: union(self.unchecked_calls, o.unchecked_calls),
+            removed_calls: union(self.removed_calls, o.removed_calls),
             no_tx_block: self.no_tx_block || o.no_tx_block,
             adds_enum_value: self.adds_enum_value || o.adds_enum_value,
         }
@@ -518,6 +554,16 @@ impl Risk {
     /// class, not a call of a built-in that acts on the server, nor a query given as text that
     /// cannot be checked, since the server's read-only transaction does not stop them.
     pub fn read_only(&self) -> Result<(), ReadOnlyBlock> {
+        self.read_only_in(&ReadOnlyContext::default())
+    }
+
+    /// [`Risk::read_only`] where the calls of functions that are not PostgreSQL 17 built-ins
+    /// ([`Risk::unchecked_calls`]) may still run when `cx` lets them: a built-in of the
+    /// server's newer version ([`ReadOnlyContext::server_major`]) or a function the
+    /// environment allows ([`ReadOnlyContext::allowed`]). The first call that neither lets run
+    /// is refused, named as written. With the default context the answer is
+    /// [`Risk::read_only`]'s.
+    pub fn read_only_in(&self, cx: &ReadOnlyContext) -> Result<(), ReadOnlyBlock> {
         match self.danger {
             Some(Danger::Unparsed) => return Err(ReadOnlyBlock::Unparsed),
             Some(Danger::TooComplex) => return Err(ReadOnlyBlock::TooComplex),
@@ -535,8 +581,8 @@ impl Risk {
             Some(Danger::Setting) if !self.read_write => return Err(ReadOnlyBlock::Setting),
             _ => {}
         }
-        if let Some(f) = &self.unchecked_call {
-            return Err(ReadOnlyBlock::UnknownFunction(f.clone()));
+        if let Some(f) = self.refused_call(cx) {
+            return Err(ReadOnlyBlock::UnknownFunction(f));
         }
         if self.read_write {
             return Err(ReadOnlyBlock::ReadWrite);
@@ -795,7 +841,10 @@ impl Prepared {
         // built-in, whose effects cannot be checked (DDL only stores what it calls, and a
         // read-only policy refuses DDL anyway).
         if risk.class != Class::Ddl && risk.unchecked_call.is_none() {
-            risk.unchecked_call = unknown_function(b);
+            let calls = unknown_functions(b);
+            risk.unchecked_call = calls.first().map(|n| n.join("."));
+            risk.unchecked_calls = calls;
+            risk.removed_calls = removed_builtin_calls(b);
         }
         risk.no_tx_block |= no_tx_block(kind, b);
         risk.adds_enum_value |= kind == "AlterEnumStmt" && text(&b["old_val"]).is_none_or(str::is_empty);
@@ -1505,7 +1554,7 @@ fn calls_code(v: &Value) -> bool {
     let mut found = false;
     walk(v, &mut |o| {
         found |= calls(o).iter().any(|c| match c {
-            Call::Func(name, _) => !catalog_name(name, builtin),
+            Call::Func(name, call) => !catalog_name(name, builtin) && !builtin_cast(name, call),
             Call::Attribute(f, _) => RUNS_CODE.contains(f),
         });
     });
@@ -1518,23 +1567,84 @@ fn catalog_name(name: &[&str], known: impl Fn(&str) -> bool) -> bool {
     matches!(name, [f] | ["pg_catalog", f] | [_, "pg_catalog", f] if known(f))
 }
 
-/// The first function `v` calls by name ([`Call::Func`]) that is neither a known built-in
-/// ([`builtin`]) nor one of [`RUNS_CODE`] (whose query text is classified already), as written
-/// (`f`, `s.f`): a name with a schema other than `pg_catalog`, a quoted name in another case,
-/// any name not in the lists.
-fn unknown_function(v: &Value) -> Option<String> {
-    let mut found = None;
+/// The functions `v` calls by name ([`Call::Func`]) that are neither a known built-in
+/// ([`builtin`]) nor one of [`RUNS_CODE`] (whose query text is classified already), nor a cast
+/// to a built-in type written as a call ([`builtin_cast`]), in the order written, each once,
+/// with the names they are written with (`f`, `s.f`): a name with a schema other than
+/// `pg_catalog`, a quoted name in another case, any name not in the lists.
+fn unknown_functions(v: &Value) -> Vec<Vec<String>> {
+    let mut found: Vec<Vec<String>> = Vec::new();
     walk(v, &mut |o| {
         for c in calls(o) {
-            if let Call::Func(name, _) = c
-                && found.is_none()
+            if let Call::Func(name, call) = c
                 && !catalog_name(&name, |f| builtin(f) || RUNS_CODE.contains(&f))
+                && !builtin_cast(&name, call)
             {
-                found = Some(name.join("."));
+                let name: Vec<String> = name.iter().map(|n| n.to_string()).collect();
+                if !found.contains(&name) {
+                    found.push(name);
+                }
             }
         }
     });
     found
+}
+
+/// The calls in `v` of a PostgreSQL 17 built-in that PostgreSQL 18 no longer has
+/// ([`allow::REMOVED_IN_18`]), unqualified or in `pg_catalog`, in the order written, each once.
+fn removed_builtin_calls(v: &Value) -> Vec<Vec<String>> {
+    let mut found: Vec<Vec<String>> = Vec::new();
+    walk(v, &mut |o| {
+        for c in calls(o) {
+            if let Call::Func(name, _) = c
+                && catalog_name(&name, |f| allow::REMOVED_IN_18.contains(&f))
+            {
+                let name: Vec<String> = name.iter().map(|n| n.to_string()).collect();
+                if !found.contains(&name) {
+                    found.push(name);
+                }
+            }
+        }
+    });
+    found
+}
+
+/// `a` then what `b` has that `a` does not.
+fn union(mut a: Vec<Vec<String>>, b: Vec<Vec<String>>) -> Vec<Vec<String>> {
+    for c in b {
+        if !a.contains(&c) {
+            a.push(c);
+        }
+    }
+    a
+}
+
+/// Whether a call by `name` is a cast of a string constant to a built-in type written as a
+/// function call (`uuid('…')`, `pg_catalog.jsonb('{}')`): the name is a built-in base, range or
+/// multirange type's ([`BUILTIN_TYPES`]), unqualified or in `pg_catalog`, and the one argument
+/// is a string constant of no type (`'…'`, `E'…'`, `$$…$$`), by position, with nothing else
+/// (no `VARIADIC`, `DISTINCT`, `ORDER BY`, `WITHIN GROUP`, `FILTER` or `OVER`). The server
+/// takes such a call as the cast `'…'::uuid` before it looks for a function of the name other
+/// than one taking exactly that unknown type (which only C code can declare): only the type's
+/// input function runs. With any other argument (a column, a typed value, a parameter) a
+/// function of the user's with that name may be chosen, so it stays a call; so does a row
+/// type's name, which the server never takes as a cast.
+fn builtin_cast(name: &[&str], call: &Value) -> bool {
+    let empty = |k: &str| call[k].is_null() || call[k].as_array().is_some_and(Vec::is_empty);
+    let flag = |k: &str| call[k] == Value::Bool(true);
+    let literal = match call["args"].as_array().map(Vec::as_slice) {
+        Some([a]) => matches!(node(a), Some(("AConst", c)) if c["val"]["Sval"]["sval"].is_string()),
+        _ => false,
+    };
+    catalog_name(name, builtin_type)
+        && literal
+        && empty("agg_order")
+        && empty("agg_filter")
+        && empty("over")
+        && !flag("agg_within_group")
+        && !flag("agg_star")
+        && !flag("agg_distinct")
+        && !flag("func_variadic")
 }
 
 /// The first call in `v` of a built-in that acts on the server ([`SERVER_FILES`],
@@ -1633,6 +1743,8 @@ pub const SERVER_FILES: &[&str] = &[
     "pg_ls_logicalmapdir",
     "pg_ls_logicalsnapdir",
     "pg_ls_replslotdir",
+    // PostgreSQL 18.
+    "pg_ls_summariesdir",
     "pg_ls_tmpdir",
     "pg_ls_waldir",
     "pg_read_binary_file",
@@ -1696,7 +1808,27 @@ pub const SERVER_ACTIONS: &[&str] = &[
     "pg_stat_reset_single_table_counters",
     "pg_stat_reset_slru",
     "pg_stat_reset_subscription_stats",
+    // PostgreSQL 18: a backend's statistics, and the planner's statistics of a table or a
+    // column, written in place (a read-only transaction does not stop them).
+    "pg_stat_reset_backend_stats",
+    "pg_clear_attribute_stats",
+    "pg_clear_relation_stats",
+    "pg_restore_attribute_stats",
+    "pg_restore_relation_stats",
 ];
+
+/// The names of PostgreSQL's built-in base, range and multirange types (the `pg_type` rows of
+/// `pg_catalog` that initdb creates, `oid < 10000`; no array, row or pseudo type), one per line
+/// in byte order: the same in PostgreSQL 17 and 18. Generated with `SELECT typname COLLATE "C"
+/// FROM pg_type WHERE typnamespace = 'pg_catalog'::regnamespace AND oid < 10000 AND typtype IN
+/// ('b', 'r', 'm', 'e', 'd') AND typname NOT LIKE '\_%' ORDER BY 1`.
+pub const BUILTIN_TYPES: &str = include_str!("risk/builtin_types.txt");
+
+/// Whether `name` (as PostgreSQL folds it) is a built-in type in [`BUILTIN_TYPES`].
+pub fn builtin_type(name: &str) -> bool {
+    static SORTED: std::sync::OnceLock<Vec<&str>> = std::sync::OnceLock::new();
+    SORTED.get_or_init(|| BUILTIN_TYPES.lines().collect()).binary_search(&name).is_ok()
+}
 
 /// Whether `name` (as PostgreSQL folds it) is a built-in function in [`BUILTINS`].
 pub fn builtin(name: &str) -> bool {

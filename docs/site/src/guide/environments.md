@@ -11,7 +11,11 @@
   environment with `confirm = "writes"` asks before every write too.
 - **What is refused.** Before sending a statement, a read-only profile refuses anything that is
   not a read, transaction control or a safe session setting, and any call of a function by a
-  name that is not a built-in's, naming the function. On PostgreSQL a typed setting of an
+  name that is not a built-in's, naming the function. A cast of a quoted value written as a call
+  to a built-in type (`uuid('…')`, `pg_catalog.jsonb('{}')`) is a cast, not a call; with any
+  other argument (`uuid(t.c)`) it is taken as a call, since a function of that name may run
+  instead. Built-ins that act on the server (reading or listing its files, resetting or writing
+  statistics, signalling other sessions) are refused on every version. On PostgreSQL a typed setting of an
   extension or a custom one (a name with a `.`: `SET app.tenant = '1'`, `SET LOCAL pgaudit.log =
   'none'`, `RESET pgaudit.log`, `set_config()` of one) is refused too, and so are `RESET ALL`
   and `DISCARD ALL`, which would reset such settings as well; set such a setting in the
