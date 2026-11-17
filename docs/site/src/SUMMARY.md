@@ -1,6 +1,6 @@
 # Summary
 
-[Introduction](introduction.md)
+[Overview](introduction.md)
 
 - [Install](install.md)
 - [Getting started](getting-started.md)
@@ -8,22 +8,23 @@
 # User guide
 
 - [Connections](guide/connections.md)
-  - [SSH tunnels](guide/ssh-tunnels.md)
-  - [TLS](guide/tls.md)
-  - [Poolers](guide/poolers.md)
+  - [SSH tunnels and bastion hosts](guide/ssh-tunnels.md)
+  - [TLS and SSL](guide/tls.md)
+  - [Connection poolers](guide/poolers.md)
 - [Environments and safety](guide/environments.md)
   - [Manual commit](guide/manual-commit.md)
   - [Startup SQL](guide/startup-sql.md)
-- [Editor](guide/editor.md)
-- [Results](guide/results.md)
+- [SQL editor](guide/editor.md)
+- [Results grid](guide/results.md)
   - [Filtering and sorting a table](guide/filtering.md)
-  - [Export](guide/export.md)
+  - [Export results](guide/export.md)
   - [Charts](guide/charts.md)
   - [Editing data](guide/editing.md)
-- [Plans](guide/plans.md)
+- [Query plans (EXPLAIN)](guide/plans.md)
 - [Server monitor](guide/monitoring.md)
-- [Explorer](guide/explorer.md)
-- [MySQL](guide/mysql.md)
+- [Schema explorer](guide/explorer.md)
+- [PostgreSQL](guide/postgresql.md)
+- [MySQL and MariaDB](guide/mysql.md)
 - [Themes](guide/themes.md)
 - [Updates](guide/updates.md)
 

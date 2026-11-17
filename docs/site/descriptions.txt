@@ -1,0 +1,35 @@
+# The description of each page of the docs site, for search results: its path in the built
+# site, a space, then one line of text. .github/scripts/docs-build.sh writes each into its
+# page and lists the pages in sitemap.xml; it fails when a page of the build has no line here,
+# or a line names no page. index.html is the copy of introduction.html and takes its line.
+# Database engines are named on their own pages only.
+introduction.html datarig is a terminal database client and SQL editor (TUI): browse, query, edit and monitor your databases. Keyboard-first, light, fast and safe by default.
+install.html Install datarig, the terminal database client: Homebrew on macOS and Linux, release archives for macOS, Linux and Windows, or a build from source.
+getting-started.html Start datarig, add a connection, run your first query and find your way around the workspace of the terminal database client.
+guide/connections.html Connection profiles in datarig: host, port, user, database, passwords from the system keychain, TLS, SSH tunnels and folders of profiles.
+guide/ssh-tunnels.html Reach a database through an SSH bastion host: datarig opens the tunnel itself, with a key, a password, the SSH agent or one-time codes, host key checks and tunnel presets.
+guide/tls.html Encrypt database connections with TLS (SSL): SSL modes, CA files, client certificates and keys, and what each connection reports.
+guide/poolers.html Use datarig behind a connection pooler, transaction pooling included: how a pooler is detected and what changes behind one.
+guide/environments.html How datarig keeps a database safe: statements that may do harm ask first, read-only profiles refuse writes, and paging leaves no lock or transaction open unless you ask for it.
+guide/manual-commit.html Manual commit in datarig: changes wait in an open transaction until you commit or roll back, and datarig never sends a COMMIT on its own.
+guide/startup-sql.html Startup SQL: named lists of settings that each query session of a connection profile starts with, such as timeouts and memory settings.
+guide/editor.html The SQL editor of datarig: vim keys, syntax highlighting, completion of schemas, tables and columns, a formatter, saved queries and your own editor.
+guide/results.html The results grid: paged results, search, an inspector for rows and cells, copying rows, and editing and transactions from the grid.
+guide/filtering.html Filter and sort a table on the server from a query bar: WHERE, ORDER BY, columns and a row limit, with the exact SQL shown.
+guide/export.html Export query results to a file: formats and their options, which rows are exported, and what happens when an export stops.
+guide/charts.html Draw query results as bar or line charts in the terminal, from the rows already fetched, without running anything again.
+guide/editing.html Edit table data in the grid: change cells, add and delete rows, paste ranges, then read the exact SQL statements before they are applied.
+guide/plans.html Read a query plan: EXPLAIN and EXPLAIN ANALYZE as a tree with each node's share of the cost or time, a summary, and icicle, flame graph and treemap views.
+guide/monitoring.html Monitor a database server from the terminal: load, sessions, locks and replication, and cancel or end a session.
+guide/explorer.html The schema explorer: connections, databases, schemas and tables, row and size estimates, a table's structure and its DDL.
+guide/postgresql.html PostgreSQL in datarig: supported versions, connecting through SSH, TLS and poolers, read-only profiles, query plans and the server monitor.
+guide/mysql.html MySQL and MariaDB in datarig: supported versions, what works and what does not, paging and locks, read-only profiles and editing data.
+guide/themes.html Themes for datarig: built-in colour themes, light and dark backgrounds, 256-colour terminals and your own theme files.
+guide/updates.html How datarig tells you about a new release and what changed after an update, and how to turn both off.
+reference/keybindings.html Every key binding of datarig, the keyboard-first terminal database client, by context.
+reference/commands.html Every colon command of datarig, the terminal database client and SQL editor.
+reference/configuration.html Every configuration key of datarig: the config file, its tables and the settings you can change with :set.
+reference/theme-files.html The theme file format of datarig: where a theme file lives, its colours and its styles.
+reference/command-line.html The command line of datarig: options, arguments and environment variables.
+faq.html Answers to common problems with datarig: keychain prompts, icons, colours, terminal size, clipboard over SSH and missing features.
+whats-new.html What changed in each release of datarig, the terminal database client and SQL editor, newest first.

@@ -1,4 +1,4 @@
-# Export
+# Export results
 
 `Space r e`, the results menu, or `:export` alone opens the export dialog for the active tab's
 result: which rows, the format, CSV's options, and the file.

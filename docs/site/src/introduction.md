@@ -1,6 +1,7 @@
-# Introduction
+# Overview
 
-A full-featured database client that lives in your terminal: light, fast, and safe by default.
+datarig is a terminal database client and SQL editor (TUI): browse, query, edit and monitor
+your databases. Keyboard-first, light, fast and safe by default.
 
 ![Editing a table in datarig: a cell is changed, the Changes tab shows the exact SQL, and Apply asks first](https://dokadev.github.io/datarig/demo/hero.gif)
 
@@ -20,11 +21,11 @@ it.
 datarig is early and pre-1.0. The configuration format, key bindings and behaviour may still
 change between releases.
 
-- **PostgreSQL** is implemented. CI tests it against PostgreSQL 17. Not supported before
-  PostgreSQL 12: a table's structure, its DDL, the key marks and copying rows as `INSERT`
-  (datarig says the server is too old).
-- **MySQL** is implemented in part; [MySQL](guide/mysql.md) says what it supports and what not.
-  MariaDB is a best effort.
+- **[PostgreSQL](guide/postgresql.md)** is implemented. CI tests it against PostgreSQL 17. Not
+  supported before PostgreSQL 12: a table's structure, its DDL, the key marks and copying rows
+  as `INSERT` (datarig says the server is too old).
+- **[MySQL](guide/mysql.md)** is implemented in part; its page says what it supports and what
+  not. MariaDB is a best effort.
 
 **Platforms.** datarig is developed and tested on macOS. CI runs the full test suite on Linux.
 On Windows, CI builds datarig, lints it and runs the tests that need no database, but running

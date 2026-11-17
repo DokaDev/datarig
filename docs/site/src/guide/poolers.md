@@ -1,4 +1,4 @@
-# Poolers
+# Connection poolers
 
 datarig works through PgBouncer and other PostgreSQL connection poolers, including transaction
 pooling, where consecutive transactions of one client may run on different server

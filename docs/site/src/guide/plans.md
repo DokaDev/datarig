@@ -1,4 +1,4 @@
-# Plans
+# Query plans (EXPLAIN)
 
 datarig shows a statement's query plan as a tree and as several other views. It works on
 PostgreSQL and on MySQL 8.0.16 and later; not on MariaDB.
