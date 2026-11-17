@@ -5,7 +5,7 @@ What changed in each release, newest first. For 0.36.0 and earlier, see the rele
 
 ## 0.41.2 (2026-11-17)
 
-A patch release that makes several checks stricter, so read the list before upgrading. Read-only PostgreSQL profiles now refuse calls of functions that are not PostgreSQL built-ins, which includes extension functions such as PostGIS (`ST_*`) and pgcrypto; until a per-environment allow list ships in the next patch, use a profile that is not read-only for those queries. On MySQL and MariaDB, applying edits fails on any server warning and is rolled back, `TIME` values are checked, the first-page row limit applies only to plain reads, counts and exports are refused inside your own SERIALIZABLE transaction, and a cancel is sent only when the server confirms the session (otherwise the tab's connection is closed). On PostgreSQL, a read-only profile also refuses typed settings of extensions, and a query holding a backslash or `U&` is not run again automatically. Startup SQL refuses settings that ask before they run, so a profile holding one stops connecting until it is removed.
+A patch release that makes several checks stricter, so read the list before upgrading. Read-only PostgreSQL profiles now refuse calls of functions that are not PostgreSQL built-ins, which includes extension functions such as PostGIS (`ST_*`) and pgcrypto; until a per-environment allow list ships in the next patch, use a profile that is not read-only for those queries. On MySQL and MariaDB, applying edits fails on any server warning and is undone where the table allows, `TIME` values are checked, the first-page row limit applies only to plain reads, counts and exports are refused inside your own SERIALIZABLE transaction, and a cancel is sent only when the server confirms the session (otherwise the tab's connection is closed). On PostgreSQL, a read-only profile also refuses typed settings of extensions, and a query holding a backslash or `U&` is not run again automatically. Startup SQL refuses settings that ask before they run, so a profile holding one stops connecting until it is removed.
 
 ### Changed
 
@@ -29,7 +29,7 @@ A patch release that makes several checks stricter, so read the list before upgr
 ### Fixed
 
 - MySQL and MariaDB: applying edits now fails when the server answers any step with a warning
-  or a note, whatever the server's mode, and nothing is applied; the message shows the
+  or a note, whatever the server's mode, and what it changed is undone; the message shows the
   server's warnings (up to five). Before, a server without strict mode could store a value it
   had changed (text cut to the column's length, a character the column cannot hold, a date
   made zero, a member of a SET dropped) and the Apply reported success. While the session's
@@ -42,14 +42,15 @@ A patch release that makes several checks stricter, so read the list before upgr
   or `H:MM:SS` (such as `12:30` or `8:3:2`; hours up to three digits, a leading `-` allowed)
   with at most as many digits of a second as the column keeps (the server would round the
   others away without a warning), or either of them with days first (`1 10:00:00`,
-  `1 10:00`). Other forms, such as `123000` or `12:30.5`, are refused.
+  `1 10:00`); further digits are accepted only when they are zero. Other forms, such as
+  `123000` or `12:30.5`, are refused.
 - MySQL and MariaDB: a cancel of a running statement is now sent only once the server confirms
   that it reaches the tab's own session (each datarig connection carries a `datarig_session`
   connection attribute, read back from `performance_schema.session_account_connect_attrs`).
   When that cannot be confirmed, datarig closes the tab's connection instead and says so; the
   statement may then still finish on the server and, outside a transaction block, commit what
   it changed, while an open transaction is rolled back. On MariaDB with `performance_schema`
-  off (its default) this is always the case, and so it is through proxies and load balancers
+  off (its default) this is always the case, and it can be through proxies and load balancers
   that share or reroute connections. A cancel that arrives before the statement is sent stops
   it and keeps the connection. Opening a MySQL session takes one more round trip.
 - MySQL and MariaDB: a row count or an export inside your own open transaction is refused when
@@ -66,8 +67,9 @@ A patch release that makes several checks stricter, so read the list before upgr
   and not sent. The check before the action also compares the session's account.
 - MySQL and MariaDB: the row limit used to show the first page now applies only to plain reads.
   A last statement that is not one, such as `SELECT … INTO OUTFILE`, `SELECT … INTO @variable`,
-  a `SELECT` that calls a stored or loadable function, an `EXECUTE` or a statement with an
-  executable comment (`/*! … */`), now runs to its end and its result is read in full. Before,
+  a `SELECT` that calls a stored or loadable function or a statement with an executable
+  comment (`/*! … */`), now runs to its end, and its result is read whole into datarig's local
+  spill, as a locking read already was. Before,
   the limit stopped it after a page of rows, so a file was written in part or a function ran
   for those rows only, while the run reported success. Your own `sql_select_limit` is kept.
 - MySQL and MariaDB: a read-only profile on a read replica that does not keep a session's
@@ -84,16 +86,21 @@ A patch release that makes several checks stricter, so read the list before upgr
   `EXPLAIN` of such a call and `EXECUTE` of a statement prepared with one are refused too. A
   read-only MySQL profile already refused such calls. The refusal now names the function, on
   PostgreSQL and MySQL alike. A function reached through a view, a trigger, an operator, a cast
-  or attribute notation (`t.f`) is not checked by this rule; the read-only transaction then
-  stops only what it would write in the session's own database. Until a
+  or attribute notation (`t.f`) is not checked by this rule, and the rule reads a name as
+  written, so an unqualified name that matches a built-in's passes it; the read-only
+  transaction then stops only what it would write in the session's own database. Until a
   per-environment allow list ships in the next patch, run queries that need such functions
-  (for example PostGIS `ST_*` or pgcrypto) from a profile that is not read-only.
+  (for example PostGIS `ST_*` or pgcrypto) from a profile that is not read-only. The same
+  applies for now to some built-in calls the rule does not know: a type cast written as a
+  function call (such as `pg_catalog.uuid(…)` or `jsonb(…)`) and functions newer than
+  PostgreSQL 17 (such as `uuidv7()`).
 - PostgreSQL: copied and exported SQL, export chunks and DDL text write a string holding a
   backslash as `E'…'`, so it reads the same whatever `standard_conforming_strings` is. A query
   whose text holds a backslash anywhere (even in `E'…'` or a comment) or `U&`, which that
-  setting may read differently, is not run again by datarig: its next pages, its row count and
-  its value counts are refused (page it with `LIMIT` and `OFFSET`), and an export of the whole
-  result asks first. This includes a table tab whose filter holds a backslash. Startup SQL
+  setting may read differently, is not run again by datarig: a next page that would run it
+  again, its row count and its value counts are refused (page it with `LIMIT` and `OFFSET`),
+  and an export of the whole result asks first. Pages read from a result still held open are
+  not affected. This includes a table tab whose filter holds a backslash. Startup SQL
   refuses such a statement. The safety checks read a national string (`N'…'`) with that
   setting off as the server does.
 - On PostgreSQL, the explorer, completion, key, table structure, sort key and DDL reads now name
