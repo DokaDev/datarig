@@ -16,8 +16,10 @@
 //! - a trait item with a default body in `core/src/engine/spec.rs`: each engine must answer
 //!   every rule itself.
 //!
-//! `Self::V` inside an `impl` of an engine enum, `use E::*`, `use E::{V}`, `use E as Alias` and
-//! `type Alias = E` are resolved first. The sites that exist today are counted per area against
+//! - another name for an engine enum or one of its variants (`use E as A`, `use E::{self as A}`,
+//!   `use E::V as A`, `type A = E`), anywhere: an alias would hide the enum from this scan.
+//!
+//! `Self::V` inside an `impl` of an engine enum, `use E::*` and `use E::{V}` are resolved first. The sites that exist today are counted per area against
 //! `engine_seam/budget.toml`: a count may only go down, and a count that went down lowers its
 //! budget in the same change. The fixtures in `engine_seam/fixtures/` (read as text, never
 //! compiled) prove that the scan reports each kind of violation.
@@ -65,10 +67,13 @@ enum Kind {
     BooleanTest,
     /// A trait item with a default body in the seam's rule traits.
     DefaultBody,
+    /// Another name for an engine enum or variant.
+    Alias,
 }
 
 impl Kind {
-    const ALL: [Kind; 5] = [Kind::Reference, Kind::Marker, Kind::CatchAll, Kind::BooleanTest, Kind::DefaultBody];
+    const ALL: [Kind; 6] =
+        [Kind::Reference, Kind::Marker, Kind::CatchAll, Kind::BooleanTest, Kind::DefaultBody, Kind::Alias];
 
     /// The section of the budget file.
     fn section(self) -> &'static str {
@@ -78,6 +83,7 @@ impl Kind {
             Kind::CatchAll => "catch_alls",
             Kind::BooleanTest => "boolean_tests",
             Kind::DefaultBody => "default_bodies",
+            Kind::Alias => "aliases",
         }
     }
 }
@@ -243,63 +249,38 @@ fn line(span: Span) -> usize {
     span.start().line
 }
 
-/// The names one file gives the engine enums and their variants. They are file-wide, not per
-/// scope: a name given to several enums in different scopes stands for each of them, so reusing
-/// a name can add findings but never hide one.
+/// The engine variants one file names without their enum (`use E::V`, `use E::*`). An engine
+/// enum is only ever named by its own name: another name for it is itself reported.
 #[derive(Default)]
 struct Names {
-    /// The engine enums a name stands for in this file (itself, `use E as A`, `type A = E`).
-    enums: HashMap<String, Vec<&'static str>>,
-    /// The variants a name stands for without its enum (`use E::V`, `use E::*`).
-    bare: HashMap<String, Vec<(&'static str, String)>>,
+    bare: HashMap<String, (&'static str, String)>,
+}
+
+/// The engine enum a name is, if any.
+fn engine_enum(name: &str) -> Option<&'static str> {
+    ENGINE_ENUMS.iter().find(|e| **e == name).copied()
 }
 
 impl Names {
     fn new(file: &syn::File, variants: &Variants) -> Names {
         let mut names = Names::default();
-        for name in ENGINE_ENUMS {
-            names.add_enum(name.to_string(), name);
-        }
-        // Aliases first (twice: an alias may name another alias), then the variants they reach.
-        for _ in 0..2 {
-            Collect { names: &mut names, variants, variants_pass: false }.visit_file(file);
-        }
-        Collect { names: &mut names, variants, variants_pass: true }.visit_file(file);
+        Collect { names: &mut names, variants }.visit_file(file);
         names
     }
 
-    fn add_enum(&mut self, name: String, e: &'static str) {
-        let list = self.enums.entry(name).or_default();
-        if !list.contains(&e) {
-            list.push(e);
-        }
-    }
-
-    fn add_bare(&mut self, name: String, variant: (&'static str, String)) {
-        let list = self.bare.entry(name).or_default();
-        if !list.contains(&variant) {
-            list.push(variant);
-        }
-    }
-
-    fn enums_of(&self, name: &str) -> Vec<&'static str> {
-        self.enums.get(name).cloned().unwrap_or_default()
-    }
-
     fn bare_of(&self, name: &str) -> Option<(&'static str, String)> {
-        self.bare.get(name).and_then(|list| list.first().cloned())
+        self.bare.get(name).cloned()
     }
 }
 
 struct Collect<'a> {
     names: &'a mut Names,
     variants: &'a Variants,
-    variants_pass: bool,
 }
 
 impl Collect<'_> {
     fn tree(&mut self, prefix: &mut Vec<String>, tree: &syn::UseTree) {
-        let owners = prefix.last().map(|p| self.names.enums_of(p)).unwrap_or_default();
+        let owner = prefix.last().and_then(|p| engine_enum(p));
         match tree {
             syn::UseTree::Path(p) => {
                 prefix.push(p.ident.to_string());
@@ -307,37 +288,23 @@ impl Collect<'_> {
                 prefix.pop();
             }
             syn::UseTree::Group(g) => g.items.iter().for_each(|t| self.tree(prefix, t)),
-            syn::UseTree::Name(n) if self.variants_pass => {
-                let v = n.ident.to_string();
-                for e in owners.into_iter().filter(|e| self.variants[e].contains(&v)) {
-                    self.names.add_bare(v.clone(), (e, v.clone()));
-                }
-            }
-            syn::UseTree::Rename(r) => {
-                // `use path::E::{self as A}` renames `E` itself.
-                let from = match (r.ident == "self", prefix.last()) {
-                    (true, Some(owner)) => owner.clone(),
-                    _ => r.ident.to_string(),
+            syn::UseTree::Name(syn::UseName { ident }) | syn::UseTree::Rename(syn::UseRename { ident, .. }) => {
+                let as_name = match tree {
+                    syn::UseTree::Rename(r) => r.rename.to_string(),
+                    _ => ident.to_string(),
                 };
-                let enums = self.names.enums_of(&from);
-                if !enums.is_empty() {
-                    for e in enums {
-                        self.names.add_enum(r.rename.to_string(), e);
-                    }
-                } else if self.variants_pass {
-                    for e in owners.into_iter().filter(|e| self.variants[e].contains(&from)) {
-                        self.names.add_bare(r.rename.to_string(), (e, from.clone()));
-                    }
+                let v = ident.to_string();
+                if let Some(e) = owner.filter(|e| self.variants[e].contains(&v)) {
+                    self.names.bare.insert(as_name, (e, v));
                 }
             }
-            syn::UseTree::Glob(_) if self.variants_pass => {
-                for e in owners {
+            syn::UseTree::Glob(_) => {
+                if let Some(e) = owner {
                     for v in &self.variants[e] {
-                        self.names.add_bare(v.clone(), (e, v.clone()));
+                        self.names.bare.insert(v.clone(), (e, v.clone()));
                     }
                 }
             }
-            syn::UseTree::Name(_) | syn::UseTree::Glob(_) => {}
         }
     }
 }
@@ -347,21 +314,12 @@ impl<'ast> Visit<'ast> for Collect<'_> {
         self.tree(&mut Vec::new(), &u.tree);
     }
 
-    // Names given inside a macro body that parses as Rust count too.
+    // Imports inside a macro body that parses as Rust count too.
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
         if let Ok(stmts) = syn::Block::parse_within.parse2(mac.tokens.clone()) {
             stmts.iter().for_each(|st| self.visit_stmt(st));
         } else if let Ok(exprs) = Punctuated::<Expr, Token![,]>::parse_terminated.parse2(mac.tokens.clone()) {
             exprs.iter().for_each(|e| self.visit_expr(e));
-        }
-    }
-    fn visit_item_type(&mut self, t: &'ast syn::ItemType) {
-        if let syn::Type::Path(p) = &*t.ty
-            && let Some(last) = p.path.segments.last()
-        {
-            for e in self.names.enums_of(&last.ident.to_string()) {
-                self.names.add_enum(t.ident.to_string(), e);
-            }
         }
     }
 }
@@ -382,14 +340,12 @@ impl Scan<'_> {
         self.findings.push(Finding { path: self.rel.to_string(), line: line(span), kind, what });
     }
 
-    /// The engine enum `owner::variant` names, if any (`owner` an enum, an alias or `Self`).
+    /// The engine enum `owner::variant` names, if any (`owner` an engine enum, or `Self` in its
+    /// `impl`).
     fn resolve(&self, owner: &str, variant: &str) -> Option<&'static str> {
-        let enums = if owner == "Self" {
-            self.selves.last().cloned().flatten().map(|ty| self.names.enums_of(&ty)).unwrap_or_default()
-        } else {
-            self.names.enums_of(owner)
-        };
-        enums.into_iter().find(|e| self.variants[e].contains(variant))
+        let e =
+            if owner == "Self" { engine_enum(&self.selves.last().cloned().flatten()?)? } else { engine_enum(owner)? };
+        self.variants[e].contains(variant).then_some(e)
     }
 
     /// The engine variant a path names (`E::V`, `Alias::V`, `Self::V`, an imported `V`).
@@ -717,7 +673,15 @@ impl<'ast> Visit<'ast> for Scan<'_> {
 
     fn visit_item_use(&mut self, u: &'ast syn::ItemUse) {
         fn walk(scan: &mut Scan<'_>, prefix: &mut Vec<String>, tree: &syn::UseTree) {
-            let owners = prefix.last().map(|p| scan.names.enums_of(p)).unwrap_or_default();
+            let owner = prefix.last().and_then(|p| engine_enum(p));
+            if let syn::UseTree::Rename(r) = tree {
+                let renamed = if r.ident == "self" { prefix.last().cloned() } else { Some(r.ident.to_string()) };
+                let enum_alias = renamed.as_deref().and_then(engine_enum);
+                let variant_alias = owner.filter(|e| scan.variants[e].contains(&r.ident.to_string()));
+                if let Some(e) = enum_alias.or(variant_alias) {
+                    scan.report(r.rename.span(), Kind::Alias, format!("`{}` is another name for {e}", r.rename));
+                }
+            }
             match tree {
                 syn::UseTree::Path(p) => {
                     if (p.ident == "Scheme" || p.ident == "Dbms")
@@ -732,18 +696,27 @@ impl<'ast> Visit<'ast> for Scan<'_> {
                 }
                 syn::UseTree::Group(g) => g.items.iter().for_each(|t| walk(scan, prefix, t)),
                 syn::UseTree::Name(syn::UseName { ident }) | syn::UseTree::Rename(syn::UseRename { ident, .. }) => {
-                    if let Some(e) = owners.into_iter().find(|e| scan.variants[e].contains(&ident.to_string())) {
+                    if let Some(e) = owner.filter(|e| scan.variants[e].contains(&ident.to_string())) {
                         scan.reference(ident.span(), e, &ident.to_string());
                     }
                 }
                 syn::UseTree::Glob(g) => {
-                    if let Some(&e) = owners.first() {
+                    if let Some(e) = owner {
                         scan.reference(g.star_token.spans[0], e, "*");
                     }
                 }
             }
         }
         walk(self, &mut Vec::new(), &u.tree);
+    }
+
+    fn visit_item_type(&mut self, t: &'ast syn::ItemType) {
+        if let syn::Type::Path(p) = &*t.ty
+            && let Some(e) = p.path.segments.last().and_then(|s| engine_enum(&s.ident.to_string()))
+        {
+            self.report(t.ident.span(), Kind::Alias, format!("`{}` is another name for {e}", t.ident));
+        }
+        visit::visit_item_type(self, t);
     }
 
     fn visit_path(&mut self, p: &'ast syn::Path) {
@@ -1102,7 +1075,7 @@ fn collect_all(root: &Path, dir: &str, out: &mut Vec<String>) {
 
 #[test]
 fn engine_references_stay_within_budget() {
-    check_budget(&[Kind::Reference, Kind::Marker]);
+    check_budget(&[Kind::Reference, Kind::Marker, Kind::Alias]);
 }
 
 #[test]
@@ -1119,13 +1092,13 @@ fn boolean_engine_tests_stay_within_budget() {
 fn every_violation_fixture_is_reported() {
     // (fixture, the path it is scanned as, what must be reported, with the line)
     type Case = (&'static str, &'static str, &'static [(Kind, usize)]);
-    let cases: [Case; 14] = [
+    let cases: [Case; 15] = [
         ("driver_engine_branch", "crates/drivers/mysql/src/session.rs", &[(Kind::Reference, 6), (Kind::Reference, 7)]),
         ("tui_if_let_dialect", "crates/tui/src/app/editor.rs", &[(Kind::BooleanTest, 6), (Kind::Reference, 6)]),
         ("catch_all_explain", "crates/core/src/sql/plan.rs", &[(Kind::CatchAll, 9)]),
         ("matches_dialect", "crates/core/src/sql/split.rs", &[(Kind::BooleanTest, 6)]),
         ("self_eq_in_impl", "crates/core/src/sql/dialect.rs", &[(Kind::BooleanTest, 7)]),
-        ("alias_use", "crates/core/src/sql/lexer.rs", &[(Kind::BooleanTest, 7)]),
+        ("alias_use", "crates/core/src/sql/lexer.rs", &[(Kind::Alias, 2)]),
         ("glob_use", "crates/drivers/postgres/src/connect.rs", &[(Kind::Reference, 3), (Kind::CatchAll, 9)]),
         ("trait_default_body", SPEC_FILE, &[(Kind::DefaultBody, 7)]),
         (
@@ -1134,14 +1107,15 @@ fn every_violation_fixture_is_reported() {
             &[(Kind::Reference, 8), (Kind::Reference, 9), (Kind::Marker, 13), (Kind::Marker, 14)],
         ),
         ("cfg_not_only_test", "crates/core/src/sql/split.rs", &[(Kind::BooleanTest, 7)]),
-        ("alias_scopes", "crates/tui/src/app/plan.rs", &[(Kind::BooleanTest, 6), (Kind::Reference, 6)]),
+        ("alias_scopes", "crates/tui/src/app/plan.rs", &[(Kind::Alias, 3), (Kind::Alias, 10)]),
         (
             "macro_forms",
             "crates/core/src/sql/complete.rs",
             &[(Kind::BooleanTest, 6), (Kind::BooleanTest, 7), (Kind::BooleanTest, 15)],
         ),
-        ("self_rename", "crates/core/src/sql/split.rs", &[(Kind::BooleanTest, 6)]),
-        ("macro_alias", "crates/core/src/sql/split.rs", &[(Kind::BooleanTest, 6)]),
+        ("self_rename", "crates/core/src/sql/split.rs", &[(Kind::Alias, 2)]),
+        ("macro_alias", "crates/core/src/sql/split.rs", &[(Kind::Alias, 3)]),
+        ("alias_reexport", "crates/core/src/sql.rs", &[(Kind::Alias, 2), (Kind::Alias, 5)]),
     ];
     let mut missed = Vec::new();
     for (name, path, expected) in cases {
@@ -1166,6 +1140,10 @@ fn the_clean_fixture_passes() {
     let found = scan_fixture("clean", "crates/core/src/sql/clean.rs");
     let listed: Vec<String> = found.iter().map(|f| format!("    {f}")).collect();
     assert!(found.is_empty(), "the clean fixture was reported:\n{}", listed.join("\n"));
+    // An enum of its own that shares variant names with an engine enum is no engine enum, even
+    // under a one-letter name.
+    let found = scan_fixture("unrelated_enum", "crates/tui/src/app/chart.rs");
+    assert!(found.is_empty(), "an unrelated enum was reported: {found:?}");
     // A file under an inner `#![cfg(test)]` is test code, whatever it holds.
     let found = scan_fixture("inner_cfg_test", "crates/tui/src/app/probe.rs");
     assert!(found.is_empty(), "a test-only file was reported: {found:?}");

@@ -1,4 +1,4 @@
-//! An alias declared inside a macro body is still the enum.
+//! An alias declared inside a macro body is reported too.
 wrap! {
     use crate::sql::dialect::Dialect as D;
 

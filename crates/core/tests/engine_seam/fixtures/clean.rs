@@ -1,6 +1,6 @@
 //! What the scan lets pass in a seam module: exhaustive matches with one arm per variant, and
 //! catch-alls and comparisons on enums that carry no engine.
-use super::dialect::Dialect as D;
+use super::dialect::Dialect;
 use crate::driver::ExplainFormat;
 
 impl ExplainFormat {
@@ -13,11 +13,11 @@ impl ExplainFormat {
     }
 }
 
-fn comment(d: D) -> &'static str {
+fn comment(d: Dialect) -> &'static str {
     match d {
-        D::Postgres => "--",
-        D::MySql(mode) if mode.ansi_quotes => "--",
-        D::MySql(_) => "#",
+        Dialect::Postgres => "--",
+        Dialect::MySql(mode) if mode.ansi_quotes => "--",
+        Dialect::MySql(_) => "#",
     }
 }
 
@@ -38,8 +38,8 @@ fn same(a: &Shape, b: &Shape) -> bool {
     matches!(a, Shape::Line) && a == b
 }
 
-fn fresh(d: D) -> D {
-    let fresh = D::default();
+fn fresh(d: Dialect) -> Dialect {
+    let fresh = Dialect::default();
     if d == fresh { d } else { fresh }
 }
 
@@ -49,23 +49,23 @@ fn formatter() -> sqlformat::Dialect {
 
 /// Built only for the tests: not scanned.
 #[cfg(all(unix, any(test, all(test, feature = "extra"))))]
-fn in_tests_only(d: D) -> bool {
-    matches!(d, D::Postgres)
+fn in_tests_only(d: Dialect) -> bool {
+    matches!(d, Dialect::Postgres)
 }
 
 /// Test-only statements, arms and fields inside product code: not scanned.
-fn checked(d: D) -> u8 {
+fn checked(d: Dialect) -> u8 {
     #[cfg(test)]
     {
-        assert!(matches!(d, D::Postgres));
+        assert!(matches!(d, Dialect::Postgres));
     }
     #[cfg(test)]
-    if d == D::Postgres {
+    if d == Dialect::Postgres {
         return 0;
     }
     match d {
         #[cfg(test)]
-        _ if matches!(d, D::Postgres) => 0,
+        _ if matches!(d, Dialect::Postgres) => 0,
         _ => 1,
     }
 }
@@ -83,7 +83,7 @@ fn probe(#[cfg(test)] pg: bool) {}
 trait Probed {
     /// A test helper: not scanned.
     #[cfg(test)]
-    fn probe(d: D) -> bool {
-        matches!(d, D::Postgres)
+    fn probe(d: Dialect) -> bool {
+        matches!(d, Dialect::Postgres)
     }
 }

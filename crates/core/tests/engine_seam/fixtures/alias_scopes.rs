@@ -1,4 +1,4 @@
-//! One alias for two enums, each in its own scope: neither hides the other.
+//! One alias for two enums, each in its own scope: both aliases are reported.
 fn dollar_quotes(d: datarig_core::sql::dialect::Dialect) -> bool {
     use datarig_core::sql::dialect::Dialect as E;
     // PostgreSQL reads dollar quotes.
