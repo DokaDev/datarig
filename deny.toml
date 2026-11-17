@@ -30,6 +30,9 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "unmaintained (merged into zbus 6); only keyring's Linux Secret Service store, whose newest release needs zbus 5" },
     { id = "RUSTSEC-2026-0371", reason = "unmaintained (merged into zbus 6); only keyring's Linux Secret Service store, whose newest release needs zbus 5" },
     { id = "RUSTSEC-2026-0372", reason = "unmaintained (merged into zbus 6); only keyring's Linux Secret Service store, whose newest release needs zbus 5" },
+    # RUSTSEC-2026-0543 (chrono): unmaintained, informational, not a vulnerability. Its
+    # replacement is tracked in issue #466.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained (informational, no vulnerability); replacement tracked in #466" },
 ]
 
 [licenses]
