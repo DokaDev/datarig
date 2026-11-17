@@ -1,0 +1,62 @@
+# The engine seam budget, checked by tests/engine_seam.rs: per kind of finding, per area, the
+# number of sites the code has. An area is a module path; a file counts in the longest area that
+# holds it. A count may not rise. A change that lowers a count lowers its budget too, and the
+# change that moves an area behind the seam brings it to 0 (and may then delete the line).
+# A site in an area not listed has a budget of 0.
+
+# Variants of the engine enums named outside the seam modules.
+[references]
+"crates/bench/src/editor" = 1
+"crates/bench/src/export" = 1
+"crates/bench/src/monitor" = 1
+"crates/core/src/edit" = 3
+"crates/core/src/export" = 16
+"crates/core/src/monitor" = 14
+"crates/core/src/profile" = 2
+"crates/core/src/query" = 63
+"crates/drivers/mysql/src/connect" = 4
+"crates/drivers/mysql/src/meta" = 9
+"crates/drivers/mysql/src/monitor" = 2
+"crates/drivers/mysql/src/query" = 9
+"crates/drivers/mysql/src/session" = 2
+"crates/drivers/postgres/src/connect" = 3
+"crates/drivers/postgres/src/monitor" = 2
+"crates/drivers/postgres/src/query" = 1
+"crates/tui/src/app" = 36
+"crates/tui/src/widgets" = 4
+
+# Legacy markers of engine identity outside the seam modules: the `mariadb` flag, `is_mysql`,
+# `mysql: bool`, `pg: bool`, `Scheme::of_driver`, `Dbms::of_driver`, the text "mariadb".
+[markers]
+"crates/bench/src/proxy" = 2
+"crates/core/src/edit" = 12
+"crates/core/src/monitor" = 1
+"crates/core/src/profile" = 8
+"crates/drivers/mysql/src/connect" = 1
+"crates/drivers/mysql/src/meta" = 15
+"crates/drivers/mysql/src/query" = 11
+"crates/drivers/mysql/src/session" = 14
+"crates/tui/src/app" = 19
+"crates/tui/src/icons" = 1
+"crates/tui/src/widgets" = 3
+
+# Matches with an arm naming an engine variant and a catch-all arm (seam modules included).
+[catch_alls]
+"crates/core/src/edit" = 1
+"crates/core/src/monitor" = 1
+"crates/core/src/query" = 2
+"crates/core/src/sql" = 4
+"crates/tui/src/app" = 2
+
+# `matches!`, `==`, `!=`, `if let` and `let .. else` on an engine variant (seam modules included).
+[boolean_tests]
+"crates/core/src/edit" = 1
+"crates/core/src/export" = 6
+"crates/core/src/monitor" = 4
+"crates/core/src/query" = 25
+"crates/core/src/sql" = 11
+"crates/tui/src/app" = 22
+"crates/tui/src/widgets" = 2
+
+# Trait items with a default body in the seam's rule traits: none, ever.
+[default_bodies]
