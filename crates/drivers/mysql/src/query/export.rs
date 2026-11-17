@@ -19,13 +19,14 @@
 
 use super::{
     Closed, Env, Link, State, Stop, after, asked_server, begin_own, cells, failure, idle, keeps_next, limit_applies,
-    no_locking_read, open_before, rest, runs_server_code, stop_result,
+    mariadb_bound, no_locking_read, open_before, rest, runs_server_code, stop_result,
 };
 use crate::session::my_error;
 use crate::values::column_meta;
 use datarig_core::driver::{
     Cell, ColumnMeta, DbError, EXPORT_BATCH_BYTES, ExportBatch, ExportGuard, ExportRead, ExportSink,
 };
+use datarig_core::export::keyset::LOCK_WAIT_SECS;
 use datarig_core::sql::risk::Class;
 use datarig_core::sql::risk::mysql as risk;
 use mysql_async::prelude::Queryable;
@@ -34,6 +35,19 @@ use std::sync::atomic::Ordering;
 
 /// An export's answer: what it read, or why not and whether that was a cancel.
 pub(super) type Answer = (Result<ExportRead, DbError>, bool);
+
+/// Keyset chunk `sql` (a plain `SELECT`) as it is sent: waiting at most [`LOCK_WAIT_SECS`] for a
+/// metadata lock, MySQL through its optimizer hint after the `SELECT`, MariaDB (which reads the
+/// hint as a comment) through [`mariadb_bound`] before it. `None` for a text that does not start
+/// with `SELECT `: it is not sent unbounded.
+pub(super) fn keyset_text(sql: &str, mariadb: bool) -> Option<String> {
+    let rest = sql.strip_prefix("SELECT ")?;
+    Some(if mariadb {
+        format!("{}{sql}", mariadb_bound(None, LOCK_WAIT_SECS))
+    } else {
+        format!("SELECT /*+ SET_VAR(lock_wait_timeout={LOCK_WAIT_SECS}) */ {rest}")
+    })
+}
 
 /// Run export `sql` into `sink`, `batch` rows at a time ([`DbCommand::Export`]).
 ///
@@ -57,6 +71,14 @@ pub(super) async fn export(
     if r.class != Class::Read || r.writes {
         return Ok((Err(DbError::NotSupported), false));
     }
+    // What is sent: a keyset chunk with its lock wait bound, added once it was read as a read.
+    let text = match guard {
+        ExportGuard::Keyset => match keyset_text(sql, env.server.mariadb) {
+            Some(text) => text,
+            None => return Ok((Err(DbError::NotSupported), false)),
+        },
+        _ => sql.to_string(),
+    };
     // A transaction open before the app's own reads (the user's, or one the server cannot rule
     // out) is read in, never ended.
     let was_open = open_before(conn, link, s).await?;
@@ -102,7 +124,7 @@ pub(super) async fn export(
         let _ = end_own(conn, link, own, false).await?;
         return Ok((Err(DbError::Cancelled), true));
     }
-    let sent = link.guard(Some(env.killer), conn.query_iter(sql)).await?;
+    let sent = link.guard(Some(env.killer), conn.query_iter(text.as_str())).await?;
     let mut qr = match sent {
         Ok(qr) => qr,
         Err(e) => {

@@ -123,7 +123,7 @@ fn names_are_split_unquoted_and_lower_case() {
 #[test]
 fn the_servers_question_asks_every_reading_of_a_name() {
     let d = Dialect::MySql(MODE);
-    let sql = check_sql(&["users".into(), "u.email".into(), "shop.orders.id".into(), "o'k".into()], d, &MYSQL);
+    let sql = check_sql(&["users".into(), "u.email".into(), "shop.orders.id".into(), "o'k".into()], d, &MYSQL).concat();
     assert!(
         sql.starts_with(
             "SELECT /*+ SET_VAR(lock_wait_timeout=2) MAX_EXECUTION_TIME(10000) */ @@SESSION.transaction_isolation"
@@ -136,11 +136,11 @@ fn the_servers_question_asks_every_reading_of_a_name() {
     // A table is a base table or MariaDB's system-versioned one; anything else is not a table.
     assert!(sql.contains("t.TABLE_TYPE NOT IN ('BASE TABLE', 'SYSTEM VERSIONED')"), "{sql}");
     // Nothing named: nothing can be a view.
-    assert!(check_sql(&[], d, &MYSQL).contains("AND (FALSE)"));
+    assert!(check_sql(&[], d, &MYSQL).concat().contains("AND (FALSE)"));
     // Backslashes are written as the session reads them.
     let nbe = Dialect::MySql(MySqlMode { no_backslash_escapes: true, ..MODE });
-    assert!(check_sql(&["a\\b".into()], nbe, &MYSQL).contains("('a\\b')"));
-    assert!(check_sql(&["a\\b".into()], d, &MYSQL).contains("('a\\\\b')"));
+    assert!(check_sql(&["a\\b".into()], nbe, &MYSQL).concat().contains("('a\\b')"));
+    assert!(check_sql(&["a\\b".into()], d, &MYSQL).concat().contains("('a\\\\b')"));
 }
 
 #[test]
@@ -369,15 +369,17 @@ fn a_bounded_read_stopped_by_the_server_is_told_apart_from_a_cancel_and_a_lock_w
 #[test]
 fn mariadbs_bounded_read_fits_its_version_and_the_sessions_own_limits() {
     let d = Dialect::MySql(MODE);
-    let older = check_sql(&[], d, &Server { version: (10, 6, 0), mariadb: true });
+    let older = check_sql(&[], d, &Server { version: (10, 6, 0), mariadb: true }).remove(0);
     assert!(older.contains("@@SESSION.tx_isolation,"), "{older}");
     assert!(
         older.ends_with("@@SESSION.max_statement_time, @@SESSION.lock_wait_timeout, @@SESSION.max_sort_length"),
         "{older}"
     );
-    let newer = check_sql(&[], d, &Server { version: (11, 4, 0), mariadb: true });
+    let newer = check_sql(&[], d, &Server { version: (11, 4, 0), mariadb: true }).remove(0);
     assert!(newer.contains("@@SESSION.transaction_isolation,"), "{newer}");
-    assert!(check_sql(&[], d, &MYSQL).ends_with("@@SESSION.max_execution_time, NULL, @@SESSION.max_sort_length"));
+    assert!(
+        check_sql(&[], d, &MYSQL).concat().ends_with("@@SESSION.max_execution_time, NULL, @@SESSION.max_sort_length")
+    );
     let sql = "SELECT 1";
     let asked = |statement, lock| Asked { isolation: String::new(), statement, lock, sort_length: None };
     let limit = Duration::from_secs(30);
@@ -420,5 +422,65 @@ fn only_plain_reads_get_the_paging_limit() {
         ] {
             assert!(!pages_plainly(&risk::classify(sql, mode), sql, mode), "{sql}");
         }
+    }
+}
+
+/// MySQL's own reads go as they always went: the hints in the text, one statement each.
+#[test]
+fn mysql_own_read_text_is_unchanged() {
+    let d = Dialect::MySql(MODE);
+    let names: Vec<String> = vec!["shop.t".into(), "u".into()];
+    assert_eq!(not_undone_sql(&names, d, false), NOT_UNDONE_MYSQL);
+    assert_eq!(check_sql(&names, d, &MYSQL), [CHECK_MYSQL]);
+    // A keyset chunk: the hint after its `SELECT`, as the chunk was written before.
+    let chunk = "SELECT * FROM `s`.`t` WHERE `id` > 7 ORDER BY `id` LIMIT 10000";
+    assert_eq!(
+        export::keyset_text(chunk, false).as_deref(),
+        Some("SELECT /*+ SET_VAR(lock_wait_timeout=5) */ * FROM `s`.`t` WHERE `id` > 7 ORDER BY `id` LIMIT 10000")
+    );
+}
+
+const NOT_UNDONE_MYSQL: &str = r#"SELECT /*+ SET_VAR(lock_wait_timeout=2) MAX_EXECUTION_TIME(10000) */ CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME, ' (', COALESCE(t.ENGINE, t.TABLE_TYPE), ')') FROM information_schema.TABLES t WHERE (t.TABLE_TYPE = 'VIEW' OR UPPER(COALESCE(t.ENGINE, '')) NOT IN ('INNODB', 'NDBCLUSTER', 'NDB')) AND ((LOWER(t.TABLE_SCHEMA) = LOWER(DATABASE()) AND LOWER(t.TABLE_NAME) IN ('shop', 'u')) OR (LOWER(t.TABLE_SCHEMA), LOWER(t.TABLE_NAME)) IN (('shop', 't'))) UNION SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME, ' (trigger)') FROM information_schema.TABLES t WHERE EXISTS (SELECT 1 FROM information_schema.TRIGGERS g WHERE g.EVENT_OBJECT_SCHEMA = t.TABLE_SCHEMA AND g.EVENT_OBJECT_TABLE = t.TABLE_NAME) AND ((LOWER(t.TABLE_SCHEMA) = LOWER(DATABASE()) AND LOWER(t.TABLE_NAME) IN ('shop', 'u')) OR (LOWER(t.TABLE_SCHEMA), LOWER(t.TABLE_NAME)) IN (('shop', 't'))) UNION SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME, ' (triggers not visible)') FROM information_schema.TABLES t WHERE t.TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VERSIONED') AND ((LOWER(t.TABLE_SCHEMA) = LOWER(DATABASE()) AND LOWER(t.TABLE_NAME) IN ('shop', 'u')) OR (LOWER(t.TABLE_SCHEMA), LOWER(t.TABLE_NAME)) IN (('shop', 't'))) AND NOT EXISTS (SELECT 1 FROM information_schema.USER_PRIVILEGES p WHERE p.GRANTEE = CONCAT(QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', 1)), '@', QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', -1))) AND p.PRIVILEGE_TYPE = 'TRIGGER' AND @@GLOBAL.partial_revokes = 0) AND NOT EXISTS (SELECT 1 FROM information_schema.SCHEMA_PRIVILEGES p WHERE p.GRANTEE = CONCAT(QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', 1)), '@', QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', -1))) AND p.PRIVILEGE_TYPE = 'TRIGGER' AND p.TABLE_SCHEMA = t.TABLE_SCHEMA) AND NOT EXISTS (SELECT 1 FROM information_schema.TABLE_PRIVILEGES p WHERE p.GRANTEE = CONCAT(QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', 1)), '@', QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', -1))) AND p.PRIVILEGE_TYPE = 'TRIGGER' AND p.TABLE_SCHEMA = t.TABLE_SCHEMA AND p.TABLE_NAME = t.TABLE_NAME) ORDER BY 1 LIMIT 20"#;
+
+const CHECK_MYSQL: &str = r#"SELECT /*+ SET_VAR(lock_wait_timeout=2) MAX_EXECUTION_TIME(10000) */ @@SESSION.transaction_isolation, (SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME) FROM information_schema.TABLES t WHERE t.TABLE_TYPE NOT IN ('BASE TABLE', 'SYSTEM VERSIONED') AND ((LOWER(t.TABLE_SCHEMA) = LOWER(DATABASE()) AND LOWER(t.TABLE_NAME) IN ('shop', 'u')) OR (LOWER(t.TABLE_SCHEMA), LOWER(t.TABLE_NAME)) IN (('shop', 't'))) LIMIT 1), @@SESSION.max_execution_time, NULL, @@SESSION.max_sort_length"#;
+
+/// MariaDB reads the hints as a comment: its own reads go bounded by `SET STATEMENT … FOR`, never
+/// longer than the session's own limits, and its session values are read apart, before the
+/// bounded lookup (inside it they would read as the bound's). A keyset chunk waits at most 5 s
+/// for a lock; a chunk that is not a plain `SELECT` is not sent unbounded.
+#[test]
+fn mariadb_own_reads_are_bounded_by_set_statement() {
+    let d = Dialect::MySql(MODE);
+    let names: Vec<String> = vec!["shop.t".into(), "u".into()];
+    let bound = "SET STATEMENT max_statement_time = IF(@@SESSION.max_statement_time = 0, 10, \
+                 LEAST(@@SESSION.max_statement_time, 10)), lock_wait_timeout = LEAST(@@SESSION.lock_wait_timeout, 2) FOR ";
+    assert_eq!(mariadb_bound(Some(10), 2), bound);
+    let sql = not_undone_sql(&names, d, true);
+    assert!(sql.starts_with(&format!("{bound}SELECT CONCAT(t.TABLE_SCHEMA")), "{sql}");
+    assert!(!sql.contains("/*+"), "{sql}");
+    let ask = check_sql(&names, d, &Server { version: (11, 4, 0), mariadb: true });
+    assert_eq!(
+        ask[0],
+        "SELECT @@SESSION.transaction_isolation, @@SESSION.max_statement_time, @@SESSION.lock_wait_timeout, \
+         @@SESSION.max_sort_length"
+    );
+    assert!(
+        ask[1].starts_with(&format!("{bound}SELECT (SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME) ")),
+        "{ask:?}"
+    );
+    assert!(ask[1].ends_with("LIMIT 1)"), "{ask:?}");
+    // The lookup reads no session value besides the bound's own.
+    assert_eq!(ask[1].matches("@@SESSION.").count(), bound.matches("@@SESSION.").count(), "{ask:?}");
+    assert_eq!(ask.len(), 2);
+    let chunk = "SELECT * FROM `s`.`t` ORDER BY `id` LIMIT 10000";
+    assert_eq!(
+        export::keyset_text(chunk, true).as_deref(),
+        Some(
+            "SET STATEMENT lock_wait_timeout = LEAST(@@SESSION.lock_wait_timeout, 5) FOR SELECT * FROM `s`.`t` ORDER BY `id` LIMIT 10000"
+        )
+    );
+    for mariadb in [false, true] {
+        assert_eq!(export::keyset_text("WITH x AS (SELECT 1) SELECT * FROM x", mariadb), None);
+        assert_eq!(export::keyset_text("select * from t", mariadb), None);
     }
 }

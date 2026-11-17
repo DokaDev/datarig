@@ -23,9 +23,10 @@ use crate::driver::structure::TableStructure;
 use crate::driver::{Cell, ColumnMeta, ValueKind};
 use crate::sql::dialect::Dialect;
 
-/// How long a MySQL chunk waits for a metadata lock (an `ALTER TABLE` in the way) before it
-/// gives up, in seconds. PostgreSQL's chunks set `lock_timeout` to the same in their own
-/// transaction (the driver's).
+/// How long a chunk waits for a lock (an `ALTER TABLE` in the way) before it gives up, in
+/// seconds. The drivers bound it when they send it: MySQL's with an optimizer hint, MariaDB's with
+/// `SET STATEMENT`, PostgreSQL's with `lock_timeout` in their own transaction. The chunk's text
+/// is a plain `SELECT` for every engine, so that the driver reads it as a read.
 pub const LOCK_WAIT_SECS: u32 = 5;
 
 /// Rows a chunk reads by default.
@@ -156,11 +157,7 @@ impl Keyset {
 
     fn select(&self) -> String {
         let d = self.dialect;
-        let hint = match d {
-            Dialect::MySql(_) => format!("/*+ SET_VAR(lock_wait_timeout={LOCK_WAIT_SECS}) */ "),
-            Dialect::Postgres => String::new(),
-        };
-        format!("SELECT {hint}* FROM {}.{}", d.force_quote_ident(&self.schema), d.force_quote_ident(&self.table))
+        format!("SELECT * FROM {}.{}", d.force_quote_ident(&self.schema), d.force_quote_ident(&self.table))
     }
 
     fn order(&self) -> String {
