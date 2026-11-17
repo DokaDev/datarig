@@ -5,7 +5,7 @@ What changed in each release, newest first. For 0.36.0 and earlier, see the rele
 
 ## 0.41.2 (2026-11-17)
 
-A patch release that makes several checks stricter, so read the list before upgrading. On MySQL and MariaDB, applying edits fails on any server warning and is rolled back, `TIME` values are checked, the first-page row limit applies only to plain reads, counts and exports are refused inside your own SERIALIZABLE transaction, and a cancel is sent only when the server confirms the session (otherwise the tab's connection is closed). On PostgreSQL, a read-only profile refuses calls of functions that are not built-ins and typed settings of extensions, and a query holding a backslash or `U&` is not run again automatically. Startup SQL refuses settings that ask before they run, so a profile holding one stops connecting until it is removed.
+A patch release that makes several checks stricter, so read the list before upgrading. Read-only PostgreSQL profiles now refuse calls of functions that are not PostgreSQL built-ins, which includes extension functions such as PostGIS (`ST_*`) and pgcrypto; until a per-environment allow list ships in the next patch, use a profile that is not read-only for those queries. On MySQL and MariaDB, applying edits fails on any server warning and is rolled back, `TIME` values are checked, the first-page row limit applies only to plain reads, counts and exports are refused inside your own SERIALIZABLE transaction, and a cancel is sent only when the server confirms the session (otherwise the tab's connection is closed). On PostgreSQL, a read-only profile also refuses typed settings of extensions, and a query holding a backslash or `U&` is not run again automatically. Startup SQL refuses settings that ask before they run, so a profile holding one stops connecting until it is removed.
 
 ### Changed
 
@@ -84,7 +84,9 @@ A patch release that makes several checks stricter, so read the list before upgr
   `EXPLAIN` of such a call and `EXECUTE` of a statement prepared with one are refused too. A
   read-only MySQL profile already refused such calls. The refusal now names the function, on
   PostgreSQL and MySQL alike. A function reached through a view, a trigger, an operator, a cast
-  or attribute notation (`t.f`) is still stopped only by the read-only transaction.
+  or attribute notation (`t.f`) is still stopped only by the read-only transaction. Until a
+  per-environment allow list ships in the next patch, run queries that need such functions
+  (for example PostGIS `ST_*` or pgcrypto) from a profile that is not read-only.
 - PostgreSQL: copied and exported SQL, export chunks and DDL text write a string holding a
   backslash as `E'…'`, so it reads the same whatever `standard_conforming_strings` is. A query
   whose text holds a backslash anywhere (even in `E'…'` or a comment) or `U&`, which that
