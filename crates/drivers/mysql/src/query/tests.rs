@@ -178,6 +178,54 @@ fn the_not_undone_question_of_mariadb_reads_no_partial_revokes() {
     assert!(sql.contains("' (triggers not visible)'") && sql.ends_with("ORDER BY 1 LIMIT 20"), "{sql}");
 }
 
+/// MariaDB runs none of an executable comment whose version is five digits from 50700 to 99999
+/// (MySQL 5.7 and later; MariaDB 11.4 checked): to it a statement that is only
+/// `/*!80000 SET TRANSACTION … */` sets nothing. Any other text with an executable comment it
+/// may run, as on MySQL: the comment ends at the first `*/` (a quote inside does not hide it),
+/// and 99997 runs on a Galera node.
+#[test]
+fn mariadb_does_not_count_a_mysql8_set_transaction_comment() {
+    let maria = MySqlMode { mariadb: true, ..MODE };
+    for sql in [
+        "/*!80000 SET TRANSACTION ISOLATION LEVEL SERIALIZABLE */",
+        " /*!50700 SET TRANSACTION READ ONLY */\n",
+        "/*!99999 SET @@transaction_isolation = 'SERIALIZABLE' */",
+        "/*!80000 SET TRANSACTION READ ONLY*/",
+    ] {
+        assert_eq!(sets_next_transaction(sql, maria), SetsNext::No, "{sql}");
+    }
+    for sql in [
+        "/*! SET TRANSACTION READ ONLY */",
+        "/*!50699 SET TRANSACTION READ ONLY */",
+        "/*!99997 SET TRANSACTION READ ONLY */",
+        "/*!100000 SET TRANSACTION READ ONLY */",
+        "/*!5070012 SET TRANSACTION READ ONLY */",
+        "/*!80000 '*/ SET TRANSACTION READ ONLY /*' */",
+        "/*!80000 -- ignored */ SET TRANSACTION READ ONLY",
+        "/*!80000 SET TRANSACTION READ ONLY */ /*!50601 SET TRANSACTION READ ONLY */",
+        "/*!80000 SET TRANSACTION READ ONLY",
+        "SELECT 1 /*!80000 , 2 */",
+        "CALL p()",
+    ] {
+        assert_ne!(sets_next_transaction(sql, maria), SetsNext::No, "{sql}");
+    }
+}
+
+/// MySQL runs an executable comment from its version on: what it holds is not read, so it may
+/// set the next transaction, whatever the version.
+#[test]
+fn a_version_comment_may_set_the_next_transaction() {
+    for sql in [
+        "/*!80000 SET TRANSACTION ISOLATION LEVEL SERIALIZABLE */",
+        "/*!50700 SET TRANSACTION READ ONLY */",
+        "/*!99999 SET TRANSACTION READ ONLY */",
+        "/*! SET TRANSACTION READ ONLY */",
+        "SELECT 1 /*!80000 , 2 */",
+    ] {
+        assert_eq!(sets_next_transaction(sql, MODE), SetsNext::Maybe, "{sql}");
+    }
+}
+
 #[test]
 fn settings_of_the_next_transaction_only_are_seen_in_every_spelling() {
     let ansi = MySqlMode { ansi_quotes: true, ..MODE };

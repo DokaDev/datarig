@@ -2272,6 +2272,9 @@ pub(crate) enum SetsNext {
 /// `CALL`, an `EXECUTE` of a prepared text, an executable comment `/*! … */`, whose text is not
 /// read). A stored function cannot: the statement that calls it is a transaction already.
 pub(crate) fn sets_next_transaction(sql: &str, mode: MySqlMode) -> SetsNext {
+    if mode.mariadb && mariadb_skips_all(sql) {
+        return SetsNext::No;
+    }
     let toks = set_tokens(sql, mode);
     if toks.iter().any(|t| t.kind == Tok::ExecComment) {
         return SetsNext::Maybe;
@@ -2280,6 +2283,20 @@ pub(crate) fn sets_next_transaction(sql: &str, mode: MySqlMode) -> SetsNext {
         return SetsNext::Maybe;
     }
     if sets_next_isolation(sql, mode) || sets_next_access(sql, mode) { SetsNext::Yes } else { SetsNext::No }
+}
+
+/// Whether MariaDB runs none of `sql`: the whole text (blanks around it aside) is one
+/// executable comment with a five-digit version from 50700 to 99999 (`/*!80000 … */`, MySQL 5.7
+/// and later), which MariaDB reads as a plain comment, ending at the first `*/` whatever lies
+/// before it. 99997 is left out: a MariaDB Galera node runs it. Anything else (text before or
+/// after the comment, another version) is read as on MySQL.
+fn mariadb_skips_all(sql: &str) -> bool {
+    let text = sql.trim();
+    let Some(rest) = text.strip_prefix("/*!") else { return false };
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    let skipped = digits == 5 && rest[..5].parse::<u32>().is_ok_and(|v| (50700..=99999).contains(&v) && v != 99997);
+    // The comment ends at the first `*/` after its opening, and nothing follows it.
+    skipped && rest.find("*/").is_some_and(|at| at + 2 == rest.len())
 }
 
 /// Whether `sql` sets the isolation level of the next transaction only, which the server does not

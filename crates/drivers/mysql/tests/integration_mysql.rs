@@ -512,6 +512,28 @@ async fn a_count_leaves_the_transactions_level_as_it_was() {
     assert_eq!(isolation_of(&evs), Some(Some(Isolation::ReadCommitted)), "the session's again: {evs:?}");
 }
 
+/// An executable comment for MySQL 8 (`/*!80000 … */`): MySQL runs what it holds, MariaDB runs
+/// none of it (it skips every five-digit version from 50700 to 99999). So after
+/// `/*!80000 SET TRANSACTION … */` a count is refused on MySQL (the next transaction may have
+/// settings of its own, which the count would use up) and runs on MariaDB, where nothing was set.
+#[tokio::test(flavor = "multi_thread")]
+async fn mariadb_ignores_a_mysql8_version_comment() {
+    let test = "mariadb_ignores_a_mysql8_version_comment";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "versioncomment", 10).await;
+    let mut a = side(&admin).await;
+    let maria = is_mariadb(&mut a).await;
+    // The server's own reading, from the side.
+    let row: mysql_async::Row = a.query_first("SELECT 1 /*!80000 , 2 */").await.unwrap().expect("a row");
+    assert_eq!(row.len(), if maria { 1 } else { 2 }, "what the server ran of the comment");
+    a.disconnect().await.unwrap();
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let counted = format!("SELECT COUNT(*) FROM (SELECT id FROM {}) AS datarig_count", t.q());
+    c.ok(1, "/*!80000 SET TRANSACTION ISOLATION LEVEL SERIALIZABLE */").await;
+    let want = if maria { Ok(10) } else { Err(DbError::NextTransactionSet) };
+    assert_eq!(count(&mut c, 2, counted).await.0, want);
+}
+
 /// A level that code of the server's may have changed (`EXECUTE`, here without the server
 /// reporting it) stays not known past the end of a transaction, until the server reports the
 /// session's level again.
