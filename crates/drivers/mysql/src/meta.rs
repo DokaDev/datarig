@@ -201,9 +201,11 @@ async fn load_schemas(conn: &mut Conn) -> Result<Vec<String>, DbError> {
 const SCHEMA_OBJECTS: &str = "SELECT TABLE_NAME, TABLE_TYPE, TABLE_ROWS, DATA_LENGTH + INDEX_LENGTH \
      FROM information_schema.TABLES WHERE TABLE_SCHEMA = {schema} ORDER BY TABLE_NAME";
 
-/// Whether a `TABLE_TYPE` is a table's: MariaDB's system-versioned tables say `SYSTEM VERSIONED`.
+/// Whether a `TABLE_TYPE` is a table's: MariaDB's system-versioned tables say `SYSTEM VERSIONED`,
+/// its sequences `SEQUENCE` (a sequence is a one-row table to its server, its DDL read with
+/// `SHOW CREATE TABLE`).
 pub(crate) fn is_table(kind: &str) -> bool {
-    matches!(kind, "BASE TABLE" | "SYSTEM VERSIONED")
+    matches!(kind, "BASE TABLE" | "SYSTEM VERSIONED" | "SEQUENCE")
 }
 
 async fn load_objects(conn: &mut Conn, schema: &str, mode: MySqlMode) -> Result<SchemaObjects, DbError> {

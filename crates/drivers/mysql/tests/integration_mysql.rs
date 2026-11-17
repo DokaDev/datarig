@@ -7958,6 +7958,56 @@ async fn mariadb_system_versioned_tables_are_listed_read_and_paged_as_tables() {
     a.disconnect().await.unwrap();
 }
 
+/// A MariaDB sequence (`CREATE SEQUENCE`, `TABLE_TYPE` `SEQUENCE`) is a table to the app, as its
+/// DDL already is (`SHOW CREATE TABLE`): the catalog and the database's listing have it with the
+/// tables and its estimates, never with the views; its DDL is the server's.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sequence_is_listed_with_tables() {
+    use datarig_core::driver::ddl::DdlObject;
+    let test = "a_sequence_is_listed_with_tables";
+    let Some((url, admin)) = urls(test) else { return };
+    if !mariadb(&url).await {
+        only_on_mariadb(test);
+        return;
+    }
+    let s = Table::make(&admin, "sequence", &["CREATE SEQUENCE {t} START WITH 5"]).await;
+    let mut a = side(&admin).await;
+    let kind: Option<String> = a
+        .exec_first(
+            "SELECT TABLE_TYPE FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'shop' AND TABLE_NAME = ?",
+            (s.name.as_str(),),
+        )
+        .await
+        .unwrap();
+    assert_eq!(kind.as_deref(), Some("SEQUENCE"), "the shape under test");
+    a.disconnect().await.unwrap();
+
+    let mut m = Conn::start(&url, SessionRole::Meta, false, test);
+    match m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await {
+        DbEvent::Catalog(Ok(cat)) => {
+            let r = cat.relations.iter().find(|r| r.schema == "shop" && r.name == s.name).expect("the sequence");
+            assert!(!r.is_view, "{} is a table, not a view", s.name);
+        }
+        other => panic!("{other:?}"),
+    }
+    m.session.send(DbCommand::LoadObjects { schema: "shop".into() });
+    match m.wait(|e| matches!(e, DbEvent::Objects { .. }), 15).await {
+        DbEvent::Objects { result: Ok(o), .. } => {
+            assert!(o.tables.contains(&s.name), "listed with the tables: {o:?}");
+            assert!(!o.views.contains(&s.name), "not listed with the views: {o:?}");
+            assert!(o.stats.contains_key(&s.name), "a table's estimates");
+        }
+        other => panic!("{other:?}"),
+    }
+    // Its structure is not read, as before: a sequence's columns are the server's.
+    assert_eq!(structure_of(&mut m, &s.name).await.err(), Some(DbError::NotSupported));
+    let (name, ddl) =
+        verbatim(ddl_of(&mut m, DdlObject::Relation { schema: "shop".into(), name: s.name.clone() }).await);
+    assert_eq!(name, s.q());
+    // The server's `SHOW CREATE TABLE`: the sequence as a table that says it is one.
+    assert!(ddl.starts_with("CREATE TABLE ") && ddl.contains(" SEQUENCE=1"), "{ddl}");
+}
+
 /// The paging limit (`sql_select_limit` at a page and one row more) cuts what a top-level
 /// `SELECT` does row by row, not only what it shows: a last statement that calls a stored
 /// function runs without it, so the function runs for every row (here one that writes a row of
