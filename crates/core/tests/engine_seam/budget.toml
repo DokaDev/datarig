@@ -34,7 +34,7 @@
 "crates/core/src/profile" = 8
 "crates/drivers/mysql/src/connect" = 1
 "crates/drivers/mysql/src/meta" = 15
-"crates/drivers/mysql/src/query" = 11
+"crates/drivers/mysql/src/query" = 12
 "crates/drivers/mysql/src/session" = 14
 "crates/tui/src/app" = 19
 "crates/tui/src/icons" = 1
