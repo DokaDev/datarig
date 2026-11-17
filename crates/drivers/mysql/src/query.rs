@@ -2272,6 +2272,8 @@ pub(crate) enum SetsNext {
 /// `CALL`, an `EXECUTE` of a prepared text, an executable comment `/*! … */`, whose text is not
 /// read). A stored function cannot: the statement that calls it is a transaction already.
 pub(crate) fn sets_next_transaction(sql: &str, mode: MySqlMode) -> SetsNext {
+    let unread = mariadb_unread(sql, mode);
+    let sql = unread.as_deref().unwrap_or(sql);
     let toks = set_tokens(sql, mode);
     if toks.iter().any(|t| t.kind == Tok::ExecComment) {
         return SetsNext::Maybe;
@@ -2280,6 +2282,45 @@ pub(crate) fn sets_next_transaction(sql: &str, mode: MySqlMode) -> SetsNext {
         return SetsNext::Maybe;
     }
     if sets_next_isolation(sql, mode) || sets_next_access(sql, mode) { SetsNext::Yes } else { SetsNext::No }
+}
+
+/// `sql` as MariaDB reads it, when it differs: an executable comment with a five-digit version
+/// from 50700 to 99999 (`/*!80000 … */`, MySQL 5.7 and later) is a plain comment to MariaDB,
+/// which runs none of it (blanked here, the offsets kept). `None` on MySQL, or when there is no
+/// such comment. Any other executable comment (`/*! … */`, `/*!50601 … */`, a six-digit
+/// version) MariaDB may run, as MySQL does.
+fn mariadb_unread(sql: &str, mode: MySqlMode) -> Option<String> {
+    if !mode.mariadb {
+        return None;
+    }
+    let toks = lex_in(sql, Dialect::MySql(mode));
+    let mut out: Option<String> = None;
+    let mut i = 0;
+    while i < toks.len() {
+        let open = toks[i];
+        // A longer number than five digits is not read so: it may be a version MariaDB runs.
+        let longer = sql.as_bytes().get(open.end).is_some_and(u8::is_ascii_digit);
+        if open.kind == Tok::ExecComment && !longer && mysql_only_version(open.text(sql)) {
+            // Up to its closing `*/`, or the end of the text.
+            let close = toks[i + 1..].iter().position(|t| t.kind == Tok::ExecComment && t.text(sql) == "*/");
+            let end = close.map_or(sql.len(), |c| toks[i + 1 + c].end);
+            let text = out.get_or_insert_with(|| sql.to_string());
+            text.replace_range(open.start..end, &" ".repeat(end - open.start));
+            i = close.map_or(toks.len(), |c| i + 2 + c);
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Whether the opening of an executable comment (`/*!80000`) names a version MariaDB never
+/// runs: five digits from 50700 to 99999.
+fn mysql_only_version(opening: &str) -> bool {
+    let Some(digits) = opening.strip_prefix("/*!") else { return false };
+    digits.len() == 5
+        && digits.bytes().all(|b| b.is_ascii_digit())
+        && digits.parse::<u32>().is_ok_and(|v| (50700..=99999).contains(&v))
 }
 
 /// Whether `sql` sets the isolation level of the next transaction only, which the server does not
