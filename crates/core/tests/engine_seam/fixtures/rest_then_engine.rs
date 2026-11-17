@@ -7,3 +7,10 @@ fn pick(n: usize, d: Dialect) -> usize {
         (.., Dialect::MySql(_)) => 2,
     }
 }
+
+fn mixed(n: usize, d: Dialect) -> usize {
+    match (n, d) {
+        (_, Dialect::Postgres) => 1,
+        (.., Dialect::MySql(_)) => 2,
+    }
+}

@@ -381,10 +381,12 @@ impl Scan<'_> {
             let len = elems.len();
             let dots = elems.iter().position(|p| matches!(p, Pat::Rest(_)));
             let i = match (*at, dots) {
-                (Index::Front(i), Some(r)) if i >= r => return Ok(self.wildcard(&elems[r])),
-                (Index::Back(k), Some(r)) if k >= len - 1 - r => return Ok(self.wildcard(&elems[r])),
-                (Index::Front(i), _) => i,
-                (Index::Back(k), _) => len.checked_sub(k + 1).ok_or(())?,
+                // Before the `..`, counted from the front; after it, from the back.
+                (Index::Front(i) | Index::Both(i, _), Some(r)) if i < r => i,
+                (Index::Back(k) | Index::Both(_, k), Some(r)) if k < len - 1 - r => len - 1 - k,
+                (_, Some(r)) => return Ok(self.wildcard(&elems[r])),
+                (Index::Front(i) | Index::Both(i, _), None) => i,
+                (Index::Back(k), None) => len.checked_sub(k + 1).ok_or(())?,
             };
             elems.iter().nth(i).map(|p| self.wildcard_at(p, rest)).ok_or(())
         };
@@ -534,6 +536,23 @@ impl Scan<'_> {
                             Kind::BooleanTest,
                             format!("{e}::{v} in macro tokens the scan cannot read as Rust"),
                         );
+                    }
+                    // `E::*` or `E::{..}`: an import of the variants.
+                    let import_after = match (flat.get(i + 1), flat.get(i + 2), flat.get(i + 3)) {
+                        (Some(TokenTree::Punct(a)), Some(TokenTree::Punct(b)), Some(next))
+                            if a.as_char() == ':' && b.as_char() == ':' =>
+                        {
+                            match next {
+                                TokenTree::Punct(star) => star.as_char() == '*',
+                                TokenTree::Group(g) => g.delimiter() == proc_macro2::Delimiter::Brace,
+                                _ => false,
+                            }
+                        }
+                        _ => false,
+                    };
+                    if import_after && let Some(e) = engine_enum(&s) {
+                        let what = format!("an import of {e}'s variants in macro tokens");
+                        self.report(id.span(), Kind::Alias, what);
                     }
                 }
                 TokenTree::Literal(l) => {
@@ -848,6 +867,8 @@ enum Step {
 enum Index {
     Front(usize),
     Back(usize),
+    /// A part of a tuple without `..`: both counts are known.
+    Both(usize, usize),
 }
 
 /// The parts of a tuple pattern with where each stands (the `..` itself included).
@@ -859,7 +880,8 @@ fn indices(elems: &Punctuated<Pat, Token![,]>) -> Vec<(Index, &Pat)> {
         .enumerate()
         .map(|(i, p)| match dots {
             Some(r) if i > r => (Index::Back(len - 1 - i), p),
-            _ => (Index::Front(i), p),
+            Some(_) => (Index::Front(i), p),
+            None => (Index::Both(i, len - 1 - i), p),
         })
         .collect()
 }
@@ -1175,7 +1197,7 @@ fn every_violation_fixture_is_reported() {
             &[(Kind::CatchAll, 8), (Kind::CatchAll, 17), (Kind::CatchAll, 23), (Kind::CatchAll, 30)],
         ),
         ("macro_metavar", "crates/core/src/sql/values.rs", &[(Kind::BooleanTest, 7)]),
-        ("macro_variant_import", "crates/core/src/sql/values.rs", &[(Kind::Alias, 5)]),
+        ("macro_variant_import", "crates/core/src/sql/values.rs", &[(Kind::Alias, 5), (Kind::Alias, 13)]),
     ];
     let mut missed = Vec::new();
     for (name, path, expected) in cases {

@@ -7,3 +7,11 @@ macro_rules! check {
         }
     };
 }
+
+macro_rules! check_value {
+    ($d:expr) => {{
+        use crate::sql::dialect::Dialect::*;
+        let d = $d;
+        matches!(d, Postgres)
+    }};
+}
