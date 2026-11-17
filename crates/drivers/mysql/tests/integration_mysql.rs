@@ -1938,14 +1938,17 @@ async fn a_capped_read_is_never_read_past_its_cap() {
     assert_eq!(rows_sent(&mut a, id, &outcome).await, None, "never sent");
     // Without a cap it runs as before (and the server's history has it).
     c.ok(3, &outcome).await;
+    // The server records a statement in its history after it answered it: once the next one
+    // answered, it is there.
+    c.ok(4, "SELECT 1").await;
     assert!(rows_sent(&mut a, id, &outcome).await.is_some());
     // A procedure's result: the session's limit does not stop it.
     let t0 = Instant::now();
-    c.session.send(capped(4, &format!("CALL shop.{p}()")));
-    let evs = c.answer(4).await;
+    c.session.send(capped(5, &format!("CALL shop.{p}()")));
+    let evs = c.answer(5).await;
     assert_eq!((page_of(&evs).1.len(), page_of(&evs).2), (3, false));
     assert!(t0.elapsed() < Duration::from_secs(4), "not read to its end: {:?}", t0.elapsed());
-    c.ok(5, "SELECT 1").await;
+    c.ok(6, "SELECT 1").await;
     // The rows its statement sent (a procedure's statement, as the server records it).
     let sent: Option<u64> = a
         .exec_first(
@@ -1963,16 +1966,16 @@ async fn a_capped_read_is_never_read_past_its_cap() {
     // read on to its end past the cap.
     let t0 = Instant::now();
     c.session.send(DbCommand::Execute {
-        id: 6,
+        id: 7,
         statements: vec![format!("CALL shop.{p}()")],
         paging: PagingMode::NoHold,
         tx: TxRule::Auto,
         max_rows: Some(PAGE as u64 + 3),
     });
-    let evs = c.answer(6).await;
+    let evs = c.answer(7).await;
     assert_eq!((page_of(&evs).1.len(), page_of(&evs).2), (PAGE, true), "the first page, more to come");
     assert!(t0.elapsed() < Duration::from_secs(5), "not read to its end: {:?}", t0.elapsed());
-    c.ok(7, "SELECT 1").await;
+    c.ok(8, "SELECT 1").await;
     let sent: Option<u64> = a
         .exec_first(
             "SELECT h.ROWS_SENT FROM performance_schema.events_statements_history h \
