@@ -164,7 +164,9 @@ fn scanned_files(root: &Path) -> (Vec<String>, Vec<String>) {
 /// The module paths (`dir/name`, no `.rs`) that file `rel` declares under a test-only cfg:
 /// their files, and every module below them, are test code.
 fn test_only_modules(rel: &str, file: &syn::File, out: &mut Vec<String>) {
-    fn items(dir: &str, list: &[syn::Item], out: &mut Vec<String>) {
+    // `dir`: where the modules declared here live; `path_base`: what a `#[path]` here is
+    // relative to (the file's own directory at its top level, `dir` inside an inline module).
+    fn items(dir: &str, path_base: &str, list: &[syn::Item], out: &mut Vec<String>) {
         for item in list {
             let syn::Item::Mod(m) = item else { continue };
             let here = format!("{dir}/{}", m.ident);
@@ -177,23 +179,23 @@ fn test_only_modules(rel: &str, file: &syn::File, out: &mut Vec<String>) {
             });
             if is_test_only(&m.attrs) {
                 match path_attr {
-                    Some(p) => out.push(format!("{dir}/{}", p.trim_end_matches(".rs"))),
+                    Some(p) => out.push(format!("{path_base}/{}", p.trim_end_matches(".rs"))),
                     None => out.push(here),
                 }
             } else if let Some((_, inner)) = &m.content {
-                items(&here, inner, out);
+                items(&here, &here, inner, out);
             }
         }
     }
     // A `lib.rs`, `main.rs` or `mod.rs` holds the modules of its own directory; any other file
     // those of the directory named after it.
-    let (dir, name) = rel.rsplit_once('/').expect("a file in a directory");
+    let (file_dir, name) = rel.rsplit_once('/').expect("a file in a directory");
     let dir = if matches!(name, "lib.rs" | "main.rs" | "mod.rs") {
-        dir.to_string()
+        file_dir.to_string()
     } else {
-        format!("{dir}/{}", name.trim_end_matches(".rs"))
+        format!("{file_dir}/{}", name.trim_end_matches(".rs"))
     };
-    items(&dir, &file.items, out);
+    items(&dir, file_dir, &file.items, out);
 }
 
 fn read(root: &Path, rel: &str) -> String {
@@ -540,15 +542,39 @@ impl Scan<'_> {
             block.iter().for_each(|s| self.visit_stmt(s));
             return;
         }
+        // `vec![x; n]`: the tokens of an array.
+        let array = TokenTree::Group(proc_macro2::Group::new(proc_macro2::Delimiter::Bracket, mac.tokens.clone()));
+        if let Ok(e) = syn::parse2::<Expr>(array.into()) {
+            self.visit_expr(&e);
+            return;
+        }
         self.tokens(mac.tokens.clone());
     }
 
-    /// Engine variants and markers in tokens that do not parse as Rust.
+    /// Engine variants and markers in tokens that do not parse as Rust; a macro call or a
+    /// group in them that does parse is scanned as Rust.
     fn tokens(&mut self, tokens: TokenStream) {
         let flat: Vec<TokenTree> = tokens.into_iter().collect();
+        let mut skip = 0;
         for (i, t) in flat.iter().enumerate() {
+            if skip > 0 {
+                skip -= 1;
+                continue;
+            }
+            if let (TokenTree::Ident(_), Some(TokenTree::Punct(bang)), Some(TokenTree::Group(_))) =
+                (t, flat.get(i + 1), flat.get(i + 2))
+                && bang.as_char() == '!'
+                && let Ok(mac) = syn::parse2::<syn::Macro>(flat[i..i + 3].iter().cloned().collect())
+            {
+                self.visit_macro(&mac);
+                skip = 2;
+                continue;
+            }
             match t {
-                TokenTree::Group(g) => self.tokens(g.stream()),
+                TokenTree::Group(g) => match Punctuated::<Expr, Token![,]>::parse_terminated.parse2(g.stream()) {
+                    Ok(exprs) => exprs.iter().for_each(|e| self.visit_expr(e)),
+                    Err(_) => self.tokens(g.stream()),
+                },
                 TokenTree::Ident(id) => {
                     let s = id.to_string();
                     if s == "mariadb" || s == "is_mysql" {
@@ -1023,8 +1049,28 @@ fn the_scan_walks_every_workspace_member() {
         collect_all(&root, src, &mut all);
     }
     assert!(all.iter().any(|f| f.ends_with("/tests.rs")), "no tests.rs under any src/ to skip");
-    // So are the files of modules declared under a test-only cfg.
+    // So are the files of modules declared under a test-only cfg, `#[path]` included.
     assert!(!ws.skipped.is_empty(), "no file of a test-only module was found to skip");
+    let src = r#"
+        #[cfg(test)] mod fake;
+        #[cfg(test)] #[path = "edit_fake.rs"] mod by_path;
+        mod inner { #[cfg(test)] mod deep; #[cfg(test)] #[path = "x.rs"] mod y; }
+        #[cfg(any(test, unix))] mod product;
+    "#;
+    let mut found = Vec::new();
+    test_only_modules("crates/core/src/edit.rs", &parse("inline", src), &mut found);
+    assert_eq!(
+        found,
+        [
+            "crates/core/src/edit/fake",
+            "crates/core/src/edit_fake",
+            "crates/core/src/edit/inner/deep",
+            "crates/core/src/edit/inner/x"
+        ]
+    );
+    found.clear();
+    test_only_modules("crates/core/src/edit/mod.rs", &parse("inline", src), &mut found);
+    assert_eq!(found[..2], ["crates/core/src/edit/fake", "crates/core/src/edit/edit_fake"]);
     for f in &ws.skipped {
         assert!(!ws.files.contains(f), "{f} is both scanned and skipped");
     }
@@ -1067,7 +1113,7 @@ fn boolean_engine_tests_stay_within_budget() {
 fn every_violation_fixture_is_reported() {
     // (fixture, the path it is scanned as, what must be reported, with the line)
     type Case = (&'static str, &'static str, &'static [(Kind, usize)]);
-    let cases: [Case; 11] = [
+    let cases: [Case; 12] = [
         ("driver_engine_branch", "crates/drivers/mysql/src/session.rs", &[(Kind::Reference, 6), (Kind::Reference, 7)]),
         ("tui_if_let_dialect", "crates/tui/src/app/editor.rs", &[(Kind::BooleanTest, 6), (Kind::Reference, 6)]),
         ("catch_all_explain", "crates/core/src/sql/plan.rs", &[(Kind::CatchAll, 9)]),
@@ -1083,6 +1129,7 @@ fn every_violation_fixture_is_reported() {
         ),
         ("cfg_not_only_test", "crates/core/src/sql/split.rs", &[(Kind::BooleanTest, 7)]),
         ("alias_scopes", "crates/tui/src/app/plan.rs", &[(Kind::BooleanTest, 6), (Kind::Reference, 6)]),
+        ("macro_forms", "crates/core/src/sql/complete.rs", &[(Kind::BooleanTest, 6), (Kind::BooleanTest, 7)]),
     ];
     let mut missed = Vec::new();
     for (name, path, expected) in cases {
