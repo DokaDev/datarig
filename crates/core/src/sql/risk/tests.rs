@@ -2008,6 +2008,7 @@ fn allowed_function_entries() {
     assert_eq!(parsed("Public.Crypt"), Some((Some("public".into()), "crypt".into())));
     assert_eq!(parsed("\"My Fn\""), Some((None, "My Fn".into())));
     assert_eq!(parsed("s.\"F\""), Some((Some("s".into()), "F".into())));
+    assert_eq!(parsed("\"a\"\"b\".f$1"), Some((Some("a\"b".into()), "f$1".into())));
     for bad in [
         "",
         " ",
@@ -2024,6 +2025,17 @@ fn allowed_function_entries() {
         "*",
         "s.*",
         "f AS g",
+        "DISTINCT public.f",
+        "ALL public.f",
+        "DISTINCT f",
+        "f.",
+        ".f",
+        "a..b",
+        "\"\"",
+        "\"f",
+        "s.\"\"",
+        "1f",
+        "f\tg",
         "f::text",
         "select",
     ] {

@@ -179,7 +179,7 @@ impl AllowedFunction {
     /// `app."Fn"` (folded to lower case unless quoted, read by PostgreSQL's own parser). `None`
     /// when it is not one or two names: empty, three names, arguments, anything else.
     pub fn parse(entry: &str) -> Option<Self> {
-        if entry.trim().is_empty() || entry.contains(['(', ')', ';']) || entry.contains("--") || entry.contains("/*") {
+        if !plain_name(entry.trim()) {
             return None;
         }
         let stmts = super::parse(&format!("SELECT {entry}()"))?;
@@ -210,6 +210,48 @@ impl AllowedFunction {
         match &self.schema {
             None => true,
             Some(s) => matches!(qualifiers, [q] | [_, q] if q == s),
+        }
+    }
+}
+
+/// Whether `text` is one name or two separated by a `.`, nothing else: each a plain identifier
+/// (a letter or `_`, then letters, digits, `_` or `$`) or a quoted one (`"…"`, `""` for a
+/// quote inside), no blanks, comments or words around them. A keyword is left to the parser,
+/// which rejects it as a function name.
+fn plain_name(text: &str) -> bool {
+    let mut chars = text.chars().peekable();
+    let mut parts = 0;
+    loop {
+        match chars.next() {
+            Some('"') => {
+                let mut empty = true;
+                loop {
+                    match chars.next() {
+                        Some('"') if chars.peek() == Some(&'"') => {
+                            chars.next();
+                            empty = false;
+                        }
+                        Some('"') => break,
+                        Some(_) => empty = false,
+                        None => return false,
+                    }
+                }
+                if empty {
+                    return false;
+                }
+            }
+            Some(c) if c.is_alphabetic() || c == '_' => {
+                while chars.peek().is_some_and(|c| c.is_alphanumeric() || *c == '_' || *c == '$') {
+                    chars.next();
+                }
+            }
+            _ => return false,
+        }
+        parts += 1;
+        match chars.next() {
+            None => return parts <= 2,
+            Some('.') if parts < 2 => {}
+            Some(_) => return false,
         }
     }
 }
