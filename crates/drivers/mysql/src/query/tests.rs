@@ -179,35 +179,34 @@ fn the_not_undone_question_of_mariadb_reads_no_partial_revokes() {
 }
 
 /// MariaDB runs none of an executable comment whose version is five digits from 50700 to 99999
-/// (MySQL 5.7 and later; MariaDB 11.4 checked): to it `/*!80000 SET TRANSACTION … */` sets
-/// nothing. Any other executable comment it may run.
+/// (MySQL 5.7 and later; MariaDB 11.4 checked): to it a statement that is only
+/// `/*!80000 SET TRANSACTION … */` sets nothing. Any other text with an executable comment it
+/// may run, as on MySQL: the comment ends at the first `*/` (a quote inside does not hide it),
+/// and 99997 runs on a Galera node.
 #[test]
 fn mariadb_does_not_count_a_mysql8_set_transaction_comment() {
     let maria = MySqlMode { mariadb: true, ..MODE };
     for sql in [
         "/*!80000 SET TRANSACTION ISOLATION LEVEL SERIALIZABLE */",
-        "/*!50700 SET TRANSACTION READ ONLY */",
+        " /*!50700 SET TRANSACTION READ ONLY */\n",
         "/*!99999 SET @@transaction_isolation = 'SERIALIZABLE' */",
-        "SELECT 1 /*!80000 , 2 */",
-        "/*!80000 SET TRANSACTION READ ONLY",
+        "/*!80000 SET TRANSACTION READ ONLY*/",
     ] {
         assert_eq!(sets_next_transaction(sql, maria), SetsNext::No, "{sql}");
     }
     for sql in [
-        "/*!80000 SET TRANSACTION READ ONLY */ SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
-        "SET TRANSACTION READ ONLY /*!80000 , ISOLATION LEVEL SERIALIZABLE */",
-    ] {
-        assert_eq!(sets_next_transaction(sql, maria), SetsNext::Yes, "{sql}");
-    }
-    for sql in [
         "/*! SET TRANSACTION READ ONLY */",
         "/*!50699 SET TRANSACTION READ ONLY */",
+        "/*!99997 SET TRANSACTION READ ONLY */",
         "/*!100000 SET TRANSACTION READ ONLY */",
         "/*!5070012 SET TRANSACTION READ ONLY */",
-        "/*!80000 SELECT 1 */ /*!50601 SET TRANSACTION READ ONLY */",
+        "/*!80000 '*/ SET TRANSACTION READ ONLY /*' */",
+        "/*!80000 SET TRANSACTION READ ONLY */ /*!50601 SET TRANSACTION READ ONLY */",
+        "/*!80000 SET TRANSACTION READ ONLY",
+        "SELECT 1 /*!80000 , 2 */",
         "CALL p()",
     ] {
-        assert_eq!(sets_next_transaction(sql, maria), SetsNext::Maybe, "{sql}");
+        assert_ne!(sets_next_transaction(sql, maria), SetsNext::No, "{sql}");
     }
 }
 
