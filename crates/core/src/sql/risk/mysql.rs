@@ -503,7 +503,7 @@ enum Unread {
     Syntax,
     /// Its risk is known without reading its statements (an executable comment, a client
     /// command, a text over the caps, …).
-    Risk(Risk),
+    Risk(Box<Risk>),
 }
 
 /// The risk of MySQL text `sql`, read in sql mode `mode`: one statement, or several separated
@@ -563,7 +563,7 @@ fn classify_as(sql: &str, mode: MySqlMode) -> Option<Risk> {
             Some(if hint { worse(risk, Risk::danger(Class::Read, Danger::Setting)) } else { risk })
         }
         Err(Unread::Syntax) => None,
-        Err(Unread::Risk(risk)) => Some(risk),
+        Err(Unread::Risk(risk)) => Some(*risk),
     }
 }
 
@@ -581,7 +581,7 @@ fn statements(sql: &str, mode: MySqlMode) -> Result<(Vec<Vec<W<'_>>>, bool), Unr
             }
             RoutineEnd::Whole => return Ok((vec![ws], hint)),
             // What follows its body may be other statements, which are not read.
-            RoutineEnd::Lost => return Err(Unread::Risk(ddl(Some(Danger::Unrecognized)))),
+            RoutineEnd::Lost => return Err(Unread::Risk(Box::new(ddl(Some(Danger::Unrecognized))))),
         }
     }
     let mut cur = Vec::new();
@@ -628,7 +628,7 @@ fn unrecognized() -> Risk {
 /// SET_VAR(foreign_key_checks = 0) */`); or the risk of a text that is not read (see the module
 /// docs).
 fn words(sql: &str, mode: MySqlMode) -> Result<(Vec<W<'_>>, bool), Unread> {
-    let not_read = |risk: Risk| Err(Unread::Risk(risk));
+    let not_read = |risk: Risk| Err(Unread::Risk(Box::new(risk)));
     if sql.len() > MAX_BYTES {
         return not_read(Risk::danger(Class::Unknown, Danger::TooComplex));
     }
