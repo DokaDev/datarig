@@ -1359,6 +1359,70 @@ mod terminal {
         drop(s);
     }
 
+    /// The metadata session's read of the extensions a read-only environment allows says which
+    /// of them the database has, lists their functions with the extension, and every other
+    /// function of the same name with none; nothing of an extension not asked for nor of
+    /// another name. Makes database `zz_extfn_<pid>` and drops it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_allowed_extensions_functions_are_read_with_those_sharing_their_names() {
+        use datarig_core::sql::risk::CatalogFunction;
+        let Some(url) = pg_url("the_allowed_extensions_functions_are_read_with_those_sharing_their_names") else {
+            return;
+        };
+        let db = format!("zz_extfn_{}", std::process::id());
+        struct DropDb(String, String);
+        impl Drop for DropDb {
+            fn drop(&mut self) {
+                let (url, db) = (self.0.clone(), self.1.clone());
+                let _ = std::thread::spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                    rt.block_on(async {
+                        let (c, ..) = connect(&url).await;
+                        let _ = c.batch_execute(&format!("DROP DATABASE IF EXISTS {db} WITH (FORCE)")).await;
+                    });
+                })
+                .join();
+            }
+        }
+        let _guard = DropDb(url.clone(), db.clone());
+        let (c, ..) = connect(&url).await;
+        c.batch_execute(&format!("CREATE DATABASE {db}")).await.expect("database");
+        let in_db = format!("{}/{db}", url.rsplit_once('/').map_or(url.as_str(), |(base, _)| base));
+        let (c, ..) = connect(&in_db).await;
+        c.batch_execute(
+            "CREATE EXTENSION pgcrypto; CREATE EXTENSION citext; CREATE SCHEMA zz_s; \
+             CREATE FUNCTION zz_s.crypt(int) RETURNS int LANGUAGE sql AS 'SELECT 1'; \
+             CREATE FUNCTION zz_s.zz_other() RETURNS int LANGUAGE sql AS 'SELECT 1'",
+        )
+        .await
+        .expect("setup");
+        let asked = ["pgcrypto".to_string(), "postgis".to_string()];
+        let (database, read) =
+            crate::meta::extension_functions::load_extension_functions(&c, &asked).await.expect("read");
+        assert_eq!(database, db, "the session's database");
+        assert_eq!(read.installed, ["pgcrypto"], "postgis is not there");
+        let f = |schema: &str, name: &str, extension: Option<&str>| CatalogFunction {
+            schema: schema.into(),
+            name: name.into(),
+            extension: extension.map(str::to_string),
+        };
+        for want in [
+            f("public", "crypt", Some("pgcrypto")),
+            f("public", "gen_salt", Some("pgcrypto")),
+            f("zz_s", "crypt", None),
+        ] {
+            assert!(read.functions.contains(&want), "{want:?} in {:?}", read.functions);
+        }
+        let stray =
+            read.functions.iter().filter(|c| c.name == "zz_other" || c.name == "citext" || c.name == "citextin");
+        assert_eq!(stray.count(), 0, "{:?}", read.functions);
+        let ours = read.functions.iter().filter(|c| c.extension.is_some());
+        assert!(ours.clone().all(|c| c.schema == "public" && c.extension.as_deref() == Some("pgcrypto")));
+        // Nothing asked: nothing read.
+        let none = crate::meta::extension_functions::load_extension_functions(&c, &[]).await.expect("read");
+        assert_eq!(none, (db.clone(), datarig_core::sql::risk::ExtensionFunctions::default()));
+    }
+
     /// An interval read in binary, as the driver shows it, written again in ISO 8601
     /// (`text_style::interval_as_iso`) is the very same interval on the server, also read in
     /// `sql_standard`: negative, mixed-sign, fractional, over a day.

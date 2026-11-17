@@ -67,8 +67,11 @@ impl App {
             self.unstage_run(id);
             return self.tab_status(id, refused);
         }
+        // The allowed extensions' functions, if this connection has not asked for them yet.
+        self.ask_extension_functions(pid);
         if let Some(refused) = self.read_only_refusal(id, pid, &statements) {
             self.unstage_run(id);
+            self.connect_for_extensions(id, pid);
             return self.tab_status(id, refused);
         }
         // What the run does to the open transaction (manual commit, a statement that cannot
@@ -106,8 +109,11 @@ impl App {
         if !self.table_pending_holds(id, &statements) {
             return self.unstage_run(id);
         }
+        // The allowed extensions' functions, if this connection has not asked for them yet.
+        self.ask_extension_functions(pid);
         if let Some(refused) = self.read_only_refusal(id, pid, &statements) {
             self.unstage_run(id);
+            self.connect_for_extensions(id, pid);
             return self.tab_status(id, refused);
         }
         let Some(t) = self.tabs.get(id) else { return };

@@ -899,6 +899,332 @@ fn a_call_waits_for_the_allowed_extensions_functions() {
     assert_eq!(status(&h), Some(refused_call_with("prod", "st_x", sql, hint)));
 }
 
+/// The metadata session was asked for the functions of `extensions` (and nothing else of the
+/// kind) since the last look.
+fn asked_extensions(h: &mut Harness) -> Vec<Vec<String>> {
+    h.sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::LoadExtensionFunctions { extensions } => Some(extensions),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The metadata session's answer of the extensions `extensions`, read in the profile's own
+/// database: `installed`, and `functions` as (schema, name, extension).
+fn extension_answer(
+    h: &mut Harness,
+    extensions: &[&str],
+    installed: &[&str],
+    functions: &[(&str, &str, Option<&str>)],
+) {
+    extension_answer_in(h, "datarig", extensions, installed, functions);
+}
+
+/// [`extension_answer`], read in database `database`.
+fn extension_answer_in(
+    h: &mut Harness,
+    database: &str,
+    extensions: &[&str],
+    installed: &[&str],
+    functions: &[(&str, &str, Option<&str>)],
+) {
+    use datarig_core::sql::risk::{CatalogFunction, ExtensionFunctions};
+    let functions = (functions.iter())
+        .map(|(schema, name, extension)| CatalogFunction {
+            schema: schema.to_string(),
+            name: name.to_string(),
+            extension: extension.map(str::to_string),
+        })
+        .collect();
+    let read = ExtensionFunctions { installed: installed.iter().map(|e| e.to_string()).collect(), functions };
+    let extensions = extensions.iter().map(|e| e.to_string()).collect();
+    h.meta_db("local-pg", DbEvent::ExtensionFunctions { extensions, result: Ok((database.to_string(), read)) });
+}
+
+/// A read-only environment allowing an extension asks the metadata session for its functions
+/// once connected, and once only; a call of one of them is refused as pending before the
+/// answer and runs after it. A tab working in another database is refused: the read is of
+/// the profile's own database only.
+#[test]
+fn an_allowed_extensions_function_runs_once_its_functions_are_read() {
+    let mut h = connected_allowing(&[], &["postgis"]);
+    assert_eq!(asked_extensions(&mut h), [vec!["postgis".to_string()]], "asked once connected");
+    let sql = "SELECT st_x(1)";
+    assert!(run(&mut h, sql).is_empty());
+    let pending = "The functions of the allowed extensions are still being read: run it again in a moment";
+    assert_eq!(status(&h), Some(refused_call_with("prod", "st_x", sql, pending)));
+    assert!(asked_extensions(&mut h).is_empty(), "not asked again while it is read");
+    extension_answer(&mut h, &["postgis"], &["postgis"], &[("public", "st_x", Some("postgis"))]);
+    assert_eq!(run(&mut h, sql), [sql]);
+    done(&mut h);
+    assert!(asked_extensions(&mut h).is_empty(), "read once per connection");
+    h.app.tab_mut().context.database = Some("sales".into());
+    assert!(run(&mut h, sql).is_empty(), "another database");
+    let failed = "The functions of the allowed extensions could not be read for this database";
+    assert_eq!(status(&h), Some(refused_call_with("prod", "st_x", sql, failed)));
+}
+
+/// A function of an allowed extension's name that another function shares is refused, saying
+/// to call it with its schema; with the schema it runs only when no other function of that
+/// schema has the name.
+#[test]
+fn a_name_another_function_shares_needs_the_extensions_schema() {
+    let shared = "Another function has this name, so the server may pick it: call the extension's function \
+                  with its schema (no other function of that schema may have its name)";
+    let mut h = connected_allowing(&[], &["postgis"]);
+    let functions = [("public", "st_x", Some("postgis")), ("app", "st_x", None)];
+    extension_answer(&mut h, &["postgis"], &["postgis"], &functions);
+    let sql = "SELECT st_x(1)";
+    assert!(run(&mut h, sql).is_empty());
+    assert_eq!(status(&h), Some(refused_call_with("prod", "st_x", sql, shared)));
+    assert_eq!(run(&mut h, "SELECT public.st_x(1)"), ["SELECT public.st_x(1)"]);
+    done(&mut h);
+    // Another function of the same name in the extension's schema too (an overload).
+    let mut h = connected_allowing(&[], &["postgis"]);
+    let functions = [("public", "st_x", Some("postgis")), ("public", "st_x", None)];
+    extension_answer(&mut h, &["postgis"], &["postgis"], &functions);
+    let sql = "SELECT public.st_x(1)";
+    assert!(run(&mut h, sql).is_empty());
+    assert_eq!(status(&h), Some(refused_call_with("prod", "public.st_x", sql, shared)));
+}
+
+/// A failed read refuses the extensions' calls, saying so; an explorer refresh asks again.
+#[test]
+fn a_failed_read_of_the_extensions_refuses_their_calls_until_asked_again() {
+    let mut h = connected_allowing(&[], &["postgis"]);
+    asked_extensions(&mut h);
+    let extensions = vec!["postgis".to_string()];
+    let ev = DbEvent::ExtensionFunctions {
+        extensions: extensions.clone(),
+        result: Err(datarig_core::driver::DbError::Closed),
+    };
+    h.meta_db("local-pg", ev);
+    let sql = "SELECT st_x(1)";
+    assert!(run(&mut h, sql).is_empty());
+    let failed = "The functions of the allowed extensions could not be read for this database";
+    assert_eq!(status(&h), Some(refused_call_with("prod", "st_x", sql, failed)));
+    assert!(asked_extensions(&mut h).is_empty(), "a run does not ask again");
+    h.app.focus = Focus::Tree;
+    h.keys("gg");
+    h.goto("local-pg");
+    h.keys("r");
+    assert_eq!(asked_extensions(&mut h), [extensions], "the refresh asks again");
+    h.app.focus = Focus::Editor;
+    extension_answer(&mut h, &["postgis"], &["postgis"], &[("public", "st_x", Some("postgis"))]);
+    assert_eq!(run(&mut h, sql), [sql]);
+}
+
+/// An answer of an older connection of the profile is dropped: the new connection asks again,
+/// and its calls wait for its own answer.
+#[test]
+fn an_older_connections_extension_answer_is_dropped() {
+    use datarig_core::sql::risk::{CatalogFunction, ExtensionFunctions};
+    use datarig_tui::app::action::Action;
+    let mut h = connected_allowing(&[], &["postgis"]);
+    asked_extensions(&mut h);
+    let id = h.app.profiles[0].id;
+    let old = h.app.conns.get(id).unwrap().generation;
+    h.app.dispatch(Action::ReconnectCurrent);
+    h.db(DbEvent::Connected);
+    assert_eq!(asked_extensions(&mut h), [vec!["postgis".to_string()]], "the new connection asks");
+    let function = CatalogFunction { schema: "public".into(), name: "st_x".into(), extension: Some("postgis".into()) };
+    let read = ExtensionFunctions { installed: vec!["postgis".into()], functions: vec![function] };
+    let ev = DbEvent::ExtensionFunctions { extensions: vec!["postgis".into()], result: Ok(("datarig".into(), read)) };
+    h.app.on_app_event(AppEvent::Db { target: datarig_tui::app::EventTarget::Meta(id), generation: old, ev });
+    let sql = "SELECT st_x(1)";
+    assert!(run(&mut h, sql).is_empty(), "the old connection's answer does not count");
+    let pending = "The functions of the allowed extensions are still being read: run it again in a moment";
+    assert_eq!(status(&h), Some(refused_call_with("prod", "st_x", sql, pending)));
+    extension_answer(&mut h, &["postgis"], &["postgis"], &[("public", "st_x", Some("postgis"))]);
+    assert_eq!(run(&mut h, sql), [sql]);
+}
+
+/// The answer holds for the database the metadata session read it in, never the one the
+/// profile's settings name since: changed to the database a tab works in (saved, not
+/// reconnected), that tab's calls of a function of the same name as an extension's do not run
+/// on the strength of the other database's answer, and nothing is asked again of the session
+/// still in the old one. A reconnect reads the new database.
+#[test]
+fn the_extensions_answer_holds_only_for_the_database_the_session_read_it_in() {
+    use datarig_tui::app::action::Action;
+    let mut h = connected_allowing(&[], &["pgcrypto"]);
+    asked_extensions(&mut h);
+    // The metadata session works in the profile's database, where crypt is pgcrypto's.
+    extension_answer(&mut h, &["pgcrypto"], &["pgcrypto"], &[("public", "crypt", Some("pgcrypto"))]);
+    let sql = "SELECT public.crypt('a', 'b')";
+    assert_eq!(run(&mut h, sql), [sql], "the session's own database");
+    done(&mut h);
+    // A tab in database sales, where public.crypt is another function.
+    h.app.tab_mut().context.database = Some("sales".into());
+    let failed = "The functions of the allowed extensions could not be read for this database";
+    assert!(run(&mut h, sql).is_empty(), "another database");
+    assert_eq!(status(&h), Some(refused_call_with("prod", "public.crypt", sql, failed)));
+    // The profile is changed to sales and saved; the sessions are not reconnected.
+    h.app.profiles[0].database = "sales".into();
+    assert!(run(&mut h, sql).is_empty(), "the answer is of datarig, not sales");
+    let asked = asked_extensions(&mut h);
+    // Whatever it is asked, the session still in datarig answers of datarig.
+    extension_answer(&mut h, &["pgcrypto"], &["pgcrypto"], &[("public", "crypt", Some("pgcrypto"))]);
+    assert!(run(&mut h, sql).is_empty(), "datarig's answer is not taken for sales");
+    assert_eq!(status(&h), Some(refused_call_with("prod", "public.crypt", sql, failed)));
+    assert!(asked.is_empty(), "the session still in datarig is not asked for sales");
+    // A tab of the profile's database (as its settings now say) is refused as well.
+    h.app.tab_mut().context.database = None;
+    assert!(run(&mut h, sql).is_empty(), "the settings name another database than the session's");
+    assert_eq!(status(&h), Some(refused_call_with("prod", "public.crypt", sql, failed)));
+    // Reconnected, the metadata session reads in sales: its answer counts there.
+    h.app.dispatch(Action::ReconnectCurrent);
+    h.db(DbEvent::Connected);
+    assert_eq!(asked_extensions(&mut h), [vec!["pgcrypto".to_string()]], "the new connection asks");
+    extension_answer_in(&mut h, "sales", &["pgcrypto"], &["pgcrypto"], &[("public", "crypt", Some("pgcrypto"))]);
+    assert_eq!(run(&mut h, sql), [sql], "read in sales");
+}
+
+/// An answer that comes after the profile's database was changed (asked of the session in the
+/// old one) is not taken for the new one: the calls are refused as not read for this database.
+#[test]
+fn an_extensions_answer_after_the_database_changed_is_dropped() {
+    let mut h = connected_allowing(&[], &["pgcrypto"]);
+    assert_eq!(asked_extensions(&mut h), [vec!["pgcrypto".to_string()]], "asked in datarig");
+    h.app.profiles[0].database = "sales".into();
+    extension_answer(&mut h, &["pgcrypto"], &["pgcrypto"], &[("public", "crypt", Some("pgcrypto"))]);
+    let sql = "SELECT public.crypt('a', 'b')";
+    assert!(run(&mut h, sql).is_empty(), "the answer is of datarig");
+    let failed = "The functions of the allowed extensions could not be read for this database";
+    assert_eq!(status(&h), Some(refused_call_with("prod", "public.crypt", sql, failed)));
+    assert!(asked_extensions(&mut h).is_empty(), "not asked again of the same session");
+}
+
+/// The answer of a connection whose sessions were lost holds for the database it was read
+/// in only: with the profile's host and database edited since, a call is refused as not read
+/// for this database until a reconnect, which asks again and refuses it as pending meanwhile.
+#[test]
+fn a_lost_connections_answer_does_not_hold_for_an_edited_profile() {
+    use datarig_core::driver::DbError;
+    use datarig_tui::app::action::Action;
+    let sql = "SELECT public.crypt('a', 'b')";
+    let pending = "The functions of the allowed extensions are still being read: run it again in a moment";
+    let failed = "The functions of the allowed extensions could not be read for this database";
+    for reconnect in [true, false] {
+        let mut h = connected_allowing(&[], &["pgcrypto"]);
+        asked_extensions(&mut h);
+        extension_answer(&mut h, &["pgcrypto"], &["pgcrypto"], &[("public", "crypt", Some("pgcrypto"))]);
+        assert_eq!(run(&mut h, sql), [sql]);
+        done(&mut h);
+        h.meta_db("local-pg", DbEvent::Lost { error: DbError::Closed });
+        h.tab_db(0, DbEvent::Lost { error: DbError::Closed });
+        h.app.profiles[0].host = "other-host".into();
+        h.app.profiles[0].database = "sales".into();
+        if reconnect {
+            h.app.dispatch(Action::ReconnectCurrent);
+            h.db(DbEvent::Connected);
+            assert_eq!(asked_extensions(&mut h), [vec!["pgcrypto".to_string()]], "asked again");
+        }
+        assert!(run(&mut h, sql).is_empty(), "reconnect: {reconnect}");
+        let hint = if reconnect { pending } else { failed };
+        assert_eq!(status(&h), Some(refused_call_with("prod", "public.crypt", sql, hint)), "reconnect: {reconnect}");
+    }
+}
+
+/// The metadata session lost before it answered: a reconnect asks again, and the call runs
+/// once the new connection answers.
+#[test]
+fn a_reconnect_asks_again_for_the_extensions_a_lost_session_did_not_answer() {
+    use datarig_tui::app::action::Action;
+    let mut h = connected_allowing(&[], &["pgcrypto"]);
+    asked_extensions(&mut h);
+    h.meta_db("local-pg", DbEvent::Lost { error: datarig_core::driver::DbError::Closed });
+    h.app.dispatch(Action::ReconnectCurrent);
+    h.db(DbEvent::Connected);
+    assert_eq!(asked_extensions(&mut h), [vec!["pgcrypto".to_string()]], "asked again");
+    extension_answer(&mut h, &["pgcrypto"], &["pgcrypto"], &[("public", "crypt", Some("pgcrypto"))]);
+    let sql = "SELECT public.crypt('a', 'b')";
+    assert_eq!(run(&mut h, sql), [sql]);
+}
+
+/// The metadata session lost before it answered, with the tab's session still open: a call
+/// waiting for the extensions' functions is refused as pending and reopens the metadata
+/// session, which asks again once connected; the call runs after its answer.
+#[test]
+fn a_call_waiting_for_the_extensions_reopens_a_lost_metadata_session() {
+    let mut h = connected_allowing(&[], &["pgcrypto"]);
+    asked_extensions(&mut h);
+    let sql = "SELECT 1";
+    assert_eq!(run(&mut h, sql), [sql], "the tab's session opens");
+    done(&mut h);
+    let id = h.app.profiles[0].id;
+    let old = h.app.conns.get(id).unwrap().generation;
+    h.meta_db("local-pg", DbEvent::Lost { error: datarig_core::driver::DbError::Closed });
+    let sql = "SELECT public.crypt('a', 'b')";
+    assert!(run(&mut h, sql).is_empty());
+    let pending = "The functions of the allowed extensions are still being read: run it again in a moment";
+    assert_eq!(status(&h), Some(refused_call_with("prod", "public.crypt", sql, pending)));
+    let c = h.app.conns.get(id).unwrap();
+    assert!(c.meta.is_some() && c.generation != old, "the metadata session reopens");
+    h.meta_db("local-pg", DbEvent::Connected);
+    assert_eq!(asked_extensions(&mut h), [vec!["pgcrypto".to_string()]], "asked again once connected");
+    extension_answer(&mut h, &["pgcrypto"], &["pgcrypto"], &[("public", "crypt", Some("pgcrypto"))]);
+    assert_eq!(run(&mut h, sql), [sql]);
+}
+
+/// A profile closed for being idle, or disconnected: a call waiting for the extensions'
+/// functions is refused as pending and connects the profile again as a run would (nothing is
+/// asked), which asks again once connected; the call runs after its answer.
+#[test]
+fn a_call_waiting_for_the_extensions_connects_a_closed_profile() {
+    use datarig_tui::app::action::Action;
+    let pending = "The functions of the allowed extensions are still being read: run it again in a moment";
+    let sql = "SELECT public.crypt('a', 'b')";
+    for idle in [true, false] {
+        let mut cfg = config(Some("prod"));
+        cfg.prefs.idle_disconnect = Some(Duration::from_secs(300));
+        let rules = Policy { read_only: true, read_only_extensions: vec!["pgcrypto".into()], ..Policy::default() };
+        cfg.policies.insert("prod", rules);
+        let mut h = Harness::with_config(&cfg, Lang::En);
+        h.db(DbEvent::Connected);
+        h.db(DbEvent::Catalog(Ok(catalog())));
+        assert_eq!(asked_extensions(&mut h), [vec!["pgcrypto".to_string()]]);
+        let id = h.app.profiles[0].id;
+        if idle {
+            h.advance(Duration::from_secs(300));
+            assert!(h.app.conns.get(id).unwrap().idle_closed.is_some(), "closed for being idle");
+        } else {
+            h.app.dispatch(Action::DisconnectCurrent);
+            assert!(h.app.conns.get(id).unwrap().meta.is_none(), "disconnected");
+        }
+        for _ in 0..2 {
+            assert!(run(&mut h, sql).is_empty(), "idle: {idle}");
+            assert_eq!(status(&h), Some(refused_call_with("prod", "public.crypt", sql, pending)), "idle: {idle}");
+            assert!(h.app.conns.get(id).unwrap().connecting.is_some(), "idle: {idle}: connecting again");
+            assert_eq!(h.overlay_kind(), None, "nothing is asked");
+        }
+        h.db(DbEvent::Connected);
+        assert_eq!(asked_extensions(&mut h), [vec!["pgcrypto".to_string()]], "asked again once connected");
+        extension_answer(&mut h, &["pgcrypto"], &["pgcrypto"], &[("public", "crypt", Some("pgcrypto"))]);
+        assert_eq!(run(&mut h, sql), [sql], "idle: {idle}");
+    }
+}
+
+/// An allowed extension the database does not have is named in the refusal; an answer for a
+/// list the environment no longer has is dropped.
+#[test]
+fn an_extension_the_database_lacks_is_named() {
+    let mut h = connected_allowing(&[], &["postgis"]);
+    extension_answer(&mut h, &["postgis"], &[], &[]);
+    let sql = "SELECT st_x(1)";
+    assert!(run(&mut h, sql).is_empty());
+    let missing = "This database does not have the allowed extension postgis";
+    assert_eq!(status(&h), Some(refused_call_with("prod", "st_x", sql, missing)));
+    let mut h = connected_allowing(&[], &["postgis"]);
+    asked_extensions(&mut h);
+    extension_answer(&mut h, &["pgcrypto"], &["pgcrypto"], &[("public", "st_x", Some("pgcrypto"))]);
+    assert!(run(&mut h, sql).is_empty(), "not the list asked for");
+    let pending = "The functions of the allowed extensions are still being read: run it again in a moment";
+    assert_eq!(status(&h), Some(refused_call_with("prod", "st_x", sql, pending)));
+}
+
 /// `:session` of a read-only profile says which functions and extensions run there, as
 /// written.
 #[test]

@@ -167,6 +167,13 @@ no fields for them, and saving the form keeps them as written. MySQL profiles ig
   one); otherwise call it with its schema. While the functions are being read, when reading
   them failed, or when the database does not have the extension, such a call is refused, and
   the refusal says which.
+- The functions are read once per connection, from the profile's own database, as soon as it
+  connects (or at the first run, when the environment lists the extensions only later). A
+  failed read is retried when you refresh the profile in the explorer (`r`) or reconnect. A tab
+  working in another database of the server refuses the extensions' calls: they are read for
+  the profile's own database only. After you change the profile's database, the calls are
+  refused until you reconnect: the functions read are those of the database it was connected
+  to.
 - A refused call says how to allow it, and `:session` lists what the profile's environment
   allows.
 - Allowed functions still run in the `READ ONLY` transaction, so the server refuses their

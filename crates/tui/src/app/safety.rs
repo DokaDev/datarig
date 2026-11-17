@@ -22,6 +22,7 @@
 //! and on the server, where every session of the profile (queries and metadata) is opened
 //! read-only (`ConnectOptions::read_only`), which also stops writes the text does not show.
 
+use super::conn::{ExtensionRead, ExtensionState};
 use super::overlay::RunConfirm;
 use super::*;
 use datarig_core::policy::{Confirm, Policy, UnknownEnvironment};
@@ -144,10 +145,120 @@ impl App {
     }
 
     /// What the catalog of tab `tab`'s database says of the extensions `wanted` that profile
-    /// `pid`'s environment allows on read-only. Not read yet: pending while any is listed, so
-    /// none of their functions runs.
-    fn extension_lookup(&self, _tab: TabId, _pid: ProfileId, wanted: &[String]) -> ExtensionLookup {
-        if wanted.is_empty() { ExtensionLookup::None } else { ExtensionLookup::Pending }
+    /// `pid`'s environment allows on read-only, as the current connection's metadata session
+    /// read them ([`App::ask_extension_functions`]): pending until it answers for this list.
+    /// The answer holds only for the database the metadata session said it read it in: failed
+    /// for a tab working in another one, and when the profile's settings name another (changed
+    /// since it connected, not reconnected).
+    fn extension_lookup(&self, tab: TabId, pid: ProfileId, wanted: &[String]) -> ExtensionLookup {
+        if wanted.is_empty() {
+            return ExtensionLookup::None;
+        }
+        let Some(t) = self.tabs.get(tab) else { return ExtensionLookup::Failed };
+        if self.other_database(t).is_some() {
+            return ExtensionLookup::Failed;
+        }
+        match self.conns.get(pid).and_then(|c| c.extension_functions.as_ref()) {
+            Some(r) if r.extensions == wanted => match &r.state {
+                ExtensionState::Pending => ExtensionLookup::Pending,
+                ExtensionState::Failed => ExtensionLookup::Failed,
+                ExtensionState::Read { database, functions } => {
+                    // The profile's settings (none: the server's default, the one it read in).
+                    let configured = self.profile(pid).map(|p| p.endpoint().1).unwrap_or_default();
+                    let own = if configured.is_empty() { database.as_str() } else { configured.as_str() };
+                    let tab_db = t.context.database.as_deref().unwrap_or(own);
+                    match own == database && tab_db == database {
+                        true => ExtensionLookup::Read(functions.clone()),
+                        false => ExtensionLookup::Failed,
+                    }
+                }
+            },
+            _ => ExtensionLookup::Pending,
+        }
+    }
+
+    /// Ask profile `pid`'s metadata session for the functions of the extensions its
+    /// environment allows on read-only (`read_only_extensions`), in the database it works in:
+    /// on PostgreSQL, once connected, when the environment is read-only and lists any, unless
+    /// this connection asked for that list already (a failed read is asked again on an
+    /// explorer refresh, [`App::retry_extension_functions`], or a reconnect). A metadata
+    /// session lost before it answered for this list reopens, to ask again once connected
+    /// (the run that asks is still refused as pending).
+    pub(super) fn ask_extension_functions(&mut self, pid: ProfileId) {
+        let postgres = self.profile(pid).is_some_and(|p| Dbms::of_driver(&p.driver) == Some(Dbms::Postgres));
+        let rules = self.rules_of(pid);
+        if !postgres || !rules.read_only || rules.read_only_extensions.is_empty() {
+            return;
+        }
+        let Some(c) = self.conns.get(pid) else { return };
+        let extensions = rules.read_only_extensions;
+        let answered = c
+            .extension_functions
+            .as_ref()
+            .is_some_and(|r| r.extensions == extensions && !matches!(r.state, ExtensionState::Pending));
+        if c.meta.is_none() && c.connecting.is_none() && c.idle_closed.is_none() && !answered {
+            return self.reopen_meta(pid);
+        }
+        if c.meta.is_none() || !c.connected {
+            return;
+        }
+        if c.extension_functions.as_ref().is_some_and(|r| r.extensions == extensions) {
+            return;
+        }
+        let state = ExtensionState::Pending;
+        self.conns.entry(pid).extension_functions = Some(ExtensionRead { extensions: extensions.clone(), state });
+        self.send_meta(pid, DbCommand::LoadExtensionFunctions { extensions });
+    }
+
+    /// A run in tab `tab` was refused while the allowed extensions' functions are pending, and
+    /// profile `pid` is not connected (not yet, or closed for being idle): it connects as a run
+    /// would, and asks for them once connected.
+    pub(super) fn connect_for_extensions(&mut self, tab: TabId, pid: ProfileId) {
+        if !matches!(self.read_only_context(tab, pid).extensions, ExtensionLookup::Pending) {
+            return;
+        }
+        let closed = self.conns.get(pid).is_none_or(|c| {
+            c.meta.is_none() && c.connecting.is_none() && (c.resolved.is_none() || c.idle_closed.is_some())
+        });
+        if closed {
+            self.connect(pid);
+        }
+    }
+
+    /// The metadata session of profile `pid` answered the read of `extensions`' functions: kept
+    /// with the database it said it read them in, when it is the one asked and the environment
+    /// still lists those extensions; otherwise dropped, and the current list is asked for.
+    pub(super) fn on_extension_functions(
+        &mut self,
+        pid: ProfileId,
+        extensions: Vec<String>,
+        result: Result<(String, datarig_core::sql::risk::ExtensionFunctions), datarig_core::driver::DbError>,
+    ) {
+        let current = self.rules_of(pid).read_only_extensions;
+        let Some(c) = self.conns.get_mut(pid) else { return };
+        let Some(r) = c.extension_functions.as_mut() else { return };
+        if r.extensions != extensions || !matches!(r.state, ExtensionState::Pending) {
+            return;
+        }
+        if extensions != current {
+            // The config changed since it was asked.
+            c.extension_functions = None;
+            return self.ask_extension_functions(pid);
+        }
+        r.state = match result {
+            Ok((database, functions)) => ExtensionState::Read { database, functions },
+            Err(_) => ExtensionState::Failed,
+        };
+    }
+
+    /// The explorer refreshed profile `pid`'s own database: a failed read of the allowed
+    /// extensions' functions is asked again.
+    pub(super) fn retry_extension_functions(&mut self, pid: ProfileId) {
+        let c = self.conns.entry(pid);
+        if c.extension_functions.as_ref().is_some_and(|r| matches!(r.state, ExtensionState::Failed)) {
+            c.extension_functions = None;
+        }
+        self.ask_extension_functions(pid);
     }
 
     /// Why `statements` cannot run at all in tab `tab`, whatever the environment: `COPY … FROM

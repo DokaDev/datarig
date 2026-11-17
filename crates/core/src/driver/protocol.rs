@@ -595,6 +595,13 @@ pub enum DbCommand {
     LoadTypeKinds {
         oids: Vec<u32>,
     },
+    /// The functions of the extensions `extensions` (by name) in the metadata session's
+    /// database, and every other function sharing a name with one of theirs (PostgreSQL's
+    /// catalog): answered with [`DbEvent::ExtensionFunctions`]. Asked for the extensions a
+    /// read-only environment allows (`read_only_extensions`).
+    LoadExtensionFunctions {
+        extensions: Vec<String>,
+    },
     /// The structure of table (or view) `schema.table` (`Capabilities::structure`): answered
     /// with [`DbEvent::Structure`]. Read from the catalog only, never from the table.
     LoadStructure {
@@ -1061,6 +1068,9 @@ impl DbCommand {
             DbCommand::LoadKeys => DbEvent::Keys(Err(error)),
             DbCommand::LoadDatabases => DbEvent::Databases(Err(error)),
             DbCommand::LoadTypeKinds { oids } => DbEvent::TypeKinds { oids: oids.clone(), result: Err(error) },
+            DbCommand::LoadExtensionFunctions { extensions } => {
+                DbEvent::ExtensionFunctions { extensions: extensions.clone(), result: Err(error) }
+            }
             DbCommand::LoadStructure { schema, table } => {
                 DbEvent::Structure { schema: schema.clone(), table: table.clone(), result: Err(error) }
             }
@@ -1109,6 +1119,7 @@ impl DbCommand {
                 | DbCommand::LoadKeys
                 | DbCommand::LoadDatabases
                 | DbCommand::LoadTypeKinds { .. }
+                | DbCommand::LoadExtensionFunctions { .. }
                 | DbCommand::LoadStructure { .. }
                 | DbCommand::LoadDdl { .. }
                 | DbCommand::LoadTableKeys { .. }
@@ -1436,6 +1447,13 @@ pub enum DbEvent {
     TypeKinds {
         oids: Vec<u32>,
         result: Result<Vec<(u32, char)>, DbError>,
+    },
+    /// The answer to [`DbCommand::LoadExtensionFunctions`] of `extensions`: the database the
+    /// session read them in (`current_database()`, as the server said) with those installed,
+    /// their functions and the other functions of the same names, or why they could not be read.
+    ExtensionFunctions {
+        extensions: Vec<String>,
+        result: Result<(String, crate::sql::risk::ExtensionFunctions), DbError>,
     },
     /// The answer to `DbCommand::LoadStructure`: the structure of `schema.table`, or why it
     /// could not be read (a table that no longer exists is the server's error).

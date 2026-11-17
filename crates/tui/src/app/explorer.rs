@@ -925,6 +925,8 @@ impl App {
                 if matches!(row.kind, RowKind::Profile(_) | RowKind::DatabasesNote(_)) {
                     self.ask_databases(id, true);
                 }
+                // A failed read of the allowed extensions' functions is asked again.
+                self.retry_extension_functions(id);
                 let structured = self.structure_on(id);
                 let Some(c) = self.conns.get_mut(id) else { return };
                 c.expanded = true;

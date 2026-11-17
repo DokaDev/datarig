@@ -20,6 +20,7 @@ fn statements() -> Vec<(&'static str, String)> {
         ("TABLE_STRUCTURE", super::structure::SQL.to_string()),
         ("ORDER_KEYS", super::order_keys::ORDER_KEYS.to_string()),
         ("TYPE_KINDS", super::type_kinds::TYPE_KINDS.to_string()),
+        ("EXTENSION_FUNCTIONS", super::extension_functions::EXTENSION_FUNCTIONS.to_string()),
         ("FIND_RELATION", FIND_RELATION.to_string()),
         ("FIND_TRIGGER", FIND_TRIGGER.to_string()),
         ("FIND_TRIGGER_FUNCTION", FIND_TRIGGER_FUNCTION.to_string()),
