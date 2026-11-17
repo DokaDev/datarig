@@ -899,6 +899,155 @@ fn a_call_waits_for_the_allowed_extensions_functions() {
     assert_eq!(status(&h), Some(refused_call_with("prod", "st_x", sql, hint)));
 }
 
+/// The metadata session was asked for the functions of `extensions` (and nothing else of the
+/// kind) since the last look.
+fn asked_extensions(h: &mut Harness) -> Vec<Vec<String>> {
+    h.sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::LoadExtensionFunctions { extensions } => Some(extensions),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The metadata session's answer of the extensions `extensions`: `installed`, and `functions`
+/// as (schema, name, extension).
+fn extension_answer(
+    h: &mut Harness,
+    extensions: &[&str],
+    installed: &[&str],
+    functions: &[(&str, &str, Option<&str>)],
+) {
+    use datarig_core::sql::risk::{CatalogFunction, ExtensionFunctions};
+    let functions = (functions.iter())
+        .map(|(schema, name, extension)| CatalogFunction {
+            schema: schema.to_string(),
+            name: name.to_string(),
+            extension: extension.map(str::to_string),
+        })
+        .collect();
+    let read = ExtensionFunctions { installed: installed.iter().map(|e| e.to_string()).collect(), functions };
+    let extensions = extensions.iter().map(|e| e.to_string()).collect();
+    h.meta_db("local-pg", DbEvent::ExtensionFunctions { extensions, result: Ok(read) });
+}
+
+/// A read-only environment allowing an extension asks the metadata session for its functions
+/// once connected, and once only; a call of one of them is refused as pending before the
+/// answer and runs after it. A tab working in another database is refused: the read is of
+/// the profile's own database only.
+#[test]
+fn an_allowed_extensions_function_runs_once_its_functions_are_read() {
+    let mut h = connected_allowing(&[], &["postgis"]);
+    assert_eq!(asked_extensions(&mut h), [vec!["postgis".to_string()]], "asked once connected");
+    let sql = "SELECT st_x(1)";
+    assert!(run(&mut h, sql).is_empty());
+    let pending = "The functions of the allowed extensions are still being read: run it again in a moment";
+    assert_eq!(status(&h), Some(refused_call_with("prod", "st_x", sql, pending)));
+    assert!(asked_extensions(&mut h).is_empty(), "not asked again while it is read");
+    extension_answer(&mut h, &["postgis"], &["postgis"], &[("public", "st_x", Some("postgis"))]);
+    assert_eq!(run(&mut h, sql), [sql]);
+    done(&mut h);
+    assert!(asked_extensions(&mut h).is_empty(), "read once per connection");
+    h.app.tab_mut().context.database = Some("sales".into());
+    assert!(run(&mut h, sql).is_empty(), "another database");
+    let failed = "The functions of the allowed extensions could not be read for this database";
+    assert_eq!(status(&h), Some(refused_call_with("prod", "st_x", sql, failed)));
+}
+
+/// A function of an allowed extension's name that another function shares is refused, saying
+/// to call it with its schema; with the schema it runs only when no other function of that
+/// schema has the name.
+#[test]
+fn a_name_another_function_shares_needs_the_extensions_schema() {
+    let shared = "Another function has this name, so the server may pick it: call the extension's function \
+                  with its schema (no other function of that schema may have its name)";
+    let mut h = connected_allowing(&[], &["postgis"]);
+    let functions = [("public", "st_x", Some("postgis")), ("app", "st_x", None)];
+    extension_answer(&mut h, &["postgis"], &["postgis"], &functions);
+    let sql = "SELECT st_x(1)";
+    assert!(run(&mut h, sql).is_empty());
+    assert_eq!(status(&h), Some(refused_call_with("prod", "st_x", sql, shared)));
+    assert_eq!(run(&mut h, "SELECT public.st_x(1)"), ["SELECT public.st_x(1)"]);
+    done(&mut h);
+    // Another function of the same name in the extension's schema too (an overload).
+    let mut h = connected_allowing(&[], &["postgis"]);
+    let functions = [("public", "st_x", Some("postgis")), ("public", "st_x", None)];
+    extension_answer(&mut h, &["postgis"], &["postgis"], &functions);
+    let sql = "SELECT public.st_x(1)";
+    assert!(run(&mut h, sql).is_empty());
+    assert_eq!(status(&h), Some(refused_call_with("prod", "public.st_x", sql, shared)));
+}
+
+/// A failed read refuses the extensions' calls, saying so; an explorer refresh asks again.
+#[test]
+fn a_failed_read_of_the_extensions_refuses_their_calls_until_asked_again() {
+    let mut h = connected_allowing(&[], &["postgis"]);
+    asked_extensions(&mut h);
+    let extensions = vec!["postgis".to_string()];
+    let ev = DbEvent::ExtensionFunctions {
+        extensions: extensions.clone(),
+        result: Err(datarig_core::driver::DbError::Closed),
+    };
+    h.meta_db("local-pg", ev);
+    let sql = "SELECT st_x(1)";
+    assert!(run(&mut h, sql).is_empty());
+    let failed = "The functions of the allowed extensions could not be read for this database";
+    assert_eq!(status(&h), Some(refused_call_with("prod", "st_x", sql, failed)));
+    assert!(asked_extensions(&mut h).is_empty(), "a run does not ask again");
+    h.app.focus = Focus::Tree;
+    h.keys("gg");
+    h.goto("local-pg");
+    h.keys("r");
+    assert_eq!(asked_extensions(&mut h), [extensions], "the refresh asks again");
+    h.app.focus = Focus::Editor;
+    extension_answer(&mut h, &["postgis"], &["postgis"], &[("public", "st_x", Some("postgis"))]);
+    assert_eq!(run(&mut h, sql), [sql]);
+}
+
+/// An answer of an older connection of the profile is dropped: the new connection asks again,
+/// and its calls wait for its own answer.
+#[test]
+fn an_older_connections_extension_answer_is_dropped() {
+    use datarig_core::sql::risk::{CatalogFunction, ExtensionFunctions};
+    use datarig_tui::app::action::Action;
+    let mut h = connected_allowing(&[], &["postgis"]);
+    asked_extensions(&mut h);
+    let id = h.app.profiles[0].id;
+    let old = h.app.conns.get(id).unwrap().generation;
+    h.app.dispatch(Action::ReconnectCurrent);
+    h.db(DbEvent::Connected);
+    assert_eq!(asked_extensions(&mut h), [vec!["postgis".to_string()]], "the new connection asks");
+    let function = CatalogFunction { schema: "public".into(), name: "st_x".into(), extension: Some("postgis".into()) };
+    let read = ExtensionFunctions { installed: vec!["postgis".into()], functions: vec![function] };
+    let ev = DbEvent::ExtensionFunctions { extensions: vec!["postgis".into()], result: Ok(read) };
+    h.app.on_app_event(AppEvent::Db { target: datarig_tui::app::EventTarget::Meta(id), generation: old, ev });
+    let sql = "SELECT st_x(1)";
+    assert!(run(&mut h, sql).is_empty(), "the old connection's answer does not count");
+    let pending = "The functions of the allowed extensions are still being read: run it again in a moment";
+    assert_eq!(status(&h), Some(refused_call_with("prod", "st_x", sql, pending)));
+    extension_answer(&mut h, &["postgis"], &["postgis"], &[("public", "st_x", Some("postgis"))]);
+    assert_eq!(run(&mut h, sql), [sql]);
+}
+
+/// An allowed extension the database does not have is named in the refusal; an answer for a
+/// list the environment no longer has is dropped.
+#[test]
+fn an_extension_the_database_lacks_is_named() {
+    let mut h = connected_allowing(&[], &["postgis"]);
+    extension_answer(&mut h, &["postgis"], &[], &[]);
+    let sql = "SELECT st_x(1)";
+    assert!(run(&mut h, sql).is_empty());
+    let missing = "This database does not have the allowed extension postgis";
+    assert_eq!(status(&h), Some(refused_call_with("prod", "st_x", sql, missing)));
+    let mut h = connected_allowing(&[], &["postgis"]);
+    asked_extensions(&mut h);
+    extension_answer(&mut h, &["pgcrypto"], &["pgcrypto"], &[("public", "st_x", Some("pgcrypto"))]);
+    assert!(run(&mut h, sql).is_empty(), "not the list asked for");
+    let pending = "The functions of the allowed extensions are still being read: run it again in a moment";
+    assert_eq!(status(&h), Some(refused_call_with("prod", "st_x", sql, pending)));
+}
+
 /// `:session` of a read-only profile says which functions and extensions run there, as
 /// written.
 #[test]

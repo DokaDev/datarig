@@ -184,7 +184,10 @@ impl App {
                 self.log_read_only_unconfirmed(SessionRole::Meta, &detail);
                 self.conns.entry(id).read_only_unconfirmed = Some(detail);
             }
-            DbEvent::Connected => self.on_connected(id),
+            DbEvent::Connected => {
+                self.on_connected(id);
+                self.ask_extension_functions(id);
+            }
             // The profile's sessions are read-only per transaction only: said once it connected.
             DbEvent::ReadOnlyPerTransaction => {
                 self.status = Some(Notice::new(Msg::DbReadOnlyPerTransaction { name }, Level::Info));
@@ -290,7 +293,13 @@ impl App {
                 c.databases_asked = false;
                 self.use_answered(id, crate::app::cmdline::UseAsk::Databases, ok);
             }
-            DbEvent::Context { database, .. } => self.conns.entry(id).database = Some(database),
+            DbEvent::Context { database, .. } => {
+                self.conns.entry(id).database = Some(database);
+                // The profile's own database is known now.
+                self.ask_extension_functions(id);
+            }
+            // The functions of the extensions a read-only environment allows.
+            DbEvent::ExtensionFunctions { extensions, result } => self.on_extension_functions(id, extensions, result),
             // The kinds of types a tab's result has, of the profile's own database.
             DbEvent::TypeKinds { oids, result } => self.on_type_kinds(id, oids, result),
             DbEvent::Keys(Err(_)) => {

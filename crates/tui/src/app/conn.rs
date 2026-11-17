@@ -99,6 +99,27 @@ pub enum NodeState {
 /// connection's generation, the tab and its query session's generation, the type's oid.
 pub type TypeKindKey = (String, u64, super::tabs::TabId, u64, u32);
 
+/// What the metadata session said of the extensions the profile's environment allows on
+/// read-only ([`ProfileConn::extension_functions`]): for the database `database` (the
+/// profile's own) and the extensions `extensions` as asked.
+#[derive(Clone, Debug)]
+pub struct ExtensionRead {
+    pub database: String,
+    pub extensions: Vec<String>,
+    pub state: ExtensionState,
+}
+
+/// Where the read of [`ExtensionRead`] is.
+#[derive(Clone, Debug)]
+pub enum ExtensionState {
+    /// Asked (`DbCommand::LoadExtensionFunctions`), the answer has not come.
+    Pending,
+    /// The read failed: asked again on an explorer refresh or a reconnect.
+    Failed,
+    /// The catalog's answer.
+    Read(datarig_core::sql::risk::ExtensionFunctions),
+}
+
 /// The connection of one profile.
 pub struct ProfileConn {
     /// The profile's metadata session (tree, catalog).
@@ -144,6 +165,9 @@ pub struct ProfileConn {
     /// generation (an answer counts only for results of that session) and the type's oid:
     /// `None` while the answer has not come; `?` for a type the answer did not list (dropped).
     pub type_kinds: std::collections::HashMap<TypeKindKey, Option<char>>,
+    /// The current attempt's read of the functions of the extensions the profile's environment
+    /// allows on read-only, of the profile's own database; `None` until asked.
+    pub extension_functions: Option<ExtensionRead>,
     /// The server's databases (`DbCommand::LoadDatabases`), once asked: the names, or why they
     /// could not be read.
     pub databases: Option<Result<Vec<String>, String>>,
@@ -212,6 +236,7 @@ impl ProfileConn {
             console: None,
             database: None,
             type_kinds: Default::default(),
+            extension_functions: None,
             databases: None,
             databases_asked: false,
             own_open: true,
@@ -324,6 +349,7 @@ impl ConnectionManager {
         let c = self.entry(id);
         c.generation = generation;
         c.encryption = None;
+        c.extension_functions = None;
         c.read_only_unconfirmed = None;
         c.explain = None;
         c.edit = None;

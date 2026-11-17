@@ -130,6 +130,7 @@ macro_rules! stats_bytes {
 #[macro_use]
 pub(crate) mod structure;
 pub(crate) mod ddl;
+pub(crate) mod extension_functions;
 pub(crate) mod monitor;
 pub(crate) mod order_keys;
 pub(crate) mod type_kinds;
@@ -219,6 +220,10 @@ pub(crate) async fn meta_loop(client: Client, mut link: Link, events: UnboundedS
                 DbCommand::LoadTypeKinds { oids } => {
                     let result = type_kinds::load_type_kinds(&client, &oids).await;
                     DbEvent::TypeKinds { oids, result }
+                }
+                DbCommand::LoadExtensionFunctions { extensions } => {
+                    let result = extension_functions::load_extension_functions(&client, &extensions).await;
+                    DbEvent::ExtensionFunctions { extensions, result }
                 }
                 DbCommand::LoadStructure { schema, table } => {
                     // It reads `attgenerated` and `pg_partition_tree`, as the keys do (12).
