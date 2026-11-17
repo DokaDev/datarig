@@ -1903,6 +1903,12 @@ fn casts_to_built_in_types_written_as_calls_are_casts() {
         "SELECT PG_CATALOG.UUID($$0b8d5f4c-6f3c-4b54-9f6e-4c1f0a1d2e3f$$)",
         "SELECT datarig.pg_catalog.numeric(E'1.5')",
         "SELECT * FROM t WHERE id = uuid('0b8d5f4c-6f3c-4b54-9f6e-4c1f0a1d2e3f')",
+        // An empty string constant (the parse tree leaves its empty value out): the server
+        // then casts it or says it is not valid for the type.
+        "SELECT tsvector('')",
+        "SELECT pg_catalog.bytea('')",
+        "SELECT uuid('')",
+        "SELECT tsquery($$$$)",
     ] {
         let r = classify(sql);
         assert_eq!((r.unchecked_call.as_deref(), r.read_only()), (None, Ok(())), "{sql}");
