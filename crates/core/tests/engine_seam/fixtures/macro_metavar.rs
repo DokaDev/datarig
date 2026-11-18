@@ -25,3 +25,14 @@ macro_rules! postgres {
 fn on_postgres(d: Dialect) -> bool {
     matches!(d, postgres!())
 }
+
+impl Dialect {
+    fn is_postgres(&self) -> bool {
+        macro_rules! postgres_here {
+            () => {
+                Self::Postgres
+            };
+        }
+        matches!(self, postgres_here!())
+    }
+}

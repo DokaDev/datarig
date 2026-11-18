@@ -32,3 +32,7 @@ impl Identity<Dialect> {
         matches!(self, Self::Postgres)
     }
 }
+
+fn nested(d: Dialect) -> bool {
+    d == Identity::<Identity<Dialect>>::Postgres
+}

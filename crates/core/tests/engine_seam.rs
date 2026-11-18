@@ -863,8 +863,11 @@ impl<'ast> Visit<'ast> for Scan<'_> {
     // (`matches!(d, postgres!())`): the scan cannot follow it, so the definition counts as a
     // branch on the enum.
     fn visit_item_macro(&mut self, m: &'ast syn::ItemMacro) {
+        // `Self` in it, inside an `impl` of an engine enum, names that enum too.
+        let self_enum = engine_enum(&self.selves.last().cloned().flatten().unwrap_or_default())
+            .filter(|_| tokens_have(m.mac.tokens.clone(), "Self"));
         if let Some(name) = &m.ident
-            && let Some(e) = tokens_name_engine(m.mac.tokens.clone())
+            && let Some(e) = tokens_name_engine(m.mac.tokens.clone()).or(self_enum)
         {
             let what = format!("macro `{name}` names {e}; the scan cannot follow where it expands");
             self.report(name.span(), Kind::BooleanTest, what);
@@ -899,7 +902,7 @@ impl<'ast> Visit<'ast> for Scan<'_> {
         if let Some(last) = p.segments.last() {
             let through = p.segments.iter().take(p.segments.len() - 1).find_map(|s| match &s.arguments {
                 syn::PathArguments::AngleBracketed(a) => a.args.iter().find_map(|g| match g {
-                    syn::GenericArgument::Type(ty) => type_engine(ty),
+                    syn::GenericArgument::Type(ty) => type_engine(ty).or_else(|| generic_engine(ty)),
                     _ => None,
                 }),
                 _ => None,
@@ -1110,6 +1113,15 @@ fn generic_engine(ty: &syn::Type) -> Option<&'static str> {
         }),
         _ => None,
     }
+}
+
+/// Whether an identifier appears anywhere in tokens.
+fn tokens_have(tokens: TokenStream, ident: &str) -> bool {
+    tokens.into_iter().any(|t| match t {
+        TokenTree::Group(g) => tokens_have(g.stream(), ident),
+        TokenTree::Ident(id) => id == ident,
+        _ => false,
+    })
 }
 
 /// The first engine enum named anywhere in tokens.
@@ -1424,7 +1436,7 @@ fn every_violation_fixture_is_reported() {
         (
             "macro_metavar",
             "crates/core/src/sql/values.rs",
-            &[(Kind::BooleanTest, 7), (Kind::BooleanTest, 13), (Kind::BooleanTest, 19)],
+            &[(Kind::BooleanTest, 7), (Kind::BooleanTest, 13), (Kind::BooleanTest, 19), (Kind::BooleanTest, 31)],
         ),
         ("macro_variant_import", "crates/core/src/sql/values.rs", &[(Kind::Alias, 5), (Kind::Alias, 13)]),
         (
@@ -1455,6 +1467,7 @@ fn every_violation_fixture_is_reported() {
                 (Kind::Alias, 28),
                 (Kind::Alias, 30),
                 (Kind::BooleanTest, 32),
+                (Kind::Alias, 37),
             ],
         ),
     ];
