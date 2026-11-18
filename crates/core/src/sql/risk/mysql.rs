@@ -1010,14 +1010,16 @@ fn words(sql: &str, mode: MySqlMode) -> Result<(Vec<W<'_>>, bool), Unread> {
 }
 
 /// Whether optimizer hint `text` has a `SET_VAR` of a setting of [`RISKY_SETTINGS`] or
-/// [`READ_ONLY_SETTINGS`].
+/// [`READ_ONLY_SETTINGS`], or of a setting whose name is not a plain word.
 fn sets_risky(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     lower.match_indices("set_var").any(|(at, _)| {
         let rest = lower[at + "set_var".len()..].trim_start();
         let Some(rest) = rest.strip_prefix('(') else { return false };
         let name: String = rest.trim_start().chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
-        RISKY_SETTINGS.contains(&name.as_str()) || READ_ONLY_SETTINGS.contains(&name.as_str())
+        // A name written otherwise (quoted: `` SET_VAR(`sql_mode` = '') ``) is not read: it
+        // counts as risky.
+        name.is_empty() || RISKY_SETTINGS.contains(&name.as_str()) || READ_ONLY_SETTINGS.contains(&name.as_str())
     })
 }
 
