@@ -31,7 +31,7 @@
 //! attribute notation (`t.f`), a user-defined operator, and code a view or a policy runs.
 
 use super::{Filter, Query, Source, TableName, Target, compile};
-use crate::sql::dialect::{Dialect, MySqlMode};
+use crate::sql::dialect::Dialect;
 use crate::sql::lexer::{Tok, Token, lex_backslash_strings, lex_in};
 use crate::sql::risk::{self, Class, Classifier, Danger, ReadOnlyBlock};
 use serde_json::Value;
