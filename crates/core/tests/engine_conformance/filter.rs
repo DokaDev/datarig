@@ -9,10 +9,23 @@ use datarig_core::query::{
 };
 
 /// What a filter case writes: one condition (with what the session's character set is known
-/// to be), or a whole query read at once.
+/// to be), a pattern on the `name` column with what is known of its collation and of the
+/// server, or a whole query read at once.
 pub enum Input {
     Cond { cond: Cond, utf8mb4: bool },
+    Like(Like),
     Query(Query),
+}
+
+/// A pattern `name LIKE 'a%'` in a case mode, on a column whose
+/// collation is (`Some(true)`), is not (`Some(false)`) or may not be (`None`) deterministic,
+/// named `collation`, on a server that takes (`Some(true)`), refuses (`Some(false)`) or may
+/// refuse (`None`) `LIKE` on a nondeterministic collation.
+pub struct Like {
+    pub case: CaseMode,
+    pub deterministic: Option<bool>,
+    pub like_nondeterministic: Option<bool>,
+    pub collation: Option<&'static str>,
 }
 
 /// The table every case reads: a number key, text (of a deterministic collation), a float,
@@ -42,8 +55,24 @@ pub fn render(e: Engine, input: &Input) -> String {
             Ok(sql) => sql,
             Err(why) => format!("{why:?}"),
         },
+        Input::Like(like) => {
+            let mut t = target(e, true);
+            let name = t.columns.iter_mut().find(|c| c.name == "name").expect("the name column");
+            name.deterministic = like.deterministic;
+            name.collation = like.collation.map(str::to_string);
+            t.like_nondeterministic = like.like_nondeterministic;
+            let cond = Cond::Like { col: "name".into(), pattern: "a%".into(), negated: false, case: like.case };
+            match datarig_core::query::render(&cond, &t) {
+                Ok(sql) => sql,
+                Err(why) => format!("{why:?}"),
+            }
+        }
         Input::Query(q) => compile_capped(q, &target(e, false)).sql,
     }
+}
+
+fn like(case: CaseMode, deterministic: Option<bool>, like_nondeterministic: Option<bool>) -> Input {
+    Input::Like(Like { case, deterministic, like_nondeterministic, collation: None })
 }
 
 fn cond(cond: Cond) -> Input {
@@ -235,6 +264,196 @@ pub fn render_cases() -> Vec<Case<Input>> {
                 (Pg, "(id IS NOT NULL OR (price > 1)) AND NOT (name IS NULL)"),
                 (MySql, "(id IS NOT NULL OR (price > 1)) AND NOT (name IS NULL)"),
                 (MariaDb, "(id IS NOT NULL OR (price > 1)) AND NOT (name IS NULL)"),
+            ],
+        },
+        Case {
+            name: "like, deterministic yes, server takes nondeterministic yes",
+            input: like(CaseMode::Server, Some(true), Some(true)),
+            expect: &[
+                (Pg, "name LIKE 'a%' ESCAPE '!'"),
+                (MySql, "name LIKE 'a%' ESCAPE '!'"),
+                (MariaDb, "name LIKE 'a%' ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "like, deterministic yes, server takes nondeterministic no",
+            input: like(CaseMode::Server, Some(true), Some(false)),
+            expect: &[
+                (Pg, "name LIKE 'a%' ESCAPE '!'"),
+                (MySql, "name LIKE 'a%' ESCAPE '!'"),
+                (MariaDb, "name LIKE 'a%' ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "like, deterministic yes, server takes nondeterministic unknown",
+            input: like(CaseMode::Server, Some(true), None),
+            expect: &[
+                (Pg, "name LIKE 'a%' ESCAPE '!'"),
+                (MySql, "name LIKE 'a%' ESCAPE '!'"),
+                (MariaDb, "name LIKE 'a%' ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "like, deterministic no, server takes nondeterministic yes",
+            input: like(CaseMode::Server, Some(false), Some(true)),
+            expect: &[
+                (Pg, "name LIKE 'a%' ESCAPE '!'"),
+                (MySql, "name LIKE 'a%' ESCAPE '!'"),
+                (MariaDb, "name LIKE 'a%' ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "like, deterministic no, server takes nondeterministic no",
+            input: like(CaseMode::Server, Some(false), Some(false)),
+            expect: &[
+                (Pg, "LikeRefused(\"name\")"),
+                (MySql, "name LIKE 'a%' ESCAPE '!'"),
+                (MariaDb, "name LIKE 'a%' ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "like, deterministic no, server takes nondeterministic unknown",
+            input: like(CaseMode::Server, Some(false), None),
+            expect: &[
+                (Pg, "LikeUnknown(\"name\")"),
+                (MySql, "name LIKE 'a%' ESCAPE '!'"),
+                (MariaDb, "name LIKE 'a%' ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "like, deterministic unknown, server takes nondeterministic yes",
+            input: like(CaseMode::Server, None, Some(true)),
+            expect: &[
+                (Pg, "name LIKE 'a%' ESCAPE '!'"),
+                (MySql, "name LIKE 'a%' ESCAPE '!'"),
+                (MariaDb, "name LIKE 'a%' ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "like, deterministic unknown, server takes nondeterministic no",
+            input: like(CaseMode::Server, None, Some(false)),
+            expect: &[
+                (Pg, "LikeUnknown(\"name\")"),
+                (MySql, "name LIKE 'a%' ESCAPE '!'"),
+                (MariaDb, "name LIKE 'a%' ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "like, deterministic unknown, server takes nondeterministic unknown",
+            input: like(CaseMode::Server, None, None),
+            expect: &[
+                (Pg, "LikeUnknown(\"name\")"),
+                (MySql, "name LIKE 'a%' ESCAPE '!'"),
+                (MariaDb, "name LIKE 'a%' ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "case-insensitive like, deterministic yes, server takes nondeterministic yes",
+            input: like(CaseMode::Insensitive, Some(true), Some(true)),
+            expect: &[
+                (Pg, "name ILIKE 'a%' ESCAPE '!'"),
+                (MySql, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+                (MariaDb, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "case-insensitive like, deterministic yes, server takes nondeterministic no",
+            input: like(CaseMode::Insensitive, Some(true), Some(false)),
+            expect: &[
+                (Pg, "name ILIKE 'a%' ESCAPE '!'"),
+                (MySql, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+                (MariaDb, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "case-insensitive like, deterministic yes, server takes nondeterministic unknown",
+            input: like(CaseMode::Insensitive, Some(true), None),
+            expect: &[
+                (Pg, "name ILIKE 'a%' ESCAPE '!'"),
+                (MySql, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+                (MariaDb, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "case-insensitive like, deterministic no, server takes nondeterministic yes",
+            input: like(CaseMode::Insensitive, Some(false), Some(true)),
+            expect: &[
+                (Pg, "CaseInsensitiveRefused(\"name\")"),
+                (MySql, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+                (MariaDb, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "case-insensitive like, deterministic no, server takes nondeterministic no",
+            input: like(CaseMode::Insensitive, Some(false), Some(false)),
+            expect: &[
+                (Pg, "CaseInsensitiveRefused(\"name\")"),
+                (MySql, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+                (MariaDb, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "case-insensitive like, deterministic no, server takes nondeterministic unknown",
+            input: like(CaseMode::Insensitive, Some(false), None),
+            expect: &[
+                (Pg, "CaseInsensitiveRefused(\"name\")"),
+                (MySql, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+                (MariaDb, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "case-insensitive like, deterministic unknown, server takes nondeterministic yes",
+            input: like(CaseMode::Insensitive, None, Some(true)),
+            expect: &[
+                (Pg, "CollationUnknown(\"name\")"),
+                (MySql, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+                (MariaDb, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "case-insensitive like, deterministic unknown, server takes nondeterministic no",
+            input: like(CaseMode::Insensitive, None, Some(false)),
+            expect: &[
+                (Pg, "CollationUnknown(\"name\")"),
+                (MySql, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+                (MariaDb, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "case-insensitive like, deterministic unknown, server takes nondeterministic unknown",
+            input: like(CaseMode::Insensitive, None, None),
+            expect: &[
+                (Pg, "CollationUnknown(\"name\")"),
+                (MySql, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+                (MariaDb, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "case-insensitive like, collation utf8mb4_0900_ai_ci",
+            input: Input::Like(Like {
+                case: CaseMode::Insensitive,
+                deterministic: Some(true),
+                like_nondeterministic: None,
+                collation: Some("utf8mb4_0900_ai_ci"),
+            }),
+            expect: &[
+                (Pg, "name ILIKE 'a%' ESCAPE '!'"),
+                (MySql, "name LIKE 'a%' ESCAPE '!'"),
+                (MariaDb, "name LIKE 'a%' ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "case-insensitive like, collation utf8mb4_bin",
+            input: Input::Like(Like {
+                case: CaseMode::Insensitive,
+                deterministic: Some(true),
+                like_nondeterministic: None,
+                collation: Some("utf8mb4_bin"),
+            }),
+            expect: &[
+                (Pg, "name ILIKE 'a%' ESCAPE '!'"),
+                (MySql, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+                (MariaDb, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
             ],
         },
         Case {
