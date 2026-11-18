@@ -1127,6 +1127,24 @@ fn calls_are_confirmed_refused_or_clear() {
         check(MY, "BENCHMARK(1000, md5('a')) = 0", false),
         Err(BarRefusal::RefusedCalls(vec!["BENCHMARK".into()]))
     );
+    // A built-in's name written otherwise than the server reads a built-in (a blank or a
+    // comment before the `(` of one the grammar reads itself, or quoted) is a stored
+    // function's of the current database there.
+    for text in ["NOW () > id", "`NOW`() > id", "`coalesce`(id, 0) > 0", "CURDATE\n() > id"] {
+        assert_eq!(check(MY, text, true), Err(BarRefusal::UncheckedCalls(vec![text_name(text)])), "{text}");
+        assert!(matches!(check(MY, text, false), Ok(FilterVerdict::NeedsConfirm(_))), "{text}");
+    }
+    // A comment is refused before that.
+    assert!(check(MY, "now/* c */() > id", true).is_err());
+    for text in ["NOW() > id", "ABS (id) > 0", "`ABS`(id) > 0", "COALESCE (id, 0) > 0"] {
+        assert!(check(MY, text, true).is_ok(), "{text}");
+    }
+}
+
+/// The name of the first function `text` calls, upper case, without quotes.
+fn text_name(text: &str) -> String {
+    let end = text.find(['(', ' ', '/', '\n']).unwrap_or(text.len());
+    text[..end].trim_matches('`').to_ascii_uppercase()
 }
 
 /// The server's files and its large objects are out of a filter's reach on every profile:

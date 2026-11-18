@@ -442,9 +442,9 @@ pub fn check_filter(
                 }
                 let Dialect::MySql(mode) = r.dialect else { continue };
                 let unread_here = || BarRefusal::NotRead { class: risk.class, danger: Some(Danger::Unrecognized) };
-                for (name, qualified) in risk::mysql::called(&sql, mode).ok_or_else(unread_here)? {
+                for (name, looked_up) in risk::mysql::called(&sql, mode).ok_or_else(unread_here)? {
                     let call = Call {
-                        allowed: !qualified && MYSQL_FILTER_CALLS.binary_search(&name.as_str()).is_ok(),
+                        allowed: !looked_up && MYSQL_FILTER_CALLS.binary_search(&name.as_str()).is_ok(),
                         refused: MYSQL_REFUSED_CALLS.binary_search(&name.as_str()).is_ok(),
                         written: name,
                     };

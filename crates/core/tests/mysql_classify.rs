@@ -260,6 +260,52 @@ fn every_built_in_is_a_function_of_the_server() {
     }
 }
 
+/// Every built-in written otherwise than right before its `(` (a blank, a newline, a comment,
+/// quoted): the server looks the name up as a stored function of the current database (error
+/// 1305 or 1630) exactly when the read check takes the call as an unchecked one, and a read-only
+/// profile refuses each such call. With `IGNORE_SPACE`, which the read check is not told of, a
+/// read-only profile still refuses each call the server looks up.
+#[test]
+fn built_ins_count_as_the_server_reads_them_however_written() {
+    let Some(client) = client() else { return };
+    let session = Language::Sql(Dialect::MySql(MySqlMode { mariadb: mariadb(&client), ..MODE }));
+    const FORMS: &[(&str, &str)] =
+        &[("", "()"), ("", " ()"), ("", "\n()"), ("", "/* c */()"), ("", " -- c\n()"), ("`", "`()")];
+    let names: Vec<&str> = BUILTINS.lines().collect();
+    let mut texts = Vec::new();
+    for name in &names {
+        for (open, close) in FORMS {
+            texts.push(format!("SELECT {open}{}{close}", name.to_ascii_lowercase()));
+        }
+    }
+    let statements: Vec<(usize, &str)> = texts.iter().enumerate().map(|(i, s)| (i, s.as_str())).collect();
+    for (prelude, ignore_space) in [
+        ("SET SESSION sql_mode = REPLACE(@@SESSION.sql_mode, 'IGNORE_SPACE', '');", false),
+        ("SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, ',IGNORE_SPACE');", true),
+    ] {
+        let errors = errors(&client, prelude, &statements);
+        let looked_up = |i: usize| matches!(errors.get(&i), Some(1305 | 1630));
+        let mut wrong = Vec::new();
+        for (n, _) in names.iter().enumerate() {
+            let first = n * FORMS.len();
+            let risk = |i: usize| Classifier::classify_once(session, &texts[i]);
+            // A name the server, or the read check, does not have as a built-in at all is
+            // another test's.
+            if looked_up(first) || risk(first).unchecked_call.is_some() {
+                continue;
+            }
+            for i in first + 1..first + FORMS.len() {
+                let r = risk(i);
+                let (unchecked, refused) = (r.unchecked_call.is_some(), r.read_only().is_err());
+                if looked_up(i) && !refused || !ignore_space && unchecked && !looked_up(i) {
+                    wrong.push(format!("{:?}: server {:?}, unchecked {unchecked}", texts[i], errors.get(&i)));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "IGNORE_SPACE {ignore_space}:\n{}", wrong.join("\n"));
+    }
+}
+
 /// On MariaDB: the names of [`BUILTINS`] that `unknown` (this server looks them up as stored
 /// functions) are those of `NOT_ON_MARIADB`, less the functions MariaDB added after 10.6, which
 /// this server has; and the read check of a MariaDB session takes a call of each as an unchecked
