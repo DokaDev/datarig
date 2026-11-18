@@ -147,6 +147,233 @@ pub const MARIADB_CONSTRUCTORS: &[(&str, usize, usize)] = &[
     ("POLYGON", 1, usize::MAX),
 ];
 
+/// MySQL's built-ins whose name its grammar reads as the function's only when `(` follows it
+/// right away, upper case, sorted (the manual's "Function Name Parsing and Resolution", 8.0 to
+/// 9.x). With a blank or a comment before the `(`, or quoted (`` `NOW`() ``), the name is a
+/// stored function's of the current database, unless the session has `IGNORE_SPACE`, which
+/// lets blanks (not comments) through. A test runs each on the server.
+pub const MYSQL_TIGHT_CALLS: &[&str] = &[
+    "ADDDATE",
+    "BIT_AND",
+    "BIT_OR",
+    "BIT_XOR",
+    "CAST",
+    "COUNT",
+    "CURDATE",
+    "CURTIME",
+    "DATE_ADD",
+    "DATE_SUB",
+    "EXTRACT",
+    "GROUP_CONCAT",
+    "JSON_ARRAYAGG",
+    "JSON_OBJECTAGG",
+    "MAX",
+    "MID",
+    "MIN",
+    "NOW",
+    "POSITION",
+    "SESSION_USER",
+    "STD",
+    "STDDEV",
+    "STDDEV_POP",
+    "STDDEV_SAMP",
+    "ST_COLLECT",
+    "SUBDATE",
+    "SUBSTR",
+    "SUBSTRING",
+    "SUM",
+    "SYSDATE",
+    "SYSTEM_USER",
+    "TRIM",
+    "VARIANCE",
+    "VAR_POP",
+    "VAR_SAMP",
+];
+
+/// [`MYSQL_TIGHT_CALLS`] as MariaDB reads them: the same names less `ST_COLLECT` (no function
+/// there) and `SYSDATE` (a blank is fine there), and its window functions. With
+/// `IGNORE_SPACE`, MariaDB lets comments through too.
+pub const MARIADB_TIGHT_CALLS: &[&str] = &[
+    "ADDDATE",
+    "BIT_AND",
+    "BIT_OR",
+    "BIT_XOR",
+    "CAST",
+    "COUNT",
+    "CUME_DIST",
+    "CURDATE",
+    "CURTIME",
+    "DATE_ADD",
+    "DATE_SUB",
+    "DENSE_RANK",
+    "EXTRACT",
+    "FIRST_VALUE",
+    "GROUP_CONCAT",
+    "JSON_ARRAYAGG",
+    "JSON_OBJECTAGG",
+    "LAG",
+    "LEAD",
+    "MAX",
+    "MID",
+    "MIN",
+    "NOW",
+    "NTH_VALUE",
+    "NTILE",
+    "PERCENT_RANK",
+    "POSITION",
+    "RANK",
+    "SESSION_USER",
+    "STD",
+    "STDDEV",
+    "STDDEV_POP",
+    "STDDEV_SAMP",
+    "SUBDATE",
+    "SUBSTR",
+    "SUBSTRING",
+    "SUM",
+    "SYSTEM_USER",
+    "TRIM",
+    "VARIANCE",
+    "VAR_POP",
+    "VAR_SAMP",
+];
+
+/// MySQL's other built-ins that its grammar reads by their name as a word: quoted
+/// (`` `DATABASE`() ``), the name is a stored function's of the current database. Upper case,
+/// sorted. A test runs each on the server.
+pub const MYSQL_WORD_CALLS: &[&str] = &[
+    "ASCII",
+    "AVG",
+    "CHAR",
+    "CHARSET",
+    "COALESCE",
+    "COLLATION",
+    "CONVERT",
+    "CUME_DIST",
+    "CURRENT_DATE",
+    "CURRENT_TIME",
+    "CURRENT_TIMESTAMP",
+    "CURRENT_USER",
+    "DATABASE",
+    "DATE",
+    "DAY",
+    "DEFAULT",
+    "DENSE_RANK",
+    "FIRST_VALUE",
+    "FORMAT",
+    "GEOMCOLLECTION",
+    "GEOMETRYCOLLECTION",
+    "GET_FORMAT",
+    "GROUPING",
+    "HOUR",
+    "IF",
+    "INSERT",
+    "INTERVAL",
+    "JSON_TABLE",
+    "JSON_VALUE",
+    "LAG",
+    "LAST_VALUE",
+    "LEAD",
+    "LEFT",
+    "LINESTRING",
+    "LOCALTIME",
+    "LOCALTIMESTAMP",
+    "MICROSECOND",
+    "MINUTE",
+    "MOD",
+    "MONTH",
+    "MULTILINESTRING",
+    "MULTIPOINT",
+    "MULTIPOLYGON",
+    "NTH_VALUE",
+    "NTILE",
+    "PERCENT_RANK",
+    "POINT",
+    "POLYGON",
+    "QUARTER",
+    "RANK",
+    "REPEAT",
+    "REPLACE",
+    "RIGHT",
+    "ROW_COUNT",
+    "ROW_NUMBER",
+    "SCHEMA",
+    "SECOND",
+    "TIME",
+    "TIMESTAMP",
+    "TIMESTAMPADD",
+    "TIMESTAMPDIFF",
+    "TRUNCATE",
+    "USER",
+    "UTC_DATE",
+    "UTC_TIME",
+    "UTC_TIMESTAMP",
+    "VALUES",
+    "WEEK",
+    "WEIGHT_STRING",
+    "YEAR",
+];
+
+/// [`MYSQL_WORD_CALLS`] as MariaDB reads them.
+pub const MARIADB_WORD_CALLS: &[&str] = &[
+    "ASCII",
+    "AVG",
+    "CHAR",
+    "CHARSET",
+    "CONVERT",
+    "CURRENT_DATE",
+    "CURRENT_ROLE",
+    "CURRENT_TIME",
+    "CURRENT_TIMESTAMP",
+    "CURRENT_USER",
+    "DATE",
+    "DAY",
+    "DEFAULT",
+    "GET_FORMAT",
+    "HOUR",
+    "IF",
+    "INSERT",
+    "INTERVAL",
+    "JSON_TABLE",
+    "LAST_VALUE",
+    "LEFT",
+    "LOCALTIME",
+    "LOCALTIMESTAMP",
+    "MINUTE",
+    "MONTH",
+    "REPEAT",
+    "REPLACE",
+    "RIGHT",
+    "ROW_NUMBER",
+    "SECOND",
+    "SYSDATE",
+    "TIME",
+    "TIMESTAMP",
+    "TIMESTAMPADD",
+    "TIMESTAMPDIFF",
+    "TRUNCATE",
+    "USER",
+    "UTC_DATE",
+    "UTC_TIME",
+    "UTC_TIMESTAMP",
+    "VALUES",
+    "WEIGHT_STRING",
+    "YEAR",
+];
+
+/// The built-ins of the server `mode` is of whose name must be followed by `(` right away
+/// ([`MYSQL_TIGHT_CALLS`], [`MARIADB_TIGHT_CALLS`]).
+pub fn tight_calls(mode: MySqlMode) -> &'static [&'static str] {
+    if mode.mariadb { MARIADB_TIGHT_CALLS } else { MYSQL_TIGHT_CALLS }
+}
+
+/// The built-ins of the server `mode` is of whose name must not be quoted: those of
+/// [`tight_calls`] and [`MYSQL_WORD_CALLS`] (or [`MARIADB_WORD_CALLS`]).
+fn word_call(name: &str, mode: MySqlMode) -> bool {
+    let words = if mode.mariadb { MARIADB_WORD_CALLS } else { MYSQL_WORD_CALLS };
+    tight_calls(mode).contains(&name) || words.contains(&name)
+}
+
 /// Built-ins that read a file of the server.
 pub const SERVER_FILES: &[&str] = &["LOAD_FILE"];
 
@@ -449,6 +676,19 @@ struct W<'a> {
     /// A parenthesis: how far its mate is (`+` for an opening one, `-` for a closing one); 0
     /// for any other token.
     mate: isize,
+    /// What is between it and the token before it.
+    gap: Gap,
+}
+
+/// What is between two tokens of a statement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Gap {
+    /// Nothing.
+    None,
+    /// Blanks only.
+    Blank,
+    /// A comment, with blanks or not.
+    Comment,
 }
 
 impl W<'_> {
@@ -481,18 +721,40 @@ struct Call {
     qualified: bool,
     /// How many arguments it is given (`None`: not known).
     args: Option<usize>,
+    /// Its name is quoted (`` `f` ``, `"f"` under `ANSI_QUOTES`).
+    quoted: bool,
+    /// What is between its name and its `(`.
+    gap: Gap,
+    /// A `JSON_TABLE` call with a `COLUMNS` clause: the table function, which MariaDB's grammar
+    /// reads only so (anywhere else its name is a stored function's there).
+    columns: bool,
 }
 
 impl Call {
+    /// Written so that the server looks its name up as a function's of a database (a stored
+    /// one) or a loadable one, whatever the name: with its database (`db.f()`), or a built-in
+    /// that the grammar reads itself written otherwise than it reads one: quoted
+    /// (`` `NOW`() ``), or with a blank or a comment before its `(` ([`tight_calls`]; blanks
+    /// only are fine under `IGNORE_SPACE`, which the session's mode is not known to have here,
+    /// so such a call counts as looked up); and on MariaDB a `JSON_TABLE` without its `COLUMNS`
+    /// clause (its grammar reads the table function only).
+    fn looked_up(&self, mode: MySqlMode) -> bool {
+        self.qualified
+            || (self.quoted && word_call(&self.name, mode))
+            || (mode.mariadb && self.name == "JSON_TABLE" && !self.columns)
+            || (self.gap != Gap::None && tight_calls(mode).contains(&self.name.as_str()))
+    }
+
     /// A built-in function of the server `mode` is of ([`builtin_in`]), or on MariaDB one of
-    /// [`MARIADB_CONSTRUCTORS`] given a number of arguments its grammar reads it with.
+    /// [`MARIADB_CONSTRUCTORS`] given a number of arguments its grammar reads it with, written as
+    /// the server reads a built-in ([`Call::looked_up`]).
     fn builtin(&self, mode: MySqlMode) -> bool {
         let constructor = || {
             MARIADB_CONSTRUCTORS.iter().any(|&(name, fewest, most)| {
                 name == self.name && self.args.is_some_and(|n| (fewest..=most).contains(&n))
             })
         };
-        !self.qualified && (builtin_in(&self.name, mode) || (mode.mariadb && constructor()))
+        !self.looked_up(mode) && (builtin_in(&self.name, mode) || (mode.mariadb && constructor()))
     }
 }
 
@@ -601,11 +863,22 @@ fn statements(sql: &str, mode: MySqlMode) -> Result<(Vec<Vec<W<'_>>>, bool), Unr
 }
 
 /// The functions MySQL text `sql` calls when read in sql mode `mode` (every statement of it):
-/// each name in upper case without quotes, and whether it is written with its database (a
-/// stored function). `None` when the text is not read in that mode (see [`Unread`]).
+/// each name in upper case without quotes, and whether the server looks it up as a stored or
+/// loadable function's whatever the name (written with its database, or a built-in's name
+/// written otherwise than the server reads a built-in: see [`Call::looked_up`]). `None` when
+/// the text is not read in that mode (see [`Unread`]).
 pub(crate) fn called(sql: &str, mode: MySqlMode) -> Option<Vec<(String, bool)>> {
     let (stmts, _) = statements(sql, mode).ok()?;
-    Some(stmts.iter().flat_map(|ws| calls(ws)).map(|c| (c.name, c.qualified)).collect())
+    Some(
+        stmts
+            .iter()
+            .flat_map(|ws| calls(ws, mode))
+            .map(|c| {
+                let looked_up = c.looked_up(mode);
+                (c.name, looked_up)
+            })
+            .collect(),
+    )
 }
 
 /// The worse of two risks ([`Risk::merge`]), keeping the danger a read-only policy refuses by
@@ -637,6 +910,7 @@ fn words(sql: &str, mode: MySqlMode) -> Result<(Vec<W<'_>>, bool), Unread> {
     let mut depth = 0usize;
     let mut open: Vec<usize> = Vec::new();
     let mut hint = false;
+    let mut gap = Gap::None;
     for t in lex_in(sql, Dialect::MySql(mode)) {
         let text = t.text(sql);
         match t.kind {
@@ -661,9 +935,13 @@ fn words(sql: &str, mode: MySqlMode) -> Result<(Vec<W<'_>>, bool), Unread> {
             }
             Tok::BlockComment => {
                 hint |= text.starts_with("/*+") && sets_risky(text);
+                gap = Gap::Comment;
                 continue;
             }
-            Tok::LineComment => continue,
+            Tok::LineComment => {
+                gap = Gap::Comment;
+                continue;
+            }
             // A backslash outside strings: the server reads only `\N` (NULL); a client command
             // (`\g`, `\G`) or a backslash at a line's end is a syntax error there.
             _ if text.starts_with('\\') && text != "\\N" => return Err(Unread::Syntax),
@@ -676,6 +954,9 @@ fn words(sql: &str, mode: MySqlMode) -> Result<(Vec<W<'_>>, bool), Unread> {
             _ => {}
         }
         if t.kind == Tok::Whitespace {
+            if gap == Gap::None {
+                gap = Gap::Blank;
+            }
             continue;
         }
         if t.kind == Tok::Variable && text.contains('\\') {
@@ -706,7 +987,8 @@ fn words(sql: &str, mode: MySqlMode) -> Result<(Vec<W<'_>>, bool), Unread> {
             mate = o as isize - here as isize;
             out[o].mate = -mate;
         }
-        out.push(W { kind: t.kind, text, up, depth: at, mate });
+        out.push(W { kind: t.kind, text, up, depth: at, mate, gap });
+        gap = Gap::None;
     }
     if depth != 0 {
         return Err(Unread::Syntax);
@@ -879,8 +1161,12 @@ fn find_top(ws: &[W], from: usize, words: &[&str]) -> Option<usize> {
     (from..ws.len()).find(|&i| ws[i].depth == 0 && words.contains(&ws[i].up.as_str()))
 }
 
-/// The function calls of `ws`.
-fn calls(ws: &[W]) -> Vec<Call> {
+/// Words of [`NOT_CALLS`] that MariaDB does not reserve: written before `(`, they name a
+/// function there (a stored one, as no built-in has the name).
+const MARIADB_NOT_RESERVED: &[&str] = &["LATERAL", "OF"];
+
+/// The function calls of `ws`, on a server of `mode`.
+fn calls(ws: &[W], mode: MySqlMode) -> Vec<Call> {
     let mut out = Vec::new();
     let args = arguments(ws);
     // The procedure of a `CALL` (with its database or not).
@@ -896,7 +1182,9 @@ fn calls(ws: &[W]) -> Vec<Call> {
         let qualified = prev.is_some_and(|p| p.kind == Tok::Dot);
         if !qualified
             && w.kind != Tok::QuotedIdent
-            && (NOT_CALLS.contains(&name.as_str()) || syntax_before_paren(ws, i))
+            && ((NOT_CALLS.contains(&name.as_str())
+                && !(mode.mariadb && MARIADB_NOT_RESERVED.contains(&name.as_str())))
+                || syntax_before_paren(ws, i))
         {
             continue;
         }
@@ -917,7 +1205,13 @@ fn calls(ws: &[W]) -> Vec<Call> {
             continue;
         }
         let written = ws[first..=i].iter().map(|w| w.text).collect();
-        out.push(Call { name, written, qualified, args: args[i + 1] });
+        let quoted = w.kind == Tok::QuotedIdent;
+        // `JSON_TABLE (… COLUMNS (…))`: the table function's own syntax.
+        let columns = name == "JSON_TABLE"
+            && mate(ws, i + 1).is_some_and(|close| {
+                ws[i + 2..close].iter().any(|w| w.is("COLUMNS") && w.depth == ws[i + 1].depth + 1)
+            });
+        out.push(Call { name, written, qualified, args: args[i + 1], quoted, gap: ws[i + 1].gap, columns });
     }
     out
 }
@@ -964,6 +1258,8 @@ fn syntax_before_paren(ws: &[W], i: usize) -> bool {
         t if CAST_TYPES.contains(&t) => {
             prev.is_some_and(|p| p.is("RETURNING"))
                 || (prev.is_some_and(|p| p.kind == Tok::Comma) && opener(ws, i).is_some_and(|o| o.is("CONVERT")))
+                // A column's type in `JSON_TABLE (… COLUMNS (d DATETIME(6) PATH …))`.
+                || (prev.is_some_and(|p| p.is_name()) && opener(ws, i).is_some_and(|o| o.is("COLUMNS")))
         }
         _ => false,
     }
@@ -991,7 +1287,7 @@ fn unquote(text: &str) -> String {
 /// like a call too, and such a statement is no read anyway).
 fn with_calls(mut risk: Risk, ws: &[W], mode: MySqlMode) -> Risk {
     let schema = risk.class == Class::Ddl;
-    for c in calls(ws) {
+    for c in calls(ws, mode) {
         if c.builtin(mode) {
             let danger = if SERVER_FILES.contains(&c.name.as_str()) {
                 Some(Danger::ServerFile)
@@ -1073,7 +1369,7 @@ fn kind(ws: &[W], mode: MySqlMode) -> Risk {
         "SHOW" | "HELP" => Risk::of(Class::Read),
         "EXPLAIN" | "DESCRIBE" | "DESC" => explain(ws, mode),
         "DO" => {
-            let code = calls(ws).iter().any(|c| !c.builtin(mode));
+            let code = calls(ws, mode).iter().any(|c| !c.builtin(mode));
             if code {
                 Risk { runs_code: true, ..Risk::danger(Class::Procedural, Danger::Procedural) }
             } else {
@@ -2126,7 +2422,7 @@ fn names_of(stmts: &[Vec<W>], hint: bool, mode: MySqlMode) -> Result<Vec<String>
     if risk.runs_code || risk.unchecked_call.is_some() {
         return Err(NotRepeatable::UserFunction);
     }
-    if let Some(c) = calls(ws).into_iter().find(|c| VOLATILE.contains(&c.name.as_str())) {
+    if let Some(c) = calls(ws, mode).into_iter().find(|c| VOLATILE.contains(&c.name.as_str())) {
         return Err(NotRepeatable::Volatile(c.name.to_ascii_lowercase()));
     }
     let mut out = Vec::new();
@@ -2223,7 +2519,7 @@ pub(super) fn form(sql: &str, mode: MySqlMode) -> Option<super::Form> {
                 let first = ws.first().map(|w| w.up.as_str());
                 let query = starts_query(ws, 0)
                     || (first == Some("WITH") && with_main(ws).is_some_and(|i| starts_query(ws, i)));
-                let form = if calls(ws).iter().any(|c| VOLATILE.contains(&c.name.as_str())) {
+                let form = if calls(ws, mode).iter().any(|c| VOLATILE.contains(&c.name.as_str())) {
                     Form::Opens
                 } else if query {
                     Form::Query

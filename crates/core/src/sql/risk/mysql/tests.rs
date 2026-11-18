@@ -460,6 +460,83 @@ fn functions_mariadb_does_not_provide_are_unchecked_calls_there() {
     assert_eq!(classify("SELECT GET_LOCK('a', 0)", MARIADB).danger, Some(Danger::ServerAction));
 }
 
+/// A built-in the grammar reads itself is one only written as the grammar reads it: with a
+/// blank or a comment before its `(` ([`tight_calls`]), or quoted (those and the words of
+/// [`MYSQL_WORD_CALLS`]), the server looks the name up as a stored function of the current
+/// database. Other built-ins are found by their name, however they are written.
+#[test]
+fn built_ins_count_only_as_the_server_reads_them() {
+    let unchecked = |sql: &str, mode: MySqlMode, name: &str| {
+        let r = classify(sql, mode);
+        assert!(r.runs_code, "{sql}");
+        assert_eq!(r.read_only(), Err(ReadOnlyBlock::UnknownFunction(name.to_string())), "{sql}");
+    };
+    let built_in = |sql: &str, mode: MySqlMode| {
+        let r = classify(sql, mode);
+        assert!(r.unchecked_call.is_none() && !r.runs_code && r.read_only().is_ok(), "{sql}");
+    };
+    for mode in [MODE, MARIADB] {
+        unchecked("SELECT now ()", mode, "now");
+        unchecked("SELECT NOW\n()", mode, "NOW");
+        unchecked("SELECT now\t()", mode, "now");
+        unchecked("SELECT now/**/()", mode, "now");
+        unchecked("SELECT now -- c\n()", mode, "now");
+        unchecked("SELECT now # c\n()", mode, "now");
+        unchecked("SELECT `now`()", mode, "`now`");
+        unchecked("SELECT `now` ()", mode, "`now`");
+        unchecked("SELECT COUNT (*) FROM t", mode, "COUNT");
+        unchecked("SELECT a FROM t WHERE b = TRIM ('x')", mode, "TRIM");
+        unchecked("SELECT `if`(a, 1, 2) FROM t", mode, "`if`");
+        unchecked("DO now ()", mode, "now");
+        built_in("SELECT now(), COUNT(*), TRIM('x'), DATABASE(), IF(a, 1, 2) FROM t", mode);
+        built_in("SELECT DATABASE (), CURRENT_USER (), LEFT ('ab', 1), abs (1), `abs`(1), `ABS` (1)", mode);
+        built_in("SELECT sum(a) FROM t", mode);
+    }
+    // Each server's own lists.
+    unchecked("SELECT `coalesce`(a, 1) FROM t", MODE, "`coalesce`");
+    unchecked("SELECT `DATABASE`()", MODE, "`DATABASE`");
+    built_in("SELECT `DATABASE`()", MARIADB);
+    built_in("SELECT `coalesce`(a, 1) FROM t", MARIADB);
+    unchecked("SELECT rank () OVER (ORDER BY a) FROM t", MARIADB, "rank");
+    built_in("SELECT rank () OVER (ORDER BY a), row_number () OVER (ORDER BY a) FROM t", MODE);
+    unchecked("SELECT `sysdate`()", MARIADB, "`sysdate`");
+    unchecked("SELECT sysdate ()", MODE, "sysdate");
+    built_in("SELECT sysdate ()", MARIADB);
+    // MariaDB reserves neither `LATERAL` nor `OF`: before `(` they name a stored function.
+    unchecked("SELECT lateral()", MARIADB, "lateral");
+    unchecked("SELECT a FROM t WHERE of(a) = 1", MARIADB, "of");
+    // MariaDB's grammar reads `JSON_TABLE` only as the table function with its columns.
+    let table = "SELECT * FROM JSON_TABLE('[1]', '$[*]' COLUMNS (a INT PATH '$')) AS jt";
+    built_in(table, MARIADB);
+    built_in(table, MODE);
+    unchecked("SELECT JSON_TABLE(1)", MARIADB, "JSON_TABLE");
+    unchecked("SELECT `JSON_TABLE`('[1]', '$[*]' COLUMNS (a INT PATH '$'))", MARIADB, "`JSON_TABLE`");
+    // A column's type with its precision in `JSON_TABLE`'s columns is no call.
+    let typed = "SELECT * FROM JSON_TABLE('[1]', '$[*]' COLUMNS (d DATETIME(6) PATH '$', n NCHAR(10) PATH '$', \
+                 NESTED PATH '$' COLUMNS (x DECIMAL(10, 2) PATH '$'))) AS jt";
+    built_in(typed, MODE);
+    built_in(typed, MARIADB);
+    // MariaDB's geometry constructors are its own quoted too, given their arguments.
+    built_in("SELECT `POINT`(1, 2), `LINESTRING`(POINT(0, 0), POINT(1, 1))", MARIADB);
+    // Quoted under `ANSI_QUOTES` too.
+    let ansi = MySqlMode { ansi_quotes: true, ..MODE };
+    unchecked("SELECT \"now\"()", ansi, "\"now\"");
+    // A call of a looked-up name is code the read check cannot see.
+    assert_eq!(classify("EXPLAIN ANALYZE SELECT now ()", MODE).danger, Some(Danger::AnalyzeRunsCode));
+    assert_eq!(repeatable("SELECT now () FROM t", MODE), Err(NotRepeatable::UserFunction));
+}
+
+#[test]
+fn the_lists_of_names_the_grammar_reads_are_sorted_built_ins() {
+    for list in [MYSQL_TIGHT_CALLS, MARIADB_TIGHT_CALLS, MYSQL_WORD_CALLS, MARIADB_WORD_CALLS] {
+        assert!(list.windows(2).all(|w| w[0] < w[1]), "sorted, no duplicates");
+        assert!(list.iter().all(|n| builtin(n)), "built-ins");
+    }
+    for (tight, words) in [(MYSQL_TIGHT_CALLS, MYSQL_WORD_CALLS), (MARIADB_TIGHT_CALLS, MARIADB_WORD_CALLS)] {
+        assert!(tight.iter().all(|n| !words.contains(n)), "in one list only");
+    }
+}
+
 /// MariaDB's grammar reads its geometry constructors only with some numbers of arguments: so
 /// written they are built-ins there, otherwise the name is a stored function's.
 #[test]
