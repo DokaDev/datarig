@@ -1,0 +1,415 @@
+//! A table's filter and order as each engine's SQL, and which column types a filter compares.
+
+use crate::Engine::{MariaDb, MySql, Pg};
+use crate::{Case, Engine};
+use datarig_core::driver::{ArrayElement, ColumnMeta, ValueKind};
+use datarig_core::query::{
+    CaseMode, CmpOp, ColumnFacts, ColumnKind, Cond, Dir, Nulls, OrderKey, Query, TableName, Target, Value,
+    compile_capped,
+};
+
+/// What a filter case writes: one condition (with what the session's character set is known
+/// to be), or a whole query read at once.
+pub enum Input {
+    Cond { cond: Cond, utf8mb4: bool },
+    Query(Query),
+}
+
+/// The table every case reads: a number key, text (of a deterministic collation), a float,
+/// bytes and a date.
+fn target(e: Engine, utf8mb4: bool) -> Target {
+    let mut name = ColumnFacts::new("name", ColumnKind::Text);
+    name.deterministic = Some(true);
+    let mut t = Target::new(
+        e.dialect(),
+        vec![
+            ColumnFacts::new("id", ColumnKind::Number),
+            name,
+            ColumnFacts::new("price", ColumnKind::Real),
+            ColumnFacts::new("data", ColumnKind::Bytes),
+            ColumnFacts::new("born", ColumnKind::Other),
+        ],
+    );
+    t.primary_key = vec!["id".to_string()];
+    t.utf8mb4 = utf8mb4;
+    t
+}
+
+/// The SQL of a case on `e`, or the `Debug` of why it is not written.
+pub fn render(e: Engine, input: &Input) -> String {
+    match input {
+        Input::Cond { cond, utf8mb4 } => match datarig_core::query::render(cond, &target(e, *utf8mb4)) {
+            Ok(sql) => sql,
+            Err(why) => format!("{why:?}"),
+        },
+        Input::Query(q) => compile_capped(q, &target(e, false)).sql,
+    }
+}
+
+fn cond(cond: Cond) -> Input {
+    Input::Cond { cond, utf8mb4: false }
+}
+
+fn text(s: &str) -> Value {
+    Value::Text(s.to_string())
+}
+
+fn query(order: Vec<OrderKey>, limit: Option<u64>, offset: Option<u64>) -> Input {
+    let mut q = Query::table(TableName { database: None, schema: "s".to_string(), name: "t".to_string() });
+    q.order = order;
+    q.limit = limit;
+    q.offset = offset;
+    Input::Query(q)
+}
+
+fn nulls(col: &str, dir: Dir, nulls: Nulls) -> OrderKey {
+    OrderKey { nulls: Some(nulls), ..OrderKey::user(col, dir) }
+}
+
+pub fn render_cases() -> Vec<Case<Input>> {
+    vec![
+        Case {
+            name: "equal text",
+            input: cond(Cond::Cmp { col: "name".into(), op: CmpOp::Eq, value: text("x") }),
+            expect: &[(Pg, "name = 'x'"), (MySql, "name = _utf8mb4 X'78'"), (MariaDb, "name = _utf8mb4 X'78'")],
+        },
+        Case {
+            name: "null-safe equal",
+            input: cond(Cond::NotDistinct { col: "name".into(), value: text("x"), negated: false }),
+            expect: &[
+                (Pg, "name IS NOT DISTINCT FROM 'x'"),
+                (MySql, "name <=> _utf8mb4 X'78'"),
+                (MariaDb, "name <=> _utf8mb4 X'78'"),
+            ],
+        },
+        Case {
+            name: "null-safe not equal",
+            input: cond(Cond::NotDistinct { col: "name".into(), value: text("x"), negated: true }),
+            expect: &[
+                (Pg, "name IS DISTINCT FROM 'x'"),
+                (MySql, "NOT (name <=> _utf8mb4 X'78')"),
+                (MariaDb, "NOT (name <=> _utf8mb4 X'78')"),
+            ],
+        },
+        Case {
+            name: "is null",
+            input: cond(Cond::IsNull { col: "name".into(), negated: false }),
+            expect: &[(Pg, "name IS NULL"), (MySql, "name IS NULL"), (MariaDb, "name IS NULL")],
+        },
+        Case {
+            name: "in with null",
+            input: cond(Cond::In {
+                col: "id".into(),
+                values: vec![Value::Number("1".into()), Value::Null],
+                negated: false,
+            }),
+            expect: &[
+                (Pg, "(id IN (1) OR id IS NULL)"),
+                (MySql, "(id IN (1) OR id IS NULL)"),
+                (MariaDb, "(id IN (1) OR id IS NULL)"),
+            ],
+        },
+        Case {
+            name: "not in",
+            input: cond(Cond::In {
+                col: "id".into(),
+                values: vec![Value::Number("1".into()), Value::Number("2".into())],
+                negated: true,
+            }),
+            expect: &[(Pg, "id NOT IN (1, 2)"), (MySql, "id NOT IN (1, 2)"), (MariaDb, "id NOT IN (1, 2)")],
+        },
+        Case {
+            name: "like",
+            input: cond(Cond::Like {
+                col: "name".into(),
+                pattern: "a!%%".into(),
+                negated: false,
+                case: CaseMode::Server,
+            }),
+            expect: &[
+                (Pg, "name LIKE 'a!%%' ESCAPE '!'"),
+                (MySql, "name LIKE _utf8mb4 X'61212525' ESCAPE '!'"),
+                (MariaDb, "name LIKE _utf8mb4 X'61212525' ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "like ignoring case",
+            input: cond(Cond::Like {
+                col: "name".into(),
+                pattern: "a%".into(),
+                negated: true,
+                case: CaseMode::Insensitive,
+            }),
+            expect: &[
+                (Pg, "name NOT ILIKE 'a%' ESCAPE '!'"),
+                (MySql, "LOWER(name) NOT LIKE LOWER(_utf8mb4 X'6125') ESCAPE '!'"),
+                (MariaDb, "LOWER(name) NOT LIKE LOWER(_utf8mb4 X'6125') ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "between",
+            input: cond(Cond::Between {
+                col: "born".into(),
+                lo: text("2026-01-01"),
+                hi: text("2026-12-31"),
+                negated: false,
+            }),
+            expect: &[
+                (Pg, "born BETWEEN '2026-01-01' AND '2026-12-31'"),
+                (MySql, "born BETWEEN _utf8mb4 X'323032362D30312D3031' AND _utf8mb4 X'323032362D31322D3331'"),
+                (MariaDb, "born BETWEEN _utf8mb4 X'323032362D30312D3031' AND _utf8mb4 X'323032362D31322D3331'"),
+            ],
+        },
+        Case {
+            name: "float",
+            input: cond(Cond::Cmp { col: "price".into(), op: CmpOp::Ge, value: Value::Number("0.1".into()) }),
+            expect: &[(Pg, "price >= '0.1'"), (MySql, "price >= 0.1"), (MariaDb, "price >= 0.1")],
+        },
+        Case {
+            name: "bytes",
+            input: cond(Cond::Cmp { col: "data".into(), op: CmpOp::Eq, value: Value::Bytes(vec![0, 0xab]) }),
+            expect: &[
+                (Pg, "data = E'\\\\x00ab'::pg_catalog.bytea"),
+                (MySql, "data = X'00AB'"),
+                (MariaDb, "data = X'00AB'"),
+            ],
+        },
+        Case {
+            name: "bool",
+            input: cond(Cond::Cmp { col: "id".into(), op: CmpOp::Ne, value: Value::Bool(true) }),
+            expect: &[(Pg, "id <> TRUE"), (MySql, "id <> TRUE"), (MariaDb, "id <> TRUE")],
+        },
+        Case {
+            name: "text with a backslash",
+            input: cond(Cond::Cmp { col: "name".into(), op: CmpOp::Eq, value: text("a\\b'c") }),
+            expect: &[
+                (Pg, "name = E'a\\\\b''c'"),
+                (MySql, "name = _utf8mb4 X'615C622763'"),
+                (MariaDb, "name = _utf8mb4 X'615C622763'"),
+            ],
+        },
+        Case {
+            name: "text literal, utf8mb4 not known",
+            input: Input::Cond {
+                cond: Cond::Cmp { col: "name".into(), op: CmpOp::Eq, value: text("caf\u{e9}") },
+                utf8mb4: false,
+            },
+            expect: &[
+                (Pg, "name = 'café'"),
+                (MySql, "name = _utf8mb4 X'636166C3A9'"),
+                (MariaDb, "name = _utf8mb4 X'636166C3A9'"),
+            ],
+        },
+        Case {
+            name: "text literal, utf8mb4",
+            input: Input::Cond {
+                cond: Cond::Cmp { col: "name".into(), op: CmpOp::Eq, value: text("caf\u{e9}") },
+                utf8mb4: true,
+            },
+            expect: &[(Pg, "name = 'café'"), (MySql, "name = 'café'"), (MariaDb, "name = 'café'")],
+        },
+        Case {
+            name: "ascii text literal, utf8mb4 not known",
+            input: Input::Cond {
+                cond: Cond::Cmp { col: "name".into(), op: CmpOp::Eq, value: text("plain") },
+                utf8mb4: false,
+            },
+            expect: &[
+                (Pg, "name = 'plain'"),
+                (MySql, "name = _utf8mb4 X'706C61696E'"),
+                (MariaDb, "name = _utf8mb4 X'706C61696E'"),
+            ],
+        },
+        Case {
+            name: "unknown column",
+            input: cond(Cond::Cmp { col: "nope".into(), op: CmpOp::Eq, value: text("x") }),
+            expect: &[(Pg, "nope = 'x'"), (MySql, "nope = _utf8mb4 X'78'"), (MariaDb, "nope = _utf8mb4 X'78'")],
+        },
+        Case {
+            name: "all and any",
+            input: cond(Cond::All(vec![
+                Cond::Any(vec![Cond::IsNull { col: "id".into(), negated: true }, Cond::Raw("price > 1".into())]),
+                Cond::Not(Box::new(Cond::IsNull { col: "name".into(), negated: false })),
+            ])),
+            expect: &[
+                (Pg, "(id IS NOT NULL OR (price > 1)) AND NOT (name IS NULL)"),
+                (MySql, "(id IS NOT NULL OR (price > 1)) AND NOT (name IS NULL)"),
+                (MariaDb, "(id IS NOT NULL OR (price > 1)) AND NOT (name IS NULL)"),
+            ],
+        },
+        Case {
+            name: "nulls first going up",
+            input: query(vec![nulls("name", Dir::Asc, Nulls::First)], None, None),
+            expect: &[
+                (Pg, "SELECT * FROM \"s\".\"t\" ORDER BY \"name\" ASC NULLS FIRST, \"id\" ASC"),
+                (MySql, "SELECT * FROM `s`.`t` ORDER BY `name` IS NULL DESC, `name` ASC, `id` ASC"),
+                (MariaDb, "SELECT * FROM `s`.`t` ORDER BY `name` IS NULL DESC, `name` ASC, `id` ASC"),
+            ],
+        },
+        Case {
+            name: "nulls last going up",
+            input: query(vec![nulls("name", Dir::Asc, Nulls::Last)], None, None),
+            expect: &[
+                (Pg, "SELECT * FROM \"s\".\"t\" ORDER BY \"name\" ASC NULLS LAST, \"id\" ASC"),
+                (MySql, "SELECT * FROM `s`.`t` ORDER BY `name` IS NULL ASC, `name` ASC, `id` ASC"),
+                (MariaDb, "SELECT * FROM `s`.`t` ORDER BY `name` IS NULL ASC, `name` ASC, `id` ASC"),
+            ],
+        },
+        Case {
+            name: "nulls first going down",
+            input: query(vec![nulls("name", Dir::Desc, Nulls::First)], None, None),
+            expect: &[
+                (Pg, "SELECT * FROM \"s\".\"t\" ORDER BY \"name\" DESC NULLS FIRST, \"id\" ASC"),
+                (MySql, "SELECT * FROM `s`.`t` ORDER BY `name` IS NULL DESC, `name` DESC, `id` ASC"),
+                (MariaDb, "SELECT * FROM `s`.`t` ORDER BY `name` IS NULL DESC, `name` DESC, `id` ASC"),
+            ],
+        },
+        Case {
+            name: "server's nulls",
+            input: query(vec![OrderKey::user("name", Dir::Desc)], None, None),
+            expect: &[
+                (Pg, "SELECT * FROM \"s\".\"t\" ORDER BY \"name\" DESC, \"id\" ASC"),
+                (MySql, "SELECT * FROM `s`.`t` ORDER BY `name` DESC, `id` ASC"),
+                (MariaDb, "SELECT * FROM `s`.`t` ORDER BY `name` DESC, `id` ASC"),
+            ],
+        },
+        Case {
+            name: "limit",
+            input: query(Vec::new(), Some(10), None),
+            expect: &[
+                (Pg, "SELECT * FROM \"s\".\"t\" LIMIT 10"),
+                (MySql, "SELECT * FROM `s`.`t` LIMIT 10"),
+                (MariaDb, "SELECT * FROM `s`.`t` LIMIT 10"),
+            ],
+        },
+        Case {
+            name: "limit and offset",
+            input: query(vec![OrderKey::user("id", Dir::Asc)], Some(10), Some(20)),
+            expect: &[
+                (Pg, "SELECT * FROM \"s\".\"t\" ORDER BY \"id\" ASC LIMIT 10 OFFSET 20"),
+                (MySql, "SELECT * FROM `s`.`t` ORDER BY `id` ASC LIMIT 10 OFFSET 20"),
+                (MariaDb, "SELECT * FROM `s`.`t` ORDER BY `id` ASC LIMIT 10 OFFSET 20"),
+            ],
+        },
+        Case {
+            name: "offset alone",
+            input: query(Vec::new(), None, Some(20)),
+            expect: &[
+                (Pg, "SELECT * FROM \"s\".\"t\" OFFSET 20"),
+                (MySql, "SELECT * FROM `s`.`t` LIMIT 18446744073709551615 OFFSET 20"),
+                (MariaDb, "SELECT * FROM `s`.`t` LIMIT 18446744073709551615 OFFSET 20"),
+            ],
+        },
+    ]
+}
+
+/// A result column of a type, as a driver describes it, and whether its type is known to be a
+/// PostgreSQL enum.
+pub struct Column {
+    pub type_name: &'static str,
+    pub kind: ValueKind,
+    pub enum_known: bool,
+}
+
+/// How a filter compares the values of the column on `e`.
+pub fn compares(e: Engine, c: &Column) -> String {
+    let meta = ColumnMeta::new("c".to_string(), c.type_name.to_string(), c.kind, None);
+    match datarig_core::query::compares(e.dialect(), &meta, c.enum_known) {
+        Ok(how) => format!("{how:?}"),
+        Err(why) => format!("{why:?}"),
+    }
+}
+
+fn col(type_name: &'static str, kind: ValueKind) -> Column {
+    Column { type_name, kind, enum_known: false }
+}
+
+pub fn compares_cases() -> Vec<Case<Column>> {
+    vec![
+        Case {
+            name: "integer",
+            input: col("int4", ValueKind::Integer),
+            expect: &[(Pg, "Order"), (MySql, "Order"), (MariaDb, "Order")],
+        },
+        Case {
+            name: "text",
+            input: col("text", ValueKind::Text),
+            expect: &[(Pg, "Order"), (MySql, "Order"), (MariaDb, "Order")],
+        },
+        Case {
+            name: "json",
+            input: col("json", ValueKind::Json),
+            expect: &[(Pg, "NoEquality"), (MySql, "NoEquality"), (MariaDb, "NoEquality")],
+        },
+        Case {
+            name: "jsonb",
+            input: col("jsonb", ValueKind::Json),
+            expect: &[(Pg, "Equality"), (MySql, "NoEquality"), (MariaDb, "NoEquality")],
+        },
+        Case {
+            name: "enum known",
+            input: Column { type_name: "mood", kind: ValueKind::Other, enum_known: true },
+            expect: &[(Pg, "Order"), (MySql, "NoEquality"), (MariaDb, "NoEquality")],
+        },
+        Case {
+            name: "enum not known",
+            input: col("mood", ValueKind::Other),
+            expect: &[(Pg, "NoEquality"), (MySql, "NoEquality"), (MariaDb, "NoEquality")],
+        },
+        Case {
+            name: "uuid",
+            input: col("uuid", ValueKind::Other),
+            expect: &[(Pg, "Order"), (MySql, "NoEquality"), (MariaDb, "NoEquality")],
+        },
+        Case {
+            name: "geometry",
+            input: col("geometry", ValueKind::Bytes),
+            expect: &[(Pg, "Order"), (MySql, "NoEquality"), (MariaDb, "NoEquality")],
+        },
+        Case {
+            name: "vector",
+            input: col("vector", ValueKind::Bytes),
+            expect: &[(Pg, "Order"), (MySql, "NoEquality"), (MariaDb, "NoEquality")],
+        },
+        Case {
+            name: "bytes",
+            input: col("bytea", ValueKind::Bytes),
+            expect: &[(Pg, "Order"), (MySql, "Order"), (MariaDb, "Order")],
+        },
+        Case {
+            name: "point",
+            input: col("point", ValueKind::Other),
+            expect: &[(Pg, "NoEquality"), (MySql, "NoEquality"), (MariaDb, "NoEquality")],
+        },
+        Case {
+            name: "bits",
+            input: col("bit", ValueKind::Bit),
+            expect: &[(Pg, "Order"), (MySql, "NoEquality"), (MariaDb, "NoEquality")],
+        },
+        Case {
+            name: "array of numbers",
+            input: col("int4[]", ValueKind::Array(ArrayElement::Number)),
+            expect: &[(Pg, "Equality"), (MySql, "NoEquality"), (MariaDb, "NoEquality")],
+        },
+        Case {
+            name: "array of text",
+            input: col("text[]", ValueKind::Array(ArrayElement::Text)),
+            expect: &[(Pg, "Equality"), (MySql, "NoEquality"), (MariaDb, "NoEquality")],
+        },
+        Case {
+            name: "array of json",
+            input: col("json[]", ValueKind::Array(ArrayElement::Json)),
+            expect: &[(Pg, "NoEquality"), (MySql, "NoEquality"), (MariaDb, "NoEquality")],
+        },
+        Case {
+            name: "array of points",
+            input: col("point[]", ValueKind::Array(ArrayElement::Text)),
+            expect: &[(Pg, "NoEquality"), (MySql, "NoEquality"), (MariaDb, "NoEquality")],
+        },
+        Case {
+            name: "interval",
+            input: col("interval", ValueKind::Interval),
+            expect: &[(Pg, "Order"), (MySql, "Order"), (MariaDb, "Order")],
+        },
+    ]
+}
