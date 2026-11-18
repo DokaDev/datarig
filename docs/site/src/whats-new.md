@@ -3,6 +3,53 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.41.4 (2026-11-18)
+
+A patch release that reads MySQL and MariaDB function calls the way the server does on read-only profiles and in the table filter, and fixes how datarig lists and reads tables on MariaDB.
+
+### Fixed
+
+- On MariaDB an invisible column that is also generated, auto-numbered or set on update is now
+  known as such: editing rows, and copying or exporting them as SQL, treat it as generated or
+  auto-numbered as they do a visible one, and a table tab's filter and sort lists show it as
+  invisible.
+- On MariaDB a statement that is only a MySQL 5.7 or later executable comment (such as
+  `/*!80000 SET TRANSACTION ... */`), which the server skips, no longer stops counts, exports and
+  the check before a re-run until a transaction starts or ends.
+- On MariaDB the checks datarig runs on its own before a count, a re-run, an export or an
+  `EXPLAIN` of a change now wait at most 2 seconds behind another session's lock and stop after
+  10 seconds, and each chunk of a table export read in chunks waits at most 5 seconds for a lock,
+  instead of waiting without limit. A shorter limit the session already has is kept.
+- On MariaDB a sequence is listed with the tables of its database, not with the views.
+- Opening a table tab on MariaDB no longer opens the other tables of the server to read the
+  table's keys.
+- On MySQL and MariaDB, a call of a built-in function that the server reads as the built-in only
+  when its name is directly followed by `(` (such as `NOW`, `COUNT` or `TRIM`) now counts as a
+  call of the database's own function when a blank or a comment comes before the `(` (`now ()`),
+  and so does a call of a built-in with its name in backticks (such as `now` or `coalesce`), as
+  the server reads them: a read-only profile refuses it and the table filter asks about it, as
+  for any function that is not a built-in. When the session's `sql_mode` has `IGNORE_SPACE` (as
+  `ANSI` does), blanks before the `(` are fine and the call stays the built-in; a comment there
+  still makes it the database's own.
+- On MariaDB, a call of `lateral()` or `of()`, and a call of `JSON_TABLE` without its `COLUMNS`
+  clause or with its name quoted, now count as calls of the database's own functions, as MariaDB
+  reads them.
+- On MariaDB, a `JSON_TABLE` call counts as the table function only with its real `COLUMNS`
+  clause (the path's string, then `COLUMNS (`): a call with a column or a call named `columns` in
+  its arguments (`JSON_TABLE(t.columns)`) now counts as a call of the database's own function, as
+  MariaDB reads it.
+- A column type with a precision in `JSON_TABLE`'s `COLUMNS` (`DATETIME(6)`, `NCHAR(10)`) is no
+  longer taken for a function call, so such a query is a plain read on a read-only profile.
+- On MySQL and MariaDB, text with a `$` is now checked both as a server that reads dollar quotes
+  reads it and as one that does not, and the stricter reading counts, since the version a server
+  reports (for example through a proxy) may not tell which it is.
+- On MySQL, a `SET_VAR` optimiser hint that names its setting in backticks or quotes (such as
+  `sql_mode` in backticks) now always asks before it runs, whatever the setting, since datarig
+  does not read such a name.
+- On MySQL, `STRING_TO_VECTOR`, `VECTOR_DIM` and `VECTOR_TO_STRING`, which only MySQL 9.0 and
+  later have, now count as calls of the database's own functions on every server: a read-only
+  profile refuses them.
+
 ## 0.41.3 (2026-11-17)
 
 A patch release that lifts the refusal of extension functions on read-only PostgreSQL profiles that 0.41.2 brought in: an environment can now allow chosen functions with `read_only_functions` and every function of chosen extensions with `read_only_extensions`, for example `read_only_extensions = ["postgis"]` in its `[policy.<name>]` table. Read-only profiles also accept a cast written as a call with a quoted value (`uuid('…')`) and the PostgreSQL 18 built-ins when the call names `pg_catalog`.

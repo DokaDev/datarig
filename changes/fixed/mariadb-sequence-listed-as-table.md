@@ -1,1 +1,0 @@
-- On MariaDB a sequence is listed with the tables of its database, not with the views.
