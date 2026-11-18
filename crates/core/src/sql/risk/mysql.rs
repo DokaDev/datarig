@@ -64,8 +64,10 @@
 //! ([`Risk::unchecked_call`]): an unqualified name may be a loadable function, code of the server's
 //! that a read-only transaction does not stop, and a stored function (`db.f()` too) may take user
 //! locks, sleep or read what the text does not show. Only the built-ins of [`BUILTINS`] are
-//! allowed, less [`SERVER_FILES`] and [`SERVER_ACTIONS`], and on MariaDB less the functions it
-//! does not provide ([`NOT_ON_MARIADB`]: it looks a call of one up as a stored function).
+//! allowed, less [`SERVER_FILES`] and [`SERVER_ACTIONS`], less those only newer servers have
+//! ([`NEWER_THAN_OLDEST`]), and on MariaDB less the functions it does not provide
+//! ([`NOT_ON_MARIADB`]: it looks a call of one up as a stored function). A built-in counts only
+//! written as the server reads one ([`MYSQL_TIGHT_CALLS`], [`MYSQL_WORD_CALLS`]).
 //!
 //! **Settings.** `SET` of a session variable on [`SAFE_SETTINGS`], of a user variable (`@x`), `SET
 //! NAMES`/`CHARACTER SET` of a UTF-8 character set and `SET ROLE` are safe; `SET` of one on
@@ -125,13 +127,20 @@ pub fn builtin(name: &str) -> bool {
 /// MariaDB.
 pub const NOT_ON_MARIADB: &str = include_str!("mysql_builtins_not_mariadb.txt");
 
+/// The names of [`BUILTINS`] that MySQL added after the oldest version the driver connects to
+/// (9.0): an older server looks an unqualified call of one up as a stored function of the
+/// current database, and which version a session is on is not known here, so they are no
+/// built-ins to the read check on any server (as a function that is not a built-in).
+pub const NEWER_THAN_OLDEST: &[&str] = &["STRING_TO_VECTOR", "VECTOR_DIM", "VECTOR_TO_STRING"];
+
 /// Whether `name` (upper case) is a built-in function of the server `mode` is of, whatever its
-/// arguments: in [`BUILTINS`], and on MariaDB not in [`NOT_ON_MARIADB`]. A call of one of
-/// [`MARIADB_CONSTRUCTORS`] may be one there too, by its arguments ([`Call`]).
+/// arguments: in [`BUILTINS`], not in [`NEWER_THAN_OLDEST`], and on MariaDB not in
+/// [`NOT_ON_MARIADB`]. A call of one of [`MARIADB_CONSTRUCTORS`] may be one there too, by its
+/// arguments ([`Call`]).
 pub fn builtin_in(name: &str, mode: MySqlMode) -> bool {
     static SORTED: std::sync::OnceLock<Vec<&str>> = std::sync::OnceLock::new();
     let missing = || SORTED.get_or_init(|| NOT_ON_MARIADB.lines().collect()).binary_search(&name).is_ok();
-    builtin(name) && !(mode.mariadb && missing())
+    builtin(name) && !NEWER_THAN_OLDEST.contains(&name) && !(mode.mariadb && missing())
 }
 
 /// MariaDB's geometry constructors of [`NOT_ON_MARIADB`], with the fewest and the most

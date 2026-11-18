@@ -456,6 +456,11 @@ fn functions_mariadb_does_not_provide_are_unchecked_calls_there() {
     // arguments may be MariaDB's own: see the test after this one).
     for name in NOT_ON_MARIADB.lines() {
         let sql = format!("SELECT {name}() FROM t");
+        let maria = classify(&sql, MARIADB);
+        assert!(maria.unchecked_call.is_some() && maria.runs_code, "{sql}");
+        if NEWER_THAN_OLDEST.contains(&name) {
+            continue;
+        }
         let mysql = classify(&sql, MODE);
         assert!(mysql.unchecked_call.is_none() && !mysql.runs_code && mysql.read_only().is_ok(), "{sql}");
         let maria = classify(&sql, MARIADB);
@@ -572,6 +577,19 @@ fn a_dollar_is_read_with_and_without_dollar_quotes() {
     for dollar_quotes in [false, true] {
         let mode = MySqlMode { dollar_quotes, ..MODE };
         assert_eq!(render(&classify("SELECT a$b, 'x$y$' FROM t", mode)), "read ro");
+    }
+}
+
+/// A built-in only newer servers have is a stored function's name on the oldest: a call of
+/// one is an unchecked call on every server.
+#[test]
+fn built_ins_newer_than_the_oldest_server_are_unchecked_calls() {
+    for name in NEWER_THAN_OLDEST {
+        assert!(builtin(name), "{name}");
+        for mode in [MODE, MARIADB] {
+            let sql = format!("SELECT {name}(a) FROM t");
+            assert_eq!(classify(&sql, mode).read_only(), Err(ReadOnlyBlock::UnknownFunction(name.to_string())));
+        }
     }
 }
 
