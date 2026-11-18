@@ -11,13 +11,26 @@ pub fn quoting(e: Engine, s: &&'static str) -> String {
     format!("{} | {} | {}", d.quote_ident(s), d.force_quote_ident(s), d.quote_literal(s))
 }
 
-/// The statements of `src` on `e`, then the comments and client commands its lexer finds.
+/// The statements of `src` on `e`, then the strings, quoted names, dollar bodies, comments
+/// and client commands its lexer finds, each with its kind (a `"…"` is a string or a name by
+/// the sql mode).
 pub fn split(e: Engine, src: &&'static str) -> String {
     let d = e.dialect();
     let bodies: Vec<&str> = split_in(src, d).iter().map(|s| s.body(src)).collect();
     let marks: Vec<String> = lex_in(src, d)
         .iter()
-        .filter(|t| matches!(t.kind, Tok::LineComment | Tok::BlockComment | Tok::ExecComment | Tok::Directive))
+        .filter(|t| {
+            matches!(
+                t.kind,
+                Tok::Str
+                    | Tok::QuotedIdent
+                    | Tok::Dollar
+                    | Tok::LineComment
+                    | Tok::BlockComment
+                    | Tok::ExecComment
+                    | Tok::Directive
+            )
+        })
         .map(|t| format!("{:?} {:?}", t.kind, t.text(src)))
         .collect();
     format!("{} / {}", bodies.join(" | "), marks.join(", "))
@@ -142,36 +155,46 @@ pub fn split_cases() -> Vec<Case<&'static str>> {
             name: "semicolon in a string",
             input: "SELECT 'a;b'; SELECT 2",
             expect: &[
-                (Pg, "SELECT 'a;b' | SELECT 2 / "),
-                (MySql, "SELECT 'a;b' | SELECT 2 / "),
-                (MariaDb, "SELECT 'a;b' | SELECT 2 / "),
+                (Pg, "SELECT 'a;b' | SELECT 2 / Str \"'a;b'\""),
+                (MySql, "SELECT 'a;b' | SELECT 2 / Str \"'a;b'\""),
+                (MariaDb, "SELECT 'a;b' | SELECT 2 / Str \"'a;b'\""),
             ],
         },
         Case {
             name: "semicolon in double quotes",
             input: "SELECT \"a;b\"; SELECT 2",
             expect: &[
-                (Pg, "SELECT \"a;b\" | SELECT 2 / "),
-                (MySql, "SELECT \"a;b\" | SELECT 2 / "),
-                (MariaDb, "SELECT \"a;b\" | SELECT 2 / "),
-                (MySqlAnsiQuotes, "SELECT \"a;b\" | SELECT 2 / "),
+                (Pg, "SELECT \"a;b\" | SELECT 2 / QuotedIdent \"\\\"a;b\\\"\""),
+                (MySql, "SELECT \"a;b\" | SELECT 2 / Str \"\\\"a;b\\\"\""),
+                (MariaDb, "SELECT \"a;b\" | SELECT 2 / Str \"\\\"a;b\\\"\""),
+                (MySqlAnsiQuotes, "SELECT \"a;b\" | SELECT 2 / QuotedIdent \"\\\"a;b\\\"\""),
+            ],
+        },
+        Case {
+            name: "backtick name",
+            input: "SELECT `a;b` FROM t; SELECT 2",
+            expect: &[
+                (Pg, "SELECT `a | b` FROM t | SELECT 2 / "),
+                (MySql, "SELECT `a;b` FROM t | SELECT 2 / QuotedIdent \"`a;b`\""),
+                (MariaDb, "SELECT `a;b` FROM t | SELECT 2 / QuotedIdent \"`a;b`\""),
+                (MySqlAnsiQuotes, "SELECT `a;b` FROM t | SELECT 2 / QuotedIdent \"`a;b`\""),
             ],
         },
         Case {
             name: "backslash before a quote",
             input: "SELECT 'a\\'; SELECT 2; -- '",
             expect: &[
-                (Pg, "SELECT 'a\\' | SELECT 2 / LineComment \"-- '\""),
-                (MySql, "SELECT 'a\\'; SELECT 2; -- ' / "),
-                (MariaDb, "SELECT 'a\\'; SELECT 2; -- ' / "),
-                (MySqlNoBackslashEscapes, "SELECT 'a\\' | SELECT 2 / LineComment \"-- '\""),
+                (Pg, "SELECT 'a\\' | SELECT 2 / Str \"'a\\\\'\", LineComment \"-- '\""),
+                (MySql, "SELECT 'a\\'; SELECT 2; -- ' / Str \"'a\\\\'; SELECT 2; -- '\""),
+                (MariaDb, "SELECT 'a\\'; SELECT 2; -- ' / Str \"'a\\\\'; SELECT 2; -- '\""),
+                (MySqlNoBackslashEscapes, "SELECT 'a\\' | SELECT 2 / Str \"'a\\\\'\", LineComment \"-- '\""),
             ],
         },
         Case {
             name: "dollar quotes",
             input: "SELECT $$a;b$$; SELECT 2",
             expect: &[
-                (Pg, "SELECT $$a;b$$ | SELECT 2 / "),
+                (Pg, "SELECT $$a;b$$ | SELECT 2 / Dollar \"$$a;b$$\""),
                 (MySql, "SELECT $$a | b$$ | SELECT 2 / "),
                 (MariaDb, "SELECT $$a | b$$ | SELECT 2 / "),
             ],
