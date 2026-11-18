@@ -30,3 +30,11 @@ fn mixed_spelling(d: Option<Dialect>) -> bool {
         None => false,
     }
 }
+
+fn back_then_braced(d: Option<Dialect>) -> bool {
+    match d {
+        Some(.., Dialect::Postgres) => true,
+        Some { 0: _ } => false,
+        None => false,
+    }
+}

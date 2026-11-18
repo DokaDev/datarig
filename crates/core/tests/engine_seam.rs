@@ -422,6 +422,13 @@ impl Scan<'_> {
                 let field = [Step::Field(name.clone(), i.to_string())];
                 self.wildcard_at(pat, &[&field[..], rest].concat())
             }
+            // From the back the index is unknown here: any wildcard field (or `..`) may stand
+            // at it, so it counts.
+            (Step::Part(name, Index::Back(_)), Pat::Struct(st)) if *name == last_name(&st.path) => st
+                .fields
+                .iter()
+                .find_map(|f| self.wildcard_at(&f.pat, rest))
+                .or_else(|| st.rest.as_ref().map(|r| r.dot2_token.spans[0])),
             (Step::Field(name, field), Pat::TupleStruct(t)) if *name == last_name(&t.path) => {
                 let i: usize = field.parse().ok()?;
                 part(&t.elems, &Index::Front(i)).ok().flatten()
@@ -1359,7 +1366,13 @@ fn every_violation_fixture_is_reported() {
         (
             "slice_catch_all",
             "crates/core/src/sql/values.rs",
-            &[(Kind::CatchAll, 7), (Kind::CatchAll, 14), (Kind::CatchAll, 22), (Kind::CatchAll, 29)],
+            &[
+                (Kind::CatchAll, 7),
+                (Kind::CatchAll, 14),
+                (Kind::CatchAll, 22),
+                (Kind::CatchAll, 29),
+                (Kind::CatchAll, 37),
+            ],
         ),
         ("qualified_self", "crates/tui/src/app/tx.rs", &[(Kind::Alias, 5), (Kind::Alias, 10)]),
         (
