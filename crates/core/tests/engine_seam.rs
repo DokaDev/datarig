@@ -687,6 +687,19 @@ impl Scan<'_> {
                 _ => None,
             }
         }
+        // `impl Identity<Dialect>` may be an impl of the enum through a generic alias: reported
+        // like another name for it, and `Self` stands for the enum inside.
+        let through = if name(ty).as_deref().and_then(engine_enum).is_none() { generic_engine(ty) } else { None };
+        if let Some(e) = through {
+            let span = match ty {
+                syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.span()),
+                _ => None,
+            };
+            let what = format!("an `impl` of a generic type over {e}, which may be {e} itself");
+            self.report(span.unwrap_or_else(Span::call_site), Kind::Alias, what);
+            self.selves.push(Some(e.to_string()));
+            return;
+        }
         self.selves.push(name(ty));
     }
 }
@@ -1406,7 +1419,15 @@ fn every_violation_fixture_is_reported() {
         (
             "assoc_type",
             "crates/tui/src/app/tx.rs",
-            &[(Kind::Alias, 9), (Kind::Alias, 13), (Kind::Alias, 20), (Kind::Alias, 25), (Kind::Alias, 28)],
+            &[
+                (Kind::Alias, 9),
+                (Kind::Alias, 13),
+                (Kind::Alias, 20),
+                (Kind::Alias, 25),
+                (Kind::Alias, 28),
+                (Kind::Alias, 30),
+                (Kind::BooleanTest, 32),
+            ],
         ),
     ];
     let mut missed = Vec::new();

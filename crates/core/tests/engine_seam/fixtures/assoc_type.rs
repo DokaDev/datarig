@@ -26,3 +26,9 @@ fn through_identity(d: Dialect) -> bool {
 }
 
 type Through = Identity<Dialect>;
+
+impl Identity<Dialect> {
+    fn check(&self) -> bool {
+        matches!(self, Self::Postgres)
+    }
+}
