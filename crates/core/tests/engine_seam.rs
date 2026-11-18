@@ -302,6 +302,12 @@ impl Scan<'_> {
                 }
                 visit::visit_path(self, p);
             }
+            // A test-only field is not in the product build.
+            fn visit_field_pat(&mut self, f: &'ast syn::FieldPat) {
+                if !is_test_only(&f.attrs) {
+                    visit::visit_field_pat(self, f);
+                }
+            }
         }
         let mut find = Find { scan: self, found: None };
         find.visit_pat(pat);
@@ -360,7 +366,7 @@ impl Scan<'_> {
                 }
             }
             Pat::Struct(st) => {
-                for f in &st.fields {
+                for f in st.fields.iter().filter(|f| !is_test_only(&f.attrs)) {
                     here.push(Step::Field(last_name(&st.path), member_name(&f.member)));
                     self.variant_positions(&f.pat, here, out);
                     here.pop();

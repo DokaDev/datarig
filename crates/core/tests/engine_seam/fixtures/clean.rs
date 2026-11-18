@@ -98,3 +98,18 @@ fn one(n: usize) -> bool {
         1
     }
 }
+
+struct Holder {
+    n: u8,
+    #[cfg(test)]
+    d: Dialect,
+}
+
+/// A test-only field pattern names no engine in the product build.
+fn holder(h: Holder) -> u8 {
+    let gated = matches!(h, Holder { #[cfg(test)] d: Dialect::Postgres, .. });
+    match h {
+        Holder { #[cfg(test)] d: Dialect::Postgres, .. } => 1,
+        _ => u8::from(gated),
+    }
+}
