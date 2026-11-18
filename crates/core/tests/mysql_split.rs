@@ -16,8 +16,13 @@ use std::process::{Command, Stdio};
 /// The tests create and drop the same objects: one at a time.
 static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-const MY: Dialect =
-    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false });
+const MY: Dialect = Dialect::MySql(MySqlMode {
+    ansi_quotes: false,
+    no_backslash_escapes: false,
+    dollar_quotes: false,
+    mariadb: false,
+    ignore_space: false,
+});
 
 /// Statements that all run (in this order; what they create they drop).
 const VALID: &str = r#"-- a comment line; with a semicolon
@@ -234,6 +239,7 @@ fn mysql_literals_and_names_read_back_as_written() {
         no_backslash_escapes: true,
         dollar_quotes: false,
         mariadb: false,
+        ignore_space: false,
     });
     let texts = ["it's", "C:\\new", "\\", "\\'", "\\%_", "\u{1F418}"];
     let mut script = String::from("SET SESSION sql_mode = CONCAT(@@sql_mode, ',NO_BACKSLASH_ESCAPES');\n");

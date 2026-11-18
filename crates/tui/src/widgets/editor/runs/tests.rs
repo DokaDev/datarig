@@ -378,6 +378,7 @@ const MYSQL: datarig_core::sql::dialect::Dialect =
         no_backslash_escapes: false,
         dollar_quotes: false,
         mariadb: false,
+        ignore_space: false,
     });
 
 fn mysql_editor(text: &str) -> Editor {
@@ -514,6 +515,7 @@ fn a_hint_on_a_statement_starting_with_a_dollar_is_checked_in_full() {
         no_backslash_escapes: true,
         dollar_quotes: true,
         mariadb: false,
+        ignore_space: false,
     });
     let text = " \\G$$ $$\n;\n\nSELECT 2;\nSELECT 3;";
     let mut e = Editor::new(text);

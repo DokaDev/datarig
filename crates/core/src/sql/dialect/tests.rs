@@ -83,7 +83,13 @@ fn literals_open_by_dialect() {
     assert_eq!(pg.literal_open("x = U& ", "'a'"), open(0, '\'', false));
     assert_eq!(pg.string_quotes(), &['\'']);
     let my = |ansi_quotes, no_backslash_escapes| {
-        Dialect::MySql(MySqlMode { ansi_quotes, no_backslash_escapes, dollar_quotes: true, mariadb: false })
+        Dialect::MySql(MySqlMode {
+            ansi_quotes,
+            no_backslash_escapes,
+            dollar_quotes: true,
+            mariadb: false,
+            ignore_space: false,
+        })
     };
     assert_eq!(my(false, false).literal_open("", "'a'"), open(0, '\'', true));
     assert_eq!(my(false, false).literal_open("", "\"a\""), open(0, '"', true));
@@ -128,6 +134,7 @@ fn literal_bodies_round_trip() {
             no_backslash_escapes: bits & 2 != 0,
             dollar_quotes: bits & 4 != 0,
             mariadb: false,
+            ignore_space: false,
         };
         dialects.push(Dialect::MySql(m));
     }

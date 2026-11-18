@@ -1,7 +1,12 @@
 use super::*;
 
-const MODE: MySqlMode =
-    MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: true, mariadb: false };
+const MODE: MySqlMode = MySqlMode {
+    ansi_quotes: false,
+    no_backslash_escapes: false,
+    dollar_quotes: true,
+    mariadb: false,
+    ignore_space: false,
+};
 const MYSQL: Server = Server { version: (8, 4, 0), mariadb: false };
 
 #[test]

@@ -544,7 +544,13 @@ fn check_values_follow_the_type_values() {
 fn values_are_escaped_for_their_literal() {
     use crate::sql::dialect::MySqlMode;
     let my = |nbe: bool, ansi: bool| {
-        Dialect::MySql(MySqlMode { ansi_quotes: ansi, no_backslash_escapes: nbe, dollar_quotes: false, mariadb: false })
+        Dialect::MySql(MySqlMode {
+            ansi_quotes: ansi,
+            no_backslash_escapes: nbe,
+            dollar_quotes: false,
+            mariadb: false,
+            ignore_space: false,
+        })
     };
     let inserts = |d: Dialect, src: &str| -> Vec<String> {
         values_in(d, src, Some(&[]))

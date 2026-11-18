@@ -21,8 +21,13 @@ use std::process::{Command, Stdio};
 
 include!("../src/sql/risk/mysql/corpus.rs");
 
-const MODE: MySqlMode =
-    MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false };
+const MODE: MySqlMode = MySqlMode {
+    ansi_quotes: false,
+    no_backslash_escapes: false,
+    dollar_quotes: false,
+    mariadb: false,
+    ignore_space: false,
+};
 
 const MY: Language = Language::Sql(Dialect::MySql(MODE));
 
@@ -268,13 +273,13 @@ fn every_built_in_is_a_function_of_the_server() {
 
 /// Every built-in written otherwise than right before its `(` (a blank, a newline, a comment,
 /// quoted): the server looks the name up as a stored function of the current database (error
-/// 1305 or 1630) exactly when the read check takes the call as an unchecked one, and a read-only
-/// profile refuses each such call. With `IGNORE_SPACE`, which the read check is not told of, a
-/// read-only profile still refuses each call the server looks up.
+/// 1305 or 1630) exactly when the read check of a session in that sql mode (with
+/// `IGNORE_SPACE` or not) takes the call as an unchecked one, and a read-only profile refuses
+/// each such call.
 #[test]
 fn built_ins_count_as_the_server_reads_them_however_written() {
     let Some(client) = client() else { return };
-    let session = Language::Sql(Dialect::MySql(MySqlMode { mariadb: mariadb(&client), ..MODE }));
+    let maria = mariadb(&client);
     const FORMS: &[(&str, &str)] =
         &[("", "()"), ("", " ()"), ("", "\n()"), ("", "/* c */()"), ("", " -- c\n()"), ("`", "`()")];
     let names: Vec<&str> = BUILTINS.lines().collect();
@@ -290,6 +295,7 @@ fn built_ins_count_as_the_server_reads_them_however_written() {
         ("SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, ',IGNORE_SPACE');", true),
     ] {
         let errors = errors(&client, prelude, &statements);
+        let session = Language::Sql(Dialect::MySql(MySqlMode { mariadb: maria, ignore_space, ..MODE }));
         let looked_up = |i: usize| matches!(errors.get(&i), Some(1305 | 1630));
         let mut wrong = Vec::new();
         for (n, _) in names.iter().enumerate() {
@@ -302,7 +308,7 @@ fn built_ins_count_as_the_server_reads_them_however_written() {
             for (i, text) in texts.iter().enumerate().skip(first + 1).take(FORMS.len() - 1) {
                 let r = Classifier::classify_once(session, text);
                 let (unchecked, refused) = (r.unchecked_call.is_some(), r.read_only().is_err());
-                if looked_up(i) && !refused || !ignore_space && unchecked && !looked_up(i) {
+                if looked_up(i) && !refused || unchecked && !looked_up(i) {
                     wrong.push(format!("{text:?}: server {:?}, unchecked {unchecked}", errors.get(&i)));
                 }
             }

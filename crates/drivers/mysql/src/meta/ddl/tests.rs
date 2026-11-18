@@ -1,10 +1,20 @@
 use super::*;
 use datarig_core::sql::split::split_in;
 
-const MY: Dialect =
-    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false });
-const ANSI: Dialect =
-    Dialect::MySql(MySqlMode { ansi_quotes: true, no_backslash_escapes: false, dollar_quotes: false, mariadb: false });
+const MY: Dialect = Dialect::MySql(MySqlMode {
+    ansi_quotes: false,
+    no_backslash_escapes: false,
+    dollar_quotes: false,
+    mariadb: false,
+    ignore_space: false,
+});
+const ANSI: Dialect = Dialect::MySql(MySqlMode {
+    ansi_quotes: true,
+    no_backslash_escapes: false,
+    dollar_quotes: false,
+    mariadb: false,
+    ignore_space: false,
+});
 
 fn parts(name: &str, d: Dialect) -> Option<Vec<String>> {
     name_parts(name, d)

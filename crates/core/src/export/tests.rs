@@ -397,6 +397,7 @@ const MY: Dialect = Dialect::MySql(crate::sql::dialect::MySqlMode {
     no_backslash_escapes: false,
     dollar_quotes: false,
     mariadb: false,
+    ignore_space: false,
 });
 
 /// MySQL's bytes (`0x…`) and bits (`b'…'`) are written as hexadecimal and bit literals;

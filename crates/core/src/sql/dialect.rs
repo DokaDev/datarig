@@ -52,6 +52,10 @@ pub struct MySqlMode {
     /// (`risk::mysql::NOT_ON_MARIADB`). The default (a MySQL server) is the driver's until a
     /// session says which server it is on.
     pub mariadb: bool,
+    /// `IGNORE_SPACE`: blanks (not comments) may come between a built-in's name and its `(`.
+    /// Without it, the server reads a call of some built-ins written so as a stored function's
+    /// (`risk::mysql::MYSQL_TIGHT_CALLS`), so off (the default) is the reading that refuses more.
+    pub ignore_space: bool,
 }
 
 impl Dialect {

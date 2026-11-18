@@ -1,7 +1,12 @@
 use super::*;
 
-const MY: MySqlMode =
-    MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false };
+const MY: MySqlMode = MySqlMode {
+    ansi_quotes: false,
+    no_backslash_escapes: false,
+    dollar_quotes: false,
+    mariadb: false,
+    ignore_space: false,
+};
 
 fn parse_my(json: &str) -> Result<TableStructure, DbError> {
     parse(json, false, MY, "shop", "items")

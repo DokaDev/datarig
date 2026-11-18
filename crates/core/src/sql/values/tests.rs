@@ -15,8 +15,13 @@ fn pg(expression: &str, column: &str) -> Option<Vec<String>> {
     found.into_iter().find(|v| v.column == column).map(|v| v.values)
 }
 
-const MYSQL: Dialect =
-    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false });
+const MYSQL: Dialect = Dialect::MySql(MySqlMode {
+    ansi_quotes: false,
+    no_backslash_escapes: false,
+    dollar_quotes: false,
+    mariadb: false,
+    ignore_space: false,
+});
 
 fn my(expression: &str, column: &str) -> Option<Vec<String>> {
     let found = check_values(MYSQL, &[check(expression, &[column])]);
@@ -96,6 +101,7 @@ fn mysql_clauses() {
         no_backslash_escapes: true,
         dollar_quotes: true,
         mariadb: false,
+        ignore_space: false,
     });
     let found = check_values(ansi, &[check("`s` in (_utf8mb4'it\\'s')", &["s"])]);
     assert_eq!(found, vec![CheckValues { column: "s".into(), values: vec!["it's".into()] }]);

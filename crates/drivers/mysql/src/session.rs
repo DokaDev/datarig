@@ -588,6 +588,8 @@ impl Tracked {
             no_backslash_escapes: flags.contains(&"NO_BACKSLASH_ESCAPES"),
             dollar_quotes: server.dollar_quotes(),
             mariadb: server.mariadb,
+            // Only a reported `IGNORE_SPACE` counts: unknown reads as off, which refuses more.
+            ignore_space: flags.contains(&"IGNORE_SPACE"),
         }
     }
 }
