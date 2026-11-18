@@ -502,6 +502,22 @@ fn built_ins_count_only_as_the_server_reads_them() {
     unchecked("SELECT `sysdate`()", MARIADB, "`sysdate`");
     unchecked("SELECT sysdate ()", MODE, "sysdate");
     built_in("SELECT sysdate ()", MARIADB);
+    // MariaDB reserves neither `LATERAL` nor `OF`: before `(` they name a stored function.
+    unchecked("SELECT lateral()", MARIADB, "lateral");
+    unchecked("SELECT a FROM t WHERE of(a) = 1", MARIADB, "of");
+    // MariaDB's grammar reads `JSON_TABLE` only as the table function with its columns.
+    let table = "SELECT * FROM JSON_TABLE('[1]', '$[*]' COLUMNS (a INT PATH '$')) AS jt";
+    built_in(table, MARIADB);
+    built_in(table, MODE);
+    unchecked("SELECT JSON_TABLE(1)", MARIADB, "JSON_TABLE");
+    unchecked("SELECT `JSON_TABLE`('[1]', '$[*]' COLUMNS (a INT PATH '$'))", MARIADB, "`JSON_TABLE`");
+    // A column's type with its precision in `JSON_TABLE`'s columns is no call.
+    let typed = "SELECT * FROM JSON_TABLE('[1]', '$[*]' COLUMNS (d DATETIME(6) PATH '$', n NCHAR(10) PATH '$', \
+                 NESTED PATH '$' COLUMNS (x DECIMAL(10, 2) PATH '$'))) AS jt";
+    built_in(typed, MODE);
+    built_in(typed, MARIADB);
+    // MariaDB's geometry constructors are its own quoted too, given their arguments.
+    built_in("SELECT `POINT`(1, 2), `LINESTRING`(POINT(0, 0), POINT(1, 1))", MARIADB);
     // Quoted under `ANSI_QUOTES` too.
     let ansi = MySqlMode { ansi_quotes: true, ..MODE };
     unchecked("SELECT \"now\"()", ansi, "\"now\"");

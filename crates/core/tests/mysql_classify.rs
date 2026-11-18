@@ -242,7 +242,13 @@ fn every_built_in_is_a_function_of_the_server() {
         names.iter().enumerate().map(|(i, n)| (i, format!("SELECT {n}()"))).collect();
     let refs: Vec<(usize, &str)> = statements.iter().map(|(i, s)| (*i, s.as_str())).collect();
     let errors = errors(&client, "", &refs);
-    let unknown: Vec<&str> = errors.iter().filter(|&(_, &e)| e == 1305).map(|(i, _)| names[*i]).collect();
+    // 1630: the same, for a name the server's grammar has otherwise (MariaDB's `JSON_TABLE`, a
+    // table function only there: the test after this one).
+    let unknown: Vec<&str> = errors
+        .iter()
+        .filter(|&(i, &e)| e == 1305 || (e == 1630 && names[*i] != "JSON_TABLE"))
+        .map(|(i, _)| names[*i])
+        .collect();
     eprintln!("built-ins this server does not have: {unknown:?}");
     if mariadb(&client) {
         functions_mariadb_does_not_provide(&unknown);
@@ -303,6 +309,51 @@ fn built_ins_count_as_the_server_reads_them_however_written() {
         }
         assert!(wrong.is_empty(), "IGNORE_SPACE {ignore_space}:\n{}", wrong.join("\n"));
     }
+}
+
+/// Words and forms the server's grammar reads itself: whether it runs a stored function of the
+/// current database (error 1305 or 1630) for each is whether the read check takes the text as
+/// calling one and a read-only profile refuses it; a text the server runs otherwise is a plain
+/// read to the check. A syntax error says nothing.
+#[test]
+fn words_and_table_functions_count_as_the_server_reads_them() {
+    let Some(client) = client() else { return };
+    let session = Language::Sql(Dialect::MySql(MySqlMode { mariadb: mariadb(&client), ..MODE }));
+    let columns = "'[1]', '$[*]' COLUMNS (d DATETIME(6) PATH '$', n NCHAR(10) PATH '$', \
+                   NESTED PATH '$' COLUMNS (x DECIMAL(10, 2) PATH '$'))";
+    let texts = [
+        "SELECT lateral()".to_string(),
+        "SELECT of(1)".to_string(),
+        "SELECT 1 FROM DUAL WHERE lateral (1)".to_string(),
+        "SELECT JSON_TABLE(1)".to_string(),
+        "SELECT `JSON_TABLE`(1)".to_string(),
+        format!("SELECT * FROM JSON_TABLE({columns}) AS jt"),
+        format!("SELECT * FROM `JSON_TABLE`({columns}) AS jt"),
+        "SELECT `POINT`(1, 2) IS NULL".to_string(),
+        "SELECT `LINESTRING`(POINT(0, 0), POINT(1, 1)) IS NULL".to_string(),
+        "SELECT `POLYGON`(LINESTRING(POINT(0, 0), POINT(1, 0), POINT(0, 1), POINT(0, 0))) IS NULL".to_string(),
+        "SELECT `MULTIPOINT`(POINT(1, 1)) IS NULL".to_string(),
+        "SELECT `MULTILINESTRING`(LINESTRING(POINT(0, 0), POINT(1, 1))) IS NULL".to_string(),
+        "SELECT `MULTIPOLYGON`(POLYGON(LINESTRING(POINT(0, 0), POINT(1, 0), POINT(0, 1), POINT(0, 0)))) IS NULL"
+            .to_string(),
+        "SELECT `GEOMETRYCOLLECTION`(POINT(1, 1)) IS NULL".to_string(),
+    ];
+    let statements: Vec<(usize, &str)> = texts.iter().enumerate().map(|(i, s)| (i, s.as_str())).collect();
+    let errors = errors(&client, "", &statements);
+    let mut wrong = Vec::new();
+    for (i, text) in texts.iter().enumerate() {
+        let r = Classifier::classify_once(session, text);
+        let (refused, plain) = (r.read_only().is_err(), r.unchecked_call.is_none() && r.read_only().is_ok());
+        let ok = match errors.get(&i) {
+            Some(1305 | 1630) => refused,
+            Some(1064) => true,
+            _ => plain,
+        };
+        if !ok {
+            wrong.push(format!("{text:?}: server {:?}, check {r:?}", errors.get(&i)));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 /// On MariaDB: the names of [`BUILTINS`] that `unknown` (this server looks them up as stored
