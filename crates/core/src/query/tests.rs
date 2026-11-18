@@ -3,8 +3,13 @@ use crate::sql::dialect::Language;
 use crate::sql::dialect::MySqlMode;
 use crate::sql::risk::{Class, Classifier, Danger};
 
-const MY: Dialect =
-    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false });
+const MY: Dialect = Dialect::MySql(MySqlMode {
+    ansi_quotes: false,
+    no_backslash_escapes: false,
+    dollar_quotes: false,
+    mariadb: false,
+    ignore_space: false,
+});
 
 fn users() -> TableName {
     TableName { database: None, schema: "shop".into(), name: "users".into() }
@@ -702,6 +707,7 @@ fn render_like_patterns_read_the_same_in_every_mysql_mode() {
             no_backslash_escapes: true,
             dollar_quotes: false,
             mariadb: false,
+            ignore_space: false,
         }),
     ];
     let starts = |value: &str| Cond::Like {

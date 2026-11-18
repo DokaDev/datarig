@@ -150,8 +150,8 @@ pub const MARIADB_CONSTRUCTORS: &[(&str, usize, usize)] = &[
 /// MySQL's built-ins whose name its grammar reads as the function's only when `(` follows it
 /// right away, upper case, sorted (the manual's "Function Name Parsing and Resolution", 8.0 to
 /// 9.x). With a blank or a comment before the `(`, or quoted (`` `NOW`() ``), the name is a
-/// stored function's of the current database, unless the session has `IGNORE_SPACE`, which
-/// lets blanks (not comments) through. A test runs each on the server.
+/// stored function's of the current database, unless the session has `IGNORE_SPACE`
+/// ([`MySqlMode::ignore_space`]), which lets blanks (not comments) through. A test runs each on the server.
 pub const MYSQL_TIGHT_CALLS: &[&str] = &[
     "ADDDATE",
     "BIT_AND",
@@ -191,8 +191,7 @@ pub const MYSQL_TIGHT_CALLS: &[&str] = &[
 ];
 
 /// [`MYSQL_TIGHT_CALLS`] as MariaDB reads them: the same names less `ST_COLLECT` (no function
-/// there) and `SYSDATE` (a blank is fine there), and its window functions. With
-/// `IGNORE_SPACE`, MariaDB lets comments through too.
+/// there) and `SYSDATE` (a blank is fine there), and its window functions.
 pub const MARIADB_TIGHT_CALLS: &[&str] = &[
     "ADDDATE",
     "BIT_AND",
@@ -735,14 +734,18 @@ impl Call {
     /// one) or a loadable one, whatever the name: with its database (`db.f()`), or a built-in
     /// that the grammar reads itself written otherwise than it reads one: quoted
     /// (`` `NOW`() ``), or with a blank or a comment before its `(` ([`tight_calls`]; blanks
-    /// only are fine under `IGNORE_SPACE`, which the session's mode is not known to have here,
-    /// so such a call counts as looked up); and on MariaDB a `JSON_TABLE` without its `COLUMNS`
-    /// clause (its grammar reads the table function only).
+    /// only, never a comment, are fine when the session has `IGNORE_SPACE`); and on MariaDB a
+    /// `JSON_TABLE` without its `COLUMNS` clause (its grammar reads the table function only).
     fn looked_up(&self, mode: MySqlMode) -> bool {
+        let gap = match self.gap {
+            Gap::None => false,
+            Gap::Blank => !mode.ignore_space,
+            Gap::Comment => true,
+        };
         self.qualified
             || (self.quoted && word_call(&self.name, mode))
             || (mode.mariadb && self.name == "JSON_TABLE" && !self.columns)
-            || (self.gap != Gap::None && tight_calls(mode).contains(&self.name.as_str()))
+            || (gap && tight_calls(mode).contains(&self.name.as_str()))
     }
 
     /// A built-in function of the server `mode` is of ([`builtin_in`]), or on MariaDB one of

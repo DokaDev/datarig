@@ -345,6 +345,7 @@ const MY: Dialect = Dialect::MySql(crate::sql::dialect::MySqlMode {
     no_backslash_escapes: false,
     dollar_quotes: false,
     mariadb: false,
+    ignore_space: false,
 });
 
 /// The default rule compares names exactly (PostgreSQL); MySQL's never minds a column's case,

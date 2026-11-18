@@ -127,6 +127,10 @@ fn the_mode_follows_the_sql_mode_the_version_and_the_server() {
     let ansi = tracked("REAL_AS_FLOAT,PIPES_AS_CONCAT,ANSI_QUOTES,IGNORE_SPACE,ONLY_FULL_GROUP_BY,ANSI");
     assert!(ansi.mode(&MYSQL_84).ansi_quotes);
     assert!(!ansi.mode(&MYSQL_84).no_backslash_escapes);
+    // `IGNORE_SPACE` (which `ANSI` has): only as reported; not known reads as off.
+    assert!(ansi.mode(&MYSQL_84).ignore_space && tracked("IGNORE_SPACE").mode(&MYSQL_84).ignore_space);
+    assert!(!tracked("").mode(&MYSQL_84).ignore_space && !Tracked::default().mode(&MYSQL_84).ignore_space);
+    assert!(!tracked("NO_IGNORE_SPACE_X").mode(&MYSQL_84).ignore_space);
     assert!(tracked("STRICT_TRANS_TABLES,NO_BACKSLASH_ESCAPES").mode(&MYSQL_84).no_backslash_escapes);
     // A flag is matched whole.
     assert!(!tracked("NO_ANSI_QUOTES_X").mode(&MYSQL_84).ansi_quotes);

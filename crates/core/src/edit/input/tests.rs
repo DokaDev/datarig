@@ -4,8 +4,13 @@ use crate::edit::Exactness;
 use crate::sql::dialect::MySqlMode;
 
 const PG: Dialect = Dialect::Postgres;
-const MY: Dialect =
-    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false });
+const MY: Dialect = Dialect::MySql(MySqlMode {
+    ansi_quotes: false,
+    no_backslash_escapes: false,
+    dollar_quotes: false,
+    mariadb: false,
+    ignore_space: false,
+});
 
 fn column(type_name: &str, kind: ValueKind, labels: &[&str]) -> TableColumn {
     TableColumn {

@@ -3,8 +3,13 @@ use crate::sql::risk::{Classifier, ReadOnlyBlock, TxStep};
 
 include!("corpus.rs");
 
-const MODE: MySqlMode =
-    MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false };
+const MODE: MySqlMode = MySqlMode {
+    ansi_quotes: false,
+    no_backslash_escapes: false,
+    dollar_quotes: false,
+    mariadb: false,
+    ignore_space: false,
+};
 const MARIADB: MySqlMode = MySqlMode { mariadb: true, ..MODE };
 
 fn risk(sql: &str) -> Risk {
@@ -368,8 +373,16 @@ fn deep_nesting_is_read_in_linear_time() {
 /// guard (which would turn a panic into a verdict): no panic.
 #[test]
 fn no_text_makes_the_classifier_panic() {
-    let modes =
-        [MODE, MySqlMode { ansi_quotes: true, no_backslash_escapes: true, dollar_quotes: true, mariadb: false }];
+    let modes = [
+        MODE,
+        MySqlMode {
+            ansi_quotes: true,
+            no_backslash_escapes: true,
+            dollar_quotes: true,
+            mariadb: false,
+            ignore_space: false,
+        },
+    ];
     let mut texts: Vec<&str> = CORPUS.iter().map(|(sql, _)| *sql).collect();
     texts.extend([
         "SET CHARACTER",
@@ -521,6 +534,14 @@ fn built_ins_count_only_as_the_server_reads_them() {
     // Quoted under `ANSI_QUOTES` too.
     let ansi = MySqlMode { ansi_quotes: true, ..MODE };
     unchecked("SELECT \"now\"()", ansi, "\"now\"");
+    // With `IGNORE_SPACE` blanks are fine, comments and quotes are not.
+    for mariadb in [false, true] {
+        let ignore = MySqlMode { ignore_space: true, mariadb, ..MODE };
+        built_in("SELECT now (), NOW\n(), COUNT (*) FROM t", ignore);
+        unchecked("SELECT now/**/()", ignore, "now");
+        unchecked("SELECT now -- c\n()", ignore, "now");
+        unchecked("SELECT `now`()", ignore, "`now`");
+    }
     // A call of a looked-up name is code the read check cannot see.
     assert_eq!(classify("EXPLAIN ANALYZE SELECT now ()", MODE).danger, Some(Danger::AnalyzeRunsCode));
     assert_eq!(repeatable("SELECT now () FROM t", MODE), Err(NotRepeatable::UserFunction));
