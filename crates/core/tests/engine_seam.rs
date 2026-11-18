@@ -859,6 +859,19 @@ impl<'ast> Visit<'ast> for Scan<'_> {
         visit::visit_qself(self, q);
     }
 
+    // A `macro_rules!` that names an engine enum can expand to a pattern or a test anywhere
+    // (`matches!(d, postgres!())`): the scan cannot follow it, so the definition counts as a
+    // branch on the enum.
+    fn visit_item_macro(&mut self, m: &'ast syn::ItemMacro) {
+        if let Some(name) = &m.ident
+            && let Some(e) = tokens_name_engine(m.mac.tokens.clone())
+        {
+            let what = format!("macro `{name}` names {e}; the scan cannot follow where it expands");
+            self.report(name.span(), Kind::BooleanTest, what);
+        }
+        visit::visit_item_macro(self, m);
+    }
+
     fn visit_item_type(&mut self, t: &'ast syn::ItemType) {
         self.type_alias(&t.ident, &t.ty);
         visit::visit_item_type(self, t);
@@ -1097,6 +1110,15 @@ fn generic_engine(ty: &syn::Type) -> Option<&'static str> {
         }),
         _ => None,
     }
+}
+
+/// The first engine enum named anywhere in tokens.
+fn tokens_name_engine(tokens: TokenStream) -> Option<&'static str> {
+    tokens.into_iter().find_map(|t| match t {
+        TokenTree::Group(g) => tokens_name_engine(g.stream()),
+        TokenTree::Ident(id) => engine_enum(&id.to_string()),
+        _ => None,
+    })
 }
 
 fn stmt_is_test_only(stmt: &syn::Stmt) -> bool {
@@ -1399,7 +1421,11 @@ fn every_violation_fixture_is_reported() {
             "crates/core/src/sql/format.rs",
             &[(Kind::CatchAll, 8), (Kind::CatchAll, 17), (Kind::CatchAll, 23), (Kind::CatchAll, 30)],
         ),
-        ("macro_metavar", "crates/core/src/sql/values.rs", &[(Kind::BooleanTest, 7), (Kind::BooleanTest, 13)]),
+        (
+            "macro_metavar",
+            "crates/core/src/sql/values.rs",
+            &[(Kind::BooleanTest, 7), (Kind::BooleanTest, 13), (Kind::BooleanTest, 19)],
+        ),
         ("macro_variant_import", "crates/core/src/sql/values.rs", &[(Kind::Alias, 5), (Kind::Alias, 13)]),
         (
             "wrapped_eq",

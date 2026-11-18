@@ -15,3 +15,13 @@ macro_rules! is_postgres_too {
         matches!(d, D::Postgres)
     }};
 }
+
+macro_rules! postgres {
+    () => {
+        Dialect::Postgres
+    };
+}
+
+fn on_postgres(d: Dialect) -> bool {
+    matches!(d, postgres!())
+}
