@@ -1230,10 +1230,19 @@ fn calls(ws: &[W], mode: MySqlMode) -> Vec<Call> {
         }
         let written = ws[first..=i].iter().map(|w| w.text).collect();
         let quoted = w.kind == Tok::QuotedIdent;
-        // `JSON_TABLE (… COLUMNS (…))`: the table function's own syntax.
+        // `JSON_TABLE (doc, 'path' COLUMNS (…))`: the table function's own syntax. Only the real
+        // clause counts: a bare `COLUMNS` directly inside, right after the path's string and
+        // right before `(`. Anything else (a column or a call named `columns`) is no clause.
         let columns = name == "JSON_TABLE"
             && mate(ws, i + 1).is_some_and(|close| {
-                ws[i + 2..close].iter().any(|w| w.is("COLUMNS") && w.depth == ws[i + 1].depth + 1)
+                let depth = ws[i + 1].depth + 1;
+                (i + 3..close).any(|j| {
+                    ws[j].is("COLUMNS")
+                        && ws[j].depth == depth
+                        && ws[j - 1].kind == Tok::Str
+                        && ws[j - 1].depth == depth
+                        && ws.get(j + 1).is_some_and(|w| w.kind == Tok::LParen)
+                })
             });
         out.push(Call { name, written, qualified, args: args[i + 1], quoted, gap: ws[i + 1].gap, columns });
     }

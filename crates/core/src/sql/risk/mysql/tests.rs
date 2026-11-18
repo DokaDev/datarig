@@ -539,6 +539,16 @@ fn built_ins_count_only_as_the_server_reads_them() {
     built_in(table, MODE);
     unchecked("SELECT JSON_TABLE(1)", MARIADB, "JSON_TABLE");
     unchecked("SELECT `JSON_TABLE`('[1]', '$[*]' COLUMNS (a INT PATH '$'))", MARIADB, "`JSON_TABLE`");
+    // Only the real clause counts: the path, then `COLUMNS (`. A column or a call named
+    // `columns` in the arguments is no clause.
+    unchecked("SELECT JSON_TABLE(t.columns) FROM t", MARIADB, "JSON_TABLE");
+    unchecked("SELECT JSON_TABLE(columns) FROM t", MARIADB, "JSON_TABLE");
+    unchecked("SELECT JSON_TABLE(a, columns) FROM t", MARIADB, "JSON_TABLE");
+    unchecked("SELECT JSON_TABLE(columns(1))", MARIADB, "JSON_TABLE");
+    unchecked("SELECT JSON_TABLE(a, f(1) COLUMNS (x INT PATH '$'))", MARIADB, "JSON_TABLE");
+    unchecked("SELECT JSON_TABLE('[1]', '$' `COLUMNS` (a INT PATH '$'))", MARIADB, "JSON_TABLE");
+    unchecked("SELECT JSON_TABLE('[1]', '$' COLUMNS)", MARIADB, "JSON_TABLE");
+    unchecked("SELECT JSON_TABLE('[1]', ('$' COLUMNS (a INT PATH '$')))", MARIADB, "JSON_TABLE");
     // A column's type with its precision in `JSON_TABLE`'s columns is no call.
     let typed = "SELECT * FROM JSON_TABLE('[1]', '$[*]' COLUMNS (d DATETIME(6) PATH '$', n NCHAR(10) PATH '$', \
                  NESTED PATH '$' COLUMNS (x DECIMAL(10, 2) PATH '$'))) AS jt";
