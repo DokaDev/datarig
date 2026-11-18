@@ -851,7 +851,9 @@ impl<'ast> Visit<'ast> for Scan<'_> {
         // `<Self>::..` inside an `impl` of an engine enum is that enum.
         let is_self = matches!(&*q.ty, syn::Type::Path(p) if p.path.is_ident("Self"));
         let self_enum = || engine_enum(&self.selves.last().cloned().flatten()?);
-        if let Some(e) = if is_self { self_enum() } else { type_engine(&q.ty) } {
+        // A generic type over an engine enum may be the enum itself (`<Identity<Dialect>>::V`).
+        let named = if is_self { self_enum() } else { type_engine(&q.ty).or_else(|| generic_engine(&q.ty)) };
+        if let Some(e) = named {
             self.report(q.lt_token.span, Kind::Alias, format!("`<{e}>::..` names {e} through a qualified path"));
         }
         visit::visit_qself(self, q);
@@ -1415,7 +1417,7 @@ fn every_violation_fixture_is_reported() {
                 (Kind::CatchAll, 37),
             ],
         ),
-        ("qualified_self", "crates/tui/src/app/tx.rs", &[(Kind::Alias, 5), (Kind::Alias, 10)]),
+        ("qualified_self", "crates/tui/src/app/tx.rs", &[(Kind::Alias, 5), (Kind::Alias, 10), (Kind::Alias, 17)]),
         (
             "assoc_type",
             "crates/tui/src/app/tx.rs",

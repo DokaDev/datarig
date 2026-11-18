@@ -10,3 +10,9 @@ impl Dialect {
         *self == <Self>::Postgres
     }
 }
+
+type Identity<T> = T;
+
+fn through_identity(d: Dialect) -> bool {
+    d == <Identity<Dialect>>::Postgres
+}
