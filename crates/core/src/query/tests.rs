@@ -1140,6 +1140,13 @@ fn calls_are_confirmed_refused_or_clear() {
         assert_eq!(check(MY, text, true), Err(BarRefusal::UncheckedCalls(vec![text_name(text)])), "{text}");
         assert!(matches!(check(MY, text, false), Ok(FilterVerdict::NeedsConfirm(_))), "{text}");
     }
+    // A `$` reads as a dollar quote or not, whichever the server does: not clear either way.
+    for dollar_quotes in [false, true] {
+        let Dialect::MySql(mode) = MY else { unreachable!() };
+        let my = Dialect::MySql(MySqlMode { dollar_quotes, ..mode });
+        let r = check(my, "id > 1 $a$ OR my_fn(id) > 0 OR 2 $a$ > 0", false);
+        assert!(!matches!(r, Ok(FilterVerdict::Clear)), "{dollar_quotes}: {r:?}");
+    }
     // A comment is refused before that.
     assert!(check(MY, "now/* c */() > id", true).is_err());
     for text in ["NOW() > id", "ABS (id) > 0", "`ABS`(id) > 0", "COALESCE (id, 0) > 0"] {

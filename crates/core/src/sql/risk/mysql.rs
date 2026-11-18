@@ -784,27 +784,37 @@ pub fn classify(sql: &str, mode: MySqlMode) -> Risk {
     })
 }
 
-/// The sql modes to read `sql` in: `mode` first, then the others that read it differently (a
-/// backslash in it reads otherwise under `NO_BACKSLASH_ESCAPES`, a `"` under `ANSI_QUOTES`).
-/// The session's mode is the driver's to keep current, and a server's default may differ from
-/// what the app was told.
+/// The sql modes to read `sql` in: `mode` first, then the others that read it differently
+/// ([`other_readings`]). The session's mode is the driver's to keep current, and a server's
+/// default may differ from what the app was told.
 fn readings(sql: &str, mode: MySqlMode) -> Vec<MySqlMode> {
-    let backslash = sql.contains('\\');
-    let quote = sql.contains('"');
     let mut out = vec![mode];
-    if backslash {
-        out.push(MySqlMode { no_backslash_escapes: !mode.no_backslash_escapes, ..mode });
+    out.extend(other_readings(sql, mode));
+    out
+}
+
+/// The sql modes other than `mode` that read MySQL text `sql` differently: a backslash in it
+/// reads otherwise under `NO_BACKSLASH_ESCAPES`, a `"` under `ANSI_QUOTES`, and a `$` where the
+/// server reads dollar quotes (which the driver tells from the server's version, and a proxy
+/// may report another); each such setting flipped, and every combination of them.
+pub(crate) fn other_readings(sql: &str, mode: MySqlMode) -> Vec<MySqlMode> {
+    let (backslash, quote, dollar) = (sql.contains('\\'), sql.contains('"'), sql.contains('$'));
+    let mut out: Vec<MySqlMode> = vec![mode];
+    for (on, flip) in [
+        (
+            backslash,
+            (|m: MySqlMode| MySqlMode { no_backslash_escapes: !m.no_backslash_escapes, ..m })
+                as fn(MySqlMode) -> MySqlMode,
+        ),
+        (quote, |m: MySqlMode| MySqlMode { ansi_quotes: !m.ansi_quotes, ..m }),
+        (dollar, |m: MySqlMode| MySqlMode { dollar_quotes: !m.dollar_quotes, ..m }),
+    ] {
+        if on {
+            let flipped: Vec<MySqlMode> = out.iter().map(|&m| flip(m)).collect();
+            out.extend(flipped);
+        }
     }
-    if quote {
-        out.push(MySqlMode { ansi_quotes: !mode.ansi_quotes, ..mode });
-    }
-    if backslash && quote {
-        out.push(MySqlMode {
-            ansi_quotes: !mode.ansi_quotes,
-            no_backslash_escapes: !mode.no_backslash_escapes,
-            ..mode
-        });
-    }
+    out.remove(0);
     out
 }
 

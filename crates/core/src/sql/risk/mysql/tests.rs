@@ -222,9 +222,11 @@ fn the_sql_mode_changes_what_is_a_string() {
     // A reading the server would refuse (an unterminated string) does not count.
     assert_eq!(render(&classify("SELECT 'it\\'s'", MODE)), "read ro");
     assert_eq!(render(&classify("SELECT \"it\"\"s\" FROM t", ansi)), "read ro");
-    // Dollar quotes only where the server reads them.
+    // Dollar quotes only where the server reads them, and where the driver may be wrong about
+    // that, both readings count (a server that reads them refuses such a `SELECT` anyway).
     let dollar = MySqlMode { dollar_quotes: true, ..MODE };
-    assert_eq!(render(&classify("SELECT $$a; DROP TABLE t$$", dollar)), "read ro");
+    assert_eq!(classify_as("SELECT $$a; DROP TABLE t$$", dollar).map(|r| render(&r)), Some("read ro".into()));
+    assert_eq!(render(&classify("SELECT $$a; DROP TABLE t$$", dollar)), "ddl drop commit");
     assert_eq!(render(&classify("SELECT $$a; DROP TABLE t$$", MODE)), "ddl drop commit");
 }
 
@@ -545,6 +547,24 @@ fn built_ins_count_only_as_the_server_reads_them() {
     // A call of a looked-up name is code the read check cannot see.
     assert_eq!(classify("EXPLAIN ANALYZE SELECT now ()", MODE).danger, Some(Danger::AnalyzeRunsCode));
     assert_eq!(repeatable("SELECT now () FROM t", MODE), Err(NotRepeatable::UserFunction));
+}
+
+/// Whether the server reads dollar quotes is told from its version, which a proxy may report
+/// otherwise: a text with a `$` is read both ways, and the worse reading counts.
+#[test]
+fn a_dollar_is_read_with_and_without_dollar_quotes() {
+    let sql = "SELECT 1 $a$, GET_LOCK('x', 10), 2 $a$";
+    for dollar_quotes in [false, true] {
+        let mode = MySqlMode { dollar_quotes, ..MODE };
+        assert_eq!(classify(sql, mode).danger, Some(Danger::ServerAction), "{dollar_quotes}");
+        let r = classify("SELECT 1 $a$, my_fn(), 2 $a$", mode);
+        assert!(r.unchecked_call.is_some() && r.read_only().is_err(), "{dollar_quotes}");
+    }
+    // A plain `$` in a name or a string reads the same both ways.
+    for dollar_quotes in [false, true] {
+        let mode = MySqlMode { dollar_quotes, ..MODE };
+        assert_eq!(render(&classify("SELECT a$b, 'x$y$' FROM t", mode)), "read ro");
+    }
 }
 
 #[test]
