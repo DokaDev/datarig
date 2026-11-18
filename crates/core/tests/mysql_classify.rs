@@ -13,7 +13,7 @@
 //! (split on blanks, no shell). Skipped without it, unless `DATARIG_REQUIRE_MYSQL=1`.
 
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
-use datarig_core::sql::risk::mysql::{BUILTINS, MARIADB_CONSTRUCTORS, NOT_ON_MARIADB};
+use datarig_core::sql::risk::mysql::{BUILTINS, MARIADB_CONSTRUCTORS, NEWER_THAN_OLDEST, NOT_ON_MARIADB};
 use datarig_core::sql::risk::{Class, Classifier};
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -259,15 +259,16 @@ fn every_built_in_is_a_function_of_the_server() {
         functions_mariadb_does_not_provide(&unknown);
         return geometry_constructors_on_mariadb(&client);
     }
-    // Functions only some supported versions have.
-    const NOT_EVERYWHERE: &[&str] =
-        &["MD5", "SHA1", "STRING_TO_VECTOR", "VECTOR_DIM", "VECTOR_TO_STRING", "WAIT_UNTIL_SQL_THREAD_AFTER_GTIDS"];
-    let missing: Vec<&&str> = unknown.iter().filter(|n| !NOT_EVERYWHERE.contains(n)).collect();
+    // Functions newer versions no longer have, and those only newer versions have (no
+    // built-ins to the read check).
+    const REMOVED: &[&str] = &["MD5", "SHA1", "WAIT_UNTIL_SQL_THREAD_AFTER_GTIDS"];
+    let missing: Vec<&&str> =
+        unknown.iter().filter(|n| !REMOVED.contains(n) && !NEWER_THAN_OLDEST.contains(n)).collect();
     assert!(missing.is_empty(), "not functions of this server: {missing:?}");
     // MySQL's own functions are built-ins to the read check, whatever MariaDB has.
     for name in NOT_ON_MARIADB.lines() {
         let risk = Classifier::classify_once(MY, &format!("SELECT {name}()"));
-        assert!(risk.unchecked_call.is_none(), "{name}");
+        assert_eq!(risk.unchecked_call.is_some(), NEWER_THAN_OLDEST.contains(&name), "{name}");
     }
 }
 

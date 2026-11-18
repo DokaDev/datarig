@@ -259,7 +259,7 @@ const CORPUS: &[(&str, &str)] = &[
     ("DO SLEEP(0)", "read ro"),
     ("DO zz_cls_f()", "proc procedural code udf"),
     ("DO zz_classify.zz_cls_f()", "proc procedural code udf"),
-    ("SELECT VECTOR_DIM(STRING_TO_VECTOR('[1, 2]'))", "read ro norun"),
+    ("SELECT VECTOR_DIM(STRING_TO_VECTOR('[1, 2]'))", "read code udf norun"),
     ("SELECT 3 MEMBER OF ('[1, 3]')", "read ro"),
     ("SELECT * FROM (SELECT 1) d (a)", "read ro"),
     ("SELECT CONVERT('2020-01-01', DATETIME(6)), CONVERT('a', NCHAR(2))", "read ro"),
