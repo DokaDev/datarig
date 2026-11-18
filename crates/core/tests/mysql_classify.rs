@@ -288,17 +288,16 @@ fn built_ins_count_as_the_server_reads_them_however_written() {
         let mut wrong = Vec::new();
         for (n, _) in names.iter().enumerate() {
             let first = n * FORMS.len();
-            let risk = |i: usize| Classifier::classify_once(session, &texts[i]);
             // A name the server, or the read check, does not have as a built-in at all is
             // another test's.
-            if looked_up(first) || risk(first).unchecked_call.is_some() {
+            if looked_up(first) || Classifier::classify_once(session, &texts[first]).unchecked_call.is_some() {
                 continue;
             }
-            for i in first + 1..first + FORMS.len() {
-                let r = risk(i);
+            for (i, text) in texts.iter().enumerate().skip(first + 1).take(FORMS.len() - 1) {
+                let r = Classifier::classify_once(session, text);
                 let (unchecked, refused) = (r.unchecked_call.is_some(), r.read_only().is_err());
                 if looked_up(i) && !refused || !ignore_space && unchecked && !looked_up(i) {
-                    wrong.push(format!("{:?}: server {:?}, unchecked {unchecked}", texts[i], errors.get(&i)));
+                    wrong.push(format!("{text:?}: server {:?}, unchecked {unchecked}", errors.get(&i)));
                 }
             }
         }
