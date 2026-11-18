@@ -26,7 +26,7 @@ A patch release that reads MySQL and MariaDB function calls the way the server d
 - On MySQL and MariaDB, a call of a built-in function that the server reads as the built-in only
   when its name is directly followed by `(` (such as `NOW`, `COUNT` or `TRIM`) now counts as a
   call of the database's own function when a blank or a comment comes before the `(` (`now ()`),
-  and so does a call of a built-in with its name quoted (`` `now`() ``, `` `coalesce`() ``), as
+  and so does a call of a built-in with its name in backticks (such as `now` or `coalesce`), as
   the server reads them: a read-only profile refuses it and the table filter asks about it, as
   for any function that is not a built-in. When the session's `sql_mode` has `IGNORE_SPACE` (as
   `ANSI` does), blanks before the `(` are fine and the call stays the built-in; a comment there
@@ -39,9 +39,9 @@ A patch release that reads MySQL and MariaDB function calls the way the server d
 - On MySQL and MariaDB, text with a `$` is now checked both as a server that reads dollar quotes
   reads it and as one that does not, and the stricter reading counts, since the version a server
   reports (for example through a proxy) may not tell which it is.
-- On MySQL, a `SET_VAR` optimiser hint that names its setting in backticks or quotes
-  (`` SET_VAR(`sql_mode` = '') ``) now always asks before it runs, whatever the setting, since
-  datarig does not read such a name.
+- On MySQL, a `SET_VAR` optimiser hint that names its setting in backticks or quotes (such as
+  `sql_mode` in backticks) now always asks before it runs, whatever the setting, since datarig
+  does not read such a name.
 - On MySQL, `STRING_TO_VECTOR`, `VECTOR_DIM` and `VECTOR_TO_STRING`, which only MySQL 9.0 and
   later have, now count as calls of the database's own functions on every server: a read-only
   profile refuses them.
