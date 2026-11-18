@@ -523,7 +523,7 @@ fn readings(text: &str, d: Dialect) -> Result<Vec<Reading>, BarRefusal> {
         }
         Dialect::Postgres => {}
         Dialect::MySql(mode) => {
-            for m in other_modes(text, mode) {
+            for m in risk::mysql::other_readings(text, mode) {
                 all.push(Reading { tokens: lex_in(&ext, Dialect::MySql(m)), dialect: Dialect::MySql(m) });
             }
         }
@@ -549,21 +549,6 @@ fn readings(text: &str, d: Dialect) -> Result<Vec<Reading>, BarRefusal> {
         out.push(r);
     }
     Ok(out)
-}
-
-/// The other sql modes that read MySQL text `text` differently from `mode`: with a backslash,
-/// the other `NO_BACKSLASH_ESCAPES`; with a `"`, the other `ANSI_QUOTES`; with both, both.
-fn other_modes(text: &str, mode: MySqlMode) -> Vec<MySqlMode> {
-    let backslash = text.contains('\\');
-    let quote = text.contains('"');
-    let nbe = MySqlMode { no_backslash_escapes: !mode.no_backslash_escapes, ..mode };
-    let ansi = MySqlMode { ansi_quotes: !mode.ansi_quotes, ..mode };
-    let both = MySqlMode { ansi_quotes: !mode.ansi_quotes, ..nbe };
-    [(backslash, nbe), (quote, ansi), (backslash && quote, both)]
-        .into_iter()
-        .filter(|(on, _)| *on)
-        .map(|(_, m)| m)
-        .collect()
 }
 
 /// Token `t`'s byte range within `text` (not the blank after it).
