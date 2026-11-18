@@ -7,3 +7,9 @@ impl Dialect {
         self == Self::Postgres
     }
 }
+
+impl (Dialect) {
+    fn dollar_quotes(&self) -> bool {
+        matches!(self, Self::Postgres)
+    }
+}

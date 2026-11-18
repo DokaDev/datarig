@@ -672,11 +672,16 @@ impl Scan<'_> {
     }
 
     fn enter_impl(&mut self, ty: &syn::Type) {
-        let name = match ty {
-            syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
-            _ => None,
-        };
-        self.selves.push(name);
+        // Through parentheses: `impl (Dialect) { .. }`.
+        fn name(ty: &syn::Type) -> Option<String> {
+            match ty {
+                syn::Type::Paren(p) => name(&p.elem),
+                syn::Type::Group(g) => name(&g.elem),
+                syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
+                _ => None,
+            }
+        }
+        self.selves.push(name(ty));
     }
 }
 
@@ -1349,7 +1354,7 @@ fn every_violation_fixture_is_reported() {
         ("tui_if_let_dialect", "crates/tui/src/app/editor.rs", &[(Kind::BooleanTest, 6), (Kind::Reference, 6)]),
         ("catch_all_explain", "crates/core/src/sql/plan.rs", &[(Kind::CatchAll, 9)]),
         ("matches_dialect", "crates/core/src/sql/split.rs", &[(Kind::BooleanTest, 6)]),
-        ("self_eq_in_impl", "crates/core/src/sql/dialect.rs", &[(Kind::BooleanTest, 7)]),
+        ("self_eq_in_impl", "crates/core/src/sql/dialect.rs", &[(Kind::BooleanTest, 7), (Kind::BooleanTest, 13)]),
         ("alias_use", "crates/core/src/sql/lexer.rs", &[(Kind::Alias, 2)]),
         ("glob_use", "crates/drivers/postgres/src/connect.rs", &[(Kind::Reference, 3), (Kind::Alias, 3)]),
         ("trait_default_body", SPEC_FILE, &[(Kind::DefaultBody, 7)]),
