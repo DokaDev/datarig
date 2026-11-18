@@ -665,7 +665,8 @@ impl Scan<'_> {
 
     /// `type name = ty`: reported when `ty` is an engine enum.
     fn type_alias(&mut self, name: &proc_macro2::Ident, ty: &syn::Type) {
-        if let Some(e) = type_engine(ty) {
+        // An engine enum passed to a generic type (`Identity<Dialect>`) may be the target too.
+        if let Some(e) = type_engine(ty).or_else(|| generic_engine(ty)) {
             self.report(name.span(), Kind::Alias, format!("`{name}` is another name for {e}"));
         }
     }
@@ -1056,6 +1057,22 @@ fn type_engine(ty: &syn::Type) -> Option<&'static str> {
     }
 }
 
+/// An engine enum passed anywhere as a generic argument of a type: `Identity<Dialect>`.
+fn generic_engine(ty: &syn::Type) -> Option<&'static str> {
+    match ty {
+        syn::Type::Paren(p) => generic_engine(&p.elem),
+        syn::Type::Group(g) => generic_engine(&g.elem),
+        syn::Type::Path(p) => p.path.segments.iter().find_map(|s| match &s.arguments {
+            syn::PathArguments::AngleBracketed(a) => a.args.iter().find_map(|g| match g {
+                syn::GenericArgument::Type(t) => type_engine(t).or_else(|| generic_engine(t)),
+                _ => None,
+            }),
+            _ => None,
+        }),
+        _ => None,
+    }
+}
+
 fn stmt_is_test_only(stmt: &syn::Stmt) -> bool {
     match stmt {
         syn::Stmt::Local(l) => is_test_only(&l.attrs),
@@ -1378,7 +1395,7 @@ fn every_violation_fixture_is_reported() {
         (
             "assoc_type",
             "crates/tui/src/app/tx.rs",
-            &[(Kind::Alias, 9), (Kind::Alias, 13), (Kind::Alias, 20), (Kind::Alias, 25)],
+            &[(Kind::Alias, 9), (Kind::Alias, 13), (Kind::Alias, 20), (Kind::Alias, 25), (Kind::Alias, 28)],
         ),
     ];
     let mut missed = Vec::new();

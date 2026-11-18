@@ -24,3 +24,5 @@ type Identity<T> = T;
 fn through_identity(d: Dialect) -> bool {
     d == Identity::<Dialect>::Postgres
 }
+
+type Through = Identity<Dialect>;
