@@ -240,6 +240,14 @@ fn a_hint_with_a_semicolon_or_a_write_stays_a_comment() {
         "write setting writes"
     );
     assert_eq!(render(&risk("SELECT /*+ SET_VAR(sort_buffer_size = 1M) */ 1")), "read ro");
+    // A quoted name is not read: it asks as a risky one does.
+    for sql in [
+        "SELECT /*+ SET_VAR(`sql_mode` = '') */ 1",
+        "SELECT /*+ SET_VAR( `foreign_key_checks` = 0) */ 1",
+        "SELECT /*+ SET_VAR(\"sql_mode\" = '') */ 1",
+    ] {
+        assert_eq!(render(&risk(sql)), "read setting", "{sql}");
+    }
 }
 
 #[test]
