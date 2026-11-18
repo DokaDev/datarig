@@ -6,7 +6,7 @@ use crate::{Case, Engine, verdict};
 use datarig_core::driver::structure::{ColumnFill, StructureColumn};
 use datarig_core::driver::{ReadIn, SessionValues, ValueKind};
 use datarig_core::edit::{Exactness, TableColumn, check_input};
-use datarig_core::export::{SqlColumn, sql_cells};
+use datarig_core::export::{Kind, SqlColumn, sql_cells, sql_value};
 
 /// A value typed for a table column of a type.
 pub struct Typed {
@@ -210,25 +210,32 @@ pub fn input_cases() -> Vec<Case<Typed>> {
     ]
 }
 
-/// A result column copied as SQL, what its values were read in, and values of it to write.
+/// A result column copied as SQL, what its values were read in, and values of it to write
+/// (`None`: NULL).
 pub struct Copied {
     pub columns: &'static [SqlColumn<'static>; 1],
     pub read_in: ReadIn,
     pub server_zone: Option<&'static str>,
-    pub values: &'static [&'static str],
+    pub values: &'static [Option<&'static str>],
 }
 
-/// How the column is copied as SQL on `e`: refused, or each of its values as written or why
-/// not.
+/// How the column is copied as SQL on `e`: refused, or each of its values as the SQL literal a
+/// copy writes (what `SqlCells::cell` takes, written by `sql_value` in the column's kind), or
+/// why not.
 pub fn cells(e: Engine, c: &Copied) -> String {
-    match sql_cells(e.dialect(), c.columns, &c.read_in, c.server_zone) {
+    let d = e.dialect();
+    let kind = Kind::from(c.columns[0].kind);
+    match sql_cells(d, c.columns, &c.read_in, c.server_zone) {
         Err(refused) => format!("refused {refused:?}"),
         Ok(cells) => c
             .values
             .iter()
-            .map(|v| match cells.cell(0, v) {
-                Ok(written) => written.into_owned(),
-                Err(refused) => format!("{:?}", refused.why),
+            .map(|v| match v {
+                None => sql_value(d, kind, None),
+                Some(v) => match cells.cell(0, v) {
+                    Ok(taken) => sql_value(d, kind, Some(&taken)),
+                    Err(refused) => format!("{:?}", refused.why),
+                },
             })
             .collect::<Vec<_>>()
             .join(" | "),
@@ -243,7 +250,11 @@ fn read_in(time_zone: &str, charset: &str) -> ReadIn {
     ReadIn::Values(SessionValues { time_zone: time_zone.to_string(), charset: charset.to_string() })
 }
 
-fn copied(columns: &'static [SqlColumn<'static>; 1], read_in: ReadIn, values: &'static [&'static str]) -> Copied {
+fn copied(
+    columns: &'static [SqlColumn<'static>; 1],
+    read_in: ReadIn,
+    values: &'static [Option<&'static str>],
+) -> Copied {
     Copied { columns, read_in, server_zone: None, values }
 }
 
@@ -252,6 +263,9 @@ const DOUBLE: &[SqlColumn; 1] = &[column("f", "double", ValueKind::Float)];
 const TIMESTAMP: &[SqlColumn; 1] = &[column("at", "timestamp", ValueKind::TimestampTz)];
 const TEXT: &[SqlColumn; 1] = &[column("t", "varchar", ValueKind::Text)];
 const BYTES: &[SqlColumn; 1] = &[column("b", "varbinary", ValueKind::Bytes)];
+const BITS: &[SqlColumn; 1] = &[column("bits", "bit(3)", ValueKind::Bit)];
+const BYTEA: &[SqlColumn; 1] = &[column("b", "bytea", ValueKind::Bytes)];
+const BOOL: &[SqlColumn; 1] = &[column("ok", "boolean", ValueKind::Bool)];
 const SERIAL: &[SqlColumn; 1] =
     &[SqlColumn { name: "id", type_name: "int", kind: ValueKind::Integer, auto_increment: true }];
 const SERIAL_TEXT: &[SqlColumn; 1] =
@@ -261,7 +275,7 @@ pub fn cells_cases() -> Vec<Case<Copied>> {
     vec![
         Case {
             name: "float",
-            input: copied(FLOAT, read_in("+00:00", "utf8mb4"), &["0.1"]),
+            input: copied(FLOAT, read_in("+00:00", "utf8mb4"), &[Some("0.1")]),
             expect: &[
                 (Pg, "0.1"),
                 (MySql, "refused Refused { column: \"f\", why: Float }"),
@@ -270,25 +284,29 @@ pub fn cells_cases() -> Vec<Case<Copied>> {
         },
         Case {
             name: "double",
-            input: copied(DOUBLE, read_in("+00:00", "utf8mb4"), &["0.1"]),
+            input: copied(DOUBLE, read_in("+00:00", "utf8mb4"), &[Some("0.1")]),
             expect: &[(Pg, "0.1"), (MySql, "0.1"), (MariaDb, "0.1")],
         },
         Case {
             name: "timestamp in a fixed offset",
-            input: copied(TIMESTAMP, read_in("+05:30", "utf8mb4"), &["2026-11-18 10:00:00", "0000-00-00 00:00:00"]),
+            input: copied(
+                TIMESTAMP,
+                read_in("+05:30", "utf8mb4"),
+                &[Some("2026-11-18 10:00:00"), Some("0000-00-00 00:00:00")],
+            ),
             expect: &[
-                (Pg, "2026-11-18 10:00:00 | 0000-00-00 00:00:00"),
-                (MySql, "2026-11-18 10:00:00+05:30 | 0000-00-00 00:00:00"),
-                (MariaDb, "2026-11-18 10:00:00+05:30 | 0000-00-00 00:00:00"),
+                (Pg, "'2026-11-18 10:00:00' | '0000-00-00 00:00:00'"),
+                (MySql, "'2026-11-18 10:00:00+05:30' | '0000-00-00 00:00:00'"),
+                (MariaDb, "'2026-11-18 10:00:00+05:30' | '0000-00-00 00:00:00'"),
             ],
         },
         Case {
             name: "timestamp in utc",
-            input: copied(TIMESTAMP, read_in("UTC", "utf8mb4"), &["2026-11-18 10:00:00"]),
+            input: copied(TIMESTAMP, read_in("UTC", "utf8mb4"), &[Some("2026-11-18 10:00:00")]),
             expect: &[
-                (Pg, "2026-11-18 10:00:00"),
-                (MySql, "2026-11-18 10:00:00+00:00"),
-                (MariaDb, "2026-11-18 10:00:00+00:00"),
+                (Pg, "'2026-11-18 10:00:00'"),
+                (MySql, "'2026-11-18 10:00:00+00:00'"),
+                (MariaDb, "'2026-11-18 10:00:00+00:00'"),
             ],
         },
         Case {
@@ -297,80 +315,117 @@ pub fn cells_cases() -> Vec<Case<Copied>> {
                 columns: TIMESTAMP,
                 read_in: read_in("SYSTEM", "utf8mb4"),
                 server_zone: Some("-03:00"),
-                values: &["2026-11-18 10:00:00"],
+                values: &[Some("2026-11-18 10:00:00")],
             },
             expect: &[
-                (Pg, "2026-11-18 10:00:00"),
-                (MySql, "2026-11-18 10:00:00-03:00"),
-                (MariaDb, "2026-11-18 10:00:00-03:00"),
+                (Pg, "'2026-11-18 10:00:00'"),
+                (MySql, "'2026-11-18 10:00:00-03:00'"),
+                (MariaDb, "'2026-11-18 10:00:00-03:00'"),
             ],
         },
         Case {
             name: "timestamp in a zone with daylight saving",
-            input: copied(TIMESTAMP, read_in("Europe/Berlin", "utf8mb4"), &["2026-11-18 10:00:00"]),
+            input: copied(TIMESTAMP, read_in("Europe/Berlin", "utf8mb4"), &[Some("2026-11-18 10:00:00")]),
             expect: &[
-                (Pg, "2026-11-18 10:00:00"),
+                (Pg, "'2026-11-18 10:00:00'"),
                 (MySql, "refused Refused { column: \"at\", why: TimeZone(\"Europe/Berlin\") }"),
                 (MariaDb, "refused Refused { column: \"at\", why: TimeZone(\"Europe/Berlin\") }"),
             ],
         },
         Case {
             name: "timestamp read in unknown values",
-            input: copied(TIMESTAMP, ReadIn::Unknown, &["2026-11-18 10:00:00"]),
+            input: copied(TIMESTAMP, ReadIn::Unknown, &[Some("2026-11-18 10:00:00")]),
             expect: &[
-                (Pg, "2026-11-18 10:00:00"),
+                (Pg, "'2026-11-18 10:00:00'"),
                 (MySql, "refused Refused { column: \"at\", why: SessionUnknown }"),
                 (MariaDb, "refused Refused { column: \"at\", why: SessionUnknown }"),
             ],
         },
         Case {
             name: "timestamp read in changed values",
-            input: copied(TIMESTAMP, ReadIn::Changed, &["2026-11-18 10:00:00"]),
+            input: copied(TIMESTAMP, ReadIn::Changed, &[Some("2026-11-18 10:00:00")]),
             expect: &[
-                (Pg, "2026-11-18 10:00:00"),
+                (Pg, "'2026-11-18 10:00:00'"),
                 (MySql, "refused Refused { column: \"at\", why: SessionChanged }"),
                 (MariaDb, "refused Refused { column: \"at\", why: SessionChanged }"),
             ],
         },
         Case {
             name: "text in utf8mb4",
-            input: copied(TEXT, read_in("+00:00", "utf8mb4"), &["it's"]),
-            expect: &[(Pg, "it's"), (MySql, "it's"), (MariaDb, "it's")],
+            input: copied(TEXT, read_in("+00:00", "utf8mb4"), &[Some("it's")]),
+            expect: &[(Pg, "'it''s'"), (MySql, "'it''s'"), (MariaDb, "'it''s'")],
         },
         Case {
             name: "text in latin1",
-            input: copied(TEXT, read_in("+00:00", "latin1"), &["x"]),
-            expect: &[(Pg, "x"), (MySql, "Charset(\"latin1\")"), (MariaDb, "Charset(\"latin1\")")],
+            input: copied(TEXT, read_in("+00:00", "latin1"), &[Some("x")]),
+            expect: &[(Pg, "'x'"), (MySql, "Charset(\"latin1\")"), (MariaDb, "Charset(\"latin1\")")],
         },
         Case {
             name: "text read in unknown values",
-            input: copied(TEXT, ReadIn::Unknown, &["x"]),
-            expect: &[(Pg, "x"), (MySql, "SessionUnknown"), (MariaDb, "SessionUnknown")],
+            input: copied(TEXT, ReadIn::Unknown, &[Some("x")]),
+            expect: &[(Pg, "'x'"), (MySql, "SessionUnknown"), (MariaDb, "SessionUnknown")],
         },
         Case {
             name: "text read in changed values",
-            input: copied(TEXT, ReadIn::Changed, &["x"]),
-            expect: &[(Pg, "x"), (MySql, "SessionChanged"), (MariaDb, "SessionChanged")],
+            input: copied(TEXT, ReadIn::Changed, &[Some("x")]),
+            expect: &[(Pg, "'x'"), (MySql, "SessionChanged"), (MariaDb, "SessionChanged")],
         },
         Case {
             name: "bytes",
-            input: copied(BYTES, read_in("+00:00", "utf8mb4"), &["0x0A", "\\x0a"]),
-            expect: &[(Pg, "0x0A | \\x0a"), (MySql, "0x0A | NotShownWhole"), (MariaDb, "0x0A | NotShownWhole")],
+            input: copied(BYTES, read_in("+00:00", "utf8mb4"), &[Some("0x0A"), Some("\\x0a")]),
+            expect: &[
+                (Pg, "'0x0A' | E'\\\\x0a'"),
+                (MySql, "X'0A' | NotShownWhole"),
+                (MariaDb, "X'0A' | NotShownWhole"),
+            ],
         },
         Case {
             name: "auto_increment",
-            input: copied(SERIAL, read_in("+00:00", "utf8mb4"), &["0", "5"]),
+            input: copied(SERIAL, read_in("+00:00", "utf8mb4"), &[Some("0"), Some("5")]),
             expect: &[(Pg, "0 | 5"), (MySql, "AutoIncrementZero | 5"), (MariaDb, "AutoIncrementZero | 5")],
         },
         Case {
             name: "auto_increment read in unknown values",
-            input: copied(SERIAL, ReadIn::Unknown, &["0"]),
+            input: copied(SERIAL, ReadIn::Unknown, &[Some("0")]),
             expect: &[(Pg, "0"), (MySql, "AutoIncrementZero"), (MariaDb, "AutoIncrementZero")],
         },
         Case {
             name: "auto_increment text",
-            input: copied(SERIAL_TEXT, read_in("+00:00", "utf8mb4"), &["0"]),
-            expect: &[(Pg, "0"), (MySql, "AutoIncrementZero"), (MariaDb, "AutoIncrementZero")],
+            input: copied(SERIAL_TEXT, read_in("+00:00", "utf8mb4"), &[Some("0")]),
+            expect: &[(Pg, "'0'"), (MySql, "AutoIncrementZero"), (MariaDb, "AutoIncrementZero")],
+        },
+        Case {
+            name: "null",
+            input: copied(TEXT, read_in("+00:00", "utf8mb4"), &[None]),
+            expect: &[(Pg, "NULL"), (MySql, "NULL"), (MariaDb, "NULL")],
+        },
+        Case {
+            name: "negative zero",
+            input: copied(DOUBLE, read_in("+00:00", "utf8mb4"), &[Some("-0"), Some("-0.0"), Some("0"), None]),
+            expect: &[
+                (Pg, "'-0' | '-0.0' | 0 | NULL"),
+                (MySql, "'-0' | '-0.0' | 0 | NULL"),
+                (MariaDb, "'-0' | '-0.0' | 0 | NULL"),
+            ],
+        },
+        Case {
+            name: "bits",
+            input: copied(BITS, read_in("+00:00", "utf8mb4"), &[Some("b'101'"), Some("101"), None]),
+            expect: &[
+                (Pg, "'b''101''' | '101' | NULL"),
+                (MySql, "b'101' | NotShownWhole | NULL"),
+                (MariaDb, "b'101' | NotShownWhole | NULL"),
+            ],
+        },
+        Case {
+            name: "postgres bytes",
+            input: copied(BYTEA, read_in("+00:00", "utf8mb4"), &[Some("\\x0a")]),
+            expect: &[(Pg, "E'\\\\x0a'"), (MySql, "NotShownWhole"), (MariaDb, "NotShownWhole")],
+        },
+        Case {
+            name: "bool",
+            input: copied(BOOL, read_in("+00:00", "utf8mb4"), &[Some("true"), Some("1")]),
+            expect: &[(Pg, "true | '1'"), (MySql, "true | '1'"), (MariaDb, "true | '1'")],
         },
     ]
 }
