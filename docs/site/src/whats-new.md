@@ -34,6 +34,10 @@ A patch release that reads MySQL and MariaDB function calls the way the server d
 - On MariaDB, a call of `lateral()` or `of()`, and a call of `JSON_TABLE` without its `COLUMNS`
   clause or with its name quoted, now count as calls of the database's own functions, as MariaDB
   reads them.
+- On MariaDB, a `JSON_TABLE` call counts as the table function only with its real `COLUMNS`
+  clause (the path's string, then `COLUMNS (`): a call with a column or a call named `columns` in
+  its arguments (`JSON_TABLE(t.columns)`) now counts as a call of the database's own function, as
+  MariaDB reads it.
 - A column type with a precision in `JSON_TABLE`'s `COLUMNS` (`DATETIME(6)`, `NCHAR(10)`) is no
   longer taken for a function call, so such a query is a plain read on a read-only profile.
 - On MySQL and MariaDB, text with a `$` is now checked both as a server that reads dollar quotes
