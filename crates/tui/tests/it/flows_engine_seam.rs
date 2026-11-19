@@ -10,7 +10,7 @@ use crate::common;
 
 use common::*;
 use datarig_core::config::Config;
-use datarig_core::driver::{DbCommand, DbError, DbEvent, ExplainFormat, Outcome, SessionRole, TxRule, TxStep};
+use datarig_core::driver::{DbCommand, DbError, DbEvent, Driver, ExplainFormat, Outcome, SessionRole, TxRule, TxStep};
 use datarig_core::policy::{CommitRule, Policy};
 use datarig_core::profile::{ConnectionConfig, ProfileId};
 use datarig_core::secret::{MemoryStore, PasswordSource};
@@ -85,6 +85,13 @@ fn driver(mysql: bool) -> FakeDriver {
     d
 }
 
+/// [`driver`], saying it can stop a statement on the server (`Capabilities::cancel`) or not.
+fn driver_cancel(mysql: bool, cancel: bool) -> FakeDriver {
+    let d = driver(mysql);
+    d.no_cancel.store(!cancel, Ordering::SeqCst);
+    d
+}
+
 fn id(h: &Harness, name: &str) -> ProfileId {
     h.app.profiles.iter().find(|p| p.name == name).expect("profile").id
 }
@@ -146,6 +153,11 @@ async fn next_event(rx: &mut UnboundedReceiver<AppEvent>) -> AppEvent {
 /// that its connect waits until the test hands the command's result over
 /// ([`AppEvent::Resolved`]). Nothing is connected yet.
 fn slow_harness(engine: Engine, read_only: bool) -> (Harness, UnboundedReceiver<AppEvent>) {
+    slow_harness_cancel(engine, read_only, true)
+}
+
+/// [`slow_harness`] with a driver that says it can stop a statement on the server or not.
+fn slow_harness_cancel(engine: Engine, read_only: bool, cancel: bool) -> (Harness, UnboundedReceiver<AppEvent>) {
     let mut p = ConnectionConfig {
         name: "slow".into(),
         driver: engine.driver().into(),
@@ -160,6 +172,7 @@ fn slow_harness(engine: Engine, read_only: bool) -> (Harness, UnboundedReceiver<
     cfg.policies.insert("prod", Policy { read_only: true, ..Policy::default() });
     let (h, rx) = Harness::started(&cfg, Lang::En, Arc::new(MemoryStore::new()), Startup::Normal);
     h.driver.mysql.store(engine.mysql_driver(), Ordering::SeqCst);
+    h.driver.no_cancel.store(!cancel, Ordering::SeqCst);
     (h.with_fake_driver(), rx)
 }
 
@@ -569,39 +582,45 @@ fn a_prepared_statement_is_kept_after_a_confirmed_success_and_forgotten_after_an
 // ── Cancel is local first ───────────────────────────────────────────────────────────────────
 
 /// On every engine, a cancel of a statement that waits for its profile to connect drops it:
-/// it never runs, no query session is opened for it, and no session is asked to cancel.
+/// it never runs, no query session is opened for it, and no session is asked to cancel. The
+/// same with a driver that says it cannot stop a statement on the server: the cancel is the
+/// app's own.
 #[tokio::test(flavor = "multi_thread")]
 async fn cancel_drops_a_queued_run_without_starting_a_connection() {
-    for engine in ENGINES {
-        let (mut h, mut rx) = slow_harness(engine, false);
+    for (engine, cancel) in ENGINES.into_iter().flat_map(|e| [(e, true), (e, false)]) {
+        let (mut h, mut rx) = slow_harness_cancel(engine, false, cancel);
+        assert_eq!(h.driver.capabilities().cancel, cancel, "{engine:?}, cancel {cancel}");
         let resolved = console_on_slow(&mut h, &mut rx).await;
         run_all(&mut h, "SELECT 1");
         let tab = h.app.tab().id;
-        assert!(h.app.is_queued(tab), "{engine:?}");
+        assert!(h.app.is_queued(tab), "{engine:?}, cancel {cancel}");
         h.app.dispatch(Action::CancelQuery);
-        assert!(!h.app.is_queued(tab), "{engine:?}");
-        assert_eq!(tab_status(&h), Some(Msg::Label(Label::QueryCancelled)), "{engine:?}");
+        assert!(!h.app.is_queued(tab), "{engine:?}, cancel {cancel}");
+        assert_eq!(tab_status(&h), Some(Msg::Label(Label::QueryCancelled)), "{engine:?}, cancel {cancel}");
         h.app.on_app_event(resolved);
         if let Some(lang) = engine.said() {
             h.meta_db("slow", DbEvent::Language(lang));
         }
         h.meta_db("slow", DbEvent::Connected);
-        assert!(executes(&mut h).is_empty(), "{engine:?}: nothing ran");
-        assert_eq!(query_sessions(&h), 0, "{engine:?}: no query session was opened");
-        assert!(!h.cancelled.load(Ordering::SeqCst), "{engine:?}: no session was asked to cancel");
+        assert!(executes(&mut h).is_empty(), "{engine:?}, cancel {cancel}: nothing ran");
+        assert_eq!(query_sessions(&h), 0, "{engine:?}, cancel {cancel}: no query session was opened");
+        assert!(!h.cancelled.load(Ordering::SeqCst), "{engine:?}, cancel {cancel}: no session was asked to cancel");
     }
 }
 
 /// On every engine, a cancel of a run of several statements reaches the session's canceller
 /// (the engine never stops it before the driver): what the driver ran stays as it answered,
-/// and the statements after the one it stopped at are not run.
+/// and the statements after the one it stopped at are not run. The same with a driver that
+/// says it cannot stop a statement on the server: the cancel still reaches the session, which
+/// stops the run between its statements.
 #[test]
 fn a_cancel_between_statements_reaches_the_session_on_every_engine() {
     use datarig_tui::app::runlog::StatementOutcome;
-    for engine in ENGINES {
+    for (engine, cancel) in ENGINES.into_iter().flat_map(|e| [(e, true), (e, false)]) {
         let p = ConnectionConfig { driver: engine.driver().into(), ..ConnectionConfig::test_db() };
         let cfg = Config { connections: vec![p], ..Config::default() };
-        let mut h = Harness::with_driver(&cfg, Lang::En, driver(engine.mysql_driver()));
+        let mut h = Harness::with_driver(&cfg, Lang::En, driver_cancel(engine.mysql_driver(), cancel));
+        assert_eq!(h.driver.capabilities().cancel, cancel, "{engine:?}, cancel {cancel}");
         if let Some(lang) = engine.said() {
             h.db(DbEvent::Language(lang));
         }
@@ -613,21 +632,21 @@ fn a_cancel_between_statements_reaches_the_session_on_every_engine() {
         h.app.focus = Focus::Editor;
         h.sent();
         run_all(&mut h, "SELECT 1;\nSELECT 2;\nSELECT 3;");
-        assert_eq!(executes(&mut h).len(), 1, "{engine:?}");
+        assert_eq!(executes(&mut h).len(), 1, "{engine:?}, cancel {cancel}");
         let id = h.app.tab().exec.query_id;
         h.tab_db(0, DbEvent::Started { id, index: 0 });
         h.tab_db(0, DbEvent::Finished { id, index: 0, outcome: Outcome::Command("SELECT".into()), elapsed: MS });
         h.tab_db(0, DbEvent::Started { id, index: 1 });
         h.app.dispatch(Action::CancelQuery);
         let session = h.roles().iter().position(|r| *r == SessionRole::Query).expect("a query session");
-        assert!(h.session_cancelled(session), "{engine:?}: the cancel reached the session");
+        assert!(h.session_cancelled(session), "{engine:?}, cancel {cancel}: the cancel reached the session");
         h.tab_db(0, DbEvent::Failed { id, error: DbError::Cancelled, cancelled: true });
-        assert!(h.app.tab().exec.running.is_none(), "{engine:?}");
+        assert!(h.app.tab().exec.running.is_none(), "{engine:?}, cancel {cancel}");
         let outcomes: Vec<StatementOutcome> =
             h.app.tab().exec.run.statements.iter().map(|s| s.outcome.clone()).collect();
-        assert!(matches!(outcomes[0], StatementOutcome::Command(_)), "{engine:?}: {outcomes:?}");
-        assert!(matches!(outcomes[1], StatementOutcome::Cancelled), "{engine:?}: {outcomes:?}");
-        assert!(matches!(outcomes[2], StatementOutcome::NotRun), "{engine:?}: {outcomes:?}");
+        assert!(matches!(outcomes[0], StatementOutcome::Command(_)), "{engine:?}, cancel {cancel}: {outcomes:?}");
+        assert!(matches!(outcomes[1], StatementOutcome::Cancelled), "{engine:?}, cancel {cancel}: {outcomes:?}");
+        assert!(matches!(outcomes[2], StatementOutcome::NotRun), "{engine:?}, cancel {cancel}: {outcomes:?}");
     }
 }
 

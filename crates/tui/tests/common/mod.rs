@@ -108,13 +108,16 @@ pub struct FakeDriver {
     pub no_manual: Arc<AtomicBool>,
     /// With `Capabilities::monitor` (a driver that opens monitor sessions).
     pub monitor: Arc<AtomicBool>,
+    /// Without `Capabilities::cancel` (as a driver that says it cannot stop a statement on the
+    /// server); its sessions still take a cancel as every fake session does.
+    pub no_cancel: Arc<AtomicBool>,
 }
 
 impl Driver for FakeDriver {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             server_paging: true,
-            cancel: true,
+            cancel: !self.no_cancel.load(Ordering::SeqCst),
             introspection: true,
             key_metadata: true,
             contexts: true,
