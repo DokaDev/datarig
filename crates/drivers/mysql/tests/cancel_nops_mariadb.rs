@@ -303,14 +303,25 @@ async fn a_cancel_between_statements_works_without_performance_schema() {
     let mut c = Conn::open(&url, test).await;
     let one = format!("INSERT INTO {} VALUES (1)", t.q());
     let two = format!("INSERT INTO {} VALUES (2)", t.q());
-    // A run behind another: the cancel is the last run's, which has not started.
+    // A run behind another: the cancel is the last run's, which has not started. The run before
+    // it waits for a lock the side connection holds, so it cannot end before the cancel; the
+    // lock is let go once the cancel was asked.
+    let lock = format!("zz_nops_hold_{}", std::process::id());
+    let held: Option<i64> = a.exec_first("SELECT GET_LOCK(?, 5)", (lock.clone(),)).await.unwrap();
+    assert_eq!(held, Some(1), "the side connection holds {lock}");
     let marker = format!("zz_nops_first_{}", std::process::id());
-    c.send(1, &[&format!("SELECT SLEEP(1) AS {marker}")]);
+    c.send(1, &[&format!("SELECT GET_LOCK('{lock}', 30) AS {marker}")]);
     c.send(2, &[&one]);
     running(&mut a, &marker).await;
     c.session.cancel();
+    let let_go: Option<i64> = a.exec_first("SELECT RELEASE_LOCK(?)", (lock.clone(),)).await.unwrap();
+    assert_eq!(let_go, Some(1));
     let evs = c.until(15, |e| matches!(e, DbEvent::Failed { id: 2, .. } | DbEvent::Lost { .. })).await;
-    assert!(evs.iter().any(|e| matches!(e, DbEvent::Page { id: 1, columns: Some(_), .. })), "{evs:?}");
+    let first = evs.iter().find_map(|e| match e {
+        DbEvent::Page { id: 1, columns: Some(_), rows, .. } => Some(rows.clone()),
+        _ => None,
+    });
+    assert_eq!(first, Some(vec![vec![Some("1".to_string())]]), "the run before it got its lock: {evs:?}");
     assert!(failures(&evs, 1).is_empty(), "the run before it ends as it would: {evs:?}");
     assert!(
         matches!(failures(&evs, 2)[..], [DbEvent::Failed { error: DbError::Cancelled, cancelled: true, .. }]),
@@ -318,9 +329,10 @@ async fn a_cancel_between_statements_works_without_performance_schema() {
     );
     assert!(!evs.iter().any(|e| matches!(e, DbEvent::Lost { .. })), "{evs:?}");
     assert_eq!(t.count().await, 0, "the cancelled run did not run");
-    c.send(3, &["SELECT 1"]);
+    c.send(3, &[&format!("SELECT RELEASE_LOCK('{lock}')")]);
     let evs = c.answer(3).await;
-    assert!(matches!(evs.last(), Some(DbEvent::Page { .. })), "the session goes on: {evs:?}");
+    let Some(DbEvent::Page { rows, .. }) = evs.last() else { panic!("the session goes on: {evs:?}") };
+    assert_eq!(rows, &vec![vec![Some("1".to_string())]], "the session held the lock");
     // Several statements, cancelled while the first runs: the later ones never start.
     let marker = format!("zz_nops_many_{}", std::process::id());
     c.send(4, &[&format!("SELECT SLEEP(20) AS {marker}"), &one, &two]);
