@@ -35,6 +35,9 @@ uuid.workspace = true
 rustix.workspace = true
 
 [dev-dependencies]
+# The engine seam test parses the workspace's source.
+proc-macro2.workspace = true
+syn.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "net", "io-util"] }
 
 [features]
