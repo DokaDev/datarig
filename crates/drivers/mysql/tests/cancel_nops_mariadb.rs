@@ -248,8 +248,9 @@ fn failures(evs: &[DbEvent], id: u64) -> Vec<&DbEvent> {
 #[tokio::test(flavor = "multi_thread")]
 async fn an_in_flight_cancel_without_performance_schema_sends_no_kill_and_ends_the_read() {
     let test = "an_in_flight_cancel_without_performance_schema_sends_no_kill_and_ends_the_read";
-    let Some(url) = nops_url(test).await else { return };
+    // Before any connection to the server: the other test's connections would count.
     let _alone = ALONE.lock().await;
+    let Some(url) = nops_url(test).await else { return };
     let mut a = side(&url).await;
     let mut c = Conn::open(&url, test).await;
     let marker = format!("zz_nops_inflight_{}", std::process::id());
@@ -293,8 +294,9 @@ async fn an_in_flight_cancel_without_performance_schema_sends_no_kill_and_ends_t
 #[tokio::test(flavor = "multi_thread")]
 async fn a_cancel_between_statements_works_without_performance_schema() {
     let test = "a_cancel_between_statements_works_without_performance_schema";
-    let Some(url) = nops_url(test).await else { return };
+    // Before any connection to the server: the other test's connections would count.
     let _alone = ALONE.lock().await;
+    let Some(url) = nops_url(test).await else { return };
     let t = Table::make(&url, "between").await;
     let mut a = side(&url).await;
     let kills = kills_and_connections(&mut a).await.0;
