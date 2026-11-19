@@ -6,6 +6,7 @@
 //! text, or the connection is closed in its place. Everything else, authentication included,
 //! passes through unchanged.
 
+use datarig_core::profile::dsn;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -101,11 +102,12 @@ impl Proxy {
     }
 }
 
-/// The server's `host:port` in `url`.
+/// The server's `host:port` in `url`, read by the profile's URL parser: a URL without a port
+/// names the scheme's default one.
 pub fn upstream(url: &str) -> String {
-    let at = url.rfind('@').map_or(url.find("//").unwrap() + 2, |i| i + 1);
-    let end = url[at..].find(['/', '?']).map_or(url.len(), |i| at + i);
-    url[at..end].to_string()
+    let d = dsn::parse(url).expect("a test server URL");
+    let port = d.port.unwrap_or(d.scheme.default_port());
+    if d.host.contains(':') { format!("[{}]:{port}", d.host) } else { format!("{}:{port}", d.host) }
 }
 
 /// One packet: its sequence number and payload (a payload of `0xFFFFFF` bytes is followed by
@@ -192,4 +194,18 @@ async fn relay(
     }
     let _ = sw.shutdown().await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::upstream;
+
+    #[test]
+    fn the_upstream_of_a_url_without_a_port_is_on_the_default_port() {
+        assert_eq!(upstream("mysql://u:p@127.0.0.1/shop"), "127.0.0.1:3306");
+        assert_eq!(upstream("mariadb://u@db.example/shop?ssl-mode=disabled"), "db.example:3306");
+        assert_eq!(upstream("mysql://u:p@127.0.0.1:53306/shop"), "127.0.0.1:53306");
+        assert_eq!(upstream("mysql://u:p@[::1]/shop"), "[::1]:3306");
+        assert_eq!(upstream("mysql://u:p@[::1]:53306/"), "[::1]:53306");
+    }
 }
