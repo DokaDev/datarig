@@ -1385,3 +1385,87 @@ async fn behind_a_pooler_start_up_settings_leave_the_text_settings_not_known() {
     assert!(styles.iter().all(Option::is_none), "never known: {styles:?}");
     drop(session);
 }
+
+/// A read-only profile behind the pooler, which drops the read-only startup option: every
+/// session opens. The query and the metadata session say, right after `Connected`, that the
+/// default was ignored and each transaction is opened `READ ONLY` instead (the query session's
+/// reads are read-only, a write fails on the server); the monitor session says nothing of it
+/// (it opens every read `READ ONLY` itself and asks nothing before its probe).
+#[tokio::test(flavor = "multi_thread")]
+async fn behind_a_pooler_a_read_only_profile_opens_and_reads_per_transaction() {
+    let Some(url) = pooler_url("behind_a_pooler_a_read_only_profile_opens_and_reads_per_transaction") else { return };
+    let _pool = POOL.read().await;
+    let tag = format!("poolro{}", std::process::id());
+    for role in [SessionRole::Query, SessionRole::Meta, SessionRole::Monitor] {
+        let opts = ConnectOptions::new(PAGE, role, &tag).read_only(true);
+        let cfg = ConnectionConfig { name: "pooler".into(), dsn: Some(url.clone()), ..ConnectionConfig::default() };
+        let (tx, mut rx) = unbounded_channel();
+        let session = PgDriver.connect(&cfg, role, opts, tx);
+        let mut before = Vec::new();
+        loop {
+            match tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.expect("an answer") {
+                Some(DbEvent::Connected) => break,
+                Some(DbEvent::ConnectFailed { error, .. }) => panic!("{role:?}: {error:?}"),
+                Some(ev) => before.push(ev),
+                None => panic!("{role:?}: closed"),
+            }
+        }
+        assert!(!before.iter().any(|e| matches!(e, DbEvent::ReadOnlyPerTransaction)), "{role:?}: {before:?}");
+        let mut c = Conn { session, rx, cache_off: 0 };
+        if role == SessionRole::Monitor {
+            // Nothing more comes of its own: what came by then is all it says.
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let mut after = Vec::new();
+            while let Ok(ev) = c.rx.try_recv() {
+                after.push(ev);
+            }
+            assert!(!after.iter().any(|e| matches!(e, DbEvent::ReadOnlyPerTransaction)), "{role:?}: {after:?}");
+            continue;
+        }
+        // Said right after `Connected`, before anything else the session says.
+        let next = tokio::time::timeout(Duration::from_secs(10), c.rx.recv()).await.expect("an answer");
+        assert!(matches!(next, Some(DbEvent::ReadOnlyPerTransaction)), "{role:?}: {next:?}");
+        if role == SessionRole::Query {
+            let DbEvent::Page { rows, .. } = c.run(1, "SHOW transaction_read_only").await else { panic!("a row") };
+            assert_eq!(rows[0][0].as_deref(), Some("on"), "the read's transaction is read-only");
+            let ev = c.run(2, "CREATE TEMPORARY TABLE zz_poolro (x int)").await;
+            let DbEvent::Failed { error, .. } = &ev else { panic!("a write ran: {ev:?}") };
+            assert!(format!("{error:?}").contains("read-only transaction"), "{error:?}");
+        }
+    }
+}
+
+/// Behind the pooler a query session without a lock wait limit, idle limit or start-up
+/// statements asks nothing at connect of whether it reaches the server directly: asked inside a
+/// transaction block, its server session is not known (no check is made there); asked outside
+/// one, it checks then and finds it does not (the pooler's). With a limit the connect checks:
+/// known in a block at once.
+#[tokio::test(flavor = "multi_thread")]
+async fn without_limits_or_startup_sql_direct_is_unknown_until_asked() {
+    use datarig_core::driver::OwnSession;
+    let Some(url) = pooler_url("without_limits_or_startup_sql_direct_is_unknown_until_asked") else { return };
+    let _pool = POOL.read().await;
+    let tag = format!("pooldirect{}", std::process::id());
+    async fn own(c: &mut Conn, request: u64) -> OwnSession {
+        c.session.send(DbCommand::ServerSession { request });
+        match c.wait(|e| matches!(e, DbEvent::ServerSession { request: r, .. } if *r == request), 10).await {
+            DbEvent::ServerSession { own, .. } => own,
+            _ => unreachable!(),
+        }
+    }
+    for limit in [None, Some(Duration::from_secs(5))] {
+        let opts = ConnectOptions::new(PAGE, SessionRole::Query, &tag).lock_wait(limit);
+        let mut c = Conn::open_with(&url, SessionRole::Query, opts).await;
+        let ev = c.run(1, "BEGIN").await;
+        assert!(!matches!(ev, DbEvent::Failed { .. }), "{ev:?}");
+        let in_block = own(&mut c, 1).await;
+        let ev = c.run(2, "ROLLBACK").await;
+        assert!(!matches!(ev, DbEvent::Failed { .. }), "{ev:?}");
+        let outside = own(&mut c, 2).await;
+        match limit {
+            None => assert_eq!(in_block, OwnSession::NotKnown, "not checked at connect, nor in a block"),
+            Some(_) => assert_eq!(in_block, OwnSession::NotDirect, "checked at connect"),
+        }
+        assert_eq!(outside, OwnSession::NotDirect, "limit {limit:?}");
+    }
+}
