@@ -135,6 +135,35 @@ impl Drop for Table {
     }
 }
 
+/// The server's count of `KILL` statements since it started.
+async fn kills(a: &mut mysql_async::Conn) -> u64 {
+    let row: Option<(String, u64)> = a.query_first("SHOW GLOBAL STATUS LIKE 'Com_kill'").await.unwrap();
+    row.expect("Com_kill").1
+}
+
+/// The connection that runs a statement containing `marker` once the server runs it (at most
+/// 10 s): a statement the session only set up is not there yet.
+async fn running(a: &mut mysql_async::Conn, marker: &str) -> u64 {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(id) = on_server(a, marker).await {
+            return id;
+        }
+        assert!(Instant::now() < deadline, "{marker} does not run");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// The connection running a statement containing `marker` now, if any.
+async fn on_server(a: &mut mysql_async::Conn, marker: &str) -> Option<u64> {
+    a.exec_first(
+        "SELECT ID FROM information_schema.PROCESSLIST WHERE INFO LIKE CONCAT('%', ?, '%') AND ID <> CONNECTION_ID()",
+        (marker,),
+    )
+    .await
+    .unwrap()
+}
+
 struct Conn {
     session: Session,
     rx: UnboundedReceiver<DbEvent>,
@@ -288,10 +317,11 @@ async fn a_sql_mode_change_is_said_again_after_the_run() {
     assert!(!said[0].ansi_quotes && said[0].mariadb == maria, "{said:?}");
 }
 
-/// A run of several statements cancelled while its first one runs: the server stops it (the
-/// kill is taken where `performance_schema` is on, as on the CI servers and the dev ones), the
-/// run ends cancelled once, no later statement starts or runs (their writes are not there), and
-/// the session goes on.
+/// A run of several statements cancelled while its first one runs on the server (seen in its
+/// process list, so not while the session sets it up): the server takes a `KILL` (its
+/// `Com_kill` moves, as `performance_schema` is on there, as on the CI servers and the dev
+/// ones) and the statement is gone, the run ends cancelled once, no later statement starts or
+/// runs (their writes are not there), and the session goes on.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_multi_statement_run_cancelled_between_statements_runs_no_more() {
     let test = "a_multi_statement_run_cancelled_between_statements_runs_no_more";
@@ -299,12 +329,19 @@ async fn a_multi_statement_run_cancelled_between_statements_runs_no_more() {
     let t = Table::make(&admin, "cancel", &["CREATE TABLE {t} (x INT PRIMARY KEY)"]).await;
     let mut c = Conn::open(&url, test).await;
     let (one, two) = (format!("INSERT INTO {} VALUES (1)", t.q()), format!("INSERT INTO {} VALUES (2)", t.q()));
+    let mut a = side(&admin).await;
+    let marker = format!("zz_seam_cancel_{}", std::process::id());
     let t0 = Instant::now();
-    c.send(1, &["SELECT SLEEP(30)", &one, &two]);
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    c.send(1, &[&format!("SELECT SLEEP(30) AS {marker}"), &one, &two]);
+    // Cancelled once the server runs it, not while the session sets it up.
+    running(&mut a, &marker).await;
+    let before = kills(&mut a).await;
     c.session.cancel();
     let evs = c.answer(1).await;
     assert!(t0.elapsed() < Duration::from_secs(10), "{:?}", t0.elapsed());
+    assert!(kills(&mut a).await > before, "the server took a KILL");
+    assert_eq!(on_server(&mut a, &marker).await, None, "the statement is gone from the server");
+    a.disconnect().await.unwrap();
     let failed: Vec<&DbEvent> = evs.iter().filter(|e| matches!(e, DbEvent::Failed { id: 1, .. })).collect();
     assert!(matches!(failed[..], [DbEvent::Failed { error: DbError::Cancelled, cancelled: true, .. }]), "{evs:?}");
     let started: Vec<usize> = evs
