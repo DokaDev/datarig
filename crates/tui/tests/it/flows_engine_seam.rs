@@ -308,14 +308,17 @@ fn edit_none_is_stored_before_connected() {
 }
 
 /// The Startup SQL of a MySQL-family profile is judged before any server answered, so it is
-/// read as on MySQL and on MariaDB: a call MariaDB does not provide refuses the connect on a
-/// `mysql` and on a `mariadb` profile alike; a call both provide opens the session with it.
+/// read as on MySQL and on MariaDB: a call MariaDB does not provide (`BIN_TO_UUID`,
+/// `ANY_VALUE`) and one MySQL does not (`` `POINT`(1, 2) ``, quoted: a stored function's name
+/// there, MariaDB's own constructor) each refuse the connect on a `mysql` and on a `mariadb`
+/// profile alike; a call both provide opens the session with it.
 #[test]
 fn startup_sql_of_a_mysql_family_profile_is_read_as_mysql_and_mariadb() {
     for key in ["mysql", "mariadb"] {
         for (sql, connects) in [
             ("SET @x = BIN_TO_UUID(UUID_TO_BIN(UUID()))", false),
             ("SET @x = ANY_VALUE(1)", false),
+            ("SET @p = `POINT`(1, 2)", false),
             ("SET @x = UUID()", true),
         ] {
             let p = ConnectionConfig {
