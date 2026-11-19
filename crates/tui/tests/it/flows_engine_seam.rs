@@ -577,6 +577,21 @@ fn a_prepared_statement_is_kept_after_a_confirmed_success_and_forgotten_after_an
     assert!(executes(&mut h).is_empty(), "asked first");
     let asked: Option<Vec<usize>> = h.app.overlays.run_confirm().map(|c| c.items.iter().map(|d| d.index).collect());
     assert_eq!(asked, Some(vec![0]), "a new session starts with none");
+    // Not run: a new session opens for the next run, and its classifier starts with no name
+    // either (the tab's own, not a fresh one made for the check).
+    h.key(KeyCode::Esc);
+    assert_eq!(h.overlay_kind(), None);
+    assert!(executes(&mut h).is_empty(), "nothing was sent");
+    let before = query_sessions(&h);
+    run_all(&mut h, "SELECT 1");
+    assert_eq!(executes(&mut h), [["SELECT 1"]]);
+    assert_eq!(query_sessions(&h), before + 1, "a new query session");
+    done(&mut h);
+    assert!(!knows(&h, "again"), "the new session prepared nothing");
+    run_all(&mut h, "EXECUTE again");
+    assert!(executes(&mut h).is_empty(), "asked first on the new session too");
+    let asked: Option<Vec<usize>> = h.app.overlays.run_confirm().map(|c| c.items.iter().map(|d| d.index).collect());
+    assert_eq!(asked, Some(vec![0]), "the new session's classifier starts with none");
 }
 
 // ── Cancel is local first ───────────────────────────────────────────────────────────────────
