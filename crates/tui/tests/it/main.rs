@@ -26,6 +26,7 @@ mod flows_edit_popup;
 mod flows_edit_preview;
 mod flows_edit_rows;
 mod flows_editor;
+mod flows_engine_seam;
 mod flows_env_colors;
 mod flows_environments;
 mod flows_explorer;
