@@ -2,8 +2,11 @@
 //! `dev/init-mysql/*.sql`. There the driver cannot confirm which connection id is its session's
 //! (it reads the sessions' markers there), so a cancel never sends a `KILL`: a statement that
 //! runs is given up on at once (the session's connection is cut and the session is lost, saying
-//! why), while a cancel of a run that has not started yet, or of the statements after the one
-//! that ran, is the session's own and needs nothing of the server.
+//! why) and no later statement of its run starts, while a cancel of a run that has not started
+//! yet is the session's own and needs nothing of the server. A cancel in the moment between two
+//! statements of a run (one answered, the next not yet sent) is not reached here: the tests
+//! cannot hold the session in that moment, and a cancel while a statement is on its way is that
+//! statement's.
 //!
 //! Connection: `DATARIG_TEST_MARIADB_NOPS_URL` (CI's `integration (MariaDB 11.4)` job starts
 //! such a server on port 13309: `mysql://datarig:datarig@127.0.0.1:13309/shop`).
@@ -290,10 +293,11 @@ async fn an_in_flight_cancel_without_performance_schema_sends_no_kill_and_ends_t
 /// Without `performance_schema` a cancel still stops what the session itself can stop: a run
 /// waiting behind another is answered cancelled and never runs while the one before it ends as
 /// it would (the session stays), and a run of several statements cancelled while its first one
-/// runs runs none of the later ones. No `KILL` reaches the server either way.
+/// runs runs none of the later ones (that session is lost, its connection cut). No `KILL`
+/// reaches the server either way.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_cancel_between_statements_works_without_performance_schema() {
-    let test = "a_cancel_between_statements_works_without_performance_schema";
+async fn a_queued_run_and_the_rest_of_a_cancelled_run_never_run_without_performance_schema() {
+    let test = "a_queued_run_and_the_rest_of_a_cancelled_run_never_run_without_performance_schema";
     // Before any connection to the server: the other test's connections would count.
     let _alone = ALONE.lock().await;
     let Some(url) = nops_url(test).await else { return };

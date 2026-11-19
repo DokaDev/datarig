@@ -2,7 +2,7 @@
 //! MySQL or MariaDB loaded with `dev/init-mysql/*.sql` (CI runs this file in both jobs): the
 //! order of the words a session says before `Connected` and their values on each server, a
 //! changed sql mode said again before the run's answer, a run of several statements cancelled
-//! during one statement running no more of them, and the text a keyset chunk is sent as.
+//! during its first statement running no more of them, and the text a keyset chunk is sent as.
 //!
 //! Connection: `DATARIG_TEST_MYSQL_URL` (e.g. `mysql://datarig:datarig@127.0.0.1:53306/shop`),
 //! and for the tests that look at the server from the side (`performance_schema`) or make a
@@ -321,10 +321,13 @@ async fn a_sql_mode_change_is_said_again_after_the_run() {
 /// process list, so not while the session sets it up): the server takes a `KILL` (its
 /// `Com_kill` moves, as `performance_schema` is on there, as on the CI servers and the dev
 /// ones) and the statement is gone, the run ends cancelled once, no later statement starts or
-/// runs (their writes are not there), and the session goes on.
+/// runs (their writes are not there), and the session goes on. A cancel in the moment between
+/// two statements (one answered, the next not yet sent) is not reached: the test cannot hold the
+/// session there, and a cancel while a statement is on its way is that statement's (even where
+/// the killed statement answers a row, as `GET_LOCK` does on MariaDB).
 #[tokio::test(flavor = "multi_thread")]
-async fn a_multi_statement_run_cancelled_between_statements_runs_no_more() {
-    let test = "a_multi_statement_run_cancelled_between_statements_runs_no_more";
+async fn a_multi_statement_run_cancelled_during_its_first_statement_runs_no_more() {
+    let test = "a_multi_statement_run_cancelled_during_its_first_statement_runs_no_more";
     let Some((url, admin)) = urls(test) else { return };
     let t = Table::make(&admin, "cancel", &["CREATE TABLE {t} (x INT PRIMARY KEY)"]).await;
     let mut c = Conn::open(&url, test).await;
