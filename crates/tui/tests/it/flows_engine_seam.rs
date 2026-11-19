@@ -158,9 +158,20 @@ fn slow_harness(engine: Engine, read_only: bool) -> (Harness, UnboundedReceiver<
 
 /// [`slow_harness`] with a driver that says it can stop a statement on the server or not.
 fn slow_harness_cancel(engine: Engine, read_only: bool, cancel: bool) -> (Harness, UnboundedReceiver<AppEvent>) {
+    slow_harness_key(engine.driver(), engine.mysql_driver(), read_only, cancel)
+}
+
+/// [`slow_harness_cancel`] with the profile's `driver` key `key` and the MySQL driver when
+/// `mysql_driver`.
+fn slow_harness_key(
+    key: &str,
+    mysql_driver: bool,
+    read_only: bool,
+    cancel: bool,
+) -> (Harness, UnboundedReceiver<AppEvent>) {
     let mut p = ConnectionConfig {
         name: "slow".into(),
-        driver: engine.driver().into(),
+        driver: key.into(),
         password: String::new(),
         ..ConnectionConfig::test_db()
     };
@@ -171,7 +182,7 @@ fn slow_harness_cancel(engine: Engine, read_only: bool, cancel: bool) -> (Harnes
     let mut cfg = Config { connections: vec![p], ..Config::default() };
     cfg.policies.insert("prod", Policy { read_only: true, ..Policy::default() });
     let (h, rx) = Harness::started(&cfg, Lang::En, Arc::new(MemoryStore::new()), Startup::Normal);
-    h.driver.mysql.store(engine.mysql_driver(), Ordering::SeqCst);
+    h.driver.mysql.store(mysql_driver, Ordering::SeqCst);
     h.driver.no_cancel.store(!cancel, Ordering::SeqCst);
     (h.with_fake_driver(), rx)
 }
@@ -430,6 +441,68 @@ async fn bin_to_uuid_runs_on_a_mysql_read_only_profile_before_connect() {
             assert!(matches!(tab_status(&h), Some(Msg::SafetyReadOnlyBlocked { .. })), "{:?}", tab_status(&h));
         } else {
             assert_eq!(executes(&mut h), [[sql]], "it runs");
+        }
+    }
+}
+
+/// What became of a run on a read-only profile, at each step.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Verdict {
+    /// Sent to the server (or, before connect, waiting to be).
+    Runs,
+    /// Refused before anything was sent.
+    Refused,
+}
+
+/// The profile's `driver` key (`mysql` or `mariadb`) and the server the MySQL driver reaches
+/// (it says MySQL or MariaDB with its first `Language`) are independent: on a read-only
+/// profile a call only one of them provides (`BIN_TO_UUID` MySQL's, `` `POINT`(1, 2) ``
+/// quoted MariaDB's) is judged before connect in the driver's default (MySQL) whatever the
+/// key, judged again right before it is sent in what the server said, and judged in what the
+/// server said once connected. The key changes none of it.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_profile_key_and_the_servers_language_decide_independently() {
+    use Verdict::{Refused, Runs};
+    // (statement, on MySQL, on MariaDB)
+    let calls = [("SELECT BIN_TO_UUID(a) FROM t", Runs, Refused), ("SELECT `POINT`(1, 2)", Refused, Runs)];
+    for key in ["mysql", "mariadb"] {
+        for server in [Engine::MySql, Engine::MariaDb] {
+            for (sql, on_mysql, on_mariadb) in calls {
+                let on_server = if server == Engine::MariaDb { on_mariadb } else { on_mysql };
+                let case = format!("{key} profile, {server:?} server: {sql}");
+                let (mut h, mut rx) = slow_harness_key(key, true, true, true);
+                let resolved = console_on_slow(&mut h, &mut rx).await;
+                let tab = h.app.tab().id;
+                assert_eq!(h.app.tab_language(tab), mysql(MySqlMode::default()), "{case}: the driver's default");
+                h.sent();
+                run_all(&mut h, sql);
+                let before = if h.app.is_queued(tab) { Runs } else { Refused };
+                assert_eq!(before, on_mysql, "{case}: before connect");
+                if before == Refused {
+                    assert!(matches!(tab_status(&h), Some(Msg::SafetyReadOnlyBlocked { .. })), "{case}");
+                }
+                h.app.on_app_event(resolved);
+                h.meta_db("slow", DbEvent::Language(server.said().expect("a MySQL-family server")));
+                h.meta_db("slow", DbEvent::Connected);
+                let sent = executes(&mut h);
+                if before == Runs {
+                    let at_send = if sent.is_empty() { Refused } else { Runs };
+                    assert_eq!(at_send, on_server, "{case}: right before it is sent");
+                    if at_send == Runs {
+                        assert_eq!(sent, [[sql]], "{case}");
+                        done(&mut h);
+                    } else {
+                        assert!(matches!(tab_status(&h), Some(Msg::SafetyReadOnlyBlocked { .. })), "{case}");
+                    }
+                } else {
+                    assert!(sent.is_empty(), "{case}: a refused run is not sent later");
+                }
+                // Connected: run once more.
+                h.app.focus = Focus::Editor;
+                run_all(&mut h, sql);
+                let connected = if executes(&mut h).is_empty() { Refused } else { Runs };
+                assert_eq!(connected, on_server, "{case}: connected");
+            }
         }
     }
 }
