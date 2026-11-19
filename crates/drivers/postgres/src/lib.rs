@@ -19,6 +19,7 @@
 //!   certificate is checked against the profile's host, also through a tunnel.
 
 mod connect;
+mod engine;
 mod link;
 mod meta;
 mod monitor;

@@ -373,7 +373,8 @@ async fn only_session(admin: &mut mysql_async::Conn, role: SessionRole, test: &s
 async fn a_query_session_says_how_its_text_is_read() {
     let Some(url) = my_url("a_query_session_says_how_its_text_is_read") else { return };
     let mut c = Conn::start(&url, SessionRole::Query, false, "a_query_session_says_how_its_text_is_read");
-    assert!(matches!(c.next(15).await, DbEvent::Encryption(_)), "how its traffic goes, first");
+    assert!(matches!(c.next(15).await, DbEvent::Server(_)), "what the server is, first");
+    assert!(matches!(c.next(15).await, DbEvent::Encryption(_)), "how its traffic goes, second");
     assert!(matches!(c.next(15).await, DbEvent::Isolation(_)), "its level, before it is connected");
     let DbEvent::Language(Language::Sql(Dialect::MySql(mode))) = c.next(5).await else {
         panic!("the language comes before Connected")
@@ -565,7 +566,8 @@ async fn a_level_lost_to_code_stays_unknown_until_reported() {
 async fn the_metadata_session_reads_the_databases_and_the_catalog() {
     let Some(url) = my_url("the_metadata_session_reads_the_databases_and_the_catalog") else { return };
     let mut c = Conn::start(&url, SessionRole::Meta, false, "metaread");
-    assert!(matches!(c.next(15).await, DbEvent::Encryption(_)), "how its traffic goes, first");
+    assert!(matches!(c.next(15).await, DbEvent::Server(_)), "what the server is, first");
+    assert!(matches!(c.next(15).await, DbEvent::Encryption(_)), "how its traffic goes, second");
     let lang = c.next(15).await;
     assert!(matches!(lang, DbEvent::Language(Language::Sql(Dialect::MySql(_)))), "{lang:?}");
     // The plan format of the server and the edits it takes (MySQL 8.0.17 on); none on MariaDB.
@@ -1085,7 +1087,8 @@ async fn a_session_may_start_without_a_database() {
     let Some(url) = my_url("a_session_may_start_without_a_database") else { return };
     let mut c =
         Conn::start(&in_database(&url, ""), SessionRole::Query, false, "a_session_may_start_without_a_database");
-    assert!(matches!(c.next(15).await, DbEvent::Encryption(_)), "how its traffic goes, first");
+    assert!(matches!(c.next(15).await, DbEvent::Server(_)), "what the server is, first");
+    assert!(matches!(c.next(15).await, DbEvent::Encryption(_)), "how its traffic goes, second");
     assert!(matches!(c.next(15).await, DbEvent::Isolation(_)), "its level, before it is connected");
     assert!(matches!(c.next(15).await, DbEvent::Language(_)), "its language, before it is connected");
     assert!(matches!(c.next(15).await, DbEvent::Explain(_)), "the plan format, before it is connected");
@@ -1118,7 +1121,9 @@ async fn sessions_and_test_connections_go_through_a_dialer() {
         tx,
     );
     let first = tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.unwrap();
-    assert!(matches!(first, Some(DbEvent::Encryption(_))), "{first:?}");
+    assert!(matches!(first, Some(DbEvent::Server(_))), "{first:?}");
+    let next = tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.unwrap();
+    assert!(matches!(next, Some(DbEvent::Encryption(_))), "{next:?}");
     let next = tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.unwrap();
     assert!(matches!(next, Some(DbEvent::Isolation(_))), "{next:?}");
     let next = tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.unwrap();

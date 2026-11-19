@@ -23,6 +23,7 @@
 //!   the session opens, with their version.
 
 mod connect;
+mod engine;
 mod link;
 mod meta;
 mod monitor;

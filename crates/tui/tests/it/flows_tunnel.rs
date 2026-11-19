@@ -303,6 +303,7 @@ fn a_test_connection_goes_through_a_throwaway_tunnel_stage_by_stage() {
             server_version: "17.2".into(),
             latency: Duration::from_millis(12),
             encryption: Default::default(),
+            identity: pg_identity(),
         }),
     });
     let line = test_line(&h);

@@ -934,6 +934,7 @@ fn test_connection_success_and_error_states() {
             server_version: "17.2".into(),
             latency: Duration::from_millis(12),
             encryption: Default::default(),
+            identity: pg_identity(),
         }));
         assert_screen!(format!("test_connection_ok_{}_80x24", lang_tag(lang)), lang, h.draw(80, 24));
         h.ctrl('t');

@@ -5,13 +5,13 @@
 use crate::link::Link;
 use crate::session::{self, CONNECT_GUARD, Killer, Opened, Settings, Target, connect_error, my_error};
 use datarig_core::driver::{
-    CancelMark, Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, EditFormat,
-    ExplainFormat, Hierarchy, MySqlEdit, PingError, PingInfo, Session, SessionRole,
+    CancelMark, Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, PingError, PingInfo,
+    Session, SessionRole,
 };
+use datarig_core::engine::EngineId;
 use datarig_core::fault::Fault;
 use datarig_core::panics::caught;
 use datarig_core::profile::ConnectionConfig;
-use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_core::transport::DialerRef;
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -56,23 +56,11 @@ impl Canceller for MyCanceller {
 
 impl Driver for MyDriver {
     fn capabilities(&self) -> Capabilities {
-        Capabilities {
-            server_paging: true,
-            cancel: true,
-            introspection: true,
-            key_metadata: true,
-            contexts: false,
-            structure: true,
-            ddl: true,
-            language: Language::Sql(Dialect::MySql(MySqlMode::default())),
-            hierarchy: Hierarchy::SchemaOnly,
-            explain: Some(ExplainFormat::MySqlTree),
-            reads_held_to_end: true,
-            export: true,
-            manual_commit: true,
-            edit: Some(EditFormat::MySql(MySqlEdit { nowait: true })),
-            monitor: true,
-        }
+        crate::engine::CAPABILITIES
+    }
+
+    fn engines(&self) -> &'static [EngineId] {
+        crate::engine::ENGINES
     }
 
     fn connect(
@@ -118,18 +106,20 @@ impl Driver for MyDriver {
                 let stream = route.dial(timeout).await?;
                 let (_wire, conn, encryption) = session::login(&route, stream, opts).await;
                 let mut conn = conn.map_err(|e| connect_error(&e).0)?;
-                let server = session::Server { version: conn.server_version(), mariadb: conn.is_mariadb() };
+                let greeting = crate::engine::greeting(&conn);
+                let server = session::Server::of_greeting(&greeting);
                 let version: Result<Option<String>, _> = match server.check() {
                     Ok(()) => conn.query_first("SELECT VERSION()").await.map_err(|e| my_error(&e)),
                     Err(e) => Err(e),
                 };
                 session::quit(conn).await;
-                Ok::<_, DbError>((version?.unwrap_or_else(|| server.label()), encryption))
+                let identity = crate::engine::identity(&greeting);
+                Ok::<_, DbError>((version?.unwrap_or_else(|| server.label()), encryption, identity))
             };
             // A panic in the attempt fails the test like any other error.
             match AssertUnwindSafe(caught(tokio::time::timeout(timeout, attempt))).catch_unwind().await {
-                Ok(Ok(Ok((server_version, encryption)))) => {
-                    Ok(PingInfo { server_version, latency: start.elapsed(), encryption })
+                Ok(Ok(Ok((server_version, encryption, identity)))) => {
+                    Ok(PingInfo { server_version, latency: start.elapsed(), encryption, identity })
                 }
                 Ok(Ok(Err(e))) => Err(PingError::Failed(e)),
                 Ok(Err(_)) => Err(PingError::Timeout(timeout)),
@@ -226,7 +216,7 @@ async fn run_session(
             return;
         }
     };
-    let Opened { conn, wire, encryption, server, tracked, id, read_only_unconfirmed, token, own } = opened;
+    let Opened { conn, wire, encryption, server, facts, tracked, id, read_only_unconfirmed, token, own } = opened;
     // The cancel logs in as the session does, without a database (one could be dropped since).
     let kill_opts = target.opts(None, &opts.application_name, &route);
     let killer = Killer::new(route, kill_opts, id, token.clone());
@@ -234,6 +224,8 @@ async fn run_session(
         *g = Some(killer);
     }
     connected.store(true, Ordering::SeqCst);
+    // What the server is, first: every step of opening the session that can fail is behind it.
+    let _ = events.send(DbEvent::Server(facts.clone()));
     let _ = events.send(DbEvent::Encryption(encryption));
     // A metadata or monitor session whose read-only the server did not keep, with its values.
     if let Some(detail) = read_only_unconfirmed {
@@ -254,9 +246,10 @@ async fn run_session(
     // account starts in, which the app checks a tab's first run in. With the plan format and the
     // edits the server takes, before `Connected`: the app acts on a connected session at once
     // (a plan asked for then is built in the server's format, never the driver's default).
-    let _ = events.send(DbEvent::Language(Language::Sql(Dialect::MySql(tracked.mode(&server)))));
-    let _ = events.send(DbEvent::Explain(server.explain()));
-    let _ = events.send(DbEvent::Edit(server.edit()));
+    let derived = crate::engine::derive(&facts, &tracked);
+    let _ = events.send(DbEvent::Language(derived.language));
+    let _ = events.send(DbEvent::Explain(derived.explain));
+    let _ = events.send(DbEvent::Edit(derived.edit));
     let _ = events.send(DbEvent::Connected);
     // What a query session's values are read in (copying them as SQL needs it).
     if let Some(values) = tracked.values().filter(|_| role == SessionRole::Query) {
@@ -269,7 +262,7 @@ async fn run_session(
     }
     let link = Link::new(rx, wire);
     match role {
-        SessionRole::Meta => crate::meta::meta_loop(conn, link, events, tracked).await,
+        SessionRole::Meta => crate::meta::meta_loop(conn, link, events, tracked, server).await,
         SessionRole::Monitor => {
             let marker = token.map(|token| crate::monitor::Marker { token, handshake: conn.id() });
             crate::monitor::monitor_loop(conn, link, events, opts.read_only, marker).await
@@ -287,7 +280,7 @@ async fn run_session(
                 busy,
                 events,
                 settings,
-                server,
+                facts,
                 tracked,
                 select_limit,
                 own,

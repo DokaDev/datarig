@@ -7,6 +7,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const MYSQL_84: Server = Server { version: (8, 4, 6), mariadb: false };
 
+/// The facts of a session on MySQL 8.4.6 (`MYSQL_84`), its own id not read.
+fn facts_84() -> Arc<datarig_core::engine::ServerFacts> {
+    let handshake = datarig_core::engine::Version::new(8, 4, 6);
+    crate::engine::facts(&crate::engine::Greeting { mariadb: false, handshake }, None)
+}
+
 #[test]
 fn versions_before_mysql_8_and_mariadb_10_6_are_refused_with_their_name() {
     let refused = |version, mariadb| Server { version, mariadb }.check().err();
@@ -998,7 +1004,7 @@ async fn a_result_answered_while_its_kill_hangs_is_read_to_its_end_then_the_sess
         Arc::new(AtomicBool::new(false)),
         events,
         crate::query::Settings { page_size: 100, read_only: false },
-        MYSQL_84,
+        facts_84(),
         Tracked::default(),
         None,
         None,
@@ -1111,7 +1117,7 @@ async fn held_while_its_kill_hangs(close: bool) {
         Arc::new(AtomicBool::new(false)),
         events,
         crate::query::Settings { page_size: 1, read_only: false },
-        MYSQL_84,
+        facts_84(),
         Tracked::default(),
         None,
         None,
@@ -1285,7 +1291,7 @@ async fn faked() -> Faked {
         busy.clone(),
         events_tx,
         crate::query::Settings { page_size: 100, read_only: false },
-        MYSQL_84,
+        facts_84(),
         Tracked::default(),
         None,
         None,

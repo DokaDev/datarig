@@ -91,13 +91,15 @@ impl WiredSession {
         Ok(s)
     }
 
-    /// Wait for `Connected` (how the traffic goes comes first and must be plain: the budgets
+    /// Wait for `Connected` (what the server is comes first, then how the traffic goes, which must be plain: the budgets
     /// count unencrypted round trips; the session's start-up state, as a MySQL session says it
     /// before it counts as connected (its level, autocommit, language, plan format and edits),
     /// is not a round trip of its own).
     async fn connected(&mut self, within: Duration) -> Result<(), String> {
         loop {
             match self.next(within).await? {
+                // What the server is, as the session found it (read from the startup it had).
+                DbEvent::Server(_) => {}
                 DbEvent::Encryption(datarig_core::tls::Encryption::Plain) => {}
                 DbEvent::Isolation(_) | DbEvent::Autocommit(_) => {}
                 DbEvent::Language(_) | DbEvent::Explain(_) | DbEvent::Edit(_) => {}

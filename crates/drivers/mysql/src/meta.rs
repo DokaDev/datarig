@@ -94,8 +94,13 @@ async fn rows_of<T: FromRow>(conn: &mut Conn, sql: String) -> Result<Vec<T>, DbE
         .collect()
 }
 
-pub(crate) async fn meta_loop(mut conn: Conn, mut link: Link, events: UnboundedSender<DbEvent>, tracked: Tracked) {
-    let server = Server { version: conn.server_version(), mariadb: conn.is_mariadb() };
+pub(crate) async fn meta_loop(
+    mut conn: Conn,
+    mut link: Link,
+    events: UnboundedSender<DbEvent>,
+    tracked: Tracked,
+    server: Server,
+) {
     let mode = tracked.mode(&server);
     // The database the session opened in; its current one moves for the DDL reads ([`ddl`]).
     let home: Option<String> = conn.opts().db_name().filter(|d| !d.is_empty()).map(str::to_string);

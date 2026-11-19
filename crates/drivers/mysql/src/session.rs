@@ -5,9 +5,8 @@
 
 use crate::route::{Route, io_fault};
 use crate::wire::{TlsFailed, Wire};
-use datarig_core::driver::{
-    CancelFailure, DbError, EditFormat, ExplainFormat, Isolation, MySqlEdit, SessionRole, SessionValues,
-};
+use datarig_core::driver::{CancelFailure, DbError, Isolation, SessionRole, SessionValues};
+use datarig_core::engine::ServerFacts;
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::profile::dsn::{self, Scheme};
@@ -265,20 +264,6 @@ const MYSQL_MIN: (u16, u16, u16) = (8, 0, 0);
 const MARIADB_MIN: (u16, u16, u16) = (10, 6, 0);
 
 impl Server {
-    /// The plan format the server gives: MySQL's tree from 8.0.16 on (`EXPLAIN FORMAT=TREE`;
-    /// `EXPLAIN ANALYZE` from 8.0.18, an older one's error is the server's), none on MariaDB
-    /// (its plans are shaped otherwise).
-    pub(crate) fn explain(&self) -> Option<ExplainFormat> {
-        (!self.mariadb && self.version >= (8, 0, 16)).then_some(ExplainFormat::MySqlTree)
-    }
-
-    /// The edits the server takes: MySQL's from 8.0.17 on (`utf8mb4_0900_bin` compares text
-    /// exactly, `FOR UPDATE NOWAIT` locks without waiting), none on MariaDB (its collations and
-    /// row locks differ).
-    pub(crate) fn edit(&self) -> Option<EditFormat> {
-        (!self.mariadb && self.version >= (8, 0, 17)).then_some(EditFormat::MySql(MySqlEdit { nowait: true }))
-    }
-
     /// `MySQL 8.4.6`, `MariaDB 11.4.2`.
     pub(crate) fn label(&self) -> String {
         let (a, b, c) = self.version;
@@ -656,6 +641,8 @@ pub(crate) struct Opened {
     /// How its traffic goes.
     pub(crate) encryption: Encryption,
     pub(crate) server: Server,
+    /// What the server is, as this connection found it (from the same greeting as `server`).
+    pub(crate) facts: Arc<ServerFacts>,
     pub(crate) tracked: Tracked,
     /// The connection's id on the server (what `KILL QUERY` names): `CONNECTION_ID()`, else the
     /// handshake's when that could not be read.
@@ -695,7 +682,8 @@ pub(crate) async fn open(
     let stream = route.dial(DIAL_TIMEOUT).await.map_err(|e| (e, false))?;
     let (wire, conn, encryption) = login(route, stream, opts).await;
     let mut conn = conn.map_err(|e| connect_error(&e))?;
-    let server = Server { version: conn.server_version(), mariadb: conn.is_mariadb() };
+    let greeting = crate::engine::greeting(&conn);
+    let server = Server::of_greeting(&greeting);
     if let Err(e) = server.check() {
         quit(conn).await;
         return Err((e, false));
@@ -774,7 +762,8 @@ pub(crate) async fn open(
         Some((id, marker)) => (id, own_verdict(handshake, id, marker).then_some(token), Some(low32(id) == handshake)),
         None => (u64::from(handshake), None, None),
     };
-    Ok(Opened { conn, wire, encryption, server, tracked, id, read_only_unconfirmed, token, own })
+    let facts = crate::engine::facts(&greeting, own);
+    Ok(Opened { conn, wire, encryption, server, facts, tracked, id, read_only_unconfirmed, token, own })
 }
 
 /// The handshake and login over `stream` of `route`, through a [`Wire`]: encrypted as the

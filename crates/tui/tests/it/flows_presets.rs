@@ -1366,6 +1366,7 @@ fn the_profile_forms_test_comes_back_after_a_new_tunnel() {
                 server_version: "17.2".into(),
                 latency: Duration::from_millis(12),
                 encryption: Default::default(),
+                identity: pg_identity(),
             }),
         });
     };

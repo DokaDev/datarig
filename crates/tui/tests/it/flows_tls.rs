@@ -104,7 +104,14 @@ fn the_form_test_says_how_the_test_connection_was_encrypted() {
     let mut h = launched();
     h.command("conn.edit");
     h.ctrl('t');
-    let ok = |encryption| Ok(PingInfo { server_version: "17.2".into(), latency: Duration::from_millis(9), encryption });
+    let ok = |encryption| {
+        Ok(PingInfo {
+            server_version: "17.2".into(),
+            latency: Duration::from_millis(9),
+            encryption,
+            identity: pg_identity(),
+        })
+    };
     h.ping(ok(Encryption::Tls { version: TLS13, verified: Verified::Full }));
     let screen = h.screen(160, 45);
     assert!(screen.contains("Connection OK · server 17.2 · 9ms · TLS 1.3, server verified"), "{screen}");

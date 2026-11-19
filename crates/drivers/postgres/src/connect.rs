@@ -11,12 +11,12 @@ use crate::query::query_loop;
 use crate::route::{Cancel, Route, route};
 use crate::tls::{PgTls, TlsError};
 use datarig_core::driver::{
-    CancelMark, Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, EditFormat,
-    ExplainFormat, Hierarchy, PingError, PingInfo, ServerMessage, Session, SessionRole, SessionStatement,
+    CancelMark, Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, PingError, PingInfo,
+    ServerMessage, Session, SessionRole, SessionStatement,
 };
+use datarig_core::engine::EngineId;
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
-use datarig_core::sql::dialect::{Dialect, Language};
 use datarig_core::tls::{TlsProblem, TlsSettings};
 use datarig_core::transport::DialerRef;
 use futures::future::BoxFuture;
@@ -58,23 +58,11 @@ impl Canceller for PgCanceller {
 
 impl Driver for PgDriver {
     fn capabilities(&self) -> Capabilities {
-        Capabilities {
-            server_paging: true,
-            cancel: true,
-            introspection: true,
-            key_metadata: true,
-            contexts: true,
-            structure: true,
-            ddl: true,
-            language: Language::Sql(Dialect::Postgres),
-            hierarchy: Hierarchy::DatabaseSchema,
-            explain: Some(ExplainFormat::PostgresJson),
-            reads_held_to_end: false,
-            export: true,
-            manual_commit: true,
-            edit: Some(EditFormat::Postgres),
-            monitor: true,
-        }
+        crate::engine::CAPABILITIES
+    }
+
+    fn engines(&self) -> &'static [EngineId] {
+        crate::engine::ENGINES
     }
 
     fn connect(
@@ -150,7 +138,8 @@ impl Driver for PgDriver {
             };
             match tokio::time::timeout(timeout, attempt).await {
                 Ok(Ok(server_version)) => {
-                    Ok(PingInfo { server_version, latency: start.elapsed(), encryption: tls.encryption() })
+                    let identity = crate::engine::identity(&server_version);
+                    Ok(PingInfo { server_version, latency: start.elapsed(), encryption: tls.encryption(), identity })
                 }
                 Ok(Err(e)) => Err(PingError::Failed(e)),
                 Err(_) => Err(PingError::Timeout(timeout)),
@@ -557,6 +546,8 @@ async fn run_session(
             return;
         }
     };
+    // What the server is, first: every step of opening the session that can fail is behind it.
+    let _ = events.send(DbEvent::Server(crate::engine::facts(&params, verified)));
     if let Some((_, refused)) = &per_tx {
         let _ = events.send(DbEvent::SessionPerTransaction { refused: refused.clone() });
     }

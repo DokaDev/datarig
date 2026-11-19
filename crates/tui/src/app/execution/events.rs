@@ -22,6 +22,7 @@ impl App {
             DbEvent::Page { .. }
             | DbEvent::Language(_)
             | DbEvent::Explain(_)
+            | DbEvent::Server(_)
             | DbEvent::Edit(_)
             | DbEvent::SessionValues(_)
             | DbEvent::TextStyle(_)

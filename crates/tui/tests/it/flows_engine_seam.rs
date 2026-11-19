@@ -854,3 +854,72 @@ fn server_idle_limit_is_offered_on_postgres_only() {
         assert_eq!(rules, [TxRule::Manual { steps: vec![TxStep::Open], idle_timeout: idle }], "{engine:?}");
     }
 }
+
+// ── What the server is ──────────────────────────────────────────────────────────────────────
+
+/// The facts a session of `engine` says first: MySQL 8.4.6, MariaDB 11.4.13 or PostgreSQL 17.2,
+/// reached directly.
+fn facts_of(engine: Engine) -> DbEvent {
+    use datarig_core::engine::{EngineFacts, Fact, MyFacts, PgFacts, ServerFacts, Topology, Version, Why};
+    let (version, detail) = match engine {
+        Engine::Postgres => (Version::new(17, 2, 0), EngineFacts::Postgres(PgFacts::default())),
+        Engine::MySql => (Version::new(8, 4, 6), EngineFacts::MySql(MyFacts { handshake: Version::new(8, 4, 6) })),
+        Engine::MariaDb => {
+            (Version::new(11, 4, 13), EngineFacts::MariaDb(MyFacts { handshake: Version::new(11, 4, 13) }))
+        }
+    };
+    DbEvent::Server(Arc::new(ServerFacts {
+        version: Fact::Known(version),
+        version_text: None,
+        provider: Fact::Unknown(Why::NotChecked),
+        topology: Fact::Known(Topology::Direct),
+        detail,
+    }))
+}
+
+/// What a session of `engine` says before `Connected`, as its driver says it, with the facts
+/// first (`server`) or without them.
+fn connect_words(engine: Engine, server: bool) -> Vec<DbEvent> {
+    let mut words: Vec<DbEvent> = server.then(|| facts_of(engine)).into_iter().collect();
+    words.push(DbEvent::Encryption(datarig_core::tls::Encryption::Plain));
+    let format = (engine == Engine::MySql).then_some(ExplainFormat::MySqlTree);
+    let edits = (engine == Engine::MySql)
+        .then_some(datarig_core::driver::EditFormat::MySql(datarig_core::driver::MySqlEdit { nowait: true }));
+    if let Some(lang) = engine.said() {
+        words.extend([DbEvent::Language(lang), DbEvent::Explain(format), DbEvent::Edit(edits)]);
+    }
+    words.push(DbEvent::Connected);
+    words
+}
+
+/// A session's first word, what its server is, changes nothing yet: on every engine a profile
+/// whose metadata session and a tab whose query session say it connect, run and draw exactly as
+/// without it (the same screens, plan format, edits and languages, and the same commands sent).
+#[test]
+fn a_server_word_changes_nothing_yet() {
+    let run = |engine: Engine, server: bool| {
+        let p = ConnectionConfig { name: "seam".into(), driver: engine.driver().into(), ..ConnectionConfig::test_db() };
+        let cfg = Config { connections: vec![p], ..Config::default() };
+        let mut h = Harness::with_driver(&cfg, Lang::En, driver(engine.mysql_driver()));
+        let pid = id(&h, "seam");
+        let mut seen = Vec::new();
+        for ev in connect_words(engine, server) {
+            h.meta_db("seam", ev);
+        }
+        seen.push(h.screen(120, 40));
+        h.app.focus = Focus::Editor;
+        run_all(&mut h, "SELECT 1");
+        for ev in connect_words(engine, server) {
+            h.tab_db(0, ev);
+        }
+        done(&mut h);
+        seen.push(h.screen(120, 40));
+        let c = h.app.conns.get(pid).expect("the profile's connection");
+        seen.push(format!("{:?} {:?} {:?} {:?}", c.explain, c.edit, c.connected, tab_reads(&h, 0)));
+        seen.push(format!("{:?} {:?} {:?}", status(&h), tab_status(&h), h.sent()));
+        seen
+    };
+    for engine in ENGINES {
+        assert_eq!(run(engine, true), run(engine, false), "{engine:?}");
+    }
+}

@@ -79,6 +79,10 @@ impl App {
         if matches!(ev, DbEvent::StatementCacheOff) {
             return self.statement_cache_off(id, profile);
         }
+        // What the server is: nothing reads it yet.
+        if matches!(ev, DbEvent::Server(_)) {
+            return;
+        }
         // The plan format of the profile's server: a query session's word is the profile's.
         if let DbEvent::Explain(format) = ev {
             if let Some(p) = profile {
@@ -354,6 +358,7 @@ impl App {
             DbEvent::StatementCacheOff
             | DbEvent::Language(_)
             | DbEvent::Explain(_)
+            | DbEvent::Server(_)
             | DbEvent::Edit(_)
             | DbEvent::SessionValues(_)
             | DbEvent::TextStyle(_)
