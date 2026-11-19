@@ -1,0 +1,4 @@
+# datarig: Korean messages, engine (the same keys, in the same file, as locales/en/engine.toml).
+
+"engine.why.not_checked" = "이 연결에서 아직 확인하지 않음"
+"engine.why.version_unknown" = "서버 버전을 읽을 수 없음"

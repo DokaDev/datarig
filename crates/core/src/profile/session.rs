@@ -113,13 +113,12 @@ impl Dbms {
         }
     }
 
-    /// The database of a profile's `driver` (`None`: a driver no preset is for).
+    /// The database of a profile's `driver` (`None`: a driver no preset is for;
+    /// [`Expected::preset`]).
+    ///
+    /// [`Expected::preset`]: crate::engine::Expected::preset
     pub fn of_driver(driver: &str) -> Option<Self> {
-        match driver.to_ascii_lowercase().as_str() {
-            "postgres" | "postgresql" | "pg" => Some(Dbms::Postgres),
-            "mysql" | "mariadb" => Some(Dbms::MySql),
-            _ => None,
-        }
+        crate::engine::expected(driver).preset()
     }
 
     /// The language its statements are checked in (MySQL: the default sql mode; the check
@@ -439,7 +438,7 @@ pub fn plan(
         None => intent(Intent::IdleDisconnect(defaults.idle_disconnect), Source::Global),
     }
     intent(Intent::TxIdleRollback(rules.tx_idle_rollback), rules_source());
-    let Some(dbms) = Dbms::of_driver(&c.driver) else {
+    let Some(dbms) = c.dbms() else {
         if c.session != SessionRef::Inherit || !c.session_sql.is_empty() {
             return Err(SessionError::Driver(c.driver.clone()));
         }

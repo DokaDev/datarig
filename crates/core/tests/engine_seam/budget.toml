@@ -31,7 +31,7 @@
 "crates/bench/src/proxy" = 2
 "crates/core/src/edit" = 12
 "crates/core/src/monitor" = 1
-"crates/core/src/profile" = 8
+"crates/core/src/profile" = 2
 "crates/drivers/mysql/src/connect" = 1
 "crates/drivers/mysql/src/meta" = 15
 "crates/drivers/mysql/src/query" = 18

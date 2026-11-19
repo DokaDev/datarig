@@ -1,6 +1,8 @@
 //! UI-independent core of datarig: everything a front end and a database driver share.
 //!
 //! * [`driver`] — the driver abstraction (base interface + capability flags, session channels).
+//! * [`engine`]: engine identity: the engines, the one reader of a profile's driver name, what a
+//!   connection found its server to be, and what is fixed per engine.
 //! * [`sql`] — tolerant lexer, statement splitter and completion engine.
 //! * [`profile`] — connection profile model and `postgres://` DSN parsing.
 //! * [`secret`] — password sources (OS keychain, secrets file, command, env, prompt), the
@@ -37,6 +39,7 @@ pub mod chart;
 pub mod config;
 pub mod driver;
 pub mod edit;
+pub mod engine;
 pub mod export;
 pub mod fault;
 pub mod filter_history;

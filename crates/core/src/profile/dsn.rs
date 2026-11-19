@@ -19,14 +19,11 @@ pub enum Scheme {
 }
 
 impl Scheme {
-    /// The scheme of a profile's `driver` name: MySQL for `mysql` and `mariadb`, PostgreSQL
-    /// for every other name.
+    /// The scheme of a profile's `driver` name ([`Expected::form_scheme`]).
+    ///
+    /// [`Expected::form_scheme`]: crate::engine::Expected::form_scheme
     pub fn of_driver(driver: &str) -> Self {
-        if driver.eq_ignore_ascii_case("mysql") || driver.eq_ignore_ascii_case("mariadb") {
-            Self::MySql
-        } else {
-            Self::Postgres
-        }
+        crate::engine::expected(driver).form_scheme()
     }
 
     /// The scheme and `://` a URL is written with.
