@@ -79,6 +79,18 @@ The MySQL tests run against MariaDB too: point `DATARIG_TEST_MYSQL_URL` and
 `docker exec -i datarig-mariadb mariadb -udatarig -pdatarig shop`. Tests that need what MariaDB
 does not offer check its refusal instead and say so with a `MARIADB` line.
 
+The cancel tests of `crates/drivers/mysql/tests/cancel_nops_mariadb.rs` need a MariaDB with
+performance_schema off, as MariaDB ships; the dev service above has it on, so they print
+`SKIPPED` unless `DATARIG_TEST_MARIADB_NOPS_URL` is set (`DATARIG_REQUIRE_MARIADB_NOPS=1` makes
+it a failure, as CI does). A scratch one from the same image, removed again afterwards:
+
+```sh
+bash .github/scripts/start-mariadb.sh "$(docker inspect -f '{{.Config.Image}}' datarig-mariadb)" 13309 zz-datarig-mariadb-nops ps=off
+DATARIG_TEST_MARIADB_NOPS_URL=mysql://datarig:datarig@127.0.0.1:13309/shop \
+  cargo test -p datarig-driver-mysql --test cancel_nops_mariadb --locked
+docker rm -f zz-datarig-mariadb-nops
+```
+
 ## TLS servers
 
 Scratch servers for the TLS tests, never the services above or their volumes: PostgreSQL 17 on
