@@ -10,7 +10,8 @@ const MYSQL_84: Server = Server { version: (8, 4, 6), mariadb: false };
 /// The facts of a session on MySQL 8.4.6 (`MYSQL_84`), its own id not read.
 fn facts_84() -> Arc<datarig_core::engine::ServerFacts> {
     let handshake = datarig_core::engine::Version::new(8, 4, 6);
-    crate::engine::facts(&crate::engine::Greeting { mariadb: false, handshake }, None)
+    let g = crate::engine::Greeting { mariadb: false, handshake };
+    crate::engine::facts(&g, &crate::engine::VersionReport::agreeing(&g), None)
 }
 
 #[test]

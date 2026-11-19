@@ -923,3 +923,33 @@ fn a_server_word_changes_nothing_yet() {
         assert_eq!(run(engine, true), run(engine, false), "{engine:?}");
     }
 }
+
+/// A MySQL-family session refused because the server's two reports of its engine disagree (or
+/// its version line confirmed none) leaves the profile unconnected, and its error says what each
+/// report said and that nothing ran on the session.
+#[test]
+fn a_session_whose_reports_disagree_says_both_and_stays_unconnected() {
+    let cases = [
+        (
+            DbError::EnginesDisagree { greeting: "MariaDB 11.4.13".into(), version: "8.4.6".into() },
+            "Connection failed: the server's greeting says MariaDB 11.4.13 but VERSION() says 8.4.6: a proxy \
+             in between may rewrite one of them, so nothing was run on the session",
+        ),
+        (
+            DbError::EngineUnconfirmed { greeting: "MySQL 8.4.6".into() },
+            "Connection failed: the server's engine could not be confirmed: VERSION() gave no answer \
+             (MySQL 8.4.6 by its greeting), so nothing was run on the session",
+        ),
+    ];
+    for (error, text) in cases {
+        let p = ConnectionConfig { name: "seam".into(), driver: "mysql".into(), ..ConnectionConfig::test_db() };
+        let cfg = Config { connections: vec![p], ..Config::default() };
+        let mut h = Harness::with_driver(&cfg, Lang::En, driver(true));
+        let pid = id(&h, "seam");
+        h.meta_db("seam", DbEvent::ConnectFailed { error: error.clone(), auth: false });
+        assert_eq!(h.node_error("seam").as_deref(), Some(text), "{error:?}");
+        assert!(h.prompt().is_none(), "{error:?}: not a password problem");
+        let connected = h.app.conns.get(pid).is_some_and(|c| c.connected);
+        assert!(!connected, "{error:?}");
+    }
+}

@@ -2,3 +2,6 @@
 
 "engine.why.not_checked" = "이 연결에서 아직 확인하지 않음"
 "engine.why.version_unknown" = "서버 버전을 읽을 수 없음"
+"engine.why.versions_disagree" = "서버가 스스로 알린 버전이 서로 다름"
+"engine.reports_disagree" = "서버 인사말은 {greeting}, VERSION()은 {version}입니다. 중간의 프록시가 둘 중 하나를 바꿨을 수 있어 세션에서 아무것도 실행하지 않았습니다"
+"engine.unconfirmed" = "서버 엔진을 확인할 수 없습니다: VERSION()이 답하지 않아(인사말로는 {greeting}) 세션에서 아무것도 실행하지 않았습니다"

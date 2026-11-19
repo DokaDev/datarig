@@ -3,7 +3,7 @@
 //! canceller (`KILL QUERY` on a connection of its own).
 
 use crate::link::Link;
-use crate::session::{self, CONNECT_GUARD, Killer, Opened, Settings, Target, connect_error, my_error};
+use crate::session::{self, CONNECT_GUARD, Killer, Opened, Settings, Target, connect_error};
 use datarig_core::driver::{
     CancelMark, Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, PingError, PingInfo,
     Session, SessionRole,
@@ -15,7 +15,6 @@ use datarig_core::profile::ConnectionConfig;
 use datarig_core::transport::DialerRef;
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use mysql_async::prelude::Queryable;
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -108,13 +107,14 @@ impl Driver for MyDriver {
                 let mut conn = conn.map_err(|e| connect_error(&e).0)?;
                 let greeting = crate::engine::greeting(&conn);
                 let server = session::Server::of_greeting(&greeting);
-                let version: Result<Option<String>, _> = match server.check() {
-                    Ok(()) => conn.query_first("SELECT VERSION()").await.map_err(|e| my_error(&e)),
+                let report = match server.check() {
+                    Ok(()) => crate::engine::confirm(&mut conn, &greeting).await,
                     Err(e) => Err(e),
                 };
                 session::quit(conn).await;
-                let identity = crate::engine::identity(&greeting);
-                Ok::<_, DbError>((version?.unwrap_or_else(|| server.label()), encryption, identity))
+                let report = report?;
+                let identity = crate::engine::identity(&greeting, &report);
+                Ok::<_, DbError>((report.line, encryption, identity))
             };
             // A panic in the attempt fails the test like any other error.
             match AssertUnwindSafe(caught(tokio::time::timeout(timeout, attempt))).catch_unwind().await {

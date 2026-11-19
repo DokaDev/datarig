@@ -87,8 +87,9 @@ insert = { to_result = 1, total = 1 }
 
 [rtt_mysql]
 # The MySQL driver's query session through the latency proxy (crates/bench/src/rtt_mysql.rs).
-# Opening a session: the login (answered at once from the server's cache), the session's
-# settings in one statement, and one read of its own id and of where the server lists its marker
+# Opening a session: the login (answered at once from the server's cache), the server's own
+# version before the settings, checked against the greeting, the session's settings in one
+# statement, and one read of its own id and of where the server lists its marker
 # (what lets a cancel confirm it reaches this session). A result is one round trip, a page of a large one too: the
 # session's sql_select_limit (a page and one row more) ends the statement with its first page.
 # The next page asks the server whether a name it reads is a view, sets the larger limit (only
@@ -98,7 +99,7 @@ insert = { to_result = 1, total = 1 }
 # its DDL (SHOW CREATE TABLE).
 one_way_ms = 20
 runs = 5
-session_open = { to_result = 3, total = 3 }
+session_open = { to_result = 4, total = 4 }
 select_small = { to_result = 1, total = 1 }
 select_page_of_many = { to_result = 1, total = 1 }
 resume = { to_result = 3, total = 3 }

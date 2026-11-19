@@ -179,7 +179,7 @@ pub fn probe(answers: &[Answer]) -> Result<MySqlMonitor, DecodeError> {
     let line = row.required("version")?;
     // MariaDB at any version: its system tables differ (`11.4.13-MariaDB-ubu2404` reads as
     // `MariaDB 11.4.13`), never "too old".
-    if line.contains("MariaDB") {
+    if crate::engine::mysql_family::line_names_mariadb(line) {
         let number = line.split('-').next().unwrap_or(line);
         return Err(DecodeError::NotRead(format!("MariaDB {number}")));
     }

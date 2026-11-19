@@ -4,3 +4,6 @@
 
 "engine.why.not_checked" = "not checked on this connection yet"
 "engine.why.version_unknown" = "the server's version could not be read"
+"engine.why.versions_disagree" = "the server's own reports name different versions"
+"engine.reports_disagree" = "the server's greeting says {greeting} but VERSION() says {version}: a proxy in between may rewrite one of them, so nothing was run on the session"
+"engine.unconfirmed" = "the server's engine could not be confirmed: VERSION() gave no answer ({greeting} by its greeting), so nothing was run on the session"
