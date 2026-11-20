@@ -913,7 +913,8 @@ async fn text_without_an_opener_runs_as_today_when_the_reports_disagree() {
 /// A session whose two reports agree keeps today's dollar-quote reading, however it reaches the
 /// server: straight through a proxy that changes nothing, behind one that numbers its clients
 /// (pooled), through one that fails the own-id lookup at connect (not checked), and with a
-/// version line that has no number (an Aurora-style line, which gives no answer): MySQL 8.4
+/// version line of its engine that has no number (an Aurora-style line, which gives no answer;
+/// a MariaDB line, whose answer needs none): MySQL 8.4
 /// reads them, MariaDB does not. `SELECT $$a; b$$` is sent as one statement, and the answer is
 /// the server's own (a syntax error on both: neither takes a dollar-quoted string there).
 #[tokio::test(flavor = "multi_thread")]
@@ -929,8 +930,10 @@ async fn dollar_text_on_an_agreeing_session_runs_as_today() {
             "own id not checked" => {
                 proxy.fault_start("SELECT CONNECTION_ID(), ", Fault::Instead("SELECT zz_seam_no_such_column".into()))
             }
+            // A line of the server's own engine.
             "a line without a number" => {
-                proxy.fault_start("SELECT VERSION()", Fault::Instead("SELECT '8.0.mysql_aurora.3.04.0'".into()))
+                let line = if maria { "SELECT 'MariaDB-custom'" } else { "SELECT '8.0.mysql_aurora.3.04.0'" };
+                proxy.fault_start("SELECT VERSION()", Fault::Instead(line.into()))
             }
             _ => {}
         }

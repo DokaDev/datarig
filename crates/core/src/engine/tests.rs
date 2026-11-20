@@ -236,9 +236,10 @@ fn reported(greeting: EngineId, handshake: Version, line: Option<&str>, topology
 
 /// Each of the server's two reports gives a dollar-quote answer: the greeting (its engine and
 /// number) and the `VERSION()` line (the engine it names and the number it starts with). MySQL
-/// from 8.1.0 on reads them; MySQL before 8.1.0 and MariaDB do not; a line without a number
-/// gives no answer. The session's answer is the one they give when they agree (or the one
-/// given, when only the greeting gives one), and not known only when the two differ. How the
+/// from 8.1.0 on reads them; MySQL before 8.1.0 and MariaDB (whatever its number) do not; a
+/// MySQL line without a number gives no answer. The session's answer is the one they give when
+/// they agree (or the greeting's, when only it gives one and the line names its engine), and
+/// not known when the two differ or a line of the other engine gives none. How the
 /// session reaches the server plays no part, and every spec of the family answers alike.
 #[test]
 fn dollar_quotes_follow_the_facts() {
@@ -313,7 +314,8 @@ fn dollar_quotes_follow_the_facts() {
     // gives no answer, so the greeting's is not taken for it.
     let f = reported(EngineId::MySql, v84, Some("MariaDB-custom"), Fact::Unknown(Why::EnginesDisagree));
     assert_eq!(f.engine().spec().text.dollar_quotes(&f), NotKnown);
-    let f = reported(EngineId::MySql, Version::new(8, 0, 36), Some("MariaDB-custom"), Fact::Unknown(Why::EnginesDisagree));
+    let f =
+        reported(EngineId::MySql, Version::new(8, 0, 36), Some("MariaDB-custom"), Fact::Unknown(Why::EnginesDisagree));
     assert_eq!(f.engine().spec().text.dollar_quotes(&f), NotRead);
     let f = reported(
         EngineId::MariaDb,

@@ -17,9 +17,12 @@ they name different versions of the same engine. The profile's driver name (`mys
 both reports. When one says it does and the other that it does not, where the server ends a
 statement is not known, so datarig sends no text that could open one: a `$`, then letters,
 digits or `_` (none or more), then a `$`, wherever it is, in a string, a comment or a quoted
-name too. Such a run fails with a message that says why, and nothing of it is sent. Text with a
-single `$` (`price$`, `$1`, `a$b`) runs as usual, and so does every session whose two reports
-agree.
+name too. Such a run fails with a message that says why, and nothing of it is sent; a Startup
+SQL statement with one fails the connection the same way, before the session is set up. A
+MariaDB `VERSION()` answer needs no number to say the server does not read them; a MySQL one
+without a number says nothing, and when the greeting names MariaDB the answer is not known
+either. Text with a single `$` (`price$`, `$1`, `a$b`) runs as usual, and so does every
+session whose two reports agree.
 
 A MySQL profile has `driver = "mysql"`, and a URL starts with `mysql://` (or `mariadb://`).
 

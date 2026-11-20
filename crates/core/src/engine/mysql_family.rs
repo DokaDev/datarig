@@ -23,18 +23,26 @@ impl TextRules for FamilyText {
     /// client asks with `select $$`, which MySQL 8.4 and 9.x refuse as a syntax error, while 8.0
     /// reads `$$` as a name), never on MariaDB (it reads `$$` as a name). The greeting answers
     /// by its engine and number; the `VERSION()` line by the engine it names and the number it
-    /// starts with, and not at all when it has no number. When the answers agree, or only the
-    /// greeting gives one, that one; when they differ, not known. How the session reaches the
-    /// server plays no part.
+    /// starts with (MariaDB's whatever its number), and not at all when it is MySQL's without a
+    /// number. When the answers agree, or only the greeting gives one, that one; when they
+    /// differ, not known. A line of the other engine that gives no answer leaves it not known
+    /// too: the greeting's is another engine's. How the session reaches the server plays no
+    /// part.
     fn dollar_quotes(&self, f: &ServerFacts) -> DollarQuotes {
         match &f.detail {
             EngineFacts::MySql(my) | EngineFacts::MariaDb(my) => {
                 let greeting = reads_dollar_quotes(my.greeting, my.handshake);
-                let line =
-                    f.version_text.as_deref().and_then(Version::parse).map(|v| reads_dollar_quotes(f.engine(), v));
+                let line = match f.engine() {
+                    EngineId::MariaDb => Some(DollarQuotes::NotRead),
+                    e @ (EngineId::MySql | EngineId::Postgres) => {
+                        f.version_text.as_deref().and_then(Version::parse).map(|v| reads_dollar_quotes(e, v))
+                    }
+                };
                 match line {
                     Some(line) if line != greeting => DollarQuotes::NotKnown,
-                    Some(_) | None => greeting,
+                    Some(_) => greeting,
+                    None if f.engine() != my.greeting => DollarQuotes::NotKnown,
+                    None => greeting,
                 }
             }
             // Never the facts of a MySQL or MariaDB server: the reading before any server said.
