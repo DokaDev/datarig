@@ -71,6 +71,14 @@ impl App {
                 EventTarget::SessionTest(_) | EventTarget::Monitor(_) => {}
             }
         }
+        // What a server is, said by any session of a profile (a tab's, the metadata session, one
+        // in another database, a monitor connection, a Startup SQL test), feeds what the
+        // profile's statements are judged on, all through one path.
+        if let DbEvent::Server(facts) = &ev
+            && let Some(p) = self.profile_of_target(target)
+        {
+            self.server_said(p, facts);
+        }
         match target {
             EventTarget::Meta(id) => self.meta_event(id, ev),
             EventTarget::Tab(id) => {
@@ -116,6 +124,19 @@ impl App {
         // "Quit anyway" waits for the running queries to stop.
         if self.quitting.is_some() && !self.any_running() {
             self.finish_quit();
+        }
+    }
+
+    /// The profile whose session `target` names.
+    fn profile_of_target(&self, target: EventTarget) -> Option<ProfileId> {
+        match target {
+            EventTarget::Meta(id) => Some(id),
+            EventTarget::Tab(id) | EventTarget::Monitor(id) => self.tabs.get(id).and_then(|t| t.profile),
+            EventTarget::Aux(id) => self.conns.aux_by_id_ref(id).map(|a| a.profile),
+            EventTarget::SessionTest(seq) => {
+                let test = self.session_test.as_ref().filter(|t| t.seq == seq)?;
+                self.profiles.iter().find(|p| p.name == test.profile).map(|p| p.id)
+            }
         }
     }
 
