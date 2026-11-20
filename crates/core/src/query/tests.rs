@@ -1047,6 +1047,11 @@ fn a_filter_that_ends_inside_a_token_is_refused_at_it() {
             assert_eq!(lexical(d, text), Some((LexProblem::Unterminated, text[5..].into())), "{d:?} {text:?}");
         }
     }
+    // Under NO_BACKSLASH_ESCAPES a quoted variable name ending in a backslash is closed, and
+    // left open in the other reading: the text reads otherwise by the mode, as before.
+    for d in mysql_family().into_iter().filter(|d| matches!(d, Dialect::MySql(m) if m.no_backslash_escapes)) {
+        assert_eq!(lexical(d, r"id = @'a\'"), Some((LexProblem::Ambiguous, r"@'a\'".into())), "{d:?}");
+    }
     // PostgreSQL reads a backslash outside a string as an operator of its own: the server says
     // what is wrong.
     assert!(!matches!(check(Dialect::Postgres, "id = 1 \\", false), Err(BarRefusal::Lexical { .. })));
