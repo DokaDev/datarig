@@ -103,17 +103,20 @@ fn lexing_modes() -> Vec<MySqlMode> {
     mysql_modes().into_iter().filter(|m| !m.mariadb && !m.ignore_space).collect()
 }
 
-/// PostgreSQL and every MySQL mode the lexer reads differently.
+/// PostgreSQL and every MySQL mode the lexer reads differently, on MySQL and on MariaDB.
 fn dialects() -> Vec<Dialect> {
     let mut out = vec![Dialect::Postgres];
     out.extend(lexing_modes().into_iter().map(Dialect::MySql));
+    out.extend(lexing_modes().into_iter().map(|m| Dialect::MariaDb(MySqlMode { mariadb: true, ..m })));
     out
 }
 
-/// PostgreSQL, and MySQL and MariaDB in every combination of the sql mode flags.
+/// PostgreSQL, and MySQL and MariaDB in every combination of the sql mode flags, MariaDB's
+/// also as a MariaDB session says them.
 fn checked_dialects() -> Vec<Dialect> {
     let mut out = vec![Dialect::Postgres];
     out.extend(mysql_modes().into_iter().map(Dialect::MySql));
+    out.extend(mysql_modes().into_iter().filter(|m| m.mariadb).map(Dialect::MariaDb));
     out
 }
 
