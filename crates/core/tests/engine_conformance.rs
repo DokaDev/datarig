@@ -6,7 +6,10 @@
 //! [`MySqlMode`]) and MariaDB ([`Dialect::MariaDb`], what a MariaDB session says). A case may
 //! also pin a MySQL sql mode where it changes the output (`ANSI_QUOTES`,
 //! `NO_BACKSLASH_ESCAPES`). A case without an expectation for one of the three engines fails
-//! ([`every_case_names_every_engine`]): adding an engine means answering every case for it.
+//! ([`every_case_names_every_engine`]): adding an engine means answering every case for it. A
+//! case of the classifier or split table whose text has a `$` must also answer for a MySQL
+//! session that does not know whether its server reads dollar quotes
+//! ([`Engine::MySqlDollarNotKnown`]).
 //!
 //! Every expectation is today's output, as it is, right or wrong: the table pins it, and a
 //! change that moves it updates the table in the same change. No server is needed.
@@ -26,7 +29,7 @@ mod tx;
 #[path = "engine_conformance/values.rs"]
 mod values;
 
-use datarig_core::sql::dialect::{Dialect, MySqlMode};
+use datarig_core::sql::dialect::{Dialect, DollarQuotes, MySqlMode};
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
@@ -41,6 +44,8 @@ pub enum Engine {
     MySqlAnsiQuotes,
     /// MySQL with `NO_BACKSLASH_ESCAPES`.
     MySqlNoBackslashEscapes,
+    /// MySQL whose server's own reports disagree on whether it reads dollar quotes.
+    MySqlDollarNotKnown,
 }
 
 /// The engines every case must have an expectation for.
@@ -57,6 +62,9 @@ impl Engine {
             Engine::MySqlNoBackslashEscapes => {
                 Dialect::MySql(MySqlMode { no_backslash_escapes: true, ..MySqlMode::default() })
             }
+            Engine::MySqlDollarNotKnown => {
+                Dialect::MySql(MySqlMode { dollar_quotes: DollarQuotes::NotKnown, ..MySqlMode::default() })
+            }
         }
     }
 }
@@ -68,21 +76,42 @@ pub struct Case<I> {
     pub expect: &'static [(Engine, &'static str)],
 }
 
-/// What [`every_case_names_every_engine`] reads of a case: its table, its name and the engines
-/// it has expectations for.
+/// What [`every_case_names_every_engine`] reads of a case: its table, its name, the engines it
+/// has expectations for and the engines it must have them for.
 pub struct Named {
     pub table: &'static str,
     pub case: &'static str,
     pub engines: Vec<Engine>,
+    pub required: Vec<Engine>,
 }
 
 /// The cases of table `table` as [`every_case_names_every_engine`] reads them.
 pub fn named<I>(table: &'static str, cases: &[Case<I>]) -> Vec<Named> {
-    cases.iter().map(|c| Named { table, case: c.name, engines: c.expect.iter().map(|(e, _)| *e).collect() }).collect()
+    cases
+        .iter()
+        .map(|c| Named {
+            table,
+            case: c.name,
+            engines: c.expect.iter().map(|(e, _)| *e).collect(),
+            required: ENGINES.to_vec(),
+        })
+        .collect()
 }
 
-/// What is wrong with the expectations of `cases`: a case that misses one of [`ENGINES`],
-/// names an engine twice, or shares its name with another case of its table.
+/// [`named`] for a table of texts that the dollar-quote reading changes: a text with a `$` must
+/// also answer for [`Engine::MySqlDollarNotKnown`].
+pub fn named_text(table: &'static str, cases: &[Case<&'static str>]) -> Vec<Named> {
+    let mut out = named(table, cases);
+    for (n, c) in out.iter_mut().zip(cases) {
+        if c.input.contains('$') {
+            n.required.push(Engine::MySqlDollarNotKnown);
+        }
+    }
+    out
+}
+
+/// What is wrong with the expectations of `cases`: a case that misses an engine it must answer
+/// for, names an engine twice, or shares its name with another case of its table.
 pub fn gaps(cases: &[Named]) -> Vec<String> {
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
@@ -90,7 +119,7 @@ pub fn gaps(cases: &[Named]) -> Vec<String> {
         if !seen.insert((c.table, c.case)) {
             out.push(format!("{}: case `{}` is listed twice", c.table, c.case));
         }
-        for e in ENGINES {
+        for &e in &c.required {
             if !c.engines.contains(&e) {
                 out.push(format!("{}: case `{}` has no expectation for {e:?}", c.table, c.case));
             }
@@ -109,8 +138,18 @@ pub fn gaps(cases: &[Named]) -> Vec<String> {
 /// fail with the list of every difference (expected and actual, as Rust literals) and of every
 /// gap in the expectations.
 pub fn run<I>(table: &'static str, cases: &[Case<I>], f: impl Fn(Engine, &I) -> String) {
+    check(table, cases, &named(table, cases), f);
+}
+
+/// [`run`] for a table of texts whose expectations [`named_text`] reads.
+pub fn run_text(table: &'static str, cases: &[Case<&'static str>], f: impl Fn(Engine, &&'static str) -> String) {
+    check(table, cases, &named_text(table, cases), f);
+}
+
+/// Every difference of `cases` from what `f` gives, and every gap of `named`, or nothing.
+fn check<I>(table: &'static str, cases: &[Case<I>], named: &[Named], f: impl Fn(Engine, &I) -> String) {
     let mut report = String::new();
-    for gap in gaps(&named(table, cases)) {
+    for gap in gaps(named) {
         let _ = writeln!(report, "{gap}");
     }
     for c in cases {
@@ -138,7 +177,7 @@ pub fn verdict<T, E: std::fmt::Debug>(r: &Result<T, E>) -> String {
 
 #[test]
 fn classifier_cases_on_every_engine() {
-    run("classifier", &risk::classifier_cases(), risk::classify);
+    run_text("classifier", &risk::classifier_cases(), risk::classify);
 }
 
 #[test]
@@ -153,7 +192,7 @@ fn quoting_cases_on_every_engine() {
 
 #[test]
 fn split_cases_on_every_engine() {
-    run("split", &text::split_cases(), text::split);
+    run_text("split", &text::split_cases(), text::split);
 }
 
 #[test]
@@ -189,10 +228,10 @@ fn tx_step_cases_on_every_engine() {
 #[test]
 fn every_case_names_every_engine() {
     let all: Vec<Named> = [
-        named("classifier", &risk::classifier_cases()),
+        named_text("classifier", &risk::classifier_cases()),
         named("function verdicts", &context::cases()),
         named("quoting", &text::quoting_cases()),
-        named("split", &text::split_cases()),
+        named_text("split", &text::split_cases()),
         named("filter render", &filter::render_cases()),
         named("compares", &filter::compares_cases()),
         named("edit input", &values::input_cases()),
@@ -225,6 +264,17 @@ fn every_case_names_every_engine() {
             "partial: case `only a mode` has no expectation for MariaDb",
         ]
     );
+    // A text with a `$` answers for a session that does not know the dollar reading too.
+    let dollar = [Case {
+        name: "dollar",
+        input: "SELECT $$",
+        expect: &[(Engine::Pg, ""), (Engine::MySql, ""), (Engine::MariaDb, "")],
+    }];
+    assert_eq!(
+        gaps(&named_text("dollar", &dollar)),
+        ["dollar: case `dollar` has no expectation for MySqlDollarNotKnown"]
+    );
+    assert!(gaps(&named("dollar", &dollar)).is_empty(), "only the text tables ask for it");
     let twice = [
         Case { name: "same", input: (), expect: &[(Engine::Pg, ""), (Engine::MySql, ""), (Engine::MariaDb, "")] },
         Case { name: "same", input: (), expect: &[(Engine::Pg, ""), (Engine::MySql, ""), (Engine::MariaDb, "")] },

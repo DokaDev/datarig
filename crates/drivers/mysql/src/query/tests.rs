@@ -499,3 +499,37 @@ fn mariadb_own_reads_are_bounded_by_set_statement() {
         assert_eq!(export::keyset_text("select * from t", mariadb), None);
     }
 }
+
+/// The dialect of a session whose greeting names MySQL `greeting` and whose `VERSION()` line is
+/// `line`.
+fn reported_dialect(greeting: (u16, u16, u16), line: &str) -> Dialect {
+    let g = crate::engine::Greeting {
+        mariadb: false,
+        handshake: datarig_core::engine::Version::new(greeting.0, greeting.1, greeting.2),
+    };
+    let report = crate::engine::judge(&g, Some(mysql_async::Value::Bytes(line.as_bytes().to_vec()))).expect("a line");
+    let facts = crate::engine::facts(&g, &report, Some(true));
+    let datarig_core::sql::dialect::Language::Sql(d) = crate::engine::derive(&facts, &Tracked::default()).language;
+    d
+}
+
+/// On a session whose two reports disagree on whether the server reads dollar quotes (a MySQL
+/// 8.0 greeting in front of 8.4), a statement counts as setting the next transaction when it
+/// does in either reading, the stronger answer winning (`Maybe`, then `Yes`): read without
+/// dollar quotes, the executable comment below is inside a string, read with them it runs. A
+/// session whose reports agree reads it its one way, as before.
+#[test]
+fn an_unknown_dollar_reading_counts_a_hidden_set_transaction() {
+    let hidden = "SELECT $$'$$ /*!80000 SET TRANSACTION READ ONLY */ '";
+    let disagreeing = reported_dialect((8, 0, 36), "8.4.6");
+    assert_eq!(sets_next_transaction(hidden, disagreeing), SetsNext::Maybe, "{disagreeing:?}");
+    let shown = "SELECT $$'$$; SET TRANSACTION READ ONLY; '";
+    assert_eq!(sets_next_transaction(shown, disagreeing), SetsNext::No, "{disagreeing:?}: one statement, a SELECT");
+    let plain = "SET TRANSACTION READ ONLY";
+    assert_eq!(sets_next_transaction(plain, disagreeing), SetsNext::Yes);
+    // Agreeing reports: one reading each, as before.
+    let read = reported_dialect((8, 4, 6), "8.4.6");
+    assert_eq!(sets_next_transaction(hidden, read), SetsNext::Maybe, "{read:?}");
+    let not_read = reported_dialect((8, 0, 36), "8.0.36");
+    assert_eq!(sets_next_transaction(hidden, not_read), SetsNext::No, "{not_read:?}");
+}

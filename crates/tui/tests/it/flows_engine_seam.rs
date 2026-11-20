@@ -1229,3 +1229,32 @@ fn facts_are_dropped_with_the_connection() {
     h.meta_db("seam", DbEvent::Server(fresh.clone()));
     assert_eq!(rules_facts(&h, 0), Some(fresh));
 }
+
+// ── A text the driver refuses to send ───────────────────────────────────────────────────────
+
+/// A run of several statements the MySQL driver refused because its session's server reports
+/// disagree on dollar quotes (nothing of it was sent) is shown with why, in English and Korean,
+/// and the run ends there: no statement of it is sent again, and the tab can run again.
+#[test]
+fn a_dollar_quotes_unknown_refusal_is_worded_and_nothing_else_runs() {
+    for lang in [Lang::En, Lang::Ko] {
+        let p = ConnectionConfig { name: "local-my".into(), driver: "mysql".into(), ..ConnectionConfig::test_db() };
+        let cfg = Config { connections: vec![p], ..Config::default() };
+        let mut h = Harness::with_driver(&cfg, lang, driver(true));
+        h.db(DbEvent::Connected);
+        h.app.focus = Focus::Editor;
+        run_all(&mut h, "SELECT $$a; SELECT 2");
+        let sent = executes(&mut h);
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        let id = h.app.tab().exec.query_id;
+        h.tab_db(0, DbEvent::Failed { id, error: DbError::DollarQuotesUnknown, cancelled: false });
+        assert!(h.app.tab().exec.running.is_none(), "{lang:?}: the run ended");
+        let want = h.app.i18n.label(Label::EngineDollarQuotesUnknown).to_string();
+        let shown = h.status(400, 45);
+        let start: String = want.chars().take(30).collect();
+        assert!(shown.contains(&start), "{lang:?}: {shown}");
+        assert!(executes(&mut h).is_empty(), "{lang:?}: nothing else runs");
+        run_all(&mut h, "SELECT 1");
+        assert_eq!(executes(&mut h), [["SELECT 1"]], "{lang:?}: the tab runs again");
+    }
+}

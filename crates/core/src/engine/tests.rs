@@ -212,6 +212,116 @@ fn every_spec_answers_dollar_quotes_as_the_greeting_did() {
     }
 }
 
+/// The facts of a MySQL-family session whose greeting names `greeting` at `handshake` and whose
+/// `VERSION()` line is `line` (`None`: not read), reached as `topology` says: the engine is the
+/// one the line names, as the driver reads it.
+fn reported(greeting: EngineId, handshake: Version, line: Option<&str>, topology: Fact<Topology>) -> ServerFacts {
+    let my = MyFacts { handshake, greeting };
+    let engine = match line {
+        Some(l) if mysql_family::line_names_mariadb(l) => EngineId::MariaDb,
+        Some(_) => EngineId::MySql,
+        None => greeting,
+    };
+    ServerFacts {
+        version: Version::parse(line.unwrap_or_default()).map_or(Fact::Unknown(Why::VersionUnknown), Fact::Known),
+        version_text: line.map(str::to_string),
+        provider: Fact::Unknown(Why::NotChecked),
+        topology,
+        detail: match engine {
+            EngineId::MariaDb => EngineFacts::MariaDb(my),
+            EngineId::MySql | EngineId::Postgres => EngineFacts::MySql(my),
+        },
+    }
+}
+
+/// Each of the server's two reports gives a dollar-quote answer: the greeting (its engine and
+/// number) and the `VERSION()` line (the engine it names and the number it starts with). MySQL
+/// from 8.1.0 on reads them; MySQL before 8.1.0 and MariaDB do not; a line without a number
+/// gives no answer. The session's answer is the one they give when they agree (or the one
+/// given, when only the greeting gives one), and not known only when the two differ. How the
+/// session reaches the server plays no part, and every spec of the family answers alike.
+#[test]
+fn dollar_quotes_follow_the_facts() {
+    use crate::sql::dialect::DollarQuotes::{self, NotKnown, NotRead, Read};
+    let greetings = [
+        (EngineId::MySql, Version::new(8, 0, 36)),
+        (EngineId::MySql, Version::new(8, 1, 0)),
+        (EngineId::MySql, Version::new(8, 4, 6)),
+        (EngineId::MariaDb, Version::new(10, 6, 12)),
+        (EngineId::MariaDb, Version::new(11, 4, 13)),
+    ];
+    // Each line, and its answer.
+    let lines: [(&str, Option<DollarQuotes>); 10] = [
+        ("8.0.36", Some(NotRead)),
+        ("8.0.40-log", Some(NotRead)),
+        ("8.1.0", Some(Read)),
+        ("8.4.6", Some(Read)),
+        ("9.1.0-commercial", Some(Read)),
+        ("10.6.12-MariaDB", Some(NotRead)),
+        ("11.4.13-MariaDB-ubu2404", Some(NotRead)),
+        ("5.5.5-10.6.12-MariaDB", Some(NotRead)),
+        ("1", None),
+        ("8.0.mysql_aurora.3.04.0", None),
+    ];
+    let greeted = |engine: EngineId, v: Version| match engine {
+        EngineId::MySql if v >= Version::new(8, 1, 0) => Read,
+        EngineId::MySql | EngineId::MariaDb | EngineId::Postgres => NotRead,
+    };
+    let topologies = [
+        Fact::Known(Topology::Direct),
+        Fact::Known(Topology::Pooled),
+        Fact::Unknown(Why::NotChecked),
+        Fact::Unknown(Why::EnginesDisagree),
+    ];
+    for (engine, handshake) in greetings {
+        let by_greeting = greeted(engine, handshake);
+        for (line, by_line) in lines {
+            let want = match by_line {
+                Some(answer) if answer != by_greeting => NotKnown,
+                Some(_) | None => by_greeting,
+            };
+            for topology in &topologies {
+                let facts = reported(engine, handshake, Some(line), topology.clone());
+                for spec in [EngineId::MySql, EngineId::MariaDb] {
+                    let got = spec.spec().text.dollar_quotes(&facts);
+                    assert_eq!(got, want, "{spec:?}: greeting {engine:?} {handshake:?}, line {line:?}, {topology:?}");
+                }
+            }
+        }
+        // No line read: the greeting's answer.
+        let facts = reported(engine, handshake, None, Fact::Unknown(Why::NotChecked));
+        assert_eq!(facts.engine().spec().text.dollar_quotes(&facts), by_greeting, "{engine:?} {handshake:?}");
+    }
+    // The cases by name. A pooler whose reports agree, and a direct session whose own-id
+    // check failed: the greeting's answer, as before.
+    let v84 = Version::new(8, 4, 6);
+    for topology in [Fact::Known(Topology::Pooled), Fact::Unknown(Why::NotChecked)] {
+        let f = reported(EngineId::MySql, v84, Some("8.4.6"), topology);
+        assert_eq!(f.engine().spec().text.dollar_quotes(&f), Read);
+    }
+    // A line without a number (version unknown): the greeting's answer.
+    let f = reported(EngineId::MySql, v84, Some("8.0.mysql_aurora.3.04.0"), Fact::Known(Topology::Direct));
+    assert_eq!(f.engine().spec().text.dollar_quotes(&f), Read);
+    // Numbers that disagree: not known only across 8.1.0.
+    let f = reported(EngineId::MySql, Version::new(8, 0, 36), Some("8.4.6"), Fact::Known(Topology::Direct));
+    assert_eq!(f.engine().spec().text.dollar_quotes(&f), NotKnown);
+    let f = reported(EngineId::MySql, Version::new(8, 1, 0), Some("8.4.6"), Fact::Known(Topology::Direct));
+    assert_eq!(f.engine().spec().text.dollar_quotes(&f), Read);
+    // Engines that disagree: not known only when their answers differ.
+    let f = reported(EngineId::MariaDb, Version::new(11, 4, 13), Some("8.4.6"), Fact::Unknown(Why::EnginesDisagree));
+    assert_eq!(f.engine().spec().text.dollar_quotes(&f), NotKnown);
+    let f = reported(EngineId::MySql, v84, Some("11.4.13-MariaDB"), Fact::Unknown(Why::EnginesDisagree));
+    assert_eq!(f.engine().spec().text.dollar_quotes(&f), NotKnown);
+    let f = reported(EngineId::MariaDb, Version::new(11, 4, 13), Some("8.0.36"), Fact::Unknown(Why::EnginesDisagree));
+    assert_eq!(f.engine().spec().text.dollar_quotes(&f), NotRead);
+    let f =
+        reported(EngineId::MySql, Version::new(8, 0, 36), Some("11.4.13-MariaDB"), Fact::Unknown(Why::EnginesDisagree));
+    assert_eq!(f.engine().spec().text.dollar_quotes(&f), NotRead);
+    // PostgreSQL reads them, whatever it says.
+    let pg = agreeing(EngineId::Postgres, Version::new(17, 2, 0));
+    assert_eq!(EngineId::Postgres.spec().text.dollar_quotes(&pg), Read);
+}
+
 #[test]
 fn rules_answer_the_language_before_and_after_the_server_said() {
     use crate::sql::dialect::{Dialect, Language, MySqlMode};
