@@ -1754,3 +1754,71 @@ fn an_agreeing_profiles_commands_go_judged_on_its_engine() {
     let query = h.roles().iter().rposition(|r| *r == SessionRole::Query).expect("a query session");
     assert!(judged_sent(&mut h, query).iter().all(|j| *j == Some(Judged::Own)));
 }
+
+/// The kinds of session a profile's server may say what it is through.
+#[derive(Clone, Copy, Debug)]
+enum Kind {
+    /// A tab's query session.
+    Query,
+    /// The profile's metadata session.
+    Meta,
+    /// A metadata session of the profile in another database.
+    Aux,
+    /// A Monitor tab's connection.
+    Monitor,
+}
+
+/// Every kind of session of a profile feeds what the profile's statements are judged on through
+/// one path: a server whose reports name two engines, said by any of them, has every tab of the
+/// profile judged on both from then on (`DO BIN_TO_UUID(a)` asks first in the profile's
+/// console), and reports that agree, said by any of them, change nothing (it runs).
+#[test]
+fn every_kind_of_session_feeds_the_profiles_engines_alike() {
+    let mut wrong = Vec::new();
+    for kind in [Kind::Query, Kind::Meta, Kind::Aux, Kind::Monitor] {
+        for disagree in [true, false] {
+            let case = format!("{kind:?}, reports disagree: {disagree}");
+            let p = ConnectionConfig { name: "two".into(), driver: "mysql".into(), ..ConnectionConfig::test_db() };
+            let cfg = Config { connections: vec![p], ..Config::default() };
+            let mut h = Harness::with_driver(&cfg, Lang::En, driver(true));
+            h.driver.monitor.store(true, Ordering::SeqCst);
+            meta_says(&mut h, facts_of(Engine::MySql));
+            h.app.focus = Focus::Editor;
+            run_all(&mut h, "SELECT 1");
+            h.tab_db(0, facts_of(Engine::MySql));
+            h.tab_db(0, DbEvent::Language(mysql(MySqlMode::default())));
+            done(&mut h);
+            let facts = if disagree { disagreeing_facts(Engine::MySql) } else { facts_of(Engine::MySql) };
+            match kind {
+                Kind::Query => h.tab_db(0, facts),
+                Kind::Meta => h.meta_db("two", facts),
+                Kind::Aux => {
+                    let pid = id(&h, "two");
+                    let now = h.clock.now();
+                    let aux = h.app.conns.add_aux(pid, "other", now);
+                    h.app.on_app_event(AppEvent::Db {
+                        target: datarig_tui::app::EventTarget::Aux(aux),
+                        generation: aux,
+                        ev: facts,
+                    });
+                }
+                Kind::Monitor => {
+                    h.command("monitor");
+                    h.monitor_db(DbEvent::Connected);
+                    h.monitor_db(facts);
+                    assert!(h.app.tabs.activate(0), "{case}");
+                    h.app.focus = Focus::Editor;
+                }
+            }
+            h.sent();
+            run_all(&mut h, "DO BIN_TO_UUID(a)");
+            let asked = h.app.overlays.run_confirm().is_some();
+            let sent = executes(&mut h);
+            let ran = sent == [["DO BIN_TO_UUID(a)"]];
+            if asked != disagree || ran == disagree {
+                wrong.push(format!("{case}: asked {asked}, sent {sent:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "not judged alike:\n{}", wrong.join("\n"));
+}
