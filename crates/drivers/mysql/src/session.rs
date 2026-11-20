@@ -662,7 +662,9 @@ pub(crate) struct Opened {
 /// A query session then runs its start-up statements (`session_sql`, each alone and in order,
 /// [`datarig_core::driver::ConnectOptions::session_sql`]) before the read-only check, which so
 /// also catches one that turned read-only off; a statement the server refuses fails the open
-/// ([`DbError::SessionSql`]).
+/// ([`DbError::SessionSql`]). When whether the server reads dollar quotes is not known, a
+/// start-up statement that could open one fails the open before the session is set up, with
+/// [`DbError::DollarQuotesUnknown`] as its error.
 ///
 /// The connection carries a marker of its own ([`MARKER`]), and reads its id and where the
 /// server lists the marker in one statement last ([`own_sql`]); a failure of that read leaves
@@ -697,6 +699,18 @@ pub(crate) async fn open(
     // How the session reads dollar quotes, as its server's facts say (how the session reaches
     // the server plays no part in it).
     let dollar_quotes = crate::engine::dollar_quotes(&crate::engine::facts(&greeting, &report, None));
+    // Start-up statements are user text: when whether the server reads dollar quotes is not
+    // known, one that could open a dollar quote is sent in no reading, and nothing else of the
+    // session's set-up runs.
+    let opener = session_sql.iter().enumerate().find(|(_, sql)| {
+        dollar_quotes == DollarQuotes::NotKnown && datarig_core::sql::lexer::mysql::has_dollar_opener(sql)
+    });
+    if let Some((index, sql)) = opener {
+        quit(conn).await;
+        let error =
+            DbError::SessionSql { index, statement: sql.clone(), error: Box::new(DbError::DollarQuotesUnknown) };
+        return Err((error, false));
+    }
     let mut tracked = Tracked::default();
     let set = conn.query_drop(init_sql(&server, &settings)).await;
     set.map_err(|e| (my_error(&e), false))?;

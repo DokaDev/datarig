@@ -1,6 +1,6 @@
 //! How each engine writes names and strings, and where it cuts a text into statements.
 
-use crate::Engine::{MariaDb, MySql, MySqlAnsiQuotes, MySqlNoBackslashEscapes, Pg};
+use crate::Engine::{MariaDb, MySql, MySqlAnsiQuotes, MySqlDollarNotKnown, MySqlNoBackslashEscapes, Pg};
 use crate::{Case, Engine};
 use datarig_core::sql::dialect::Dialect;
 use datarig_core::sql::lexer::{Tok, lex_in};
@@ -206,6 +206,7 @@ pub fn split_cases() -> Vec<Case<&'static str>> {
                 (Pg, "SELECT $$a;b$$ | SELECT 2 / Dollar \"$$a;b$$\""),
                 (MySql, "SELECT $$a | b$$ | SELECT 2 / "),
                 (MariaDb, "SELECT $$a | b$$ | SELECT 2 / "),
+                (MySqlDollarNotKnown, "SELECT $$a | b$$ | SELECT 2 / "),
             ],
         },
         Case {

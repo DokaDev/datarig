@@ -65,6 +65,11 @@ pub enum DollarQuotes {
     NotRead,
     /// `$$…$$` and `$tag$…$tag$` are quotes: a statement does not end inside one.
     Read,
+    /// The server's own reports disagree on it (its greeting and its `VERSION()` line, one of
+    /// a server that reads them, the other of one that does not). Text is lexed as with
+    /// [`DollarQuotes::NotRead`]; the classifier reads it both ways, and the driver sends no
+    /// text that could open one (`sql::lexer::mysql::has_dollar_opener`).
+    NotKnown,
 }
 
 impl Dialect {

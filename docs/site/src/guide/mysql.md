@@ -12,7 +12,17 @@ fails with an error that says what the greeting names, and nothing else is run o
 When the two name different engines (MySQL and MariaDB), the session connects as it always has,
 with the settings the greeting implies, and its version counts as not known; so it does when
 they name different versions of the same engine. The profile's driver name (`mysql` or
-`mariadb`) never decides which engine the server is.
+`mariadb`) never decides which engine the server is. Whether the server reads dollar quotes
+(`$$…$$`, `$tag$…$tag$`: MySQL 8.1 and later do, MySQL 8.0 and MariaDB do not) is taken from
+both reports. When one says it does and the other that it does not, where the server ends a
+statement is not known, so datarig sends no text that could open one: a `$`, then letters,
+digits or `_` (none or more), then a `$`, wherever it is, in a string, a comment or a quoted
+name too. Such a run fails with a message that says why, and nothing of it is sent; a Startup
+SQL statement with one fails the connection the same way, before the session is set up. A
+MariaDB `VERSION()` answer needs no number to say the server does not read them; a MySQL one
+without a number says nothing, and when the greeting names MariaDB the answer is not known
+either. Text with a single `$` (`price$`, `$1`, `a$b`) runs as usual, and so does every
+session whose two reports agree.
 
 A MySQL profile has `driver = "mysql"`, and a URL starts with `mysql://` (or `mariadb://`).
 

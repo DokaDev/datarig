@@ -91,6 +91,7 @@ impl App {
             DbError::ReadWriteRefused => Label::DbReadWriteRefused,
             DbError::CopyStdio => Label::DbCopyStdio,
             DbError::CappedOutcome => Label::DbCappedOutcome,
+            DbError::DollarQuotesUnknown => Label::EngineDollarQuotesUnknown,
             DbError::CopyStarted => Label::DbCopyStarted,
             DbError::ReadOnlyLost => Label::DbReadOnlyLost,
             DbError::NoTransaction => Label::DbNoTransaction,

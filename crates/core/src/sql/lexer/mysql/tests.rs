@@ -1,4 +1,5 @@
 use super::super::{LexState, Tok, lex_from, lex_in};
+use super::has_dollar_opener;
 use crate::sql::dialect::{Dialect, DollarQuotes, MySqlMode};
 
 const MY: Dialect = Dialect::MySql(MySqlMode {
@@ -365,6 +366,55 @@ fn dollar_quotes_where_the_server_reads_them() {
     // `DELIMITER $$` comes first.
     assert_eq!(kinds_in("delimiter $$\nselect 1$$", dq).last(), Some(&(Tok::Semi, "$$")));
     assert_eq!(kinds("select $$a;b$$")[1], (Tok::Ident, "$$a"));
+}
+
+/// A session that does not know whether its server reads dollar quotes lexes its text as one
+/// that does not: `$$` goes on a name, as before any server said.
+#[test]
+fn an_unknown_dollar_reading_lexes_as_not_read() {
+    let unknown = Dialect::MySql(MySqlMode { dollar_quotes: DollarQuotes::NotKnown, ..MySqlMode::default() });
+    for src in ["select $$a;b$$", "select $t$ x $t$; select 2", "select '$$' ; $$"] {
+        assert_eq!(kinds_in(src, unknown), kinds(src), "{src}");
+    }
+}
+
+/// The raw scan for a dollar-quote opener: a `$`, then zero or more tag characters (ASCII
+/// letters, digits, `_`, any character outside ASCII; never `$`), then a `$`, wherever it is
+/// in the text: in a string, a comment or a quoted name too, and glued to a name.
+#[test]
+fn the_dollar_opener_scan() {
+    for text in [
+        "$$",
+        "SELECT $$a; b$$",
+        "$a$",
+        "SELECT $tag$x$tag$",
+        "SELECT x$y$z",
+        "SELECT '$$'",
+        "SELECT 1 AS `a$$b`",
+        "SELECT 1 -- $$",
+        "SELECT /* $q$ */ 1",
+        "$\u{e9}$",
+        "SELECT $_1$",
+        "SELECT '\\' AS a, $$x$$ AS b -- '",
+        "a$b$",
+    ] {
+        assert!(has_dollar_opener(text), "{text:?}");
+    }
+    for text in [
+        "",
+        "$",
+        "SELECT price$ FROM t",
+        "SELECT $1",
+        "SELECT a$b",
+        "$ a$",
+        "$-$",
+        "$\n$",
+        "SELECT $a.b$",
+        "CREATE PROCEDURE p() BEGIN SELECT 1; END",
+        "SELECT 'no dollar at all'",
+    ] {
+        assert!(!has_dollar_opener(text), "{text:?}");
+    }
 }
 
 /// Executable comment versions: six digits, or five (the server reads five of seven).

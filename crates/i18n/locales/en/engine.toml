@@ -7,3 +7,4 @@
 "engine.why.versions_disagree" = "the server's own reports name different versions"
 "engine.why.engines_disagree" = "the server's greeting and VERSION() name different engines"
 "engine.unconfirmed" = "the server's engine could not be confirmed: VERSION() gave no answer ({greeting} by its greeting), so the session was closed before anything else ran on it"
+"engine.dollar_quotes_unknown" = "This text has a `$$` quote, and the server's greeting and VERSION() disagree on whether it reads them: nothing was sent"

@@ -17,7 +17,7 @@ mod my_proxy;
 
 use datarig_core::driver::{
     CancelFailure, Cell, ConnectOptions, DbCommand, DbError, DbEvent, Driver, EditFormat, ExplainFormat, ExportBatch,
-    ExportGuard, MySqlEdit, OwnSession, PagingMode, Session, SessionRole, TxRule,
+    ExportGuard, MySqlEdit, OwnSession, PagingMode, Session, SessionRole, SessionStatement, TxRule,
 };
 use datarig_core::engine::{EngineId, Fact, ServerFacts, Topology, Version, Why};
 use datarig_core::export::keyset::{CHUNK_ROWS, Keyset};
@@ -642,4 +642,381 @@ async fn a_test_connection_says_the_engine_and_version() {
     assert_eq!(info.identity.engine, Fact::Known(engine), "{info:?}");
     let version = Version::parse(&info.server_version).expect("the version line starts with its number");
     assert_eq!(info.identity.version, Fact::Known(version), "{info:?}");
+}
+
+// ── Dollar quotes when the server's own reports disagree ─────────────────────────────────────
+
+/// Whether `e` is the refusal of a text that opens a dollar quote, on a session that does not
+/// know whether its server reads them.
+fn dollar_refusal(e: &DbError) -> bool {
+    matches!(e, DbError::DollarQuotesUnknown)
+}
+
+/// The dollar-quote reading of the language a session said last before `evs` ended.
+fn said_dollar_quotes(evs: &[DbEvent]) -> DollarQuotes {
+    let said = languages(evs);
+    let (_, mode) = said.last().unwrap_or_else(|| panic!("a language: {evs:?}"));
+    mode.dollar_quotes
+}
+
+/// A proxy in front of the server of `url` whose sessions' two reports give different dollar
+/// answers: on MySQL (8.1 or later) its greeting names MySQL 8.0.36, which does not read them;
+/// on MariaDB ([`Disagreeing::arm`]) it answers `VERSION()` with a MySQL 8.4 line, which does.
+struct Disagreeing {
+    proxy: Proxy,
+    maria: bool,
+}
+
+impl Disagreeing {
+    async fn start(url: &str) -> Disagreeing {
+        let maria = mariadb(url).await;
+        let proxy = Proxy::start(&upstream(url)).await;
+        if !maria {
+            proxy.greet_as("8.0.36");
+        }
+        Disagreeing { proxy, maria }
+    }
+
+    /// Set up the next session's version read (once per session).
+    fn arm(&self) {
+        if self.maria {
+            self.proxy.fault_start("SELECT VERSION()", Fault::Instead("SELECT '8.4.6'".into()));
+        }
+    }
+
+    /// A query session through the proxy, and what it said before `Connected`.
+    async fn open(&self, url: &str, test: &str) -> (Conn, Vec<DbEvent>) {
+        self.arm();
+        Conn::start(&self.proxy.url(url), SessionRole::Query, test).await
+    }
+}
+
+impl Conn {
+    /// The first event `f` takes, within `secs` each; `None` once the session ended.
+    async fn until<T>(&mut self, secs: u64, f: impl Fn(&DbEvent) -> Option<T>) -> Option<T> {
+        loop {
+            let ev = tokio::time::timeout(Duration::from_secs(secs), self.rx.recv()).await.expect("an event")?;
+            if let Some(t) = f(&ev) {
+                return Some(t);
+            }
+        }
+    }
+
+    /// The error command `cmd` (number `id`) failed with, or its answer in debug text (`ended`
+    /// when the session ended without one).
+    async fn failure(&mut self, id: u64, cmd: DbCommand) -> Result<String, DbError> {
+        self.session.send(cmd);
+        self.until(60, |ev| match ev {
+            DbEvent::Failed { id: i, error, .. } if *i == id => Some(Err(error.clone())),
+            DbEvent::Page { id: i, columns: Some(_), .. } | DbEvent::Done { id: i, .. } if *i == id => {
+                Some(Ok(format!("{ev:?}")))
+            }
+            DbEvent::Counted { id: i, result, .. } if *i == id => Some(outcome(result, ev)),
+            DbEvent::GroupCounted { id: i, result, .. } if *i == id => Some(outcome(result, ev)),
+            DbEvent::Estimated { id: i, result } if *i == id => Some(outcome(result, ev)),
+            DbEvent::RepeatChecked { id: i, result } if *i == id => Some(outcome(result, ev)),
+            DbEvent::Exported { id: i, result, .. } if *i == id => Some(outcome(result, ev)),
+            _ => None,
+        })
+        .await
+        .unwrap_or_else(|| Ok(String::from("ended")))
+    }
+}
+
+/// The error of `result`, or answer `ev` in debug text.
+fn outcome<T>(result: &Result<T, DbError>, ev: &DbEvent) -> Result<String, DbError> {
+    match result {
+        Ok(_) => Ok(format!("{ev:?}")),
+        Err(e) => Err(e.clone()),
+    }
+}
+
+/// `Execute` of `statements` as run `id`.
+fn execute(id: u64, statements: &[&str]) -> DbCommand {
+    DbCommand::Execute {
+        id,
+        statements: statements.iter().map(|s| s.to_string()).collect(),
+        paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
+        max_rows: None,
+    }
+}
+
+/// Each command that carries user text, with `sql` as its text, numbered from `id`.
+fn every_send_path(id: u64, sql: &str) -> Vec<(&'static str, DbCommand)> {
+    let (sink, _) = tokio::sync::mpsc::channel(4);
+    vec![
+        ("Execute", execute(id, &[sql])),
+        (
+            "Resume",
+            DbCommand::Resume { id: id + 1, sql: sql.into(), skip: 0, paging: PagingMode::NoHold, max_rows: None },
+        ),
+        ("Export", DbCommand::Export { id: id + 2, sql: sql.into(), guard: ExportGuard::Confirmed, sink, batch: 10 }),
+        ("Count", DbCommand::Count { id: id + 3, sql: sql.into(), limit: None }),
+        ("GroupCount", DbCommand::GroupCount { id: id + 4, sql: sql.into(), limit: None }),
+        ("Estimate", DbCommand::Estimate { id: id + 5, sql: sql.into() }),
+        ("CheckRepeat", DbCommand::CheckRepeat { id: id + 6, sql: sql.into() }),
+    ]
+}
+
+/// On a session whose greeting and `VERSION()` line disagree on whether the server reads dollar
+/// quotes, the session says the reading is not known, and no user text whose bytes hold a
+/// dollar-quote opener (`$`, tag characters, `$`) is sent: an `Execute` sent while the session
+/// still opens, and each send path (`Execute`, `Resume`, `Export` confirmed by the user,
+/// `Count`, `GroupCount`, `Estimate`, `CheckRepeat`), whatever the opener is inside (a string,
+/// a name glued to it), and a run whose first statement changes the sql mode the second one
+/// would be read in. Each fails with the refusal and the proxy sees none of it; the session
+/// goes on.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dollar_opener_is_refused_on_every_send_path_when_the_reports_disagree() {
+    let test = "a_dollar_opener_is_refused_on_every_send_path_when_the_reports_disagree";
+    let Some(url) = my_url(test) else { return };
+    let way = Disagreeing::start(&url).await;
+    // Sent while the session still opens: it waits for the session's facts, then is refused.
+    way.arm();
+    let (tx, mut rx) = unbounded_channel();
+    let tag = format!("seam{}-{test}", std::process::id());
+    let at = way.proxy.url(&url);
+    let session =
+        MyDriver.connect(&profile(&at), SessionRole::Query, ConnectOptions::new(PAGE, SessionRole::Query, &tag), tx);
+    session.send(execute(1, &["SELECT $$a; b$$"]));
+    // Each way a command got through: (what, how it was answered, what the proxy saw of it).
+    let mut through: Vec<(String, String, Vec<String>)> = Vec::new();
+    let mut evs = Vec::new();
+    let opening = loop {
+        match tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.expect("an answer") {
+            Some(DbEvent::Failed { id: 1, error, .. }) => break Err(error),
+            Some(ev @ (DbEvent::Page { id: 1, .. } | DbEvent::Done { id: 1, .. })) => break Ok(format!("{ev:?}")),
+            Some(DbEvent::ConnectFailed { error, .. }) => panic!("connect failed: {error:?}"),
+            Some(ev) => evs.push(ev),
+            None => panic!("event channel closed"),
+        }
+    };
+    assert!(evs.iter().any(|e| matches!(e, DbEvent::Connected)), "{evs:?}");
+    let seen = |from: usize| way.proxy.queries()[from..].iter().filter(|q| q.contains('$')).cloned().collect();
+    if !opening.as_ref().is_err_and(dollar_refusal) || !way.proxy.queries().iter().all(|q| !q.contains('$')) {
+        through.push(("Execute while opening".into(), format!("{opening:?}"), seen(0)));
+    }
+    let language = said_dollar_quotes(&evs);
+    let mut c = Conn { session, rx };
+    let mut id = 10;
+    let texts: [&[&str]; 5] = [
+        &["SET SESSION sql_mode = 'NO_BACKSLASH_ESCAPES'", "SELECT '\\' AS a, $$x$$ AS b -- '"],
+        &["SELECT '$$'"],
+        &["SELECT $a$x$a$"],
+        &["SELECT 1 AS x$y$z"],
+        &["SELECT $$a; b$$"],
+    ];
+    'texts: for statements in texts {
+        let mut paths = vec![("Execute", execute(id, statements))];
+        if let [sql] = statements {
+            paths = every_send_path(id, sql);
+        }
+        for (path, cmd) in paths {
+            let n = match &cmd {
+                DbCommand::Execute { id, .. }
+                | DbCommand::Resume { id, .. }
+                | DbCommand::Export { id, .. }
+                | DbCommand::Count { id, .. }
+                | DbCommand::GroupCount { id, .. }
+                | DbCommand::Estimate { id, .. }
+                | DbCommand::CheckRepeat { id, .. } => *id,
+                _ => unreachable!(),
+            };
+            let from = way.proxy.queries().len();
+            let got = c.failure(n, cmd).await;
+            if !got.as_ref().is_err_and(dollar_refusal) || way.proxy.queries().len() != from {
+                let sent = way.proxy.queries()[from..].to_vec();
+                through.push((format!("{path} {statements:?}"), format!("{got:?}"), sent));
+            }
+            if got.as_deref() == Ok("ended") {
+                break 'texts;
+            }
+        }
+        id += 10;
+    }
+    let report: Vec<String> = through.iter().map(|(what, got, sent)| format!("{what}: {got}, sent {sent:?}")).collect();
+    assert!(report.is_empty(), "{} got through:\n{}", report.len(), report.join("\n"));
+    assert_eq!(language, DollarQuotes::NotKnown, "the session says the dollar reading is not known");
+    // Neither the sql mode nor anything else changed, and the session goes on.
+    let evs = c.ok(100, "SELECT @@SESSION.sql_mode LIKE '%NO_BACKSLASH_ESCAPES%' AS nbe").await;
+    let Some(DbEvent::Page { rows, .. }) = evs.last() else { panic!("{evs:?}") };
+    assert_eq!(rows[0][0].as_deref(), Some("0"), "the SET of the refused run was not sent");
+    assert!(way.proxy.queries().iter().all(|q| !q.contains('$')), "{:?}", way.proxy.queries());
+}
+
+/// A `DROP PROCEDURE IF EXISTS` run on a side connection when dropped.
+struct Dropped {
+    url: String,
+    sql: String,
+}
+
+impl Drop for Dropped {
+    fn drop(&mut self) {
+        let (url, sql) = (self.url.clone(), self.sql.clone());
+        let _ = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            rt.block_on(async {
+                let mut c = side(&url).await;
+                let _ = c.query_drop(sql).await;
+                let _ = c.disconnect().await;
+            });
+        })
+        .join();
+    }
+}
+
+/// On the same disagreeing session, text without a dollar-quote opener runs as before: a `$`
+/// at the end of a name, before a number or inside one is no opener, and a procedure and a
+/// trigger with compound bodies, cut as the editor cuts them (`DELIMITER` lines read, not sent),
+/// make their objects.
+#[tokio::test(flavor = "multi_thread")]
+async fn text_without_an_opener_runs_as_today_when_the_reports_disagree() {
+    let test = "text_without_an_opener_runs_as_today_when_the_reports_disagree";
+    let Some((_, admin)) = urls(test) else { return };
+    let way = Disagreeing::start(&admin).await;
+    let (mut c, before) = way.open(&admin, test).await;
+    let f = facts_first(SessionRole::Query, &before);
+    assert!(matches!(f.version, Fact::Unknown(_)), "the reports disagree: {f:?}");
+    for (n, sql) in ["SELECT 1 AS price$", "SELECT 1 AS a$b", "SELECT $1"].into_iter().enumerate() {
+        let id = 1 + n as u64;
+        let got = c.failure(id, execute(id, &[sql])).await;
+        if let Err(e) = &got {
+            assert!(!dollar_refusal(e) && matches!(e, DbError::Server(_)), "{sql}: {got:?}");
+        }
+        assert!(way.proxy.queries().iter().any(|q| q == sql), "{sql}: sent");
+    }
+    let t = Table::make(&admin, "dq", &["CREATE TABLE {t} (id INT PRIMARY KEY, v VARCHAR(20))"]).await;
+    let proc = format!("{}_p", t.name);
+    let _proc = Dropped { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{proc}") };
+    let text = format!(
+        "DELIMITER ;;\nCREATE PROCEDURE shop.{proc}() BEGIN SELECT 1; SELECT 'a;b'; END ;;\n\
+         CREATE TRIGGER shop.{}_bi BEFORE INSERT ON {} FOR EACH ROW BEGIN SET NEW.v = 'x;'; END ;;\nDELIMITER ;\n",
+        t.name,
+        t.q()
+    );
+    let mysql = Dialect::MySql(MySqlMode::default());
+    let statements = datarig_core::sql::split::split_in(&text, mysql);
+    assert_eq!(statements.len(), 2, "{text}");
+    for (n, s) in statements.iter().enumerate() {
+        let id = 10 + n as u64;
+        let got = c.failure(id, execute(id, &[s.body(&text)])).await;
+        assert!(got.is_ok(), "{}: {got:?}", s.body(&text));
+    }
+    let evs = c.ok(20, &format!("INSERT INTO {} (id) VALUES (1)", t.q())).await;
+    assert!(matches!(evs.last(), Some(DbEvent::Done { .. })), "{evs:?}");
+    let evs = c.ok(21, &format!("SELECT v FROM {}", t.q())).await;
+    let Some(DbEvent::Page { rows, .. }) = evs.last() else { panic!("{evs:?}") };
+    assert_eq!(rows[0][0].as_deref(), Some("x;"), "the trigger ran");
+}
+
+/// A session whose two reports agree keeps today's dollar-quote reading, however it reaches the
+/// server: straight through a proxy that changes nothing, behind one that numbers its clients
+/// (pooled), through one that fails the own-id lookup at connect (not checked), and with a
+/// version line of its engine that has no number (an Aurora-style line, which gives no answer;
+/// a MariaDB line, whose answer needs none): MySQL 8.4
+/// reads them, MariaDB does not. `SELECT $$a; b$$` is sent as one statement, and the answer is
+/// the server's own (a syntax error on both: neither takes a dollar-quoted string there).
+#[tokio::test(flavor = "multi_thread")]
+async fn dollar_text_on_an_agreeing_session_runs_as_today() {
+    let test = "dollar_text_on_an_agreeing_session_runs_as_today";
+    let Some(url) = my_url(test) else { return };
+    let maria = mariadb(&url).await;
+    let want = if maria { DollarQuotes::NotRead } else { DollarQuotes::Read };
+    for way in ["direct", "pooled", "own id not checked", "a line without a number"] {
+        let proxy = Proxy::start(&upstream(&url)).await;
+        match way {
+            "pooled" => proxy.offset_ids(0x0100_0000),
+            "own id not checked" => {
+                proxy.fault_start("SELECT CONNECTION_ID(), ", Fault::Instead("SELECT zz_seam_no_such_column".into()))
+            }
+            // A line of the server's own engine.
+            "a line without a number" => {
+                let line = if maria { "SELECT 'MariaDB-custom'" } else { "SELECT '8.0.mysql_aurora.3.04.0'" };
+                proxy.fault_start("SELECT VERSION()", Fault::Instead(line.into()))
+            }
+            _ => {}
+        }
+        let (mut c, before) = Conn::start(&proxy.url(&url), SessionRole::Query, test).await;
+        assert_eq!(said_dollar_quotes(&before), want, "{way}: {before:?}");
+        let sql = "SELECT $$a; b$$";
+        let got = c.failure(1, execute(1, &[sql])).await;
+        assert!(proxy.queries().iter().any(|q| q == sql), "{way}: sent: {got:?}");
+        assert!(matches!(&got, Err(DbError::Server(_))), "{way}: the server's own answer: {got:?}");
+    }
+}
+
+/// What a query session with start-up statement `startup`, through `proxy`, ended its opening
+/// with: `Ok` once connected, else its error.
+async fn open_with_startup(proxy: &Proxy, url: &str, test: &str, startup: &str) -> Result<Vec<DbEvent>, DbError> {
+    let (tx, mut rx) = unbounded_channel();
+    let tag = format!("seam{}-{test}", std::process::id());
+    let statement = SessionStatement { sql: startup.into(), per_transaction: None, identity: false };
+    let options = ConnectOptions::new(PAGE, SessionRole::Query, &tag).session_sql(vec![statement]);
+    let _session = MyDriver.connect(&profile(&proxy.url(url)), SessionRole::Query, options, tx);
+    let mut before = Vec::new();
+    loop {
+        match tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.expect("an answer") {
+            Some(DbEvent::Connected) => return Ok(before),
+            Some(DbEvent::ConnectFailed { error, .. }) => return Err(error),
+            Some(ev) => before.push(ev),
+            None => panic!("event channel closed"),
+        }
+    }
+}
+
+/// A start-up statement is user text too: on a session whose reports disagree on dollar quotes,
+/// one whose bytes hold a dollar-quote opener (here inside a string, as a setting's value) fails
+/// the session with the refusal as that statement's error, and nothing of it reaches the
+/// server. One without an opener runs as before, and so does the same statement on a session
+/// whose reports agree.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_startup_statement_with_a_dollar_opener_is_refused_when_the_reports_disagree() {
+    let test = "a_startup_statement_with_a_dollar_opener_is_refused_when_the_reports_disagree";
+    let Some(url) = my_url(test) else { return };
+    let opener = "SET @zz_x12_startup = '$$'";
+    let way = Disagreeing::start(&url).await;
+    way.arm();
+    let got = open_with_startup(&way.proxy, &url, test, opener).await;
+    match &got {
+        Err(DbError::SessionSql { index: 0, statement, error }) => {
+            assert_eq!(statement, opener);
+            assert!(dollar_refusal(error), "{got:?}");
+        }
+        _ => panic!("refused as the start-up statement's error: {got:?}"),
+    }
+    assert!(way.proxy.queries().iter().all(|q| !q.contains('$')), "{:?}", way.proxy.queries());
+    // No opener: it runs.
+    let plain = "SET @zz_x12_startup = 'price$'";
+    way.arm();
+    let got = open_with_startup(&way.proxy, &url, test, plain).await;
+    assert!(got.is_ok(), "{got:?}");
+    assert!(way.proxy.queries().iter().any(|q| q == plain), "sent");
+    // Agreeing reports: the opener runs as before.
+    let proxy = Proxy::start(&upstream(&url)).await;
+    let got = open_with_startup(&proxy, &url, test, opener).await;
+    assert!(got.is_ok(), "{got:?}");
+    assert!(proxy.queries().iter().any(|q| q == opener), "sent");
+}
+
+/// A `VERSION()` line of the other engine without a number still answers for dollar quotes as
+/// far as it can: a MariaDB line never reads them, so behind a greeting of MySQL 8.4 (which
+/// does) the reading is not known; a MySQL line without a number gives no answer, so behind a
+/// MariaDB greeting the reading is not known either, and is not taken from the greeting. An
+/// opener is then refused and not sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_line_of_the_other_engine_without_a_number_leaves_dollar_quotes_unknown() {
+    let test = "a_line_of_the_other_engine_without_a_number_leaves_dollar_quotes_unknown";
+    let Some(url) = my_url(test) else { return };
+    let maria = mariadb(&url).await;
+    let proxy = Proxy::start(&upstream(&url)).await;
+    let (greeting, line) =
+        if maria { ("8.4.6", "MariaDB-custom") } else { ("5.5.5-11.4.13-MariaDB", "8.0.mysql_aurora.3.04.0") };
+    proxy.greet_as(greeting);
+    proxy.fault_start("SELECT VERSION()", Fault::Instead(format!("SELECT '{line}'")));
+    let (mut c, before) = Conn::start(&proxy.url(&url), SessionRole::Query, test).await;
+    assert_eq!(said_dollar_quotes(&before), DollarQuotes::NotKnown, "{greeting} / {line}: {before:?}");
+    let got = c.failure(1, execute(1, &["SELECT $$a; b$$"])).await;
+    assert!(got.as_ref().is_err_and(dollar_refusal), "{got:?}");
+    assert!(proxy.queries().iter().all(|q| !q.contains('$')), "{:?}", proxy.queries());
 }

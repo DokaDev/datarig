@@ -1,7 +1,7 @@
 //! The risk classifier of each engine: class, danger and the read-only verdict of the same
 //! statements.
 
-use crate::Engine::{MariaDb, MySql, MySqlNoBackslashEscapes, Pg};
+use crate::Engine::{MariaDb, MySql, MySqlDollarNotKnown, MySqlNoBackslashEscapes, Pg};
 use crate::{Case, Engine, verdict};
 use datarig_core::sql::dialect::{Dialect, Language};
 use datarig_core::sql::risk::Classifier;
@@ -20,6 +20,16 @@ pub fn classify_in(d: Dialect, sql: &str) -> String {
 
 pub fn classifier_cases() -> Vec<Case<&'static str>> {
     vec![
+        Case {
+            name: "a write after a dollar quote",
+            input: "SELECT $$ ' $$; DROP TABLE t; -- '",
+            expect: &[
+                (Pg, "Ddl Some(Drop) read-only Class(Ddl)"),
+                (MySql, "Ddl Some(Drop) read-only Class(Ddl)"),
+                (MariaDb, "Ddl Some(Drop) read-only Class(Ddl)"),
+                (MySqlDollarNotKnown, "Ddl Some(Drop) read-only Class(Ddl)"),
+            ],
+        },
         Case {
             name: "plain select",
             input: "SELECT 1",
