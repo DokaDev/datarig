@@ -83,26 +83,10 @@ fn dialects() -> Vec<Dialect> {
     out
 }
 
-/// PostgreSQL, and MySQL and MariaDB in their default modes and each mode alone.
+/// PostgreSQL, and MySQL and MariaDB in every combination of the sql mode flags.
 fn checked_dialects() -> Vec<Dialect> {
-    let d = MySqlMode::default();
-    let modes = [
-        d,
-        MySqlMode { mariadb: true, ..d },
-        MySqlMode { ansi_quotes: true, ..d },
-        MySqlMode { no_backslash_escapes: true, ..d },
-        MySqlMode { dollar_quotes: true, ..d },
-        MySqlMode { ignore_space: true, ..d },
-        MySqlMode {
-            ansi_quotes: true,
-            no_backslash_escapes: true,
-            dollar_quotes: true,
-            mariadb: true,
-            ignore_space: true,
-        },
-    ];
     let mut out = vec![Dialect::Postgres];
-    out.extend(modes.into_iter().map(Dialect::MySql));
+    out.extend(mysql_modes().into_iter().map(Dialect::MySql));
     out
 }
 
@@ -238,23 +222,21 @@ fn splitting_never_panics() {
 }
 
 /// The texts the slower entry points (classifiers, formatter, completer, checks) are fed.
+/// Fewer than the lexers get, as each runs in every mode: every text of up to two characters,
+/// every one character after each prefix, and a fixed sample of longer ones after a prefix.
 fn checked_texts() -> Vec<String> {
     let mut texts = all_up_to(2);
-    texts.extend(short_texts());
-    texts.extend(sampled(400, 12));
+    for p in PREFIXES {
+        for s in all_up_to(1) {
+            texts.push(format!("{p}{s}"));
+        }
+    }
+    texts.extend(sampled(1000, 12));
     texts
 }
 
 #[test]
 fn the_classifiers_never_panic() {
-    let d = MySqlMode::default();
-    let all_on = MySqlMode {
-        ansi_quotes: true,
-        no_backslash_escapes: true,
-        dollar_quotes: true,
-        mariadb: true,
-        ignore_space: true,
-    };
     for src in checked_texts() {
         for d in checked_dialects() {
             let _ = Classifier::new(Language::Sql(d)).classify(&src);
@@ -264,7 +246,7 @@ fn the_classifiers_never_panic() {
             let _ = preset.problem();
             let _ = preset.read_only_refused();
         }
-        for m in [d, all_on] {
+        for m in mysql_modes() {
             let _ = risk::mysql::repeatable(&src, m);
             let _ = risk::mysql::names(&src, m);
             let _ = risk::mysql::named(&src, m);
