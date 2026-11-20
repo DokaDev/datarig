@@ -10,6 +10,7 @@ mod facts;
 mod id;
 mod mariadb;
 mod mysql;
+pub mod mysql_family;
 mod postgres;
 mod spec;
 mod why;

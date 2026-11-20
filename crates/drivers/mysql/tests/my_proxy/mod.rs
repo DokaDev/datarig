@@ -3,14 +3,17 @@
 //! follows) and always clears `CLIENT_SSL` in it, so every session through it stays plain. It
 //! records the text of every `COM_QUERY` a client sends, in order, and a fault can be set for
 //! the next one that starts with a given text ([`Proxy::fault_start`]): the server gets another
-//! text, or the connection is closed in its place. Everything else, authentication included,
-//! passes through unchanged.
+//! text, or the connection is closed in its place. It can also leave every new session with a
+//! `sql_select_limit` of 0 ([`Proxy::zero_select_limit`]), or with results sent in another
+//! character set ([`Proxy::results_charset`]), as a proxy or an `init_connect` that sets it
+//! would. Everything else, authentication included, passes through unchanged.
 
 use datarig_core::profile::dsn;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::oneshot;
 
 /// `CLIENT_SSL` in the greeting's lower capability flags.
 const CLIENT_SSL: u16 = 0x0800;
@@ -27,13 +30,19 @@ pub enum Fault {
     Close,
 }
 
-/// How the server's greeting is rewritten.
+/// The text the relay sends on its own before a session's first statement, in
+/// [`Proxy::zero_select_limit`]'s mode.
+const ZERO_SELECT_LIMIT: &str = "SET SESSION sql_select_limit = 0";
+
+/// How the server's greeting is rewritten, and what the relay does on its own.
 #[derive(Clone, Debug, Default)]
 struct Greeting {
     /// The version text sent instead of the server's.
     version: Option<String>,
     /// Added to the connection id (wrapping), so it is not the server's own.
     id_offset: u32,
+    /// The statement the session gets once it logged in, before its first one.
+    after_login: Option<String>,
 }
 
 type Faults = Arc<Mutex<Vec<(String, Fault)>>>;
@@ -75,6 +84,20 @@ impl Proxy {
     /// server's (wrapping), as a proxy that numbers its clients itself.
     pub fn offset_ids(&self, offset: u32) {
         self.greeting.lock().unwrap().id_offset = offset;
+    }
+
+    /// Every connection from now on runs [`ZERO_SELECT_LIMIT`] right after its login, before
+    /// the client's first statement reaches the server; its answer never reaches the client
+    /// (nor the log of [`Proxy::queries`]).
+    pub fn zero_select_limit(&self) {
+        self.greeting.lock().unwrap().after_login = Some(ZERO_SELECT_LIMIT.to_string());
+    }
+
+    /// Every connection from now on runs `SET character_set_results = <charset>` right after its
+    /// login, as [`Proxy::zero_select_limit`] does its statement: the server sends the results
+    /// in `charset` until the session sets another.
+    pub fn results_charset(&self, charset: &str) {
+        self.greeting.lock().unwrap().after_login = Some(format!("SET character_set_results = {charset}"));
     }
 
     /// The next `COM_QUERY` (on any connection) whose text starts with `start` meets `fault`,
@@ -164,14 +187,37 @@ async fn relay(
     let (seq, payload) = read_packet(&mut sr).await?;
     let how = greeting.lock().unwrap().clone();
     write_packet(&mut cw, seq, &rewrite(&payload, &how)).await?;
+    // The server's next packet, when the relay waits for one of its own statement's answers:
+    // taken here and never sent to the client.
+    let swallow: Arc<Mutex<Option<oneshot::Sender<()>>>> = Arc::default();
+    let swallowing = swallow.clone();
     tokio::spawn(async move {
-        let _ = tokio::io::copy(&mut sr, &mut cw).await;
+        while let Ok((seq, payload)) = read_packet(&mut sr).await {
+            if let Some(taken) = swallowing.lock().unwrap().take() {
+                let _ = taken.send(());
+                continue;
+            }
+            if write_packet(&mut cw, seq, &payload).await.is_err() {
+                break;
+            }
+        }
         let _ = cw.shutdown().await;
     });
     // A packet that continues the one before (that one was `0xFFFFFF` bytes) is no command.
     let mut continued = false;
+    let mut after_login = how.after_login;
     while let Ok((seq, payload)) = read_packet(&mut cr).await {
         let mut payload = payload;
+        // The client's first command comes once the login is done: the relay's own statement
+        // goes first, and its answer (an OK packet) is taken before the client's is sent.
+        if let Some(own) = after_login.take_if(|_| !continued && seq == 0) {
+            let (taken, answered) = oneshot::channel();
+            *swallow.lock().unwrap() = Some(taken);
+            write_packet(&mut sw, 0, &[&[COM_QUERY], own.as_bytes()].concat()).await?;
+            if answered.await.is_err() {
+                return Ok(());
+            }
+        }
         if !continued && seq == 0 && payload.first() == Some(&COM_QUERY) {
             let text = String::from_utf8_lossy(&payload[1..]).to_string();
             queries.lock().unwrap().push(text.clone());

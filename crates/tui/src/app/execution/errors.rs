@@ -175,6 +175,9 @@ impl App {
                     .msg(&Msg::DbVersionUnsupported { server: server.clone(), needed: needed.clone() })
                     .to_string();
             }
+            DbError::EngineUnconfirmed { greeting } => {
+                return self.i18n.msg(&Msg::EngineUnconfirmed { greeting: greeting.clone() }).to_string();
+            }
             DbError::MonitorUnsupported(server) => {
                 return self.i18n.msg(&Msg::DbMonitorUnsupported { server: server.clone() }).to_string();
             }

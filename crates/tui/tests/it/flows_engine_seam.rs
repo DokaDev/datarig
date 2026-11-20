@@ -860,13 +860,17 @@ fn server_idle_limit_is_offered_on_postgres_only() {
 /// The facts a session of `engine` says first: MySQL 8.4.6, MariaDB 11.4.13 or PostgreSQL 17.2,
 /// reached directly.
 fn facts_of(engine: Engine) -> DbEvent {
-    use datarig_core::engine::{EngineFacts, Fact, MyFacts, PgFacts, ServerFacts, Topology, Version, Why};
+    use datarig_core::engine::{EngineFacts, EngineId, Fact, MyFacts, PgFacts, ServerFacts, Topology, Version, Why};
     let (version, detail) = match engine {
         Engine::Postgres => (Version::new(17, 2, 0), EngineFacts::Postgres(PgFacts::default())),
-        Engine::MySql => (Version::new(8, 4, 6), EngineFacts::MySql(MyFacts { handshake: Version::new(8, 4, 6) })),
-        Engine::MariaDb => {
-            (Version::new(11, 4, 13), EngineFacts::MariaDb(MyFacts { handshake: Version::new(11, 4, 13) }))
-        }
+        Engine::MySql => (
+            Version::new(8, 4, 6),
+            EngineFacts::MySql(MyFacts { handshake: Version::new(8, 4, 6), greeting: EngineId::MySql }),
+        ),
+        Engine::MariaDb => (
+            Version::new(11, 4, 13),
+            EngineFacts::MariaDb(MyFacts { handshake: Version::new(11, 4, 13), greeting: EngineId::MariaDb }),
+        ),
     };
     DbEvent::Server(Arc::new(ServerFacts {
         version: Fact::Known(version),
@@ -922,4 +926,22 @@ fn a_server_word_changes_nothing_yet() {
     for engine in ENGINES {
         assert_eq!(run(engine, true), run(engine, false), "{engine:?}");
     }
+}
+
+/// A MySQL-family session refused because the server's version line confirmed no engine leaves
+/// the profile unconnected, and its error says what the greeting named and that nothing else ran
+/// on the session.
+#[test]
+fn an_unconfirmed_engine_says_the_greeting_and_stays_unconnected() {
+    let error = DbError::EngineUnconfirmed { greeting: "MySQL 8.4.6".into() };
+    let text = "Connection failed: the server's engine could not be confirmed: VERSION() gave no answer \
+                (MySQL 8.4.6 by its greeting), so the session was closed before anything else ran on it";
+    let p = ConnectionConfig { name: "seam".into(), driver: "mysql".into(), ..ConnectionConfig::test_db() };
+    let cfg = Config { connections: vec![p], ..Config::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver(true));
+    let pid = id(&h, "seam");
+    h.meta_db("seam", DbEvent::ConnectFailed { error: error.clone(), auth: false });
+    assert_eq!(h.node_error("seam").as_deref(), Some(text));
+    assert!(h.prompt().is_none(), "not a password problem");
+    assert!(!h.app.conns.get(pid).is_some_and(|c| c.connected));
 }

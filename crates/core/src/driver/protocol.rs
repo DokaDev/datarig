@@ -211,6 +211,10 @@ pub enum DbError {
     /// The monitor does not read this kind of server at any version: `server` is what it is
     /// (`MariaDB 11.4.13`).
     MonitorUnsupported(String),
+    /// A MySQL-family server's answer to `VERSION()` confirms no engine (no row, `NULL`, not
+    /// text, or blank): `greeting` is what the greeting says. Nothing but the version read ran on
+    /// the session.
+    EngineUnconfirmed { greeting: String },
     /// The server accepts only encrypted connections (MySQL's `require_secure_transport`), and
     /// the profile's TLS mode is off.
     TlsRequired,
@@ -425,6 +429,7 @@ impl DbError {
             | DbError::KindUnsupported(_)
             | DbError::VersionUnsupported { .. }
             | DbError::MonitorUnsupported(_)
+            | DbError::EngineUnconfirmed { .. }
             | DbError::TlsRequired
             | DbError::KeyRetrievalRefused
             | DbError::ServerKeyPathRelative(_)

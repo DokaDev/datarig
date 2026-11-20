@@ -4,6 +4,16 @@
 and older are refused with their version. MariaDB 10.6 and newer is a best effort: it connects
 and runs statements, and is tested only lightly.
 
+**Which server.** The server says what it is twice: in its greeting, and in its answer to
+`SELECT VERSION()`, which datarig asks on every session before anything that depends on the
+engine, and in a test connection. A proxy in front of the server may write the greeting itself,
+so the engine is the one `VERSION()` names. When `VERSION()` gives no answer, the connection
+fails with an error that says what the greeting names, and nothing else is run on the session.
+When the two name different engines (MySQL and MariaDB), the session connects as it always has,
+with the settings the greeting implies, and its version counts as not known; so it does when
+they name different versions of the same engine. The profile's driver name (`mysql` or
+`mariadb`) never decides which engine the server is.
+
 A MySQL profile has `driver = "mysql"`, and a URL starts with `mysql://` (or `mariadb://`).
 
 ## What works

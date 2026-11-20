@@ -471,7 +471,7 @@ fn words(before: &[DbEvent]) -> (Vec<Language>, Vec<Option<ExplainFormat>>, Vec<
 }
 
 /// Every role's session says what the server is first and once: the engine its own version line
-/// names, the version of its greeting (no text of it read), reached directly, the provider not
+/// names, the version of its greeting and the line `VERSION()` answers, reached directly, the provider not
 /// checked. The plan format and the edits it says before `Connected` are the ones that engine
 /// and version imply (MySQL's tree from 8.0.16 on, its edits from 8.0.17 on, none on MariaDB),
 /// and the language is MariaDB's exactly when the engine is (with dollar quotes on MySQL 8.1
@@ -491,7 +491,7 @@ async fn the_server_facts_come_first_once_and_the_words_before_connected_follow_
         let engine = if maria { EngineId::MariaDb } else { EngineId::MySql };
         assert_eq!(f.engine(), engine, "{role:?}: {f:?}");
         assert_eq!(f.version, Fact::Known(version), "{role:?}: {f:?}");
-        assert_eq!(f.version_text, None, "{role:?}: {f:?}");
+        assert_eq!(f.version_text.as_deref(), Some(line.as_str()), "{role:?}: {f:?}");
         assert_eq!(f.provider, Fact::Unknown(Why::NotChecked), "{role:?}: {f:?}");
         assert_eq!(f.topology, Fact::Known(Topology::Direct), "{role:?}: {f:?}");
         let (explain, edit, dollar_quotes) = match f.engine() {

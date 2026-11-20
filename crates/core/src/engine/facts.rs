@@ -161,6 +161,9 @@ pub struct PgFacts {}
 pub struct MyFacts {
     /// The version number of the server's greeting.
     pub handshake: Version,
+    /// The engine the server's greeting names, which may differ from the one its `VERSION()`
+    /// line names (the engine of the facts) when a proxy wrote the greeting.
+    pub greeting: EngineId,
 }
 
 /// What a test connection learns of the server: no more than its greeting and version tell.

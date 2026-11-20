@@ -350,6 +350,24 @@ fn mysql_probe_reads_what_the_account_may() {
     assert_eq!((p.version, p.innodb_trx), (80045, Readable::Yes));
 }
 
+/// A MariaDB line in the form of its greeting (as a proxy may answer `VERSION()` with it) names
+/// MariaDB's own number, not the `5.5.5` it starts with.
+#[test]
+fn a_mariadb_line_with_the_greeting_prefix_names_its_own_number() {
+    let none = Answer::Rows(Vec::new());
+    for (line, server) in
+        [("5.5.5-11.4.13-MariaDB", "MariaDB 11.4.13"), ("5.5.5-10.6.12-MariaDB-log", "MariaDB 10.6.12")]
+    {
+        let first = Answer::Rows(vec![vec![Some(line.into()), Some("1".into()), Some("u@%".into())]]);
+        let answers = [first, none.clone(), none.clone(), none.clone(), none.clone(), none.clone(), none.clone()];
+        assert_eq!(
+            decode::mysql::probe(&answers).map(|m| m.version),
+            Err(DecodeError::NotRead(server.into())),
+            "{line}"
+        );
+    }
+}
+
 #[test]
 fn mysql_versions_the_monitor_does_not_read() {
     let probe = |version: &str| {

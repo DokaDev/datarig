@@ -660,8 +660,11 @@ pub(crate) struct Opened {
 }
 
 /// Open a connection to `target` over a stream of `route` with `opts`, check the server's
-/// version and set the session up ([`init_sql`]); the session's read-only is checked with the
-/// server. A failure says whether it is about the password (`true`: a prompt can help).
+/// version, read its own version line, which names its engine ([`crate::engine::confirm`]:
+/// before any other statement, so a session whose line confirms no engine ran nothing else)
+/// and set the session up ([`init_sql`]); the session's
+/// read-only is checked with the server. A failure says whether it is about the password
+/// (`true`: a prompt can help).
 ///
 /// A query session then runs its start-up statements (`session_sql`, each alone and in order,
 /// [`datarig_core::driver::ConnectOptions::session_sql`]) before the read-only check, which so
@@ -688,6 +691,16 @@ pub(crate) async fn open(
         quit(conn).await;
         return Err((e, false));
     }
+    // The server's own version line is read before anything that depends on the engine runs:
+    // the settings, the read-only check, the start-up statements. A line that confirms no
+    // engine closes the session.
+    let report = match crate::engine::confirm(&mut conn, &greeting).await {
+        Ok(report) => report,
+        Err(e) => {
+            quit(conn).await;
+            return Err((e, false));
+        }
+    };
     let mut tracked = Tracked::default();
     let set = conn.query_drop(init_sql(&server, &settings)).await;
     set.map_err(|e| (my_error(&e), false))?;
@@ -762,7 +775,7 @@ pub(crate) async fn open(
         Some((id, marker)) => (id, own_verdict(handshake, id, marker).then_some(token), Some(low32(id) == handshake)),
         None => (u64::from(handshake), None, None),
     };
-    let facts = crate::engine::facts(&greeting, own);
+    let facts = crate::engine::facts(&greeting, &report, own);
     Ok(Opened { conn, wire, encryption, server, facts, tracked, id, read_only_unconfirmed, token, own })
 }
 

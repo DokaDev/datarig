@@ -7,4 +7,11 @@ pub enum Why {
     NotChecked,
     /// The server's report of its version did not parse as a version.
     VersionUnknown,
+    /// The server's own reports of its version (a MySQL-family greeting and `VERSION()`) name
+    /// different versions of the same engine: a proxy in between may have written one of them.
+    VersionsDisagree,
+    /// A MySQL-family greeting and the server's `VERSION()` name different engines (MySQL and
+    /// MariaDB): a proxy in between may have written the greeting itself, so neither the version
+    /// nor how the session reaches the server is known.
+    EnginesDisagree,
 }

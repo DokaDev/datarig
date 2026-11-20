@@ -33,10 +33,10 @@ async fn open(url: &str, one_way: Duration) -> Result<WiredSession, String> {
 pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, String> {
     println!("rtt_mysql: {runs} runs per statement, {} ms one way", one_way.as_millis());
     let mut out = Vec::new();
-    // Opening a session: the server's greeting, the login, and the session's settings in one
-    // statement. The login as the server has cached it: its first after a start (a fresh CI
-    // service) also asks for the server's public key and sends the password encrypted with it,
-    // two round trips more, so one login goes first, not measured.
+    // Opening a session: the server's greeting, the login, the server's own version line and the
+    // session's settings in one statement. The login as the server has cached it: its first after
+    // a start (a fresh CI service) also asks for the server's public key and sends the password
+    // encrypted with it, two round trips more, so one login goes first, not measured.
     WiredSession::open_with(&MyDriver, url, Duration::ZERO, false, SessionRole::Query).await?.quiet().await;
     let mut costs = Vec::new();
     for _ in 0..runs.min(5) {
