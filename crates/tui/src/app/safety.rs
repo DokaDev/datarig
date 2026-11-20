@@ -265,8 +265,8 @@ impl App {
     /// STDIN` and `COPY … TO STDOUT` need the COPY protocol, which the app does not carry yet
     /// (sent, the first broke the tab's connection).
     pub(super) fn unsupported(&self, tab: TabId, statements: &[String]) -> Option<Notice> {
-        let lang = self.tabs.get(tab).map_or_else(|| self.tab_language(tab), |t| t.exec.prepared.language());
-        let sql = statements.iter().find(|sql| Classifier::classify_once(lang, sql).stdio)?;
+        let classifier = self.tabs.get(tab).map_or_else(|| self.rules(tab).classifier(), |t| t.exec.prepared.fresh());
+        let sql = statements.iter().find(|sql| classifier.clone().classify(sql).stdio)?;
         let sql = super::runlog::excerpt(sql, 60);
         Some(Notice::new(Msg::SafetyCopyStdio { sql }, Level::Error))
     }
@@ -283,7 +283,7 @@ impl App {
         }));
         match self.tabs.get(tab) {
             Some(t) if t.exec.session.is_some() => t.exec.prepared.clone(),
-            Some(t) => Classifier::new(t.exec.prepared.language()),
+            Some(t) => t.exec.prepared.fresh(),
             None => self.rules(tab).classifier(),
         }
     }

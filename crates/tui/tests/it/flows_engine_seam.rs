@@ -1394,7 +1394,7 @@ fn a_pg_tab_keeps_its_prepared_statements_when_its_facts_arrive() {
     assert!(knows(&h, "ok"), "kept through the facts");
     let tab = h.app.tab().id;
     let meta_facts = facts_at(Engine::Postgres, v(17, 2, 0));
-    let name = h.app.profiles.iter().next().expect("a profile").name.clone();
+    let name = h.app.profiles.first().expect("a profile").name.clone();
     h.meta_db(&name, DbEvent::Server(meta_facts));
     assert!(knows(&h, "ok"), "kept through the profile's facts");
     assert_eq!(h.app.rules(tab).language(), Language::Sql(Dialect::Postgres));

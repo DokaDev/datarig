@@ -37,7 +37,8 @@ struct PgRisk;
 impl RiskRules for PgRisk {
     fn new_classifier(&self, d: Dialect, j: Judged) -> Classifier {
         match j {
-            Judged::Own => Classifier::new(Language::Sql(d)),
+            // PostgreSQL has no sibling engine: its sessions are judged on its own rules.
+            Judged::Own | Judged::WithSibling => Classifier::new(Language::Sql(d)),
         }
     }
 }

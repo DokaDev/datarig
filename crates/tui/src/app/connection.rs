@@ -246,7 +246,7 @@ impl App {
             s.close();
         }
         t.exec.generation = generation;
-        t.exec.prepared = Classifier::new(t.exec.prepared.language());
+        t.exec.prepared = t.exec.prepared.fresh();
         t.exec.unconfirmed.clear();
         t.exec.context = None;
         t.exec.path_per_transaction = false;

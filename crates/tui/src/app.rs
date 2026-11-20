@@ -1070,15 +1070,16 @@ impl App {
     }
 
     /// Tab `tab`'s editor and risk classifier follow its language ([`App::rules`]), once the
-    /// tab appears or its binding (or its profile's driver) changes. Another language gets a
-    /// new classifier of the tab's rules, with nothing prepared; what the server was found to be
-    /// rebuilds none.
+    /// tab appears or its binding (or its profile's driver) changes, or a session says what its
+    /// server is. Another language, or other engines to judge it on (a server whose reports name
+    /// two engines), gets a new classifier of the tab's rules, with nothing prepared; otherwise
+    /// what the server was found to be rebuilds none (PostgreSQL keeps what it prepared).
     pub(crate) fn sync_tab_language(&mut self, tab: TabId) {
         let rules = self.rules(tab);
         let lang = rules.language();
         let Some(t) = self.tabs.get_mut(tab) else { return };
         t.editor.set_language(lang);
-        if t.exec.prepared.language() != lang {
+        if t.exec.prepared.language() != lang || t.exec.prepared.judged() != rules.judged() {
             t.exec.prepared = rules.classifier();
         }
     }

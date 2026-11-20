@@ -141,6 +141,23 @@ impl ServerFacts {
             EngineFacts::MariaDb(_) => EngineId::MariaDb,
         }
     }
+
+    /// Whether the server's greeting names another engine than its `VERSION()` line (the
+    /// engine of the facts): a proxy wrote the greeting, and either engine may be the one that
+    /// runs the session's text.
+    pub fn reports_disagree(&self) -> bool {
+        match &self.detail {
+            EngineFacts::MySql(my) | EngineFacts::MariaDb(my) => my.greeting != self.engine(),
+            EngineFacts::Postgres(_) => false,
+        }
+    }
+
+    /// On which engines' rules the session's text is judged: both of the family when its
+    /// reports disagree ([`ServerFacts::reports_disagree`]), else its own.
+    pub fn judged(&self) -> crate::sql::risk::mysql::Judged {
+        use crate::sql::risk::mysql::Judged;
+        if self.reports_disagree() { Judged::WithSibling } else { Judged::Own }
+    }
 }
 
 /// The engine of a server with its server-level facts. MySQL and MariaDB share a struct but

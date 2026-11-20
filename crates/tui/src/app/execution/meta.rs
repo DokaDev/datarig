@@ -332,7 +332,13 @@ impl App {
             // The plan format its server gives (the plan actions follow it).
             DbEvent::Explain(format) => self.conns.entry(id).explain = Some(format),
             // What the server is: the profile's rules until the attempt ends.
-            DbEvent::Server(facts) => self.conns.entry(id).facts = Some(facts),
+            DbEvent::Server(facts) => {
+                self.conns.entry(id).facts = Some(facts);
+                let tabs: Vec<TabId> = self.tabs.iter().filter(|t| t.profile == Some(id)).map(|t| t.id).collect();
+                for t in tabs {
+                    self.sync_tab_language(t);
+                }
+            }
             // The edits its server takes.
             DbEvent::Edit(format) => self.conns.entry(id).edit = Some(format),
             // A query session's own (copying its values as SQL needs it).

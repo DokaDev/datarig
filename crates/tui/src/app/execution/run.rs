@@ -191,11 +191,12 @@ impl App {
             t.exec.replace_pending = true;
             t.exec.messages_scroll = 0;
             let lang = t.exec.prepared.language();
+            let classifier = t.exec.prepared.fresh();
             // A statement that commits the user's open transaction before it runs (MySQL's
             // implicit commit): said in the run's Messages (with manual commit it asked).
             if t.exec.user_tx()
                 && !manual
-                && let Some(i) = statements.iter().position(|s| Classifier::classify_once(lang, s).implicit_commit)
+                && let Some(i) = statements.iter().position(|s| classifier.clone().classify(s).implicit_commit)
             {
                 let m = Notice::new(Msg::QueryImplicitCommit { step: (i + 1).to_string() }, Level::Warning);
                 t.exec.run.notes.push(m);
@@ -211,8 +212,7 @@ impl App {
             t.exec.run_id = qid;
             t.exec.outside_offer = None;
             t.exec.ddl = statements.iter().any(|s| changes_schema_in(s, lang.dialect()));
-            t.exec.explain_rolled_back =
-                statements.iter().any(|s| Classifier::classify_once(lang, s).rollback_matters());
+            t.exec.explain_rolled_back = statements.iter().any(|s| classifier.clone().classify(s).rollback_matters());
             // What the run prepares and deallocates counts once the server says each statement
             // succeeded (`TabSession::succeeded`), never when it is sent.
             t.exec.unconfirmed = statements.iter().cloned().enumerate().collect();

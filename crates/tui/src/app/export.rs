@@ -906,7 +906,7 @@ impl App {
         {
             return Err(refused);
         }
-        let risk = Classifier::classify_once(t.exec.prepared.language(), &sql);
+        let risk = t.exec.prepared.fresh().classify(&sql);
         if risk.class != datarig_core::sql::risk::Class::Read || risk.writes {
             let sql = super::runlog::excerpt(&sql, 60);
             return Err(Notice::new(Msg::ExportNotARead { sql }, Level::Warning));

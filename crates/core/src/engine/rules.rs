@@ -38,10 +38,20 @@ impl Rules {
         }
     }
 
-    /// A fresh classifier of the tab's text ([`Rules::language`]), with nothing prepared: its
-    /// engine's.
+    /// A fresh classifier of the tab's text ([`Rules::language`]), with nothing prepared, judged
+    /// on the engines [`Rules::judged`] says.
     pub fn classifier(&self) -> Classifier {
         let d = self.language().dialect();
-        d.engine().spec().risk.new_classifier(d, Judged::Own)
+        d.engine().spec().risk.new_classifier(d, self.judged())
+    }
+
+    /// On which engines' rules the tab's text is judged: both of the family when the server's
+    /// reports name two engines ([`ServerFacts::judged`]), else its own (also before any server
+    /// said what it is).
+    pub fn judged(&self) -> Judged {
+        match self {
+            Rules::Server { facts, .. } => facts.judged(),
+            Rules::Unbound | Rules::Expected { .. } => Judged::Own,
+        }
     }
 }

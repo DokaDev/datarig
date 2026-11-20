@@ -68,6 +68,12 @@ impl RiskRules for FamilyRisk {
     fn new_classifier(&self, d: Dialect, j: Judged) -> Classifier {
         match j {
             Judged::Own => Classifier::new(Language::Sql(d)),
+            Judged::WithSibling => match d {
+                Dialect::MySql(mode) => Classifier::MySql(mode, j),
+                Dialect::MariaDb(mode) => Classifier::MariaDb(mode, j),
+                // Never a dialect of the family's sessions: its own classifier.
+                Dialect::Postgres => Classifier::new(Language::Sql(d)),
+            },
         }
     }
 }

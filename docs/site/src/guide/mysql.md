@@ -24,6 +24,14 @@ without a number says nothing, and when the greeting names MariaDB the answer is
 either. Text with a single `$` (`price$`, `$1`, `a$b`) runs as usual, and so does every
 session whose two reports agree.
 
+When the greeting and `VERSION()` name different engines, either may be the one that runs a
+statement, so datarig checks each statement by the rules of both and the stricter answer
+counts: a call either engine would look up as a stored function (MariaDB has no
+`BIN_TO_UUID`; MySQL reads a quoted `` `DATABASE`() `` as a stored function) is refused on a
+read-only profile, a statement either engine finds dangerous asks before it runs, a result is
+run again for its next page or counted only when both engines allow it, and the filter bar
+lets a call run only when both do.
+
 A MySQL profile has `driver = "mysql"`, and a URL starts with `mysql://` (or `mariadb://`).
 
 ## What works
