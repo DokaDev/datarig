@@ -119,8 +119,7 @@ fn the_facts_are_the_greeting_and_the_own_id_check() {
 fn the_version_query_survives_a_zero_select_limit() {
     // A `sql_select_limit` of 0 left on the session empties an unbounded `SELECT`; a `LIMIT` of
     // the statement's own wins over it.
-    assert!(VERSION_SQL.starts_with("SELECT VERSION()"), "{VERSION_SQL}");
-    assert!(VERSION_SQL.ends_with(" LIMIT 1"), "{VERSION_SQL}");
+    assert_eq!(VERSION_SQL, "SELECT VERSION() LIMIT 1");
 }
 
 /// What a server answers to the version read: a failed read, no row, or one value.
@@ -139,8 +138,8 @@ enum Outcome {
     /// The read's own error.
     Kept,
     Unconfirmed,
-    Disagree,
-    Agree(Fact<Version>),
+    /// A line: the engine it names and the version.
+    Line(EngineId, Fact<Version>),
 }
 
 /// What the version read of a server of greeting `g` that answers `answer` ends in, as
@@ -153,34 +152,29 @@ fn outcome(g: &Greeting, answer: &Answer) -> Outcome {
         Answer::Bytes(b) => Some(Value::Bytes(b.to_vec())),
         Answer::Number => Some(Value::Int(1)),
     };
-    let label = Server::of_greeting(g).label();
     match judge(g, value) {
         Ok(r) => {
             assert_eq!(Some(r.line.as_bytes()), if let Answer::Bytes(b) = answer { Some(*b) } else { None });
-            Outcome::Agree(r.version)
+            Outcome::Line(r.engine, r.version)
         }
         Err(DbError::EngineUnconfirmed { greeting }) => {
-            assert_eq!(greeting, label);
+            assert_eq!(greeting, Server::of_greeting(g).label());
             Outcome::Unconfirmed
-        }
-        Err(DbError::EnginesDisagree { greeting, version }) => {
-            assert_eq!(greeting, label);
-            let Answer::Bytes(b) = answer else { panic!("{answer:?}") };
-            assert_eq!(version.as_bytes(), *b);
-            Outcome::Disagree
         }
         Err(e) => panic!("{g:?} {answer:?}: {e:?}"),
     }
 }
 
 #[test]
-fn the_engine_is_the_one_both_reports_name() {
+fn the_engine_is_the_one_the_version_line_names() {
+    use EngineId::{MariaDb, MySql};
     use Outcome::*;
     let mysql = my(8, 4, 6);
     let mariadb = maria(11, 4, 13);
-    let known = |g: &Greeting| Agree(Fact::Known(g.handshake));
-    let unknown = Agree(Fact::Unknown(Why::VersionUnknown));
-    let differ = Agree(Fact::Unknown(Why::VersionsDisagree));
+    let known = |g: &Greeting| Fact::Known(g.handshake);
+    let unknown = Fact::Unknown(Why::VersionUnknown);
+    let differ = Fact::Unknown(Why::VersionsDisagree);
+    let other = Fact::Unknown(Why::EnginesDisagree);
     let rows: Vec<(Answer, Outcome, Outcome)> = vec![
         // (answer, under MySQL 8.4.6's greeting, under MariaDB 11.4.13's)
         (Answer::Failed, Kept, Kept),
@@ -191,17 +185,43 @@ fn the_engine_is_the_one_both_reports_name() {
         (Answer::Bytes(b" "), Unconfirmed, Unconfirmed),
         (Answer::Bytes(b"\t"), Unconfirmed, Unconfirmed),
         (Answer::Bytes(b"\xFF"), Unconfirmed, Unconfirmed),
-        (Answer::Bytes(b"8.4.6"), known(&mysql), Disagree),
-        (Answer::Bytes(b"8.4.6-commercial"), known(&mysql), Disagree),
-        (Answer::Bytes(b"8.0.40"), differ.clone(), Disagree),
-        (Answer::Bytes(b"1"), unknown.clone(), Disagree),
-        (Answer::Bytes(b"11.4.13-MariaDB-ubu2404"), Disagree, known(&mariadb)),
-        (Answer::Bytes(b"10.11.9-MariaDB"), Disagree, differ.clone()),
-        (Answer::Bytes(b"5.5.5-11.4.13-MariaDB"), Disagree, differ),
-        (Answer::Bytes(b"x-MariaDB"), Disagree, unknown),
+        (Answer::Bytes(b"8.4.6"), Line(MySql, known(&mysql)), Line(MySql, other.clone())),
+        (Answer::Bytes(b"8.4.6-commercial"), Line(MySql, known(&mysql)), Line(MySql, other.clone())),
+        (Answer::Bytes(b"8.0.40"), Line(MySql, differ.clone()), Line(MySql, other.clone())),
+        (Answer::Bytes(b"1"), Line(MySql, unknown.clone()), Line(MySql, other.clone())),
+        (Answer::Bytes(b"11.4.13-MariaDB-ubu2404"), Line(MariaDb, other.clone()), Line(MariaDb, known(&mariadb))),
+        (Answer::Bytes(b"10.11.9-MariaDB"), Line(MariaDb, other.clone()), Line(MariaDb, differ.clone())),
+        (Answer::Bytes(b"5.5.5-11.4.13-MariaDB"), Line(MariaDb, other.clone()), Line(MariaDb, differ)),
+        (Answer::Bytes(b"x-MariaDB"), Line(MariaDb, other), Line(MariaDb, unknown)),
     ];
     for (answer, under_mysql, under_mariadb) in rows {
         assert_eq!(outcome(&mysql, &answer), under_mysql, "MySQL greeting, {answer:?}");
         assert_eq!(outcome(&mariadb, &answer), under_mariadb, "MariaDB greeting, {answer:?}");
+    }
+}
+
+#[test]
+fn legacy_answers_follow_the_greeting_when_the_line_names_the_other_engine() {
+    for (g, ..) in table() {
+        let line = if g.mariadb { "8.4.6" } else { "11.4.13-MariaDB-ubu2404" };
+        let report = judge(&g, Some(Value::Bytes(line.as_bytes().to_vec()))).expect("a line");
+        let line_engine = if g.mariadb { EngineId::MySql } else { EngineId::MariaDb };
+        for own in [Some(true), Some(false), None] {
+            let f = facts(&g, &report, own);
+            assert_eq!(f.engine(), line_engine, "{g:?}");
+            assert_eq!(f.topology, Fact::Unknown(Why::EnginesDisagree), "{g:?} {own:?}");
+            assert_eq!(f.version, Fact::Unknown(Why::EnginesDisagree), "{g:?}");
+            assert_eq!(f.version_text.as_deref(), Some(line), "{g:?}");
+            // Everything a session says and sends follows the greeting, as when both agree.
+            assert_eq!(Server::of(&f), Server::of_greeting(&g), "{g:?}");
+            let agreeing = facts(&g, &VersionReport::agreeing(&g), own);
+            let tracked = Tracked { sql_mode: Some("ANSI_QUOTES".into()), ..Tracked::default() };
+            let (d, a) = (derive(&f, &tracked), derive(&agreeing, &tracked));
+            assert_eq!((d.language, d.explain, d.edit), (a.language, a.explain, a.edit), "{g:?}");
+            assert_eq!(format!("{:?}", d.capabilities), format!("{:?}", a.capabilities), "{g:?}");
+        }
+        let i = identity(&g, &report);
+        assert_eq!(i.engine, Fact::Known(line_engine), "{g:?}");
+        assert_eq!(i.version, Fact::Unknown(Why::EnginesDisagree), "{g:?}");
     }
 }

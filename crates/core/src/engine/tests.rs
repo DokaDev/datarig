@@ -167,7 +167,7 @@ fn the_engine_of_facts_is_its_detail() {
         topology: Fact::Unknown(Why::NotChecked),
         detail,
     };
-    let my = MyFacts { handshake: Version::new(8, 4, 6) };
+    let my = MyFacts { handshake: Version::new(8, 4, 6), greeting: EngineId::MySql };
     assert_eq!(facts(EngineFacts::Postgres(PgFacts::default())).engine(), EngineId::Postgres);
     assert_eq!(facts(EngineFacts::MySql(my.clone())).engine(), EngineId::MySql);
     assert_eq!(facts(EngineFacts::MariaDb(my)).engine(), EngineId::MariaDb);

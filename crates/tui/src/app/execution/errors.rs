@@ -175,12 +175,6 @@ impl App {
                     .msg(&Msg::DbVersionUnsupported { server: server.clone(), needed: needed.clone() })
                     .to_string();
             }
-            DbError::EnginesDisagree { greeting, version } => {
-                return self
-                    .i18n
-                    .msg(&Msg::EngineReportsDisagree { greeting: greeting.clone(), version: version.clone() })
-                    .to_string();
-            }
             DbError::EngineUnconfirmed { greeting } => {
                 return self.i18n.msg(&Msg::EngineUnconfirmed { greeting: greeting.clone() }).to_string();
             }

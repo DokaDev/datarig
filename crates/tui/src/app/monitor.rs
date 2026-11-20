@@ -1278,6 +1278,12 @@ impl App {
                     Err(_) => m.replication_error = error_text,
                 }
             }
+            // A server whose engine could not be confirmed answers no better on a retry: the
+            // monitor says why and waits for the user.
+            DbEvent::ConnectFailed { error: datarig_core::driver::DbError::EngineUnconfirmed { .. }, .. } => {
+                m.drop_connection();
+                m.state = MonState::Unavailable(text);
+            }
             DbEvent::ConnectFailed { .. } | DbEvent::Lost { .. } => {
                 m.drop_connection();
                 m.failures += 1;
