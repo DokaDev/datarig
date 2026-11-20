@@ -262,7 +262,7 @@ impl ColumnInfo {
 /// leaves out). `None` on PostgreSQL, which has no such column. A type not named here is of no
 /// kind of its own ([`ValueKind::Other`]), whose values are not compared.
 pub(crate) fn catalogue_meta(d: Dialect, name: &str, type_name: &str) -> Option<ColumnMeta> {
-    if !matches!(d, Dialect::MySql(_)) {
+    if !matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)) {
         return None;
     }
     let lower = type_name.to_ascii_lowercase();
@@ -299,7 +299,7 @@ pub(crate) fn catalogue_meta(d: Dialect, name: &str, type_name: &str) -> Option<
 ///
 /// [`ColumnFacts::zoned`]: datarig_core::query::ColumnFacts::zoned
 pub(crate) fn zoned_type(d: Dialect, type_name: &str) -> bool {
-    matches!(d, Dialect::MySql(_)) && base_type(type_name) == "timestamp"
+    matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)) && base_type(type_name) == "timestamp"
 }
 
 fn base_type(type_name: &str) -> String {
@@ -376,7 +376,7 @@ fn op_allowed(
         _ => {}
     }
     let equality = matches!(op, Op::Eq | Op::Ne | Op::NeOrNull | Op::InList | Op::NotInList);
-    if equality && c.kind == ColumnKind::Real && matches!(target.dialect, Dialect::MySql(_)) {
+    if equality && c.kind == ColumnKind::Real && matches!(target.dialect, Dialect::MySql(_) | Dialect::MariaDb(_)) {
         return Err(OpOff::InexactEquality);
     }
     if !op.pattern() {
@@ -540,7 +540,7 @@ impl Row {
 
 /// A MySQL column whose collation compares without case (`utf8mb4_0900_ai_ci`).
 fn ignores_case(target: &Target, col: &str) -> bool {
-    matches!(target.dialect, Dialect::MySql(_))
+    matches!(target.dialect, Dialect::MySql(_) | Dialect::MariaDb(_))
         && target
             .column(col)
             .and_then(|f| f.collation.as_deref())

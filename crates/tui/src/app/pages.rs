@@ -369,7 +369,9 @@ impl App {
         let Some(t) = self.tabs.get(id) else { return (None, None) };
         let limit = self.prefs.count_timeout;
         match self.tab_dialect(id) {
-            datarig_core::sql::dialect::Dialect::MySql(_) => (limit, None),
+            datarig_core::sql::dialect::Dialect::MySql(_) | datarig_core::sql::dialect::Dialect::MariaDb(_) => {
+                (limit, None)
+            }
             _ if t.exec.tx_open => (None, limit.map(|_| t.exec.in_block)),
             _ => (limit, None),
         }

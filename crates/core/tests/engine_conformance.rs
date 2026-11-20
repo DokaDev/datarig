@@ -193,20 +193,14 @@ fn mariadb_variant() -> Dialect {
 }
 
 /// The differences between `f`'s output on each case of `table` and the case's MariaDB
-/// expectation (`expected` reads the part of it `f` answers).
-fn against_mariadb<I>(
-    report: &mut String,
-    table: &str,
-    cases: &[Case<I>],
-    f: impl Fn(&I) -> String,
-    expected: impl Fn(&'static str) -> &'static str,
-) {
+/// expectation.
+fn against_mariadb<I>(report: &mut String, table: &str, cases: &[Case<I>], f: impl Fn(&I) -> String) {
     for c in cases {
         let Some((_, today)) = c.expect.iter().find(|(e, _)| *e == Engine::MariaDb) else {
             let _ = writeln!(report, "{table}: case `{}` has no MariaDB expectation", c.name);
             continue;
         };
-        let (expected, actual) = (expected(today), f(&c.input));
+        let (expected, actual) = (*today, f(&c.input));
         if actual != expected {
             let _ = writeln!(
                 report,
@@ -217,21 +211,24 @@ fn against_mariadb<I>(
     }
 }
 
-/// The tables whose answers the SQL tools alone give (risk, quoting and splitting, the
-/// transaction step, the editor's verdicts of a call) answer on the MariaDB variant exactly
-/// as on today's MariaDB.
+/// Every table answers on the MariaDB variant exactly as on today's MariaDB: risk, quoting
+/// and splitting, the transaction step, the verdicts of a call in every context (the filter
+/// bar's included), the filter's SQL and what it compares, typed and copied values, and the
+/// keyset export's chunks.
 #[test]
 fn the_mariadb_variant_answers_as_today() {
     let d = mariadb_variant();
     let mut report = String::new();
-    let whole = |s: &'static str| s;
-    against_mariadb(&mut report, "classifier", &risk::classifier_cases(), |s| risk::classify_in(d, s), whole);
-    against_mariadb(&mut report, "quoting", &text::quoting_cases(), |s| text::quoting_in(d, s), whole);
-    against_mariadb(&mut report, "split", &text::split_cases(), |s| text::split_in_dialect(d, s), whole);
-    against_mariadb(&mut report, "tx step", &tx::cases(), |s| tx::step_in(d, s), whole);
-    // The editor's rows of each call: the filter's come after them.
-    let editor = |s: &'static str| s.split_once(" | filter ").map_or(s, |(editor, _)| editor);
-    against_mariadb(&mut report, "function verdicts", &context::cases(), |s| context::editor_verdicts(d, s), editor);
+    against_mariadb(&mut report, "classifier", &risk::classifier_cases(), |s| risk::classify_in(d, s));
+    against_mariadb(&mut report, "quoting", &text::quoting_cases(), |s| text::quoting_in(d, s));
+    against_mariadb(&mut report, "split", &text::split_cases(), |s| text::split_in_dialect(d, s));
+    against_mariadb(&mut report, "tx step", &tx::cases(), |s| tx::step_in(d, s));
+    against_mariadb(&mut report, "function verdicts", &context::cases(), |s| context::verdicts_in(d, s));
+    against_mariadb(&mut report, "filter render", &filter::render_cases(), |i| filter::render_in(d, i));
+    against_mariadb(&mut report, "compares", &filter::compares_cases(), |c| filter::compares_in(d, c));
+    against_mariadb(&mut report, "edit input", &values::input_cases(), |t| values::input_in(d, t));
+    against_mariadb(&mut report, "sql cells", &values::cells_cases(), |c| values::cells_in(d, c));
+    against_mariadb(&mut report, "keyset chunk", &export::keyset_cases(), |t| export::keyset_in(d, t));
     assert!(report.is_empty(), "{report}");
 }
 

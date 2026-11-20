@@ -954,7 +954,7 @@ impl App {
     fn copy_zone_refused(&self, copy: &GridCopy, plan: &PastePlan) -> Option<String> {
         let t = self.tab();
         let rs = rows_of(t)?;
-        let mysql = matches!(self.tab_dialect(t.id), Dialect::MySql(_));
+        let mysql = matches!(self.tab_dialect(t.id), Dialect::MySql(_) | Dialect::MariaDb(_));
         let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
         plan.map.iter().find_map(|&(j, c)| {
             let from = copy.offsets.get(j)?.as_ref()?;

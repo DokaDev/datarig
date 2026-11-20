@@ -7,6 +7,7 @@ use datarig_core::driver::structure::{ColumnFill, StructureColumn};
 use datarig_core::driver::{ReadIn, SessionValues, ValueKind};
 use datarig_core::edit::{Exactness, TableColumn, check_input};
 use datarig_core::export::{Kind, SqlColumn, sql_cells, sql_value};
+use datarig_core::sql::dialect::Dialect;
 
 /// A value typed for a table column of a type.
 pub struct Typed {
@@ -18,6 +19,11 @@ pub struct Typed {
 
 /// Whether the typed value is taken on `e`.
 pub fn input(e: Engine, t: &Typed) -> String {
+    input_in(e.dialect(), t)
+}
+
+/// [`input`] in dialect `d`.
+pub fn input_in(d: Dialect, t: &Typed) -> String {
     let column = TableColumn {
         column: StructureColumn {
             name: "c".to_string(),
@@ -32,7 +38,7 @@ pub fn input(e: Engine, t: &Typed) -> String {
         exact: Exactness::Exact,
         repeated: false,
     };
-    verdict(&check_input(e.dialect(), &column, t.text))
+    verdict(&check_input(d, &column, t.text))
 }
 
 fn typed(type_name: &'static str, kind: ValueKind, text: &'static str) -> Typed {
@@ -223,7 +229,11 @@ pub struct Copied {
 /// copy writes (what `SqlCells::cell` takes, written by `sql_value` in the column's kind), or
 /// why not.
 pub fn cells(e: Engine, c: &Copied) -> String {
-    let d = e.dialect();
+    cells_in(e.dialect(), c)
+}
+
+/// [`cells`] in dialect `d`.
+pub fn cells_in(d: Dialect, c: &Copied) -> String {
     let kind = Kind::from(c.columns[0].kind);
     match sql_cells(d, c.columns, &c.read_in, c.server_zone) {
         Err(refused) => format!("refused {refused:?}"),

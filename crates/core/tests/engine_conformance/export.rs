@@ -5,6 +5,7 @@ use crate::Engine::{MariaDb, MySql, Pg};
 use crate::{Case, Engine};
 use datarig_core::driver::{ColumnMeta, ValueKind};
 use datarig_core::export::keyset::Keyset;
+use datarig_core::sql::dialect::Dialect;
 
 /// A table read by its key: its columns (name, type, kind), the key's column names and the
 /// last row read.
@@ -19,6 +20,11 @@ pub struct Table {
 /// The first chunk and the chunk after the last row on `e`, or why the table is not read by
 /// its key (text read in this session taken as the text).
 pub fn keyset(e: Engine, t: &Table) -> String {
+    keyset_in(e.dialect(), t)
+}
+
+/// [`keyset`] in dialect `d`.
+pub fn keyset_in(d: Dialect, t: &Table) -> String {
     let columns: Vec<ColumnMeta> = t
         .columns
         .iter()
@@ -26,7 +32,7 @@ pub fn keyset(e: Engine, t: &Table) -> String {
         .collect();
     let names: Vec<String> = t.columns.iter().map(|(name, _, _)| name.to_string()).collect();
     let key: Vec<String> = t.key.iter().map(|k| k.to_string()).collect();
-    match Keyset::new(e.dialect(), t.schema, t.table, &key, &columns, &names, true) {
+    match Keyset::new(d, t.schema, t.table, &key, &columns, &names, true) {
         Err(why) => format!("not keyset {why:?}"),
         Ok(k) => {
             let last: Vec<Option<String>> = t.last.iter().map(|v| v.map(str::to_string)).collect();

@@ -185,7 +185,7 @@ impl Keyset {
             }
             let lit = sql_value(d, k.kind, Some(v));
             // Bytes the MySQL driver did not show as `0x…` would be compared as their text.
-            if k.kind == Kind::Bytes && matches!(d, Dialect::MySql(_)) && !lit.starts_with("X'") {
+            if k.kind == Kind::Bytes && matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)) && !lit.starts_with("X'") {
                 return None;
             }
             names.push(d.force_quote_ident(&k.name));

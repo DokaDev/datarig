@@ -916,7 +916,7 @@ impl App {
             .iter()
             .map(|&c| match (&rs.read_in, rs.columns[c].meta.kind) {
                 (datarig_core::driver::ReadIn::Values(v), datarig_core::driver::ValueKind::TimestampTz)
-                    if matches!(d, Dialect::MySql(_)) =>
+                    if matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)) =>
                 {
                     export::fixed_offset(&v.time_zone, zone)
                 }
@@ -1010,7 +1010,7 @@ impl App {
         // A pending value of a MySQL `TIMESTAMP` read in a zone without a fixed offset (or one not
         // known) is no instant either: its text is read in the zone it lands in.
         let zoned = |j: usize| {
-            matches!(d, Dialect::MySql(_))
+            matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_))
                 && rs.columns[b.cols[j]].meta.kind == datarig_core::driver::ValueKind::TimestampTz
         };
         let refused = refused.or_else(|| {
@@ -1291,7 +1291,7 @@ impl App {
         }
         // MySQL's reasons in its own words: the keys are read at connect, so a missing table is
         // one created later or one the user may not see.
-        if matches!(self.tab_dialect(self.tab().id), Dialect::MySql(_)) {
+        if matches!(self.tab_dialect(self.tab().id), Dialect::MySql(_) | Dialect::MariaDb(_)) {
             match why {
                 NoCatalog => return self.i18n.label(Label::CopyInsertWhyKeysLoading).to_string(),
                 UnknownTable => return self.i18n.label(Label::CopyInsertWhyNotInKeys).to_string(),

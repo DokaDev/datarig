@@ -324,7 +324,7 @@ impl App {
         let Some(t) = self.tabs.get(id) else { return out };
         let manual = self.manual_commit(id);
         let dialect = t.exec.prepared.language().dialect();
-        let mysql = matches!(dialect, Dialect::MySql(_));
+        let mysql = matches!(dialect, Dialect::MySql(_) | Dialect::MariaDb(_));
         let mut open = t.exec.user_tx();
         // What the open transaction did before the run; once a statement of the run ends it, none.
         let (mut changes, mut rows) = t.exec.tx.as_ref().map_or((0, 0), |x| (x.changes, x.rows));

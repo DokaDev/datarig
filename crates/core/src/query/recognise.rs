@@ -122,7 +122,7 @@ impl Reader<'_> {
     /// concatenates with it, which is not known here; `|` bitwise). Their precedence differs
     /// from that of `AND` and `NOT`, so such a level is kept whole.
     fn holds_unmodelled(&self, toks: &[Token]) -> bool {
-        matches!(self.d, Dialect::MySql(_))
+        matches!(self.d, Dialect::MySql(_) | Dialect::MariaDb(_))
             && self
                 .level(toks)
                 .any(|(_, t)| self.word(Some(t), "XOR") || (t.kind == Tok::Op && matches!(self.text(t), "&" | "|")))
@@ -136,13 +136,13 @@ impl Reader<'_> {
         // MySQL's NULL-safe inequality: `NOT (col <=> value)`.
         if let Some(inner) = self.group(rest)
             && let Some(Cond::NotDistinct { col, value, negated: false }) = self.predicate(inner)
-            && matches!(self.d, Dialect::MySql(_))
+            && matches!(self.d, Dialect::MySql(_) | Dialect::MariaDb(_))
         {
             return Some(Cond::NotDistinct { col, value, negated: true });
         }
         // MySQL under HIGH_NOT_PRECEDENCE reads `NOT a BETWEEN …` as `(NOT a) BETWEEN …`; the
         // session's mode is not known here, so only a `NOT` over one parenthesised group is read.
-        if matches!(self.d, Dialect::MySql(_)) && self.group(rest).is_none() {
+        if matches!(self.d, Dialect::MySql(_) | Dialect::MariaDb(_)) && self.group(rest).is_none() {
             let (first, last) = (toks.first()?, toks.last()?);
             return Some(Cond::Raw(self.src[first.start..last.end].to_string()));
         }
@@ -203,7 +203,8 @@ impl Reader<'_> {
     /// the value with the offset `+00:00`. Anywhere else such a call stays as written: `render`
     /// would write that value back as a string, not as the call.
     fn value_for(&self, col: &str, toks: &[Token], at: usize) -> Option<(Value, usize)> {
-        let zoned = matches!(self.d, Dialect::MySql(_)) && self.target.column(col).is_some_and(|f| f.zoned);
+        let zoned = matches!(self.d, Dialect::MySql(_) | Dialect::MariaDb(_))
+            && self.target.column(col).is_some_and(|f| f.zoned);
         if !self.word(toks.get(at), "CONVERT_TZ") {
             return self.value(toks, at);
         }
@@ -231,7 +232,7 @@ impl Reader<'_> {
                 "TRUE" => Value::Bool(true),
                 "FALSE" => Value::Bool(false),
                 // MySQL text written as its UTF-8 bytes: `_utf8mb4 X'…'`.
-                "_UTF8MB4" if matches!(self.d, Dialect::MySql(_)) => {
+                "_UTF8MB4" if matches!(self.d, Dialect::MySql(_) | Dialect::MariaDb(_)) => {
                     let bytes = self.hex_string(toks.get(at + 1)?)?;
                     return Some((Value::Text(String::from_utf8(bytes).ok()?), at + 2));
                 }
@@ -246,7 +247,7 @@ impl Reader<'_> {
                 let sign = if text == "-" { "-" } else { "" };
                 Some((Value::Number(format!("{sign}{}", self.text(n))), at + 2))
             }
-            Tok::Str if matches!(self.d, Dialect::MySql(_)) && self.hex_string(t).is_some() => {
+            Tok::Str if matches!(self.d, Dialect::MySql(_) | Dialect::MariaDb(_)) && self.hex_string(t).is_some() => {
                 Some((Value::Bytes(self.hex_string(t)?), at + 1))
             }
             // A plain or national PostgreSQL string with a backslash reads as written or as an
@@ -278,7 +279,7 @@ impl Reader<'_> {
     /// under NO_BACKSLASH_ESCAPES has none).
     fn escapes_read_exactly(&self, text: &str) -> bool {
         match self.d {
-            Dialect::MySql(m) if m.no_backslash_escapes => true,
+            Dialect::MySql(m) | Dialect::MariaDb(m) if m.no_backslash_escapes => true,
             _ => plain_escapes(text),
         }
     }
@@ -401,7 +402,7 @@ impl Reader<'_> {
         if !done(end) {
             return None;
         }
-        if op == "<=>" && matches!(self.d, Dialect::MySql(_)) {
+        if op == "<=>" && matches!(self.d, Dialect::MySql(_) | Dialect::MariaDb(_)) {
             return Some(Cond::NotDistinct { col, value, negated: false });
         }
         let op = CmpOp::from_sql(&op)?;
@@ -422,7 +423,7 @@ impl Reader<'_> {
         if escape == toks.len() {
             // Without an ESCAPE clause the backslash escapes, except on MySQL under
             // NO_BACKSLASH_ESCAPES, where nothing does: no model form for that.
-            if let Dialect::MySql(m) = self.d
+            if let Dialect::MySql(m) | Dialect::MariaDb(m) = self.d
                 && m.no_backslash_escapes
             {
                 return None;

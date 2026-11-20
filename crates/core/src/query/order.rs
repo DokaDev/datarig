@@ -103,7 +103,7 @@ pub fn parse_order(text: &str, t: &Target) -> Result<Vec<OrderKey>, OrderError> 
             let Some(place) = place else {
                 return err(tok, OrderProblem::NullsIncomplete);
             };
-            if let Dialect::MySql(_) = d {
+            if let Dialect::MySql(_) | Dialect::MariaDb(_) = d {
                 let end = tokens[i + 1].end;
                 return Err(OrderError { range: tok.start..end, kind: OrderProblem::NullsUnsupported });
             }
@@ -142,7 +142,7 @@ fn column(text: &str, tok: &Token, t: &Target) -> Result<String, OrderError> {
             return Ok(folded);
         }
     }
-    if let Dialect::MySql(_) = d {
+    if let Dialect::MySql(_) | Dialect::MariaDb(_) = d {
         let same: Vec<&str> =
             t.columns.iter().map(|c| c.name.as_str()).filter(|c| c.eq_ignore_ascii_case(&name)).collect();
         match same.as_slice() {

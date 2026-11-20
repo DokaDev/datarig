@@ -53,7 +53,7 @@ pub enum Invalid {
 /// Whether `text`, typed for table column `c` on a server of dialect `d`, is a value of the
 /// column's type in the form the result shows that type's values in.
 pub fn check_input(d: Dialect, c: &TableColumn, text: &str) -> Result<(), Invalid> {
-    let mysql = matches!(d, Dialect::MySql(_));
+    let mysql = matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_));
     let col = &c.column;
     if !col.enum_labels.is_empty() && !matches!(c.kind, ValueKind::Array(_)) {
         return col.enum_labels.iter().any(|l| l == text).then_some(()).ok_or(Invalid::NotLabel);
