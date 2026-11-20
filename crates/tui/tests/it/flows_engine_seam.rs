@@ -1079,6 +1079,15 @@ fn seam_profile(key: &str, mysql: bool) -> Harness {
     h
 }
 
+/// Connect profile `seam` from the explorer: its metadata session opens (it has said nothing
+/// yet).
+fn open_meta(h: &mut Harness) {
+    h.explore("seam");
+    h.key(KeyCode::Enter);
+    let pid = id(h, "seam");
+    assert!(h.app.conns.get(pid).is_some_and(|c| c.meta.is_some()), "the metadata session opens");
+}
+
 /// The rules answer each tab the language it reads its text in today: without a profile, on a
 /// profile no driver serves, before a session said anything, once the profile's session and
 /// then the tab's said their server and language (MySQL, MariaDB, PostgreSQL), and again after a
@@ -1109,6 +1118,7 @@ fn rules_answer_todays_language_before_and_after_connect() {
         let never = Rules::Expected { expected: expected(engine.driver()), last: None, driver: driver_lang };
         assert_eq!(rules_of(&h, 0), never, "{engine:?}");
         // The profile's metadata session said its server and language.
+        open_meta(&mut h);
         let meta = facts_at(engine, v(8, 4, 6));
         h.meta_db("seam", DbEvent::Server(meta.clone()));
         for ev in connect_words(engine, false) {
@@ -1159,6 +1169,7 @@ fn rules_answer_todays_language_before_and_after_connect() {
 fn facts_are_dropped_with_the_connection() {
     let mut h = seam_profile("mysql", true);
     let pid = id(&h, "seam");
+    open_meta(&mut h);
     let meta = facts_at(Engine::MySql, v(8, 4, 6));
     h.meta_db("seam", DbEvent::Server(meta.clone()));
     h.meta_db("seam", DbEvent::Connected);

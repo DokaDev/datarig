@@ -191,7 +191,8 @@ pub struct ProfileConn {
     /// in until its own session says. Kept while the profile is not connected.
     pub language: Option<datarig_core::sql::dialect::Language>,
     /// What the current attempt's metadata session found its server to be (`DbEvent::Server`);
-    /// `None` until it says, and from when that session ends or another attempt starts.
+    /// `None` until it says, and from when that session is lost or closed or another attempt
+    /// starts.
     pub facts: Option<std::sync::Arc<datarig_core::engine::ServerFacts>>,
     /// The plan format the current attempt's server gives, as a session of it said
     /// (`DbEvent::Explain`: none on MariaDB); `None` until one says, when the driver's

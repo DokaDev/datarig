@@ -994,8 +994,8 @@ impl App {
     /// profile's last session said, each only when it is of an engine the profile expects (a
     /// MySQL profile may reach MariaDB, and the reverse; the profile may have changed its
     /// driver), else its driver's (`Capabilities::language`; the default when no driver serves
-    /// it). Once the tab's open session, else the profile's metadata session of the current
-    /// attempt, said what its server is (of an engine the profile expects), [`Rules::Server`]
+    /// it). Once the tab's open session, else the profile's open metadata session of the
+    /// current attempt, said what its server is (of an engine the profile expects), [`Rules::Server`]
     /// with those facts, its text read in the same language.
     pub fn rules(&self, tab: TabId) -> Rules {
         let t = self.tabs.get(tab);
@@ -1007,7 +1007,9 @@ impl App {
         let conn = self.conns.get(id);
         let profile_last = conn.and_then(|c| c.language);
         let last = t.and_then(|t| t.exec.language).filter(same).or(profile_last.filter(same));
-        let facts = t.and_then(|t| t.exec.current_facts()).or(conn.and_then(|c| c.facts.as_ref()));
+        // The profile's: only while its metadata session that said them is open.
+        let meta = conn.filter(|c| c.meta.is_some()).and_then(|c| c.facts.as_ref());
+        let facts = t.and_then(|t| t.exec.current_facts()).or(meta);
         let facts = facts.filter(|f| expected.admits(f.engine())).cloned();
         let rules = Rules::Expected { expected, last, driver: self.profile_language(Some(id)) };
         match facts {

@@ -805,6 +805,9 @@ impl App {
         if let Some(s) = c.meta.take() {
             s.close();
         }
+        // What the closed session found its server to be goes with it: it may never say it
+        // was lost.
+        c.facts = None;
         c.read_only_unconfirmed = None;
         self.status = Some(m);
     }

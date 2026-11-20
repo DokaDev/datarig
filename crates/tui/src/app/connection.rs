@@ -361,8 +361,12 @@ impl App {
         // A DDL that was asked for is never answered now (one waiting for the connection
         // still waits: a new attempt may follow).
         self.ddl_stop(id, None, super::tabs::DdlState::NotLoaded, false);
-        if let Some(s) = self.conns.get_mut(id).and_then(|c| c.meta.take()) {
-            s.close();
+        if let Some(c) = self.conns.get_mut(id) {
+            if let Some(s) = c.meta.take() {
+                s.close();
+            }
+            // What the closed session found its server to be goes with it.
+            c.facts = None;
         }
         self.conns.close_aux(Some(id));
     }
@@ -375,6 +379,7 @@ impl App {
             if let Some(s) = c.meta.take() {
                 s.close();
             }
+            c.facts = None;
         }
     }
 
