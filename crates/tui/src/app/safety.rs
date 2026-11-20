@@ -382,10 +382,17 @@ impl App {
     /// The run confirmation was answered: run (only on the tab, profile and tab generation it
     /// was asked for), or say it did not run.
     fn run_confirm_answered(&mut self, run: bool) {
-        let Some(c) = self.overlays.peek_run_confirm_profile() else { return };
+        if self.overlays.run_confirm().is_none() {
+            return;
+        }
         self.run_confirm_answer(run);
-        // The runs that waited for the profile behind this question, one at a time.
-        self.send_waiting(c);
+        // The runs that waited behind this question, one at a time: of every connected profile
+        // (one may have connected while it was open).
+        let waiting: Vec<ProfileId> =
+            self.conns.iter().filter(|(_, c)| c.connected && !c.pending.is_empty()).map(|(id, _)| id).collect();
+        for id in waiting {
+            self.send_waiting(id);
+        }
     }
 
     /// [`App::run_confirm_answered`] for the question itself.

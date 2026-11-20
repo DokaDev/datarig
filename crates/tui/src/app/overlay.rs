@@ -739,11 +739,6 @@ impl Overlays {
         self.0.iter_mut().find_map(|o| if let Overlay::Confirm(c) = o { Some(c) } else { None })
     }
 
-    /// The profile of the run confirmation, if one is open.
-    pub fn peek_run_confirm_profile(&self) -> Option<ProfileId> {
-        self.run_confirm().map(|c| c.profile)
-    }
-
     pub fn run_confirm(&self) -> Option<&RunConfirm> {
         self.0.iter().find_map(|o| if let Overlay::RunConfirm(c) = o { Some(c) } else { None })
     }
