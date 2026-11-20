@@ -46,7 +46,6 @@ fn users(d: Dialect) -> Harness {
         "local-my".into(),
         match d {
             Dialect::MariaDb(_) => "mariadb",
-            Dialect::MySql(m) if m.mariadb => "mariadb",
             Dialect::MySql(_) | Dialect::Postgres => "mysql",
         }
         .into(),
@@ -75,14 +74,12 @@ fn status(h: &Harness) -> String {
     h.app.tab().status.as_ref().map(|n| n.render(&h.app.i18n).to_string()).unwrap_or_default()
 }
 
-/// MySQL's sql modes the filter is read in, and MariaDB's, also as a MariaDB session says them.
+/// MySQL's and MariaDB's sql modes the filter is read in.
 fn dialects() -> Vec<Dialect> {
     let d = MySqlMode::default();
-    let maria = MySqlMode { mariadb: true, ..d };
     vec![
         Dialect::MySql(d),
-        Dialect::MySql(maria),
-        Dialect::MariaDb(maria),
+        Dialect::MariaDb(d),
         Dialect::MySql(MySqlMode { ansi_quotes: true, ..d }),
         Dialect::MySql(MySqlMode { no_backslash_escapes: true, ..d }),
     ]
