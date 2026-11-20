@@ -450,16 +450,21 @@ impl DbCommand {
     /// The answer of this run when it is cancelled before it starts; `None` for a command that
     /// starts no run.
     pub fn cancelled(&self) -> Option<DbEvent> {
-        let error = DbError::Cancelled;
+        self.unsent(DbError::Cancelled, true)
+    }
+
+    /// The answer of this run when nothing of it is sent, for reason `error` (`cancelled`: a
+    /// cancel stopped it); `None` for a command that starts no run.
+    pub fn unsent(&self, error: DbError, cancelled: bool) -> Option<DbEvent> {
         Some(match self {
             DbCommand::Execute { id, .. } | DbCommand::Resume { id, .. } => {
-                DbEvent::Failed { id: *id, error, cancelled: true }
+                DbEvent::Failed { id: *id, error, cancelled }
             }
             DbCommand::Count { id, .. } => DbEvent::Counted { id: *id, result: Err(error), snapshot: false },
             DbCommand::GroupCount { id, .. } => DbEvent::GroupCounted { id: *id, result: Err(error), snapshot: false },
             DbCommand::Estimate { id, .. } => DbEvent::Estimated { id: *id, result: Err(error) },
             DbCommand::CheckRepeat { id, .. } => DbEvent::RepeatChecked { id: *id, result: Err(error) },
-            DbCommand::Export { id, .. } => DbEvent::Exported { id: *id, result: Err(error), cancelled: true },
+            DbCommand::Export { id, .. } => DbEvent::Exported { id: *id, result: Err(error), cancelled },
             DbCommand::ApplyEdits { id, .. } => {
                 DbEvent::Applied { id: *id, result: Err(ApplyFailure { step: None, why: ApplyError::Db(error) }) }
             }

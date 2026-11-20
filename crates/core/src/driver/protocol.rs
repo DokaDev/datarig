@@ -165,6 +165,11 @@ pub enum DbError {
     /// limit that stops its result at the cap would be that statement, and the limit the session
     /// has would let the server read past the cap.
     CappedOutcome,
+    /// A text that could open a dollar quote (`$`, the characters of a tag, `$`, anywhere in
+    /// it) was not sent: the session's server says in its greeting that it reads dollar quotes
+    /// and in its `VERSION()` line that it does not, or the other way round, so where the
+    /// server would end its statements is not known. Nothing of the command was sent.
+    DollarQuotesUnknown,
     /// The server started a COPY to or from the client that no request asked for (a `COPY …
     /// TO STDOUT` or `FROM STDIN` the driver's own check missed): the connection was closed, so
     /// the server stopped it.
@@ -418,6 +423,7 @@ impl DbError {
             | DbError::ReadWriteRefused
             | DbError::CopyStdio
             | DbError::CappedOutcome
+            | DbError::DollarQuotesUnknown
             | DbError::CopyStarted
             | DbError::NotRepeatable(_)
             | DbError::Locked

@@ -233,6 +233,26 @@ fn is_ident_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '$' || !c.is_ascii()
 }
 
+/// Whether `text` holds what could open a dollar quote, read character by character with no
+/// lexing (in a string, a comment or a quoted name too, and whatever the sql mode): a `$`, then
+/// zero or more characters a tag is made of (those a name goes on with, never `$`), then a `$`.
+/// `$$`, `$a$` and `x$y$z` (`$y$`) hold one; `price$`, `$1` and `a$b` do not. Text without one
+/// is cut and lexed the same whether the server reads dollar quotes or not.
+pub fn has_dollar_opener(text: &str) -> bool {
+    let mut open = false;
+    for c in text.chars() {
+        if c == '$' {
+            if open {
+                return true;
+            }
+            open = true;
+        } else if !is_ident_char(c) {
+            open = false;
+        }
+    }
+    false
+}
+
 /// What follows `--` makes it a comment, to the client: a blank, or the end of the line.
 fn dash_comment(next: Option<char>) -> bool {
     next.is_none_or(is_space)

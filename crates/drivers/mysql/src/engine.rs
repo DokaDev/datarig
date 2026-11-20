@@ -249,6 +249,21 @@ pub(crate) fn risk_judge(d: Dialect) -> Judge {
     }
 }
 
+/// The ways a session of dialect `d` may read its text: its own, or, when whether its server
+/// reads dollar quotes is not known, without them and with them.
+pub(crate) fn dollar_readings(d: Dialect) -> Vec<Dialect> {
+    let mode = match d {
+        Dialect::MySql(mode) | Dialect::MariaDb(mode) => mode,
+        Dialect::Postgres => return vec![d],
+    };
+    match mode.dollar_quotes {
+        DollarQuotes::NotKnown => [DollarQuotes::NotRead, DollarQuotes::Read]
+            .map(|dollar_quotes| d.with_mode(MySqlMode { dollar_quotes, ..mode }))
+            .to_vec(),
+        DollarQuotes::NotRead | DollarQuotes::Read => vec![d],
+    }
+}
+
 /// Whether a session of dialect `d` reads an executable comment with a MySQL 5.7-or-later
 /// version (`/*!80000 … */`) as a plain comment: MariaDB's. Such a text alone sets nothing
 /// there.

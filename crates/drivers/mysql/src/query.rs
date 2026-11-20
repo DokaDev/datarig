@@ -103,7 +103,8 @@ use datarig_core::driver::{
     OwnSession, PagingMode, ServerEnd, SessionValues, StatementInfo, TxOutcome, TxRule, TxStep,
 };
 use datarig_core::engine::ServerFacts;
-use datarig_core::sql::dialect::Dialect;
+use datarig_core::sql::dialect::{Dialect, DollarQuotes};
+use datarig_core::sql::lexer::mysql::has_dollar_opener;
 use datarig_core::sql::lexer::{Tok, Token, lex_in};
 use datarig_core::sql::risk::mysql::{self as risk, Judge};
 use datarig_core::sql::risk::repeat::NotRepeatable;
@@ -481,7 +482,8 @@ pub(crate) async fn query_loop(
         server,
         facts: &facts,
     };
-    let dialect = crate::engine::dialect(&server, tracked.mode(crate::engine::dollar_quotes(&facts)));
+    let dollar_quotes = crate::engine::dollar_quotes(&facts);
+    let dialect = crate::engine::dialect(&server, tracked.mode(dollar_quotes));
     let values = tracked.values();
     let isolation = tracked.isolation();
     let autocommit = tracked.autocommit != Some(false);
@@ -505,6 +507,17 @@ pub(crate) async fn query_loop(
         if let Next::Command(cmd) = &next
             && cmd.cancelled_before_start(&asked, &events)
         {
+            continue;
+        }
+        // Where the server ends a statement is not known when its reports disagree on dollar
+        // quotes: no text that could open one is sent, and the command fails at once.
+        if let Next::Command(cmd) = &next
+            && dollar_quotes == DollarQuotes::NotKnown
+            && user_text(cmd).into_iter().any(has_dollar_opener)
+        {
+            if let Some(answer) = cmd.unsent(DbError::DollarQuotesUnknown, false) {
+                let _ = events.send(answer);
+            }
             continue;
         }
         let done = match next {
@@ -628,6 +641,41 @@ pub(crate) async fn query_loop(
             let _ = events.send(DbEvent::Lost { error });
         }
         Stop::Closed => crate::session::quit(conn).await,
+    }
+}
+
+/// The text command `cmd` sends to the server as the user wrote it, or as the app wrote it from
+/// the user's (a check of a statement's names, the statements of an Apply); none for a command
+/// that sends no such text.
+fn user_text(cmd: &DbCommand) -> Vec<&str> {
+    match cmd {
+        DbCommand::Execute { statements, .. } => statements.iter().map(String::as_str).collect(),
+        DbCommand::Resume { sql, .. }
+        | DbCommand::Count { sql, .. }
+        | DbCommand::GroupCount { sql, .. }
+        | DbCommand::Estimate { sql, .. }
+        | DbCommand::CheckRepeat { sql, .. }
+        | DbCommand::Export { sql, .. } => vec![sql.as_str()],
+        DbCommand::ApplyEdits { steps, .. } => steps.iter().map(|s| s.sql.as_str()).collect(),
+        DbCommand::EndTx { .. }
+        | DbCommand::FetchMore { .. }
+        | DbCommand::ClosePortal { .. }
+        | DbCommand::ServerSession { .. }
+        | DbCommand::LoadSchemas
+        | DbCommand::LoadObjects { .. }
+        | DbCommand::LoadCatalog
+        | DbCommand::LoadKeys
+        | DbCommand::LoadDatabases
+        | DbCommand::LoadTypeKinds { .. }
+        | DbCommand::LoadExtensionFunctions { .. }
+        | DbCommand::LoadStructure { .. }
+        | DbCommand::LoadTableKeys { .. }
+        | DbCommand::LoadDdl { .. }
+        | DbCommand::MonitorTick { .. }
+        | DbCommand::MonitorQueryText { .. }
+        | DbCommand::MonitorReplication { .. }
+        | DbCommand::MonitorAction { .. }
+        | DbCommand::MonitorFollowUp { .. } => Vec::new(),
     }
 }
 
@@ -2313,8 +2361,9 @@ fn name_condition(names: &[String], d: Dialect) -> String {
     if cond.is_empty() { "FALSE".to_string() } else { cond.join(" OR ") }
 }
 
-/// Whether a statement sets settings of the next transaction only ([`sets_next_transaction`]).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Whether a statement sets settings of the next transaction only ([`sets_next_transaction`]),
+/// in the order of how much it says: `Maybe` over `Yes` over `No`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum SetsNext {
     /// It does not.
     #[default]
@@ -2329,8 +2378,15 @@ pub(crate) enum SetsNext {
 /// Whether `sql` sets settings of the next transaction only, which the server does not report
 /// ([`sets_next_isolation`], [`sets_next_access`]), or whether it may ([`SetsNext::Maybe`]: a
 /// `CALL`, an `EXECUTE` of a prepared text, an executable comment `/*! … */`, whose text is not
-/// read). A stored function cannot: the statement that calls it is a transaction already.
+/// read). A stored function cannot: the statement that calls it is a transaction already. On a
+/// session that does not know whether its server reads dollar quotes, the stronger answer of
+/// the two readings.
 pub(crate) fn sets_next_transaction(sql: &str, d: Dialect) -> SetsNext {
+    crate::engine::dollar_readings(d).into_iter().map(|d| sets_next_in(sql, d)).max().unwrap_or_default()
+}
+
+/// [`sets_next_transaction`] in one reading, dialect `d`.
+fn sets_next_in(sql: &str, d: Dialect) -> SetsNext {
     if crate::engine::skips_mysql_version_comments(d) && mariadb_skips_all(sql) {
         return SetsNext::No;
     }

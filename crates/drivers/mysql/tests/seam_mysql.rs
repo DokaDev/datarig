@@ -649,14 +649,14 @@ async fn a_test_connection_says_the_engine_and_version() {
 /// Whether `e` is the refusal of a text that opens a dollar quote, on a session that does not
 /// know whether its server reads them.
 fn dollar_refusal(e: &DbError) -> bool {
-    format!("{e:?}") == "DollarQuotesUnknown"
+    matches!(e, DbError::DollarQuotesUnknown)
 }
 
 /// The dollar-quote reading of the language a session said last before `evs` ended.
-fn said_dollar_quotes(evs: &[DbEvent]) -> String {
+fn said_dollar_quotes(evs: &[DbEvent]) -> DollarQuotes {
     let said = languages(evs);
     let (_, mode) = said.last().unwrap_or_else(|| panic!("a language: {evs:?}"));
-    format!("{:?}", mode.dollar_quotes)
+    mode.dollar_quotes
 }
 
 /// A proxy in front of the server of `url` whose sessions' two reports give different dollar
@@ -837,7 +837,7 @@ async fn a_dollar_opener_is_refused_on_every_send_path_when_the_reports_disagree
     }
     let report: Vec<String> = through.iter().map(|(what, got, sent)| format!("{what}: {got}, sent {sent:?}")).collect();
     assert!(report.is_empty(), "{} got through:\n{}", report.len(), report.join("\n"));
-    assert_eq!(language, "NotKnown", "the session says the dollar reading is not known");
+    assert_eq!(language, DollarQuotes::NotKnown, "the session says the dollar reading is not known");
     // Neither the sql mode nor anything else changed, and the session goes on.
     let evs = c.ok(100, "SELECT @@SESSION.sql_mode LIKE '%NO_BACKSLASH_ESCAPES%' AS nbe").await;
     let Some(DbEvent::Page { rows, .. }) = evs.last() else { panic!("{evs:?}") };
@@ -921,7 +921,7 @@ async fn dollar_text_on_an_agreeing_session_runs_as_today() {
     let test = "dollar_text_on_an_agreeing_session_runs_as_today";
     let Some(url) = my_url(test) else { return };
     let maria = mariadb(&url).await;
-    let want = if maria { "NotRead" } else { "Read" };
+    let want = if maria { DollarQuotes::NotRead } else { DollarQuotes::Read };
     for way in ["direct", "pooled", "own id not checked", "a line without a number"] {
         let proxy = Proxy::start(&upstream(&url)).await;
         match way {

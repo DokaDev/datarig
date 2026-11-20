@@ -909,8 +909,9 @@ pub(crate) fn other_readings(sql: &str, mode: MySqlMode) -> Vec<MySqlMode> {
         ),
         (quote, |m: MySqlMode| MySqlMode { ansi_quotes: !m.ansi_quotes, ..m }),
         (dollar, |m: MySqlMode| {
+            // Not known: lexed as not read, so the other reading is the one that reads them.
             let dollar_quotes = match m.dollar_quotes {
-                DollarQuotes::NotRead => DollarQuotes::Read,
+                DollarQuotes::NotRead | DollarQuotes::NotKnown => DollarQuotes::Read,
                 DollarQuotes::Read => DollarQuotes::NotRead,
             };
             MySqlMode { dollar_quotes, ..m }

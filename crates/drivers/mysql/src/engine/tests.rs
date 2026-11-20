@@ -202,10 +202,24 @@ fn the_engine_is_the_one_the_version_line_names() {
     }
 }
 
+/// `l` with dollar quotes read as `dollar_quotes` says.
+fn with_dollar_quotes(l: Language, dollar_quotes: DollarQuotes) -> Language {
+    let Language::Sql(d) = l;
+    match d {
+        Dialect::MySql(m) => Language::Sql(Dialect::MySql(MySqlMode { dollar_quotes, ..m })),
+        Dialect::MariaDb(m) => Language::Sql(Dialect::MariaDb(MySqlMode { dollar_quotes, ..m })),
+        Dialect::Postgres => l,
+    }
+}
+
+/// Every answer follows the greeting, but for dollar quotes when the greeting and the line
+/// answer them differently (MySQL 8.1 or later against MariaDB's line, MariaDB against MySQL
+/// 8.4's): those are not known.
 #[test]
 fn legacy_answers_follow_the_greeting_when_the_line_names_the_other_engine() {
-    for (g, ..) in table() {
+    for (g, _, _, greeting_reads, _) in table() {
         let line = if g.mariadb { "8.4.6" } else { "11.4.13-MariaDB-ubu2404" };
+        let line_reads = g.mariadb;
         let report = judge(&g, Some(Value::Bytes(line.as_bytes().to_vec()))).expect("a line");
         let line_engine = if g.mariadb { EngineId::MySql } else { EngineId::MariaDb };
         for own in [Some(true), Some(false), None] {
@@ -219,8 +233,13 @@ fn legacy_answers_follow_the_greeting_when_the_line_names_the_other_engine() {
             let agreeing = facts(&g, &VersionReport::agreeing(&g), own);
             let tracked = Tracked { sql_mode: Some("ANSI_QUOTES".into()), ..Tracked::default() };
             let (d, a) = (derive(&f, &tracked), derive(&agreeing, &tracked));
-            assert_eq!((d.language, d.explain, d.edit), (a.language, a.explain, a.edit), "{g:?}");
-            assert_eq!(format!("{:?}", d.capabilities), format!("{:?}", a.capabilities), "{g:?}");
+            let language = match greeting_reads == line_reads {
+                true => a.language,
+                false => with_dollar_quotes(a.language, DollarQuotes::NotKnown),
+            };
+            assert_eq!((d.language, d.explain, d.edit), (language, a.explain, a.edit), "{g:?}");
+            let capabilities = Capabilities { language, ..a.capabilities };
+            assert_eq!(format!("{:?}", d.capabilities), format!("{:?}", capabilities), "{g:?}");
         }
         let i = identity(&g, &report);
         assert_eq!(i.engine, Fact::Known(line_engine), "{g:?}");

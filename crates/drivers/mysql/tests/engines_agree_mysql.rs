@@ -262,10 +262,20 @@ fn legacy(log: &[String]) -> Vec<String> {
 }
 
 /// `run` ends as `reference` does (connected with the same words, or failed with the same
-/// error) and sends the same statements past the version read: all of them on a query session or
-/// one that failed, the settings on the others (which go on reading once connected).
-fn as_reference(run: &Run, reference: &Run, what: &str) {
-    assert_eq!(run.outcome, reference.outcome, "{what}");
+/// error), but for the dollar quotes of the language it says: not known, as its two reports
+/// disagree on them. It sends the same statements past the version read: all of them on a query
+/// session or one that failed, the settings on the others (which go on reading once connected).
+fn as_reference_but_dollar_quotes(run: &Run, reference: &Run, what: &str) {
+    let not_known = reference.outcome.as_ref().map(|words| {
+        words
+            .iter()
+            .map(|w| {
+                w.replace("dollar_quotes: Read", "dollar_quotes: NotKnown")
+                    .replace("dollar_quotes: NotRead", "dollar_quotes: NotKnown")
+            })
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(run.outcome, not_known.map_err(Clone::clone), "{what}");
     let (got, want) = (legacy(&run.log), legacy(&reference.log));
     if what.contains("Query") || run.outcome.is_err() {
         assert_eq!(got, want, "{what}");
@@ -283,25 +293,23 @@ fn assert_engines_disagree(f: &ServerFacts, engine: EngineId, line: &str, what: 
 }
 
 /// The plan format, edits and dollar quotes a greeting of MySQL `v` implies (none on MariaDB).
-fn words_of(engine: EngineId, v: Version) -> (Option<ExplainFormat>, Option<EditFormat>, bool) {
+fn words_of(engine: EngineId, v: Version) -> (Option<ExplainFormat>, Option<EditFormat>, DollarQuotes) {
     match engine {
         EngineId::MySql => (
             (v >= Version::new(8, 0, 16)).then_some(ExplainFormat::MySqlTree),
             (v >= Version::new(8, 0, 17)).then_some(EditFormat::MySql(MySqlEdit { nowait: true })),
-            v >= Version::new(8, 1, 0),
+            if v >= Version::new(8, 1, 0) { DollarQuotes::Read } else { DollarQuotes::NotRead },
         ),
-        EngineId::MariaDb | EngineId::Postgres => (None, None, false),
+        EngineId::MariaDb | EngineId::Postgres => (None, None, DollarQuotes::NotRead),
     }
 }
 
 /// The plan format, edits and dollar quotes a session said before `Connected`.
-fn words(before: &[DbEvent]) -> (Option<ExplainFormat>, Option<EditFormat>, bool) {
+fn words(before: &[DbEvent]) -> (Option<ExplainFormat>, Option<EditFormat>, DollarQuotes) {
     let explain = before.iter().find_map(|e| if let DbEvent::Explain(f) = e { Some(*f) } else { None });
     let edit = before.iter().find_map(|e| if let DbEvent::Edit(f) = e { Some(*f) } else { None });
     let dollar = before.iter().find_map(|e| match e {
-        DbEvent::Language(Language::Sql(Dialect::MySql(m) | Dialect::MariaDb(m))) => {
-            Some(m.dollar_quotes == DollarQuotes::Read)
-        }
+        DbEvent::Language(Language::Sql(Dialect::MySql(m) | Dialect::MariaDb(m))) => Some(m.dollar_quotes),
         _ => None,
     });
     (explain.expect("a plan format"), edit.expect("edits"), dollar.expect("a language"))
@@ -622,7 +630,9 @@ async fn a_blank_version_answer_is_unconfirmed_whatever_the_greeting() {
 /// greeting's settings with the same error) and sends the same statements past the version read.
 /// Its facts name the line's engine, with the version and how it reaches the server unknown. A
 /// test connection succeeds and names the line's engine. A MariaDB greeting without `5.5.5-`
-/// still names MariaDB.
+/// still names MariaDB. The dollar quotes the session says are not known: every greeting here
+/// gives the other answer than the server's line (MariaDB's greeting none, MySQL 8.4's line
+/// reads them; a MySQL-format greeting of 8.4.6 or 11.4.13 reads them, MariaDB's line none).
 #[tokio::test(flavor = "multi_thread")]
 async fn a_greeting_naming_the_other_engine_connects_as_today() {
     let test = "a_greeting_naming_the_other_engine_connects_as_today";
@@ -635,7 +645,7 @@ async fn a_greeting_naming_the_other_engine_connects_as_today() {
         for role in ROLES {
             let what = format!("{greeting} {role:?}");
             let run = subject.run(&url, role, test).await;
-            as_reference(&run, &reference.run(&url, role, test).await, &what);
+            as_reference_but_dollar_quotes(&run, &reference.run(&url, role, test).await, &what);
             assert_eq!(run.log.get(..1), Some(&OPENING.map(String::from)[..]), "{what}");
             if let Some(f) = &run.facts {
                 assert_engines_disagree(f, server.engine(), &server.line, &what);
@@ -660,7 +670,9 @@ async fn a_greeting_naming_the_other_engine_connects_as_today() {
 /// A version line naming the other engine under the server's own greeting (a proxy that answers
 /// `VERSION()` itself) is followed: every session ends and sends what it does without the proxy
 /// changing the answer, its facts name the line's engine with the version and how it reaches
-/// the server unknown, and a test connection names the line's engine.
+/// the server unknown, and a test connection names the line's engine. The dollar quotes the
+/// session says are not known: the server's greeting and the other engine's line give opposite
+/// answers (MySQL 8.4 reads them, MariaDB does not).
 #[tokio::test(flavor = "multi_thread")]
 async fn a_rewritten_version_answer_follows_the_line() {
     let test = "a_rewritten_version_answer_follows_the_line";
@@ -672,7 +684,7 @@ async fn a_rewritten_version_answer_follows_the_line() {
         for role in ROLES {
             let what = format!("{line} {role:?}");
             let run = subject.run(&url, role, test).await;
-            as_reference(&run, &Setup::default().run(&url, role, test).await, &what);
+            as_reference_but_dollar_quotes(&run, &Setup::default().run(&url, role, test).await, &what);
             let f = run.facts.as_ref().unwrap_or_else(|| panic!("{what}: {:?}", run.outcome));
             assert_engines_disagree(f, server.other_engine(), line, &what);
         }
@@ -701,7 +713,8 @@ async fn a_profile_key_naming_the_sibling_connects() {
 
 /// A greeting naming another version of the same engine leaves the version unknown (the reports
 /// disagree) and the session connects; what it says before `Connected` is what the greeting
-/// implies, as before.
+/// implies, as before, but for the dollar quotes when the two numbers lie on either side of
+/// MySQL 8.1.0 (a greeting of 8.0.40 in front of 8.4): those are not known.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_version_number_the_reports_disagree_on_is_unknown_and_changes_no_word() {
     let test = "a_version_number_the_reports_disagree_on_is_unknown_and_changes_no_word";
@@ -721,7 +734,10 @@ async fn a_version_number_the_reports_disagree_on_is_unknown_and_changes_no_word
         assert_eq!(f.engine(), server.engine(), "{role:?}: {f:?}");
         assert_eq!(format!("{:?}", f.version), "Unknown(VersionsDisagree)", "{role:?}: {f:?}");
         assert_eq!(f.version_text.as_deref(), Some(server.line.as_str()), "{role:?}: {f:?}");
-        assert_eq!(words(&before), words_of(server.engine(), greeted), "{role:?}");
+        let (explain, edit, by_greeting) = words_of(server.engine(), greeted);
+        let (_, _, by_line) = words_of(server.engine(), server.version);
+        let dollar_quotes = if by_line == by_greeting { by_greeting } else { DollarQuotes::NotKnown };
+        assert_eq!(words(&before), (explain, edit, dollar_quotes), "{role:?}");
     }
 }
 
