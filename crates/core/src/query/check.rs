@@ -3,7 +3,11 @@
 //! 1. **Lexical**, with the dialect's lexer: no `;` (nor MySQL's `\g`), no comment of any form
 //!    (`--`, `/* */`, MySQL's `#`; MySQL's executable comments `/*! */` and `/*M! */` named
 //!    apart), no client command, every parenthesis closed and none closing one it did not open
-//!    (the text would leave the parentheses it is put in), no string or quoted name left open.
+//!    (the text would leave the parentheses it is put in), no string or quoted name left open,
+//!    and no other token that would run on into what the app writes after the text (MySQL's
+//!    backslash outside a string at the end, which takes the next character; a quoted variable
+//!    name left open). The text is lexed with a blank after it, so a token can end past the
+//!    text: every part of the text a check reads is cut from it within its length.
 //!    A text the server may read otherwise is read every way it may be: PostgreSQL's plain
 //!    strings with a backslash as `standard_conforming_strings = off` reads them, MySQL's text
 //!    in the other sql modes that read it differently. Another reading that leaves a string or
@@ -110,7 +114,7 @@ pub fn has_subquery(text: &str, d: Dialect) -> bool {
             w[0].kind == Tok::LParen
                 && w[1].is_word()
                 && w[1].end <= text.len()
-                && ["SELECT", "WITH", "VALUES", "TABLE"].iter().any(|k| w[1].text(text).eq_ignore_ascii_case(k))
+                && ["SELECT", "WITH", "VALUES", "TABLE"].iter().any(|k| piece(w[1], text).eq_ignore_ascii_case(k))
         })
     })
 }
@@ -133,6 +137,9 @@ pub enum LexProblem {
     ClosesOutside,
     /// A string or a quoted name that does not end.
     Unterminated,
+    /// MySQL: a backslash at the end, outside a string, which would take the character after
+    /// the text with it.
+    Escape,
     /// The text reads as other tokens under a server setting (a backslash in a string):
     /// what runs depends on it.
     Ambiguous,
@@ -530,7 +537,7 @@ fn readings(text: &str, d: Dialect) -> Result<Vec<Reading>, BarRefusal> {
     }
     let mut out: Vec<Reading> = Vec::new();
     for (i, r) in all.into_iter().enumerate() {
-        match problems(&r.tokens, text, r.dialect) {
+        match problems(&r.tokens, text, r.dialect, i == 0) {
             Ok(()) => {}
             Err((problem, at, _)) if i == 0 => return Err(BarRefusal::Lexical { problem, at }),
             // A syntax error on the server: that reading does not run.
@@ -556,10 +563,16 @@ fn clamp(t: &Token, text: &str) -> Range<usize> {
     t.start.min(text.len())..t.end.min(text.len())
 }
 
+/// The part of token `t` (of `text` and the blank after it) that is in `text`. A token can run
+/// over the end of `text` into that blank, so it is never cut from `text` by its own range.
+fn piece<'a>(t: &Token, text: &'a str) -> &'a str {
+    &text[clamp(t, text)]
+}
+
 /// The first token of one reading the filter may not hold: the problem, where, and whether the
 /// server would refuse the statement for it as a syntax error (a string or a parenthesis left
-/// open).
-fn problems(tokens: &[Token], text: &str, d: Dialect) -> Result<(), (LexProblem, Range<usize>, bool)> {
+/// open). `own`: the reading is the session's (the first).
+fn problems(tokens: &[Token], text: &str, d: Dialect, own: bool) -> Result<(), (LexProblem, Range<usize>, bool)> {
     let mut open: Vec<Range<usize>> = Vec::new();
     for t in tokens.iter().filter(|t| t.start < text.len()) {
         let at = clamp(t, text);
@@ -576,6 +589,13 @@ fn problems(tokens: &[Token], text: &str, d: Dialect) -> Result<(), (LexProblem,
             // quote the app writes after the text.
             Tok::Str | Tok::Dollar if t.end > text.len() => return Err((LexProblem::Unterminated, at, true)),
             Tok::QuotedIdent if t.end > text.len() => LexProblem::Unterminated,
+            // Any other token that runs over the end would take what the app writes after the
+            // text: MySQL's backslash outside a string (it takes the next character), a quoted
+            // variable name left open. Blanks may run on. Only in the session's own reading: in
+            // another one such a token ends elsewhere than the session's does, and the text is
+            // ambiguous (below).
+            Tok::Op if own && t.end > text.len() && piece(t, text) == "\\" => LexProblem::Escape,
+            _ if own && t.end > text.len() && t.kind != Tok::Whitespace => LexProblem::Unterminated,
             Tok::LParen => {
                 open.push(at);
                 continue;
@@ -597,9 +617,9 @@ fn mysql_shape(tokens: &[Token], text: &str) -> Result<(), (ShapeProblem, Range<
     let mut depth = 0usize;
     for (i, t) in ws.iter().enumerate() {
         let at = clamp(t, text);
-        let up = if t.is_word() { t.text(text).to_ascii_uppercase() } else { String::new() };
+        let up = if t.is_word() { piece(t, text).to_ascii_uppercase() } else { String::new() };
         let next_is = |words: &[&str]| {
-            ws.get(i + 1).is_some_and(|n| n.is_word() && words.iter().any(|w| n.text(text).eq_ignore_ascii_case(w)))
+            ws.get(i + 1).is_some_and(|n| n.is_word() && words.iter().any(|w| piece(n, text).eq_ignore_ascii_case(w)))
         };
         let problem = match (t.kind, up.as_str()) {
             (Tok::LParen, _) => {
@@ -611,13 +631,16 @@ fn mysql_shape(tokens: &[Token], text: &str) -> Result<(), (ShapeProblem, Range<
                 continue;
             }
             (Tok::Op, _)
-                if t.text(text) == ":" && ws.get(i + 1).is_some_and(|n| n.start == t.end && n.text(text) == "=") =>
+                if piece(t, text) == ":"
+                    && ws.get(i + 1).is_some_and(|n| n.start == t.end && piece(n, text) == "=") =>
             {
                 ShapeProblem::Assignment
             }
             (_, "INTO") => ShapeProblem::Into,
             (_, "NEXT") if next_is(&["VALUE"]) => ShapeProblem::Sequence,
-            _ if after_dot(&ws, i) && unquoted(t.text(text)).eq_ignore_ascii_case("NEXTVAL") => ShapeProblem::Sequence,
+            _ if after_dot(&ws, i) && unquoted(piece(t, text)).eq_ignore_ascii_case("NEXTVAL") => {
+                ShapeProblem::Sequence
+            }
             (_, "LOCK") => ShapeProblem::Locking,
             (_, "FOR") if next_is(&["UPDATE", "SHARE"]) => ShapeProblem::Locking,
             (_, "PROCEDURE") => ShapeProblem::Clause,
@@ -648,10 +671,10 @@ fn unquoted(name: &str) -> &str {
 /// does, so they are asked about as a call whose effects are not known.
 fn mysql_sequence_reads(tokens: &[Token], text: &str) -> Vec<String> {
     let ws: Vec<&Token> = tokens.iter().filter(|t| !t.is_trivia() && t.start < text.len()).collect();
-    let word = |i: usize, w: &str| ws.get(i).is_some_and(|t| t.is_word() && t.text(text).eq_ignore_ascii_case(w));
+    let word = |i: usize, w: &str| ws.get(i).is_some_and(|t| t.is_word() && piece(t, text).eq_ignore_ascii_case(w));
     let mut out = Vec::new();
     for i in 0..ws.len() {
-        let name = if after_dot(&ws, i) && unquoted(ws[i].text(text)).eq_ignore_ascii_case("CURRVAL") {
+        let name = if after_dot(&ws, i) && unquoted(piece(ws[i], text)).eq_ignore_ascii_case("CURRVAL") {
             "CURRVAL"
         } else if word(i, "PREVIOUS") && word(i + 1, "VALUE") && word(i + 2, "FOR") {
             "PREVIOUS VALUE FOR"
@@ -670,7 +693,7 @@ fn mysql_sequence_reads(tokens: &[Token], text: &str) -> Vec<String> {
 /// it writes none.
 fn pg_lock_at(tokens: &[Token], text: &str) -> Option<Range<usize>> {
     let ws: Vec<&Token> = tokens.iter().filter(|t| !t.is_trivia() && t.start < text.len()).collect();
-    let word = |i: usize, w: &str| ws.get(i).is_some_and(|t| t.is_word() && t.text(text).eq_ignore_ascii_case(w));
+    let word = |i: usize, w: &str| ws.get(i).is_some_and(|t| t.is_word() && piece(t, text).eq_ignore_ascii_case(w));
     (0..ws.len()).filter(|&i| word(i, "FOR")).find_map(|i| {
         let last = if word(i + 1, "UPDATE") || word(i + 1, "SHARE") {
             i + 1

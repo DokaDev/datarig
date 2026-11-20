@@ -584,7 +584,7 @@ be pointed to, the dialog says why, and nothing reaches the server.
 |---|---|
 | A comment, in any form | It can hide text from what you see. On MySQL `/*! */` is also text the server runs. |
 | `;`, MySQL's `\g` and `DELIMITER` | A filter is one condition, and these would end the statement or speak to a client. |
-| A parenthesis left open, or closing one the condition did not open; a string or quoted name left open | The text would not stay inside the parentheses it is put in. |
+| A parenthesis left open, or closing one the condition did not open; a string, quoted name or quoted variable name left open; on MySQL, a backslash at the end outside a string | The text would not stay inside the parentheses it is put in. |
 | A backslash in a string the server may read another way | What would run depends on a server setting. |
 | A row lock (`FOR UPDATE`, `FOR SHARE`), also in a subquery | It would hold up other sessions. |
 | Another clause of the statement outside the condition's own parentheses (`ORDER BY`, `LIMIT`, `GROUP BY`, `HAVING`, `WINDOW`, `UNION` and the like; a subquery may have its own), `INTO` anywhere, MySQL's `:=` | Only a condition is taken; what the statement reads stays this table's rows. |

@@ -1012,6 +1012,51 @@ fn lexical(d: Dialect, text: &str) -> Option<(LexProblem, String)> {
     }
 }
 
+/// MySQL's and MariaDB's sql modes the filter is read in.
+fn mysql_family() -> Vec<Dialect> {
+    let d = MySqlMode::default();
+    [
+        d,
+        MySqlMode { mariadb: true, ..d },
+        MySqlMode { ansi_quotes: true, ..d },
+        MySqlMode { no_backslash_escapes: true, ..d },
+        MySqlMode { dollar_quotes: true, ..d },
+        MySqlMode { ignore_space: true, ..d },
+    ]
+    .into_iter()
+    .map(Dialect::MySql)
+    .collect()
+}
+
+#[test]
+fn a_filter_that_ends_inside_a_token_is_refused_at_it() {
+    // MySQL reads a backslash outside a string as taking the character after it, which would
+    // be the parenthesis the app writes after the filter: refused at the backslash.
+    for d in mysql_family() {
+        for read_only in [false, true] {
+            for (text, at) in [("id = 1 \\", 7..8), ("\\", 0..1), ("id = 1 \\\\ \\", 10..11)] {
+                match check(d, text, read_only) {
+                    Err(BarRefusal::Lexical { at: got, .. }) => assert_eq!(got, at, "{d:?} {text:?}"),
+                    other => panic!("{d:?} {text:?}: {other:?}"),
+                }
+            }
+        }
+        assert_eq!(lexical(d, "id = 1 \\"), Some((LexProblem::Escape, "\\".into())), "{d:?}");
+        // A quoted variable name left open runs over the parenthesis too.
+        for text in ["id = @'x", "id = @\"x", "id = @`x"] {
+            assert_eq!(lexical(d, text), Some((LexProblem::Unterminated, text[5..].into())), "{d:?} {text:?}");
+        }
+    }
+    // Under NO_BACKSLASH_ESCAPES a quoted variable name ending in a backslash is closed, and
+    // left open in the other reading: the text reads otherwise by the mode, as before.
+    for d in mysql_family().into_iter().filter(|d| matches!(d, Dialect::MySql(m) if m.no_backslash_escapes)) {
+        assert_eq!(lexical(d, r"id = @'a\'"), Some((LexProblem::Ambiguous, r"@'a\'".into())), "{d:?}");
+    }
+    // PostgreSQL reads a backslash outside a string as an operator of its own: the server says
+    // what is wrong.
+    assert!(!matches!(check(Dialect::Postgres, "id = 1 \\", false), Err(BarRefusal::Lexical { .. })));
+}
+
 #[test]
 fn the_lexical_check_refuses_with_the_place() {
     let both = [Dialect::Postgres, MY];

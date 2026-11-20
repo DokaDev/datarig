@@ -158,6 +158,7 @@ fn every_refusal_has_its_own_words() {
         lex(LexProblem::Unclosed),
         lex(LexProblem::ClosesOutside),
         lex(LexProblem::Unterminated),
+        lex(LexProblem::Escape),
         lex(LexProblem::Ambiguous),
         shape(ShapeProblem::NotOneSelect),
         shape(ShapeProblem::Source),
@@ -177,7 +178,7 @@ fn every_refusal_has_its_own_words() {
         assert!(!w.is_empty(), "{:?}", all[i]);
         assert!(!words[..i].contains(w), "{w}");
     }
-    assert!(words[17].contains("pg_sleep") && words[18].contains("my_fn"));
+    assert!(words[18].contains("pg_sleep") && words[19].contains("my_fn"));
     assert_eq!(refusal_at(&lex(LexProblem::Comment)), Some(0..1));
     assert_eq!(refusal_at(&BarRefusal::RefusedCalls(vec![])), None);
 }
