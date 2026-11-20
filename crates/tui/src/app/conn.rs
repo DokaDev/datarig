@@ -56,9 +56,9 @@ pub struct Queued {
     pub profile: ProfileId,
     pub binding: u64,
     pub statements: Vec<String>,
-    /// The engines its statements were judged on when the user said yes to them (`None`:
-    /// nothing asked): judged on others when it is sent, what asks is asked again.
-    pub confirmed: Option<datarig_core::sql::risk::mysql::Judged>,
+    /// What the user saw and said yes to before it was queued (nothing: not asked): judged
+    /// again when it is sent, anything more that asks is asked again.
+    pub confirmed: Vec<super::safety::Dangerous>,
 }
 
 /// The key constraints of a profile's tables. Not knowing them is never taken for "no keys":
@@ -193,6 +193,10 @@ pub struct ProfileConn {
     /// (`DbEvent::Language`: a MySQL server's sql mode): what a tab of the profile reads its text
     /// in until its own session says. Kept while the profile is not connected.
     pub language: Option<datarig_core::sql::dialect::Language>,
+    /// A session of the current attempt (the metadata session or a tab's) said its server's
+    /// reports name two engines: from then on, until another attempt starts, every statement
+    /// of the profile is judged on both engines' rules, whatever a session says later.
+    pub two_engines: bool,
     /// What the current attempt's metadata session found its server to be (`DbEvent::Server`);
     /// `None` until it says, and from when that session is lost or closed or another attempt
     /// starts.
@@ -252,6 +256,7 @@ impl ProfileConn {
             tunnel_wait: None,
             tunnel_lost: None,
             language: None,
+            two_engines: false,
             facts: None,
             explain: None,
             edit: None,
@@ -360,6 +365,7 @@ impl ConnectionManager {
         c.extension_functions = None;
         c.read_only_unconfirmed = None;
         c.facts = None;
+        c.two_engines = false;
         c.explain = None;
         c.edit = None;
         generation

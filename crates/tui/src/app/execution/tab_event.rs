@@ -82,9 +82,13 @@ impl App {
         // What the server is: the tab's rules while this session is open.
         if let DbEvent::Server(facts) = ev {
             if let Some(t) = self.tabs.get_mut(id) {
-                t.exec.facts = Some((t.exec.generation, facts));
+                t.exec.facts = Some((t.exec.generation, facts.clone()));
             }
-            // Its reports may name two engines, which judge the tab's text from now on.
+            // Its reports may name two engines, which judge the tab's text (and the profile's)
+            // from now on.
+            if let Some(p) = profile {
+                self.server_said(p, &facts);
+            }
             return self.sync_tab_language(id);
         }
         // The plan format of the profile's server: a query session's word is the profile's.

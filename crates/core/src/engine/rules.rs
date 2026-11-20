@@ -45,6 +45,17 @@ impl Rules {
         d.engine().spec().risk.new_classifier(d, self.judged())
     }
 
+    /// [`Rules::classifier`], judged on both engines of the family when `at_least` says so
+    /// even if the facts it has do not (what another session of the same connection found).
+    pub fn classifier_at_least(&self, at_least: Judged) -> Classifier {
+        let d = self.language().dialect();
+        let judged = match (self.judged(), at_least) {
+            (Judged::Own, Judged::Own) => Judged::Own,
+            (Judged::WithSibling, _) | (_, Judged::WithSibling) => Judged::WithSibling,
+        };
+        d.engine().spec().risk.new_classifier(d, judged)
+    }
+
     /// On which engines' rules the tab's text is judged: both of the family when the server's
     /// reports name two engines ([`ServerFacts::judged`]), else its own (also before any server
     /// said what it is).

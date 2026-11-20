@@ -1077,10 +1077,35 @@ impl App {
     pub(crate) fn sync_tab_language(&mut self, tab: TabId) {
         let rules = self.rules(tab);
         let lang = rules.language();
+        let fresh = self.rules_classifier(tab);
         let Some(t) = self.tabs.get_mut(tab) else { return };
         t.editor.set_language(lang);
-        if t.exec.prepared.language() != lang || t.exec.prepared.judged() != rules.judged() {
-            t.exec.prepared = rules.classifier();
+        if t.exec.prepared.language() != lang || t.exec.prepared.judged() != fresh.judged() {
+            t.exec.prepared = fresh;
+        }
+    }
+
+    /// A fresh classifier of tab `tab`'s rules ([`App::rules`]), with nothing prepared. Within
+    /// a connection of its profile the engines it judges on only grow: once any session of the
+    /// connection said its server's reports name two engines, both, until another attempt
+    /// starts.
+    pub(crate) fn rules_classifier(&self, tab: TabId) -> datarig_core::sql::risk::Classifier {
+        use datarig_core::sql::risk::mysql::Judged;
+        let profile = self.tabs.get(tab).and_then(|t| t.profile);
+        let two = profile.and_then(|p| self.conns.get(p)).is_some_and(|c| c.two_engines);
+        self.rules(tab).classifier_at_least(if two { Judged::WithSibling } else { Judged::Own })
+    }
+
+    /// A session of profile `p` said what its server is (`facts`): reports that name two
+    /// engines judge every statement of the profile on both from now on, until another
+    /// attempt starts; each of its tabs follows.
+    pub(crate) fn server_said(&mut self, p: ProfileId, facts: &datarig_core::engine::ServerFacts) {
+        if facts.reports_disagree() {
+            self.conns.entry(p).two_engines = true;
+        }
+        let tabs: Vec<TabId> = self.tabs.iter().filter(|t| t.profile == Some(p)).map(|t| t.id).collect();
+        for t in tabs {
+            self.sync_tab_language(t);
         }
     }
 

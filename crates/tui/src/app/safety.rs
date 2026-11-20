@@ -47,6 +47,15 @@ pub struct Dangerous {
     pub sql: String,
 }
 
+/// Whether the user's yes to `approved` covers `item`, a statement's verdict judged again: the
+/// same statement was asked about for each reason it asks for now (its risk, what it does to
+/// the open transaction).
+pub(super) fn covers(approved: &[Dangerous], item: &Dangerous) -> bool {
+    let at = |a: &&Dangerous| a.index == item.index;
+    item.why.as_ref().is_none_or(|w| approved.iter().filter(at).any(|a| a.why.as_ref() == Some(w)))
+        && item.tx.as_ref().is_none_or(|t| approved.iter().filter(at).any(|a| a.tx.as_ref() == Some(t)))
+}
+
 impl App {
     /// The rules of profile `id`: its environment's, the default rules without one, or the
     /// name of the environment it names that is not defined.
@@ -286,7 +295,7 @@ impl App {
         // session found.
         match self.tabs.get(tab) {
             Some(t) if t.exec.session.is_some() => t.exec.prepared.clone(),
-            Some(_) | None => self.rules(tab).classifier(),
+            Some(_) | None => self.rules_classifier(tab),
         }
     }
 
@@ -331,10 +340,10 @@ impl App {
         as_is: bool,
     ) {
         let Some((binding, generation)) = self.tabs.get(id).map(|t| (t.binding, t.exec.generation)) else { return };
-        let judged = self.classifier(id).judged();
         self.overlays.close(OverlayKind::Commands);
         self.overlays.close(OverlayKind::WhichKey);
         self.key_state.clear();
+        let approved = items.clone();
         self.overlays.push(Overlay::RunConfirm(RunConfirm {
             tab: id,
             profile: pid,
@@ -344,7 +353,7 @@ impl App {
             run_focused: false,
             as_is,
             generation,
-            judged,
+            approved,
             buttons: Default::default(),
         }));
     }
@@ -373,6 +382,14 @@ impl App {
     /// The run confirmation was answered: run (only on the tab, profile and tab generation it
     /// was asked for), or say it did not run.
     fn run_confirm_answered(&mut self, run: bool) {
+        let Some(c) = self.overlays.peek_run_confirm_profile() else { return };
+        self.run_confirm_answer(run);
+        // The runs that waited for the profile behind this question, one at a time.
+        self.send_waiting(c);
+    }
+
+    /// [`App::run_confirm_answered`] for the question itself.
+    fn run_confirm_answer(&mut self, run: bool) {
         let Some(c) = self.overlays.take_run_confirm() else { return };
         if !run {
             self.unstage_run(c.tab);
@@ -384,7 +401,7 @@ impl App {
         let same_session = |t: &Tab| !c.as_is || (t.exec.generation == c.generation && t.exec.session.is_some());
         match self.tabs.get(c.tab).map(|t| (t.profile, t.binding, same_session(t))) {
             Some((Some(p), b, true)) if p == c.profile && b == c.binding => {
-                self.run_approved_as(c.tab, c.statements, c.as_is, Some(c.judged))
+                self.run_approved_as(c.tab, c.statements, c.as_is, c.approved)
             }
             Some(_) => {
                 self.unstage_run(c.tab);

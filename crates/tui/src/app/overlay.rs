@@ -347,8 +347,9 @@ pub struct RunConfirm {
     /// itself): only on the tab's session `generation`, still open.
     pub as_is: bool,
     pub generation: u64,
-    /// The engines the statements were judged on when it was asked.
-    pub judged: datarig_core::sql::risk::mysql::Judged,
+    /// What a yes approves: what it shows, and for a statement offered to run as it is, what
+    /// the user said yes to for it before.
+    pub approved: Vec<super::safety::Dangerous>,
     pub buttons: Buttons,
 }
 
@@ -736,6 +737,11 @@ impl Overlays {
 
     pub fn confirm_mut(&mut self) -> Option<&mut Confirm> {
         self.0.iter_mut().find_map(|o| if let Overlay::Confirm(c) = o { Some(c) } else { None })
+    }
+
+    /// The profile of the run confirmation, if one is open.
+    pub fn peek_run_confirm_profile(&self) -> Option<ProfileId> {
+        self.run_confirm().map(|c| c.profile)
     }
 
     pub fn run_confirm(&self) -> Option<&RunConfirm> {

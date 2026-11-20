@@ -93,24 +93,25 @@ impl App {
     /// session, or queued until its profile connects. Right before they are sent they are
     /// judged again from scratch, under the rules the tab has then ([`App::run_approved_as`]).
     pub(in crate::app) fn run_approved(&mut self, id: TabId, statements: Vec<String>) {
-        self.run_approved_as(id, statements, false, None)
+        self.run_approved_as(id, statements, false, Vec::new())
     }
 
     /// [`App::run_approved`]; `as_is`: with manual commit, every statement runs as it is (no
     /// transaction is opened for it: a procedure the user chose to run outside one).
-    /// `confirmed`: the engines they were judged on when the user said yes to them.
+    /// `confirmed`: what the user saw and said yes to for them.
     ///
     /// Statements that waited (for their profile to connect, for the user's answer) are judged
     /// again from scratch on the session they go to, right before they are sent, as a new run
     /// is (refused, read-only, the open transaction, what asks): the rules may have changed
-    /// meanwhile (the server said its reports name two engines). A refusal sends nothing;
-    /// anything that asks is asked again unless the user said yes to it under the same rules.
+    /// meanwhile (the server said its reports name two engines, or is another engine). A
+    /// refusal sends nothing; when the verdict asks for anything the user's yes did not cover
+    /// ([`crate::app::safety::covers`]), it is asked again with all it asks for.
     pub(in crate::app) fn run_approved_as(
         &mut self,
         id: TabId,
         statements: Vec<String>,
         as_is: bool,
-        confirmed: Option<datarig_core::sql::risk::mysql::Judged>,
+        confirmed: Vec<crate::app::safety::Dangerous>,
     ) {
         if self.tab_busy(id) {
             self.flash_busy();
@@ -164,7 +165,7 @@ impl App {
         }
         let items =
             crate::app::safety::with_tx_reasons(self.dangerous(id, pid, &statements), &statements, check.reasons);
-        if !items.is_empty() && confirmed != Some(self.classifier(id).judged()) {
+        if !items.iter().all(|i| crate::app::safety::covers(&confirmed, i)) {
             return self.ask_before_run_as(id, pid, statements, items, as_is);
         }
         // A table tab's read, checked again right before it is sent on the session it goes to
