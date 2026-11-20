@@ -537,7 +537,7 @@ fn readings(text: &str, d: Dialect) -> Result<Vec<Reading>, BarRefusal> {
     }
     let mut out: Vec<Reading> = Vec::new();
     for (i, r) in all.into_iter().enumerate() {
-        match problems(&r.tokens, text, r.dialect) {
+        match problems(&r.tokens, text, r.dialect, i == 0) {
             Ok(()) => {}
             Err((problem, at, _)) if i == 0 => return Err(BarRefusal::Lexical { problem, at }),
             // A syntax error on the server: that reading does not run.
@@ -571,8 +571,8 @@ fn piece<'a>(t: &Token, text: &'a str) -> &'a str {
 
 /// The first token of one reading the filter may not hold: the problem, where, and whether the
 /// server would refuse the statement for it as a syntax error (a string or a parenthesis left
-/// open).
-fn problems(tokens: &[Token], text: &str, d: Dialect) -> Result<(), (LexProblem, Range<usize>, bool)> {
+/// open). `own`: the reading is the session's (the first).
+fn problems(tokens: &[Token], text: &str, d: Dialect, own: bool) -> Result<(), (LexProblem, Range<usize>, bool)> {
     let mut open: Vec<Range<usize>> = Vec::new();
     for t in tokens.iter().filter(|t| t.start < text.len()) {
         let at = clamp(t, text);
@@ -591,9 +591,11 @@ fn problems(tokens: &[Token], text: &str, d: Dialect) -> Result<(), (LexProblem,
             Tok::QuotedIdent if t.end > text.len() => LexProblem::Unterminated,
             // Any other token that runs over the end would take what the app writes after the
             // text: MySQL's backslash outside a string (it takes the next character), a quoted
-            // variable name left open. Blanks may run on.
-            Tok::Op if t.end > text.len() && piece(t, text) == "\\" => LexProblem::Escape,
-            _ if t.end > text.len() && t.kind != Tok::Whitespace => LexProblem::Unterminated,
+            // variable name left open. Blanks may run on. Only in the session's own reading: in
+            // another one such a token ends elsewhere than the session's does, and the text is
+            // ambiguous (below).
+            Tok::Op if own && t.end > text.len() && piece(t, text) == "\\" => LexProblem::Escape,
+            _ if own && t.end > text.len() && t.kind != Tok::Whitespace => LexProblem::Unterminated,
             Tok::LParen => {
                 open.push(at);
                 continue;
