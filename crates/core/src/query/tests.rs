@@ -1018,6 +1018,7 @@ fn mysql_family() -> Vec<Dialect> {
         MySqlMode { ansi_quotes: true, ..d },
         MySqlMode { no_backslash_escapes: true, ..d },
         MySqlMode { dollar_quotes: DollarQuotes::Read, ..d },
+        MySqlMode { dollar_quotes: DollarQuotes::NotKnown, ..d },
         MySqlMode { ignore_space: true, ..d },
     ];
     let mut out: Vec<Dialect> = modes.into_iter().map(Dialect::MySql).collect();

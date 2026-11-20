@@ -84,11 +84,11 @@ const PREFIXES: &[&str] = &[
     "SELECT * FROM t WHERE (",
 ];
 
-/// Every MySQL sql mode, each way of reading dollar quotes too.
+/// Every MySQL sql mode, each way of reading dollar quotes too (not known included).
 fn mysql_modes() -> Vec<MySqlMode> {
     let mut out = Vec::new();
     for bits in 0..8u8 {
-        for dollar_quotes in [DollarQuotes::NotRead, DollarQuotes::Read] {
+        for dollar_quotes in [DollarQuotes::NotRead, DollarQuotes::Read, DollarQuotes::NotKnown] {
             out.push(MySqlMode {
                 ansi_quotes: bits & 1 != 0,
                 no_backslash_escapes: bits & 2 != 0,
@@ -209,6 +209,7 @@ fn the_lexers_read_every_text_into_tokens_that_cover_it() {
     let states = states();
     for src in &texts {
         assert_covers(src, &lex_backslash_strings(src), "backslash strings");
+        let _ = datarig_core::sql::lexer::mysql::has_dollar_opener(src);
         for d in dialects() {
             assert_covers(src, &lex_in(src, d), &format!("{d:?}"));
             let _ = changes_schema_in(src, d);
