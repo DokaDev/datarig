@@ -16,7 +16,7 @@
 
 use datarig_core::driver::DbError;
 use datarig_core::driver::keys::{CatalogColumn, OrderKeys};
-use datarig_core::sql::dialect::{Dialect, MySqlMode};
+use datarig_core::sql::dialect::Dialect;
 use mysql_async::Conn;
 use std::collections::BTreeMap;
 
@@ -41,9 +41,8 @@ WHERE u.TABLE_SCHEMA = {schema} AND u.TABLE_NAME = {table} AND u.REFERENCED_TABL
 /// `F` with a column of a foreign key in the fourth place.
 type RawRow = (String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>);
 
-/// The statement for `schema.table`, the names written as `mode` reads literals.
-pub(crate) fn statement(mode: MySqlMode, schema: &str, table: &str) -> String {
-    let d = Dialect::MySql(mode);
+/// The statement for `schema.table`, the names written as `d` reads literals.
+pub(crate) fn statement(d: Dialect, schema: &str, table: &str) -> String {
     super::fill(SQL, &[("schema", &d.quote_literal(schema)), ("table", &d.quote_literal(table))])
 }
 
@@ -136,17 +135,18 @@ fn columns_of(rows: &[ColumnRow], primary: &[String], foreign: &[String]) -> Opt
 /// Read the keys of `schema.table` in one round trip.
 pub(crate) async fn load_order_keys(
     conn: &mut Conn,
-    mode: MySqlMode,
+    d: Dialect,
     schema: &str,
     table: &str,
 ) -> Result<OrderKeys, DbError> {
-    let rows: Vec<RawRow> = super::rows_of(conn, statement(mode, schema, table)).await?;
+    let rows: Vec<RawRow> = super::rows_of(conn, statement(d, schema, table)).await?;
     keys_of(rows)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datarig_core::sql::dialect::MySqlMode;
 
     fn part(index: &str, seq: &str, col: Option<&str>, prefix: Option<&str>) -> RawRow {
         let s = |v: &str| Some(v.to_string());
@@ -186,7 +186,10 @@ mod tests {
     /// by opening every table of the server.
     #[test]
     fn every_catalog_table_is_filtered_by_the_names_as_literals() {
-        let sql = statement(MySqlMode::default(), "shop", "items").split_whitespace().collect::<Vec<_>>().join(" ");
+        let sql = statement(Dialect::MySql(MySqlMode::default()), "shop", "items")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(!sql.contains(" JOIN "), "{sql}");
         for (table, filter) in [
             ("TABLES t", "t.TABLE_SCHEMA = 'shop' AND t.TABLE_NAME = 'items'"),

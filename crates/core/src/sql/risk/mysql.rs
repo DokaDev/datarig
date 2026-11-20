@@ -103,7 +103,7 @@
 use super::repeat::NotRepeatable;
 use super::session_set::{Owner, SessionSet, SetProblem};
 use super::{Class, Danger, Explain, MAX_BYTES, MAX_DEPTH, NoWhere, Risk, THREAD};
-use crate::sql::dialect::{Dialect, MySqlMode};
+use crate::sql::dialect::{Dialect, DollarQuotes, MySqlMode};
 use crate::sql::lexer::{Tok, is_space, lex_in};
 
 /// The names of MySQL's built-in functions, upper case, one per line in byte order: every
@@ -133,14 +133,17 @@ pub const NOT_ON_MARIADB: &str = include_str!("mysql_builtins_not_mariadb.txt");
 /// built-ins to the read check on any server (as a function that is not a built-in).
 pub const NEWER_THAN_OLDEST: &[&str] = &["STRING_TO_VECTOR", "VECTOR_DIM", "VECTOR_TO_STRING"];
 
-/// Whether `name` (upper case) is a built-in function of the server `mode` is of, whatever its
-/// arguments: in [`BUILTINS`], not in [`NEWER_THAN_OLDEST`], and on MariaDB not in
-/// [`NOT_ON_MARIADB`]. A call of one of [`MARIADB_CONSTRUCTORS`] may be one there too, by its
-/// arguments ([`Call`]).
-pub fn builtin_in(name: &str, mode: MySqlMode) -> bool {
-    static SORTED: std::sync::OnceLock<Vec<&str>> = std::sync::OnceLock::new();
-    let missing = || SORTED.get_or_init(|| NOT_ON_MARIADB.lines().collect()).binary_search(&name).is_ok();
-    builtin(name) && !NEWER_THAN_OLDEST.contains(&name) && !(mode.mariadb && missing())
+/// Whether `name` (upper case) is a built-in function of the server `judge` judges for,
+/// whatever its arguments: in [`BUILTINS`], not in [`NEWER_THAN_OLDEST`], and not one its
+/// engine does not have ([`FamilyTables`]: on MariaDB [`NOT_ON_MARIADB`]). A call of one of
+/// [`MARIADB_CONSTRUCTORS`] may be one there too, by its arguments ([`Call`]).
+pub fn builtin_in(name: &str, judge: Judge) -> bool {
+    judge.tables().all(|t| builtin_on(name, t))
+}
+
+/// [`builtin_in`] on the engine of lists `t`.
+fn builtin_on(name: &str, t: &FamilyTables) -> bool {
+    builtin(name) && !NEWER_THAN_OLDEST.contains(&name) && !t.not_builtin.lines().any(|n| n == name)
 }
 
 /// MariaDB's geometry constructors of [`NOT_ON_MARIADB`], with the fewest and the most
@@ -369,17 +372,106 @@ pub const MARIADB_WORD_CALLS: &[&str] = &[
     "YEAR",
 ];
 
-/// The built-ins of the server `mode` is of whose name must be followed by `(` right away
-/// ([`MYSQL_TIGHT_CALLS`], [`MARIADB_TIGHT_CALLS`]).
-pub fn tight_calls(mode: MySqlMode) -> &'static [&'static str] {
-    if mode.mariadb { MARIADB_TIGHT_CALLS } else { MYSQL_TIGHT_CALLS }
+/// Whether `name` (upper case) is a built-in of the server `judge` judges for whose name must
+/// be followed by `(` right away ([`MYSQL_TIGHT_CALLS`], [`MARIADB_TIGHT_CALLS`]).
+pub fn tight_call(name: &str, judge: Judge) -> bool {
+    judge.tables().any(|t| t.tight_calls.contains(&name))
 }
 
-/// The built-ins of the server `mode` is of whose name must not be quoted: those of
-/// [`tight_calls`] and [`MYSQL_WORD_CALLS`] (or [`MARIADB_WORD_CALLS`]).
-fn word_call(name: &str, mode: MySqlMode) -> bool {
-    let words = if mode.mariadb { MARIADB_WORD_CALLS } else { MYSQL_WORD_CALLS };
-    tight_calls(mode).contains(&name) || words.contains(&name)
+/// Whether `name` (upper case) is a built-in of the server `judge` judges for whose name must
+/// not be quoted: one of [`tight_call`], or of [`MYSQL_WORD_CALLS`] (or
+/// [`MARIADB_WORD_CALLS`]).
+fn word_call(name: &str, judge: Judge) -> bool {
+    tight_call(name, judge) || judge.tables().any(|t| t.word_calls.contains(&name))
+}
+
+/// One engine's lists of the calls it reads: which built-ins it has and how a call of one must
+/// be written to be read as the built-in's.
+#[derive(Debug, PartialEq, Eq)]
+pub struct FamilyTables {
+    /// The names of [`BUILTINS`] the engine has no function of its own of, one per line.
+    not_builtin: &'static str,
+    /// The engine's built-ins of `not_builtin` it reads by their number of arguments (the
+    /// fewest and the most): a call with another number is a stored function's.
+    constructors: &'static [(&'static str, usize, usize)],
+    /// The built-ins whose name must be followed by `(` right away.
+    tight_calls: &'static [&'static str],
+    /// The built-ins whose name must not be quoted, besides `tight_calls`.
+    word_calls: &'static [&'static str],
+    /// Words of [`NOT_CALLS`] the engine does not reserve: written before `(`, they name a
+    /// function there.
+    unreserved_not_calls: &'static [&'static str],
+    /// `JSON_TABLE` is the table function only with its `COLUMNS` clause: without it, the name
+    /// is a stored function's.
+    json_table_needs_columns: bool,
+}
+
+/// MySQL's lists.
+pub static MYSQL_TABLES: FamilyTables = FamilyTables {
+    not_builtin: "",
+    constructors: &[],
+    tight_calls: MYSQL_TIGHT_CALLS,
+    word_calls: MYSQL_WORD_CALLS,
+    unreserved_not_calls: &[],
+    json_table_needs_columns: false,
+};
+
+/// MariaDB's lists.
+pub static MARIADB_TABLES: FamilyTables = FamilyTables {
+    not_builtin: NOT_ON_MARIADB,
+    constructors: MARIADB_CONSTRUCTORS,
+    tight_calls: MARIADB_TIGHT_CALLS,
+    word_calls: MARIADB_WORD_CALLS,
+    unreserved_not_calls: MARIADB_NOT_RESERVED,
+    json_table_needs_columns: true,
+};
+
+static ON_MYSQL: [&FamilyTables; 1] = [&MYSQL_TABLES];
+static ON_MARIADB: [&FamilyTables; 1] = [&MARIADB_TABLES];
+
+/// How a MySQL-family session's text is judged: read in its sql mode `mode`, its calls read with
+/// the lists of the engine it judges for ([`FamilyTables`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Judge {
+    /// The sql mode its text is read in.
+    pub mode: MySqlMode,
+    on: &'static [&'static FamilyTables],
+}
+
+impl Judge {
+    /// A MySQL session's, in sql mode `mode`.
+    pub const fn mysql(mode: MySqlMode) -> Self {
+        Judge { mode, on: &ON_MYSQL }
+    }
+
+    /// A MariaDB session's, in sql mode `mode`.
+    pub const fn mariadb(mode: MySqlMode) -> Self {
+        Judge { mode, on: &ON_MARIADB }
+    }
+
+    /// The judge of text in dialect `d`: its engine's, in its sql mode; `None` for a dialect
+    /// that is not of the family.
+    pub fn of(d: Dialect) -> Option<Self> {
+        match d {
+            Dialect::MySql(mode) => Some(Self::mysql(mode)),
+            Dialect::MariaDb(mode) => Some(Self::mariadb(mode)),
+            Dialect::Postgres => None,
+        }
+    }
+
+    /// The lists it reads calls with. Where they answer differently, the answer that refuses
+    /// more counts.
+    fn tables(self) -> impl Iterator<Item = &'static FamilyTables> {
+        self.on.iter().copied()
+    }
+}
+
+/// Which engines' lists judge a session's text: its own engine's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Judged {
+    /// The engine the session's dialect names.
+    #[default]
+    Own,
 }
 
 /// Built-ins that read a file of the server.
@@ -742,31 +834,31 @@ impl Call {
     /// Written so that the server looks its name up as a function's of a database (a stored
     /// one) or a loadable one, whatever the name: with its database (`db.f()`), or a built-in
     /// that the grammar reads itself written otherwise than it reads one: quoted
-    /// (`` `NOW`() ``), or with a blank or a comment before its `(` ([`tight_calls`]; blanks
+    /// (`` `NOW`() ``), or with a blank or a comment before its `(` ([`tight_call`]; blanks
     /// only, never a comment, are fine when the session has `IGNORE_SPACE`); and on MariaDB a
     /// `JSON_TABLE` without its `COLUMNS` clause (its grammar reads the table function only).
-    fn looked_up(&self, mode: MySqlMode) -> bool {
+    fn looked_up(&self, judge: Judge) -> bool {
         let gap = match self.gap {
             Gap::None => false,
-            Gap::Blank => !mode.ignore_space,
+            Gap::Blank => !judge.mode.ignore_space,
             Gap::Comment => true,
         };
         self.qualified
-            || (self.quoted && word_call(&self.name, mode))
-            || (mode.mariadb && self.name == "JSON_TABLE" && !self.columns)
-            || (gap && tight_calls(mode).contains(&self.name.as_str()))
+            || (self.quoted && word_call(&self.name, judge))
+            || (self.name == "JSON_TABLE" && !self.columns && judge.tables().any(|t| t.json_table_needs_columns))
+            || (gap && tight_call(&self.name, judge))
     }
 
-    /// A built-in function of the server `mode` is of ([`builtin_in`]), or on MariaDB one of
-    /// [`MARIADB_CONSTRUCTORS`] given a number of arguments its grammar reads it with, written as
-    /// the server reads a built-in ([`Call::looked_up`]).
-    fn builtin(&self, mode: MySqlMode) -> bool {
-        let constructor = || {
-            MARIADB_CONSTRUCTORS.iter().any(|&(name, fewest, most)| {
+    /// A built-in function of the server `judge` judges for ([`builtin_in`]), or on MariaDB
+    /// one of [`MARIADB_CONSTRUCTORS`] given a number of arguments its grammar reads it with,
+    /// written as the server reads a built-in ([`Call::looked_up`]).
+    fn builtin(&self, judge: Judge) -> bool {
+        let constructor = |t: &FamilyTables| {
+            t.constructors.iter().any(|&(name, fewest, most)| {
                 name == self.name && self.args.is_some_and(|n| (fewest..=most).contains(&n))
             })
         };
-        !self.looked_up(mode) && (builtin_in(&self.name, mode) || (mode.mariadb && constructor()))
+        !self.looked_up(judge) && judge.tables().all(|t| builtin_on(&self.name, t) || constructor(t))
     }
 }
 
@@ -780,25 +872,25 @@ enum Unread {
     Risk(Box<Risk>),
 }
 
-/// The risk of MySQL text `sql`, read in sql mode `mode`: one statement, or several separated
+/// The risk of MySQL text `sql`, judged by `judge` (in its sql mode): one statement, or several separated
 /// by `;` (their worst). A text with a backslash or a `"` is also read as a session in the other
 /// modes would read it ([`readings`]), and the worse reading counts, unless that reading is
 /// one the server would refuse as a syntax error. It runs on a thread of its own ([`THREAD`]),
 /// as PostgreSQL's does: a panic there reads as [`Danger::Unrecognized`].
-pub fn classify(sql: &str, mode: MySqlMode) -> Risk {
+pub fn classify(sql: &str, judge: Judge) -> Risk {
     guarded(unrecognized, || {
-        let mut modes = readings(sql, mode).into_iter();
+        let mut modes = readings(sql, judge).into_iter();
         let first = modes.next().and_then(|m| classify_as(sql, m)).unwrap_or_else(unrecognized);
         modes.filter_map(|m| classify_as(sql, m)).fold(first, worse)
     })
 }
 
-/// The sql modes to read `sql` in: `mode` first, then the others that read it differently
+/// The sql modes to read `sql` in, each with `judge`'s lists: its mode first, then the others that read it differently
 /// ([`other_readings`]). The session's mode is the driver's to keep current, and a server's
 /// default may differ from what the app was told.
-fn readings(sql: &str, mode: MySqlMode) -> Vec<MySqlMode> {
-    let mut out = vec![mode];
-    out.extend(other_readings(sql, mode));
+fn readings(sql: &str, judge: Judge) -> Vec<Judge> {
+    let mut out = vec![judge];
+    out.extend(other_readings(sql, judge.mode).into_iter().map(|mode| Judge { mode, ..judge }));
     out
 }
 
@@ -816,7 +908,13 @@ pub(crate) fn other_readings(sql: &str, mode: MySqlMode) -> Vec<MySqlMode> {
                 as fn(MySqlMode) -> MySqlMode,
         ),
         (quote, |m: MySqlMode| MySqlMode { ansi_quotes: !m.ansi_quotes, ..m }),
-        (dollar, |m: MySqlMode| MySqlMode { dollar_quotes: !m.dollar_quotes, ..m }),
+        (dollar, |m: MySqlMode| {
+            let dollar_quotes = match m.dollar_quotes {
+                DollarQuotes::NotRead => DollarQuotes::Read,
+                DollarQuotes::Read => DollarQuotes::NotRead,
+            };
+            MySqlMode { dollar_quotes, ..m }
+        }),
     ] {
         if on {
             let flipped: Vec<MySqlMode> = out.iter().map(|&m| flip(m)).collect();
@@ -839,11 +937,11 @@ fn guarded<T: Send>(fallback: impl FnOnce() -> T, f: impl FnOnce() -> T + Send) 
 
 /// [`classify`] in one sql mode; `None` when the server in that mode would refuse the text as a
 /// syntax error ([`Unread::Syntax`]: no way it runs so).
-fn classify_as(sql: &str, mode: MySqlMode) -> Option<Risk> {
-    match statements(sql, mode) {
+fn classify_as(sql: &str, judge: Judge) -> Option<Risk> {
+    match statements(sql, judge) {
         Ok((stmts, hint)) => {
             let risk =
-                stmts.iter().map(|ws| statement(ws, mode)).reduce(worse).unwrap_or_else(|| Risk::of(Class::Unknown));
+                stmts.iter().map(|ws| statement(ws, judge)).reduce(worse).unwrap_or_else(|| Risk::of(Class::Unknown));
             Some(if hint { worse(risk, Risk::danger(Class::Read, Danger::Setting)) } else { risk })
         }
         Err(Unread::Syntax) => None,
@@ -853,8 +951,8 @@ fn classify_as(sql: &str, mode: MySqlMode) -> Option<Risk> {
 
 /// The statements of `sql` (their tokens), and whether an optimizer hint of it sets a risky
 /// setting ([`words`]); or why the text is not read.
-fn statements(sql: &str, mode: MySqlMode) -> Result<(Vec<Vec<W<'_>>>, bool), Unread> {
-    let (mut ws, hint) = words(sql, mode)?;
+fn statements(sql: &str, judge: Judge) -> Result<(Vec<Vec<W<'_>>>, bool), Unread> {
+    let (mut ws, hint) = words(sql, judge)?;
     let mut out = Vec::new();
     if starts_compound(&ws) {
         match routine_end(&ws) {
@@ -884,19 +982,19 @@ fn statements(sql: &str, mode: MySqlMode) -> Result<(Vec<Vec<W<'_>>>, bool), Unr
     Ok((out, hint))
 }
 
-/// The functions MySQL text `sql` calls when read in sql mode `mode` (every statement of it):
+/// The functions MySQL text `sql` calls when read by `judge` (every statement of it):
 /// each name in upper case without quotes, and whether the server looks it up as a stored or
 /// loadable function's whatever the name (written with its database, or a built-in's name
 /// written otherwise than the server reads a built-in: see [`Call::looked_up`]). `None` when
 /// the text is not read in that mode (see [`Unread`]).
-pub(crate) fn called(sql: &str, mode: MySqlMode) -> Option<Vec<(String, bool)>> {
-    let (stmts, _) = statements(sql, mode).ok()?;
+pub(crate) fn called(sql: &str, judge: Judge) -> Option<Vec<(String, bool)>> {
+    let (stmts, _) = statements(sql, judge).ok()?;
     Some(
         stmts
             .iter()
-            .flat_map(|ws| calls(ws, mode))
+            .flat_map(|ws| calls(ws, judge))
             .map(|c| {
-                let looked_up = c.looked_up(mode);
+                let looked_up = c.looked_up(judge);
                 (c.name, looked_up)
             })
             .collect(),
@@ -922,18 +1020,18 @@ fn unrecognized() -> Risk {
 /// setting of [`RISKY_SETTINGS`] or turns read-only off for its statement (`/*+
 /// SET_VAR(foreign_key_checks = 0) */`); or the risk of a text that is not read (see the module
 /// docs).
-fn words(sql: &str, mode: MySqlMode) -> Result<(Vec<W<'_>>, bool), Unread> {
+fn words(sql: &str, judge: Judge) -> Result<(Vec<W<'_>>, bool), Unread> {
     let not_read = |risk: Risk| Err(Unread::Risk(Box::new(risk)));
     if sql.len() > MAX_BYTES {
         return not_read(Risk::danger(Class::Unknown, Danger::TooComplex));
     }
-    let backslash = !mode.no_backslash_escapes;
+    let backslash = !judge.mode.no_backslash_escapes;
     let mut out: Vec<W> = Vec::new();
     let mut depth = 0usize;
     let mut open: Vec<usize> = Vec::new();
     let mut hint = false;
     let mut gap = Gap::None;
-    for t in lex_in(sql, Dialect::MySql(mode)) {
+    for t in lex_in(sql, Dialect::MySql(judge.mode)) {
         let text = t.text(sql);
         match t.kind {
             Tok::ExecComment => return not_read(Risk::danger(Class::Unknown, Danger::ExecutableComment)),
@@ -1189,8 +1287,8 @@ fn find_top(ws: &[W], from: usize, words: &[&str]) -> Option<usize> {
 /// function there (a stored one, as no built-in has the name).
 const MARIADB_NOT_RESERVED: &[&str] = &["LATERAL", "OF"];
 
-/// The function calls of `ws`, on a server of `mode`.
-fn calls(ws: &[W], mode: MySqlMode) -> Vec<Call> {
+/// The function calls of `ws`, on the server `judge` judges for.
+fn calls(ws: &[W], judge: Judge) -> Vec<Call> {
     let mut out = Vec::new();
     let args = arguments(ws);
     // The procedure of a `CALL` (with its database or not).
@@ -1207,7 +1305,7 @@ fn calls(ws: &[W], mode: MySqlMode) -> Vec<Call> {
         if !qualified
             && w.kind != Tok::QuotedIdent
             && ((NOT_CALLS.contains(&name.as_str())
-                && !(mode.mariadb && MARIADB_NOT_RESERVED.contains(&name.as_str())))
+                && !judge.tables().any(|t| t.unreserved_not_calls.contains(&name.as_str())))
                 || syntax_before_paren(ws, i))
         {
             continue;
@@ -1318,10 +1416,10 @@ fn unquote(text: &str) -> String {
 /// What the function calls of `ws` add to `risk`. In a statement that changes the schema, only
 /// the calls that act on the server count (a column definition or an index's key part looks
 /// like a call too, and such a statement is no read anyway).
-fn with_calls(mut risk: Risk, ws: &[W], mode: MySqlMode) -> Risk {
+fn with_calls(mut risk: Risk, ws: &[W], judge: Judge) -> Risk {
     let schema = risk.class == Class::Ddl;
-    for c in calls(ws, mode) {
-        if c.builtin(mode) {
+    for c in calls(ws, judge) {
+        if c.builtin(judge) {
             let danger = if SERVER_FILES.contains(&c.name.as_str()) {
                 Some(Danger::ServerFile)
             } else if SERVER_ACTIONS.contains(&c.name.as_str()) {
@@ -1343,15 +1441,15 @@ fn with_calls(mut risk: Risk, ws: &[W], mode: MySqlMode) -> Risk {
     risk
 }
 
-/// The risk of one statement (its tokens) on a server of `mode`.
-fn statement(ws: &[W], mode: MySqlMode) -> Risk {
-    let mut risk = kind(ws, mode);
+/// The risk of one statement (its tokens) on the server `judge` judges for.
+fn statement(ws: &[W], judge: Judge) -> Risk {
+    let mut risk = kind(ws, judge);
     // A locking read anywhere (a subquery of a `SET`, a `SHOW … WHERE`, …) takes row locks; what
     // `EXPLAIN` only plans takes none.
     if risk.class < Class::Write && risk.explain != Explain::Plan && locks(ws) && !routine_body(ws) {
         risk.class = Class::Write;
     }
-    let risk = if routine_body(ws) { risk } else { with_calls(risk, ws, mode) };
+    let risk = if routine_body(ws) { risk } else { with_calls(risk, ws, judge) };
     let harmless = matches!(risk.class, Class::Read | Class::Session | Class::Tx);
     if harmless && has_write_word(ws) { unrecognized() } else { risk }
 }
@@ -1389,8 +1487,8 @@ fn has_write_word(ws: &[W]) -> bool {
     })
 }
 
-/// The risk of one statement by its form, before its calls (on a server of `mode`).
-fn kind(ws: &[W], mode: MySqlMode) -> Risk {
+/// The risk of one statement by its form, before its calls (on the server `judge` judges for).
+fn kind(ws: &[W], judge: Judge) -> Risk {
     let Some(first) = ws.first() else { return Risk::of(Class::Unknown) };
     let word = |i: usize| ws.get(i).map_or("", |w| w.up.as_str());
     if first.kind == Tok::LParen {
@@ -1400,9 +1498,9 @@ fn kind(ws: &[W], mode: MySqlMode) -> Risk {
         "SELECT" | "TABLE" | "VALUES" => query(ws),
         "WITH" => with(ws),
         "SHOW" | "HELP" => Risk::of(Class::Read),
-        "EXPLAIN" | "DESCRIBE" | "DESC" => explain(ws, mode),
+        "EXPLAIN" | "DESCRIBE" | "DESC" => explain(ws, judge),
         "DO" => {
-            let code = calls(ws, mode).iter().any(|c| !c.builtin(mode));
+            let code = calls(ws, judge).iter().any(|c| !c.builtin(judge));
             if code {
                 Risk { runs_code: true, ..Risk::danger(Class::Procedural, Danger::Procedural) }
             } else {
@@ -1414,8 +1512,8 @@ fn kind(ws: &[W], mode: MySqlMode) -> Risk {
         "INSERT" | "REPLACE" => insert(ws),
         "UPDATE" => update(ws, 0),
         "DELETE" => delete(ws, 0),
-        "CREATE" => create(ws, mode),
-        "ALTER" => alter(ws, mode),
+        "CREATE" => create(ws, judge),
+        "ALTER" => alter(ws, judge),
         "DROP" => drop(ws),
         "RENAME" => {
             let mut r = ddl(Some(Danger::Rename));
@@ -1564,7 +1662,7 @@ fn with(ws: &[W]) -> Risk {
 }
 
 /// `EXPLAIN`, `DESCRIBE`, `DESC`: of a statement, of a table, or of another connection.
-fn explain(ws: &[W], mode: MySqlMode) -> Risk {
+fn explain(ws: &[W], judge: Judge) -> Risk {
     let mut i = 1;
     let mut analyze = false;
     let mut into = false;
@@ -1600,7 +1698,7 @@ fn explain(ws: &[W], mode: MySqlMode) -> Risk {
             _ => unrecognized(),
         };
     }
-    let inner = kind(rest, mode);
+    let inner = kind(rest, judge);
     let mut risk = if analyze {
         Risk { explain: Explain::Analyze, ..inner }
     } else {
@@ -1861,7 +1959,7 @@ fn same_sides(c: &[W]) -> bool {
 }
 
 /// `CREATE …`.
-fn create(ws: &[W], mode: MySqlMode) -> Risk {
+fn create(ws: &[W], judge: Judge) -> Risk {
     let Some(i) = object(ws) else { return unrecognized() };
     let temporary = ws[1..i].iter().any(|w| w.is("TEMPORARY"));
     let object = ws[i].up.as_str();
@@ -1872,7 +1970,7 @@ fn create(ws: &[W], mode: MySqlMode) -> Risk {
     match object {
         "USER" | "ROLE" => ddl(Some(Danger::Privileges)),
         "INSTANCE" => unrecognized(),
-        "EVENT" => with_event_body(ddl(None), ws, i, mode),
+        "EVENT" => with_event_body(ddl(None), ws, i, judge),
         "TABLE" => {
             let named = name_at(ws, i + 1 + if_not_exists(ws, i + 1));
             let after = named.as_ref().map_or(ws.len(), |(_, next)| *next);
@@ -1893,7 +1991,7 @@ fn create(ws: &[W], mode: MySqlMode) -> Risk {
 /// An event's body (after its `DO`, from `from` on) runs later on its own, at once for one
 /// scheduled `AT CURRENT_TIMESTAMP`: a statement's danger is the event's, and a block
 /// (`BEGIN … END`) is code that is not read ([`Danger::Procedural`]).
-fn with_event_body(mut risk: Risk, ws: &[W], from: usize, mode: MySqlMode) -> Risk {
+fn with_event_body(mut risk: Risk, ws: &[W], from: usize, judge: Judge) -> Risk {
     let Some(at) = find_top(ws, from, &["DO"]) else { return risk };
     let body = &ws[at + 1..];
     let first = body.first();
@@ -1905,7 +2003,7 @@ fn with_event_body(mut risk: Risk, ws: &[W], from: usize, mode: MySqlMode) -> Ri
     } else if block {
         Risk::danger(Class::Procedural, Danger::Procedural)
     } else {
-        statement(body, mode)
+        statement(body, judge)
     };
     // What the body does beats a name changed.
     if matches!(risk.danger, None | Some(Danger::Rename)) && inner.danger.is_some() {
@@ -1922,14 +2020,14 @@ fn if_not_exists(ws: &[W], i: usize) -> usize {
 }
 
 /// `ALTER …`.
-fn alter(ws: &[W], mode: MySqlMode) -> Risk {
+fn alter(ws: &[W], judge: Judge) -> Risk {
     let Some(object) = object(ws) else { return unrecognized() };
     match ws[object].up.as_str() {
         "USER" => ddl(Some(Danger::Privileges)),
         "EVENT" => {
             let head = find_top(ws, object, &["DO"]).map_or(ws, |at| &ws[..at]);
             let renames = head.iter().any(|w| w.is("RENAME"));
-            with_event_body(ddl(renames.then_some(Danger::Rename)), ws, object, mode)
+            with_event_body(ddl(renames.then_some(Danger::Rename)), ws, object, judge)
         }
         "INSTANCE" => maintenance(Some(Danger::ServerCommand)),
         "TABLE" => {
@@ -2205,13 +2303,17 @@ pub fn session_set(sql: &str) -> Result<SessionSet, SetProblem> {
         MySqlMode { ansi_quotes: true, no_backslash_escapes: true, ..d },
     ];
     // Nor is the server: a call of a function MariaDB does not provide counts as on MariaDB.
+    // This is the family's judge of a session's start-up statements: each mode on MySQL's and
+    // on MariaDB's lists.
     let read = |sql: &str| {
-        let engines = modes.iter().flat_map(|m| [*m, MySqlMode { mariadb: true, ..*m }]);
-        engines.map(|m| classify(sql, m)).reduce(worse).unwrap_or_else(unrecognized)
+        let engines = modes.iter().flat_map(|m| [Judge::mysql(*m), Judge::mariadb(*m)]);
+        engines.map(|j| classify(sql, j)).reduce(worse).unwrap_or_else(unrecognized)
     };
     let risk = read(sql);
-    let shapes =
-        guarded(|| vec![Err(SetProblem::Unread)], || modes.iter().map(|m| set_shape(sql, *m)).collect::<Vec<_>>());
+    let shapes = guarded(
+        || vec![Err(SetProblem::Unread)],
+        || modes.iter().map(|m| set_shape(sql, Judge::mysql(*m))).collect::<Vec<_>>(),
+    );
     if let Some(Err(p)) = shapes.iter().find(|s| s.is_err()) {
         return Err(p.clone());
     }
@@ -2260,11 +2362,11 @@ fn without_sql_mode(sql: &str) -> String {
     out
 }
 
-/// [`session_set`]'s check of the statement's form in sql mode `mode`: what it sets, in order
+/// [`session_set`]'s check of the statement's form as `judge` reads it: what it sets, in order
 /// (the settings' names, `None` for a user variable, with each value's text).
 #[allow(clippy::type_complexity)]
-fn set_shape(sql: &str, mode: MySqlMode) -> Result<Vec<(Option<String>, String)>, SetProblem> {
-    let (stmts, _) = statements(sql, mode).map_err(|_| SetProblem::Unread)?;
+fn set_shape(sql: &str, judge: Judge) -> Result<Vec<(Option<String>, String)>, SetProblem> {
+    let (stmts, _) = statements(sql, judge).map_err(|_| SetProblem::Unread)?;
     let [ws] = stmts.as_slice() else { return Err(SetProblem::NotOne) };
     if !ws.first().is_some_and(|w| w.is("SET")) {
         return Err(SetProblem::NotSet);
@@ -2349,8 +2451,8 @@ fn quoted_target<'c, 'a>(item: &'c [W<'a>]) -> Option<(Option<String>, bool, &'c
 /// ([`readings`]).
 /// What only the server can tell (whether a name it reads is a view, whose query may call
 /// anything) is for the driver to ask before it runs it again, with the names of [`names`].
-pub fn repeatable(sql: &str, mode: MySqlMode) -> Result<(), NotRepeatable> {
-    names(sql, mode).map(|_| ())
+pub fn repeatable(sql: &str, judge: Judge) -> Result<(), NotRepeatable> {
+    names(sql, judge).map(|_| ())
 }
 
 /// The schemas of the server's own.
@@ -2358,12 +2460,12 @@ const SYSTEM_SCHEMAS: &[&str] = &["information_schema", "mysql", "performance_sc
 
 /// [`repeatable`], with every name the statement writes (each table, column, alias or schema,
 /// as written, qualified ones joined with `.`): a superset of the tables and views it reads.
-pub fn names(sql: &str, mode: MySqlMode) -> Result<Vec<String>, NotRepeatable> {
+pub fn names(sql: &str, judge: Judge) -> Result<Vec<String>, NotRepeatable> {
     guarded(
         || Err(NotRepeatable::Unreadable),
         || {
             let mut all: Vec<String> = Vec::new();
-            for (k, m) in readings(sql, mode).into_iter().enumerate() {
+            for (k, m) in readings(sql, judge).into_iter().enumerate() {
                 match names_as(sql, m) {
                     None if k == 0 => return Err(NotRepeatable::Unreadable),
                     // Another mode that reads the text as a syntax error: no way it runs so.
@@ -2388,12 +2490,12 @@ pub fn names(sql: &str, mode: MySqlMode) -> Result<Vec<String>, NotRepeatable> {
 /// the tables it reads and writes, for a driver to ask the server about. A keyword counts too: many
 /// are valid table names unquoted (`transaction`, `view`, `first`). `None` when the text cannot be
 /// read in the session's own mode, or no reading gives a name.
-pub fn named(sql: &str, mode: MySqlMode) -> Option<Vec<String>> {
+pub fn named(sql: &str, judge: Judge) -> Option<Vec<String>> {
     guarded(
         || None,
         || {
             let mut all: Vec<String> = Vec::new();
-            for (k, m) in readings(sql, mode).into_iter().enumerate() {
+            for (k, m) in readings(sql, judge).into_iter().enumerate() {
                 let Ok((stmts, _)) = statements(sql, m) else {
                     if k == 0 {
                         return None;
@@ -2422,9 +2524,9 @@ pub fn named(sql: &str, mode: MySqlMode) -> Option<Vec<String>> {
 
 /// [`names`] in one sql mode; `None` when the server in that mode would refuse the text as a
 /// syntax error.
-fn names_as(sql: &str, mode: MySqlMode) -> Option<Result<Vec<String>, NotRepeatable>> {
-    Some(match statements(sql, mode) {
-        Ok((stmts, hint)) => names_of(&stmts, hint, mode),
+fn names_as(sql: &str, judge: Judge) -> Option<Result<Vec<String>, NotRepeatable>> {
+    Some(match statements(sql, judge) {
+        Ok((stmts, hint)) => names_of(&stmts, hint, judge),
         Err(Unread::Syntax) => return None,
         Err(Unread::Risk(r)) if matches!(r.danger, Some(Danger::Unrecognized | Danger::TooComplex)) => {
             Err(NotRepeatable::Unreadable)
@@ -2434,7 +2536,7 @@ fn names_as(sql: &str, mode: MySqlMode) -> Option<Result<Vec<String>, NotRepeata
 }
 
 /// [`names_as`] of a text read into statements.
-fn names_of(stmts: &[Vec<W>], hint: bool, mode: MySqlMode) -> Result<Vec<String>, NotRepeatable> {
+fn names_of(stmts: &[Vec<W>], hint: bool, judge: Judge) -> Result<Vec<String>, NotRepeatable> {
     let [ws] = stmts else { return Err(NotRepeatable::NotOne) };
     let top = ws.first().map(|w| (w.kind, w.up.as_str()));
     let query = starts_query(ws, 0)
@@ -2442,7 +2544,7 @@ fn names_of(stmts: &[Vec<W>], hint: bool, mode: MySqlMode) -> Result<Vec<String>
     if !query {
         return Err(NotRepeatable::NotSelect);
     }
-    let risk = statement(ws, mode);
+    let risk = statement(ws, judge);
     match risk.danger {
         Some(Danger::Unrecognized | Danger::TooComplex) => return Err(NotRepeatable::Unreadable),
         Some(_) => return Err(NotRepeatable::Writes),
@@ -2455,7 +2557,7 @@ fn names_of(stmts: &[Vec<W>], hint: bool, mode: MySqlMode) -> Result<Vec<String>
     if risk.runs_code || risk.unchecked_call.is_some() {
         return Err(NotRepeatable::UserFunction);
     }
-    if let Some(c) = calls(ws, mode).into_iter().find(|c| VOLATILE.contains(&c.name.as_str())) {
+    if let Some(c) = calls(ws, judge).into_iter().find(|c| VOLATILE.contains(&c.name.as_str())) {
         return Err(NotRepeatable::Volatile(c.name.to_ascii_lowercase()));
     }
     let mut out = Vec::new();
@@ -2523,26 +2625,26 @@ fn is_zone(text: &str) -> bool {
 /// Whether the text of `sql` names the session's time zone variable ([`zone_reads`]) in any sql
 /// mode that reads it differently ([`readings`]): run again, it reads the zone the session has
 /// then, so its rows are those of the first run only while that zone is the same.
-pub fn reads_zone(sql: &str, mode: MySqlMode) -> bool {
-    readings(sql, mode)
+pub fn reads_zone(sql: &str, judge: Judge) -> bool {
+    readings(sql, judge)
         .into_iter()
-        .any(|m| lex_in(sql, Dialect::MySql(m)).iter().any(|t| t.kind == Tok::Variable && is_zone(t.text(sql))))
+        .any(|m| lex_in(sql, Dialect::MySql(m.mode)).iter().any(|t| t.kind == Tok::Variable && is_zone(t.text(sql))))
 }
 
 /// The form of `sql` for [`super::tx_step`] when it is exactly one statement in every sql mode
 /// that reads it differently ([`readings`]; one the server would refuse as a syntax error does
-/// not count, unless it is `mode`) and the readings agree: one that calls a [`VOLATILE`]
+/// not count, unless it is `judge`'s own) and the readings agree: one that calls a [`VOLATILE`]
 /// built-in (an effect, or a value of the moment: it runs inside the transaction like such a
 /// query, also when it only sets a variable), else a query, a `SHOW`, `HELP`, `DESCRIBE`/`DESC`
 /// or `EXPLAIN` (a plain read; what it calls and whether it runs anything is in its risk), or
 /// something else. `None` otherwise.
-pub(super) fn form(sql: &str, mode: MySqlMode) -> Option<super::Form> {
+pub(super) fn form(sql: &str, judge: Judge) -> Option<super::Form> {
     use super::Form;
     guarded(
         || None,
         || {
             let mut agreed = None;
-            for (k, m) in readings(sql, mode).into_iter().enumerate() {
+            for (k, m) in readings(sql, judge).into_iter().enumerate() {
                 let stmts = match statements(sql, m) {
                     Ok((stmts, _)) => stmts,
                     Err(Unread::Syntax) if k > 0 => continue,
@@ -2552,7 +2654,7 @@ pub(super) fn form(sql: &str, mode: MySqlMode) -> Option<super::Form> {
                 let first = ws.first().map(|w| w.up.as_str());
                 let query = starts_query(ws, 0)
                     || (first == Some("WITH") && with_main(ws).is_some_and(|i| starts_query(ws, i)));
-                let form = if calls(ws, mode).iter().any(|c| VOLATILE.contains(&c.name.as_str())) {
+                let form = if calls(ws, judge).iter().any(|c| VOLATILE.contains(&c.name.as_str())) {
                     Form::Opens
                 } else if query {
                     Form::Query
@@ -2573,11 +2675,11 @@ pub(super) fn form(sql: &str, mode: MySqlMode) -> Option<super::Form> {
 
 /// Whether the query `sql` sorts its rows at the top (`ORDER BY` outside every parenthesis,
 /// once the parentheses around all of it are left out).
-pub fn ordered(sql: &str, mode: MySqlMode) -> bool {
+pub fn ordered(sql: &str, judge: Judge) -> bool {
     guarded(
         || false,
         || {
-            let Ok((stmts, _)) = statements(sql, mode) else { return false };
+            let Ok((stmts, _)) = statements(sql, judge) else { return false };
             let [ws] = stmts.as_slice() else { return false };
             let ws = unwrap(ws);
             let depth = ws.first().map_or(0, |w| w.depth);
@@ -2587,9 +2689,9 @@ pub fn ordered(sql: &str, mode: MySqlMode) -> bool {
 }
 
 /// `sql` without the `;` (and the blanks and comments around it) that end it.
-fn without_semicolons(sql: &str, mode: MySqlMode) -> &str {
+fn without_semicolons(sql: &str, judge: Judge) -> &str {
     let mut end = sql.len();
-    for t in lex_in(sql, Dialect::MySql(mode)).into_iter().rev() {
+    for t in lex_in(sql, Dialect::MySql(judge.mode)).into_iter().rev() {
         if t.kind == Tok::Semi && t.text(sql) == ";" {
             end = t.start;
         } else if !t.is_trivia() {
@@ -2603,10 +2705,10 @@ fn without_semicolons(sql: &str, mode: MySqlMode) -> &str {
 /// AS datarig_count`, for a statement on the allowlist ([`repeatable`]). The statement goes on
 /// lines of its own, so a trailing `#` or `--` comment ends before the closing parenthesis, and
 /// a trailing `;` is left out. The text is read again and must itself be on the allowlist.
-pub fn count_query(sql: &str, mode: MySqlMode) -> Result<String, NotRepeatable> {
-    repeatable(sql, mode)?;
-    let text = format!("SELECT COUNT(*) FROM (\n{}\n) AS datarig_count", without_semicolons(sql, mode));
-    repeatable(&text, mode)?;
+pub fn count_query(sql: &str, judge: Judge) -> Result<String, NotRepeatable> {
+    repeatable(sql, judge)?;
+    let text = format!("SELECT COUNT(*) FROM (\n{}\n) AS datarig_count", without_semicolons(sql, judge));
+    repeatable(&text, judge)?;
     Ok(text)
 }
 

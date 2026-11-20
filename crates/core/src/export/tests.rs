@@ -1,4 +1,5 @@
 use super::*;
+use crate::sql::dialect::DollarQuotes;
 
 const PG: Dialect = Dialect::Postgres;
 
@@ -395,8 +396,7 @@ fn bytes_and_bits_are_written_as_text() {
 const MY: Dialect = Dialect::MySql(crate::sql::dialect::MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: false,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 });
 

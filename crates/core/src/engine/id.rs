@@ -20,3 +20,15 @@ pub enum Expected {
     /// No engine serves the name, kept as written.
     Unknown(String),
 }
+
+impl Expected {
+    /// Whether engine `e` may answer a profile that expects this: the one engine, or any of the
+    /// family; none for a name no engine serves.
+    pub fn admits(&self, e: EngineId) -> bool {
+        match self {
+            Expected::One(id) => *id == e,
+            Expected::Family(ids) => ids.contains(&e),
+            Expected::Unknown(_) => false,
+        }
+    }
+}

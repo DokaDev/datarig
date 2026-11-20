@@ -389,7 +389,7 @@ async fn messages_say_what_mysql_did() {
     pump(&mut app, &mut rx, 10, |a| !a.tab().exec.user_tx()).await;
     run(&mut app, &mut rx, "SET SESSION sql_mode = 'ANSI_QUOTES'").await;
     let tab = app.tab().id;
-    assert!(matches!(app.tab_language(tab), Language::Sql(Dialect::MySql(m)) if m.ansi_quotes));
+    assert!(matches!(app.tab_language(tab), Language::Sql(Dialect::MySql(m) | Dialect::MariaDb(m)) if m.ansi_quotes));
     assert_eq!(app.tab().editor.language(), app.tab_language(tab));
 }
 

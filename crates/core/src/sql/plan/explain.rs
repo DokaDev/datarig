@@ -22,6 +22,7 @@
 
 use crate::sql::dialect::{Dialect, MySqlMode};
 use crate::sql::lexer::{Tok, Token, lex, lex_in};
+use crate::sql::risk::mysql::Judge;
 use crate::sql::risk::{self, Explain};
 
 /// An `EXPLAIN` that asks for the plan in a format the plan view reads (PostgreSQL's JSON,
@@ -90,17 +91,17 @@ pub fn json_text_in(sql: &str, d: Dialect) -> Result<JsonExplain, NotJson> {
     }
 }
 
-/// MySQL `sql` (one `EXPLAIN`, `DESCRIBE` or `DESC` of a statement, in sql mode `mode`) asked
-/// again as `EXPLAIN FORMAT=TREE` of its statement, checked by MySQL's classifier: both texts
-/// are a plan of a statement that runs nothing (no `ANALYZE`).
-pub fn tree(sql: &str, mode: MySqlMode) -> Result<JsonExplain, NotJson> {
-    let out = tree_text(sql, mode)?;
-    let risk = risk::mysql::classify(sql, mode);
-    if risk.explain != Explain::Plan || risk::mysql::classify(&out.sql, mode).explain != Explain::Plan {
+/// MySQL `sql` (one `EXPLAIN`, `DESCRIBE` or `DESC` of a statement, judged by `judge`, in its
+/// sql mode) asked again as `EXPLAIN FORMAT=TREE` of its statement, checked by MySQL's
+/// classifier: both texts are a plan of a statement that runs nothing (no `ANALYZE`).
+pub fn tree(sql: &str, judge: Judge) -> Result<JsonExplain, NotJson> {
+    let out = tree_text(sql, judge.mode)?;
+    let risk = risk::mysql::classify(sql, judge);
+    if risk.explain != Explain::Plan || risk::mysql::classify(&out.sql, judge).explain != Explain::Plan {
         return Err(NotJson::Unreadable);
     }
     let plain = risk.class == risk::Class::Read && risk.danger.is_none() && !risk.runs_code && !risk.writes;
-    let allowed = risk::mysql::repeatable(&out.statement, mode).is_ok();
+    let allowed = risk::mysql::repeatable(&out.statement, judge).is_ok();
     Ok(JsonExplain { evaluates: !plain || !allowed, ..out })
 }
 

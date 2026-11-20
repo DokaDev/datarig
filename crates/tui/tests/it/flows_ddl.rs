@@ -12,7 +12,7 @@ use datarig_core::config::IconsSetting;
 use datarig_core::driver::ddl::{DdlObject, DdlSource, FunctionDdl, RelationDdl};
 use datarig_core::driver::{DbCommand, DbError, DbEvent, SchemaObjects};
 use datarig_core::sql::ddl::ddl_text;
-use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+use datarig_core::sql::dialect::{Dialect, DollarQuotes, Language, MySqlMode};
 use datarig_i18n::Lang;
 use datarig_tui::app::tabs::DdlState;
 use datarig_tui::app::{Focus, TabKind};
@@ -572,16 +572,14 @@ fn a_typed_name_and_the_explorer_find_the_same_tab() {
 const ESCAPES: Dialect = Dialect::MySql(MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: false,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 });
 /// And without them (`NO_BACKSLASH_ESCAPES`).
 const NO_ESCAPES: Dialect = Dialect::MySql(MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: true,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 });
 

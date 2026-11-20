@@ -202,7 +202,7 @@ fn only_what_the_repeat_allowlist_takes_is_free_of_the_question() {
 }
 
 fn my(sql: &str) -> Result<JsonExplain, NotJson> {
-    tree(sql, MySqlMode::default())
+    tree(sql, Judge::mysql(MySqlMode::default()))
 }
 
 #[test]
@@ -285,7 +285,7 @@ fn a_mysql_tree_asked_again_is_free_of_the_question_only_on_the_allowlist() {
 fn a_mysql_tree_reads_quotes_as_the_sql_mode_does() {
     let ansi = MySqlMode { ansi_quotes: true, ..MySqlMode::default() };
     // `"…"` is a name under ANSI_QUOTES: what it holds is not an option nor a statement's end.
-    let j = tree(r#"EXPLAIN SELECT "a; ANALYZE" FROM t"#, ansi).unwrap();
+    let j = tree(r#"EXPLAIN SELECT "a; ANALYZE" FROM t"#, Judge::mysql(ansi)).unwrap();
     assert_eq!(j.sql, r#"EXPLAIN FORMAT=TREE SELECT "a; ANALYZE" FROM t"#);
     // Without backslash escapes `\'` ends the string: the rest is text of the statement's own,
     // read as the server reads it (two statements here).

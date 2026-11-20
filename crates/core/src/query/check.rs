@@ -447,9 +447,9 @@ pub fn check_filter(
                         calls.push(call);
                     }
                 }
-                let (Dialect::MySql(mode) | Dialect::MariaDb(mode)) = r.dialect else { continue };
+                let Some(judge) = risk::mysql::Judge::of(r.dialect) else { continue };
                 let unread_here = || BarRefusal::NotRead { class: risk.class, danger: Some(Danger::Unrecognized) };
-                for (name, looked_up) in risk::mysql::called(&sql, mode).ok_or_else(unread_here)? {
+                for (name, looked_up) in risk::mysql::called(&sql, judge).ok_or_else(unread_here)? {
                     let call = Call {
                         allowed: !looked_up && MYSQL_FILTER_CALLS.binary_search(&name.as_str()).is_ok(),
                         refused: MYSQL_REFUSED_CALLS.binary_search(&name.as_str()).is_ok(),

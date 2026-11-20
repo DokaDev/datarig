@@ -10,7 +10,7 @@ use datarig_core::engine::ServerFacts;
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::profile::dsn::{self, Scheme};
-use datarig_core::sql::dialect::MySqlMode;
+use datarig_core::sql::dialect::{DollarQuotes, MySqlMode};
 use datarig_core::tls::{Encryption, TlsProblem, TlsSettings};
 use datarig_core::transport::{BoxedStream, DialerRef};
 use mysql_async::prelude::Queryable;
@@ -283,8 +283,8 @@ impl Server {
     /// Whether the server reads `$$…$$` as a quote: MySQL's client asks with `select $$`,
     /// which MySQL 8.4 and 9.x refuse as a syntax error (8.0 reads `$$` as a name), and
     /// MariaDB reads as a name.
-    pub(crate) fn dollar_quotes(&self) -> bool {
-        !self.mariadb && self.version >= (8, 1, 0)
+    pub(crate) fn dollar_quotes(&self) -> DollarQuotes {
+        if !self.mariadb && self.version >= (8, 1, 0) { DollarQuotes::Read } else { DollarQuotes::NotRead }
     }
 
     /// The session variable that makes its transactions read-only (`tx_read_only` before
@@ -572,7 +572,6 @@ impl Tracked {
             ansi_quotes: flags.contains(&"ANSI_QUOTES"),
             no_backslash_escapes: flags.contains(&"NO_BACKSLASH_ESCAPES"),
             dollar_quotes: server.dollar_quotes(),
-            mariadb: server.mariadb,
             // Only a reported `IGNORE_SPACE` counts: unknown reads as off, which refuses more.
             ignore_space: flags.contains(&"IGNORE_SPACE"),
         }
@@ -727,7 +726,8 @@ pub(crate) async fn open(
         }
         tracked.update(&conn);
         // Settings for the next transaction only, which the server does not report.
-        if crate::query::sets_next_transaction(sql, tracked.mode(&server)) != crate::query::SetsNext::No {
+        let dialect = crate::engine::dialect(&server, tracked.mode(&server));
+        if crate::query::sets_next_transaction(sql, dialect) != crate::query::SetsNext::No {
             tracked.next_once = true;
         }
     }

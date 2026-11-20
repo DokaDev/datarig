@@ -42,7 +42,7 @@ use datarig_core::driver::structure::{
     CheckConstraint, Collation, ColumnFill, FkAction, ForeignKey, Index, KeyConstraint, RelationKind, StructureColumn,
     StructureGroup, TableStructure, Trigger, TriggerEvent, TriggerTiming,
 };
-use datarig_core::sql::dialect::{Dialect, MySqlMode};
+use datarig_core::sql::dialect::Dialect;
 use mysql_async::Conn;
 use serde::Deserialize;
 
@@ -139,15 +139,14 @@ const MARIADB_CHECKS: &str = "(SELECT JSON_ARRAYAGG(JSON_OBJECT('name', cc.CONST
     FROM information_schema.CHECK_CONSTRAINTS cc
     WHERE cc.CONSTRAINT_SCHEMA = {schema} AND cc.TABLE_NAME = {table})";
 
-/// The statement for `schema.table` on `server`, the names written as `mode` reads literals.
-pub(crate) fn statement(server: Server, mode: MySqlMode, schema: &str, table: &str) -> String {
+/// The statement for `schema.table` on `server`, the names written as `d` reads literals.
+pub(crate) fn statement(server: Server, d: Dialect, schema: &str, table: &str) -> String {
     let functional = !server.mariadb && server.version >= (8, 0, 13);
     let checks = match server.mariadb {
         true => MARIADB_CHECKS,
         false if server.version >= (8, 0, 16) => MYSQL_CHECKS,
         false => "NULL",
     };
-    let d = Dialect::MySql(mode);
     let names = [("schema", d.quote_literal(schema)), ("table", d.quote_literal(table))];
     let names = names.each_ref().map(|(k, v)| (*k, v.as_str()));
     // The checks' subquery names the table too; it is filled first, as a value of the
@@ -181,13 +180,13 @@ pub(crate) fn statement(server: Server, mode: MySqlMode, schema: &str, table: &s
 pub(crate) async fn load_structure(
     conn: &mut Conn,
     server: Server,
-    mode: MySqlMode,
+    d: Dialect,
     schema: &str,
     table: &str,
 ) -> Result<TableStructure, DbError> {
-    let rows: Vec<String> = super::rows_of(conn, statement(server, mode, schema, table)).await?;
+    let rows: Vec<String> = super::rows_of(conn, statement(server, d, schema, table)).await?;
     match rows.first() {
-        Some(json) => parse(json, server.mariadb, mode, schema, table),
+        Some(json) => parse(json, server.mariadb, d, schema, table),
         None => Err(DbError::NotFound),
     }
 }
@@ -292,23 +291,16 @@ struct RawTrigger {
 }
 
 /// The document the statement built, as the model (see [`model`]).
-fn parse(json: &str, mariadb: bool, mode: MySqlMode, schema: &str, table: &str) -> Result<TableStructure, DbError> {
+fn parse(json: &str, mariadb: bool, d: Dialect, schema: &str, table: &str) -> Result<TableStructure, DbError> {
     let raw: Raw = serde_json::from_str(json).map_err(|e| DbError::Server(format!("table structure: {e}").into()))?;
-    model(raw, mariadb, mode, schema, table)
+    model(raw, mariadb, d, schema, table)
 }
 
 /// The structure the statement's document describes, of `schema.table`. Lists are in the
 /// server's order: columns by position, key parts by their place in the key, the rest by name.
 /// A kind of table the explorer does not list is not supported; a trigger or a foreign key rule
 /// the model has no words for fails the read (it is not left out).
-pub(crate) fn model(
-    raw: Raw,
-    mariadb: bool,
-    mode: MySqlMode,
-    schema: &str,
-    table: &str,
-) -> Result<TableStructure, DbError> {
-    let d = Dialect::MySql(mode);
+pub(crate) fn model(raw: Raw, mariadb: bool, d: Dialect, schema: &str, table: &str) -> Result<TableStructure, DbError> {
     let kind = match raw.kind.as_str() {
         "BASE TABLE" | "SYSTEM VERSIONED" => RelationKind::Table,
         "VIEW" => RelationKind::View,
@@ -547,7 +539,7 @@ fn column(c: RawColumn, mariadb: bool, d: Dialect) -> StructureColumn {
     };
     let collation = c.collation.map(|name| Collation { deterministic: byte_wise(&name), name, charset: c.charset });
     StructureColumn {
-        enum_labels: super::enum_values(&c.type_name).unwrap_or_default(),
+        enum_labels: super::enum_values(&c.type_name, d).unwrap_or_default(),
         name: c.name,
         type_name: c.type_name,
         not_null: c.nullable == "NO",

@@ -1,15 +1,15 @@
 use super::*;
+use datarig_core::sql::dialect::{DollarQuotes, MySqlMode};
 
 const MY: MySqlMode = MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: false,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 };
 
 fn parse_my(json: &str) -> Result<TableStructure, DbError> {
-    parse(json, false, MY, "shop", "items")
+    parse(json, false, Dialect::MySql(MY), "shop", "items")
 }
 
 /// A table as MySQL 8.4 describes it: the document's lists in the server's own (unsorted)
@@ -323,7 +323,7 @@ fn names_are_quoted_as_mysql_reads_them() {
         r#"{"kind":"BASE TABLE","column_privilege":true,"rows":0,"bytes":0,"trigger_privilege":true,
         "indexes":[{"name":"by key","seq":1,"column":"select","expression":null,"sub_part":null,"collation":"A","non_unique":1,"type":"HASH"}]}"#,
         false,
-        MY,
+        Dialect::MySql(MY),
         "my db",
         "t`1",
     )
@@ -334,7 +334,7 @@ fn names_are_quoted_as_mysql_reads_them() {
 #[test]
 fn the_statement_asks_only_for_what_the_server_has() {
     let my = |v| Server { version: v, mariadb: false };
-    let sql = statement(my((8, 4, 6)), MY, "it's", "t");
+    let sql = statement(my((8, 4, 6)), Dialect::MySql(MY), "it's", "t");
     assert!(sql.contains("x.EXPRESSION") && sql.contains("tc.ENFORCED"));
     assert!(sql.contains(r"t.TABLE_SCHEMA = 'it''s' AND t.TABLE_NAME = 't'"), "{sql}");
     assert!(!sql.contains("CARDINALITY"), "it can open the table");
@@ -347,13 +347,13 @@ fn the_statement_asks_only_for_what_the_server_has() {
     assert_eq!(outer, 2, "only the outer table names itself: {sql}");
     // MariaDB and MySQL before 8.0.14 cannot name the outer table inside a derived table.
     assert!(!sql.contains("FROM ("), "no derived table: {sql}");
-    let old = statement(my((8, 0, 12)), MY, "s", "t");
+    let old = statement(my((8, 0, 12)), Dialect::MySql(MY), "s", "t");
     assert!(!old.contains("x.EXPRESSION") && !old.contains("CHECK_CONSTRAINTS"));
-    let mid = statement(my((8, 0, 15)), MY, "s", "t");
+    let mid = statement(my((8, 0, 15)), Dialect::MySql(MY), "s", "t");
     assert!(mid.contains("x.EXPRESSION") && !mid.contains("CHECK_CONSTRAINTS"));
-    let maria = statement(Server { version: (11, 4, 2), mariadb: true }, MY, "s", "t");
+    let maria = statement(Server { version: (11, 4, 2), mariadb: true }, Dialect::MySql(MY), "s", "t");
     assert!(!maria.contains("x.EXPRESSION") && maria.contains("cc.TABLE_NAME = 't'"));
-    let plain = statement(my((8, 4, 6)), MySqlMode { no_backslash_escapes: true, ..MY }, r"a\b", "t");
+    let plain = statement(my((8, 4, 6)), Dialect::MySql(MySqlMode { no_backslash_escapes: true, ..MY }), r"a\b", "t");
     assert!(plain.contains(r"t.TABLE_SCHEMA = 'a\b'"), "{plain}");
     // A schema grant's pattern escapes with a backslash, written as the session reads it.
     assert!(plain.contains(r"ESCAPE '\'") && sql.contains(r"ESCAPE '\\'"), "{plain}");
@@ -429,7 +429,10 @@ fn expressions_are_unescaped_once_on_mysql() {
     assert_eq!(s.checks[0].columns, ["s", "QtY"]);
     // MariaDB's text is SQL already.
     let plain = doc(serde_json::json!({"checks": [{"name": "ck", "clause": r"(`s` <> 'a\\b')", "enforced": "YES"}]}));
-    assert_eq!(parse(&plain, true, MY, "shop", "items").unwrap().checks[0].expression, r"`s` <> 'a\\b'");
+    assert_eq!(
+        parse(&plain, true, Dialect::MySql(MY), "shop", "items").unwrap().checks[0].expression,
+        r"`s` <> 'a\\b'"
+    );
     assert_eq!(parse_my(&plain).unwrap().checks[0].expression, r"`s` <> 'a\b'");
 }
 
@@ -437,7 +440,7 @@ fn expressions_are_unescaped_once_on_mysql() {
 /// does not ask for them, and has none of its own (the schema's listing has them).
 #[test]
 fn the_estimates_are_not_read_with_the_structure() {
-    let sql = statement(Server { version: (8, 4, 6), mariadb: false }, MY, "s", "t");
+    let sql = statement(Server { version: (8, 4, 6), mariadb: false }, Dialect::MySql(MY), "s", "t");
     assert!(!sql.contains("TABLE_ROWS") && !sql.contains("DATA_LENGTH") && !sql.contains("INDEX_LENGTH"), "{sql}");
     let s = parse_my(&doc(serde_json::json!({}))).unwrap();
     assert_eq!((s.estimated_rows, s.total_bytes, s.stats()), (None, None, None));
@@ -538,7 +541,7 @@ fn an_unknown_foreign_key_rule_fails_the_read() {
 /// host is after the last one.
 #[test]
 fn the_grantee_is_split_at_the_last_at_sign() {
-    let sql = statement(Server { version: (8, 4, 6), mariadb: false }, MY, "s", "t");
+    let sql = statement(Server { version: (8, 4, 6), mariadb: false }, Dialect::MySql(MY), "s", "t");
     assert!(!sql.contains("SUBSTRING_INDEX(CURRENT_USER(), '@', 1)"), "{sql}");
     assert!(sql.contains("SUBSTRING_INDEX(CURRENT_USER(), '@', -1)"), "{sql}");
 }

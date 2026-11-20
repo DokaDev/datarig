@@ -22,7 +22,7 @@ use datarig_core::driver::{
 use datarig_core::engine::{EngineId, Fact, ServerFacts, Topology, Version, Why};
 use datarig_core::export::keyset::{CHUNK_ROWS, Keyset};
 use datarig_core::profile::ConnectionConfig;
-use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+use datarig_core::sql::dialect::{Dialect, DollarQuotes, Language, MySqlMode};
 use datarig_driver_mysql::MyDriver;
 use my_proxy::{Fault, Proxy, upstream};
 use mysql_async::prelude::Queryable;
@@ -244,13 +244,18 @@ impl Conn {
 }
 
 /// The languages `evs` says.
-fn languages(evs: &[DbEvent]) -> Vec<MySqlMode> {
+fn languages(evs: &[DbEvent]) -> Vec<(EngineId, MySqlMode)> {
     evs.iter()
         .filter_map(|e| match e {
-            DbEvent::Language(Language::Sql(Dialect::MySql(m))) => Some(*m),
+            DbEvent::Language(Language::Sql(d @ (Dialect::MySql(m) | Dialect::MariaDb(m)))) => Some((d.engine(), *m)),
             _ => None,
         })
         .collect()
+}
+
+/// The engine of a MariaDB server (`maria`) or a MySQL one.
+fn engine(maria: bool) -> EngineId {
+    if maria { EngineId::MariaDb } else { EngineId::MySql }
 }
 
 /// Before `Connected` a query and a metadata session say, as their last three words and in
@@ -275,10 +280,10 @@ async fn the_session_says_language_explain_edit_then_connected() {
         let n = before.len();
         assert!(n >= 3, "{role:?}: {before:?}");
         let last = &before[n - 3..];
-        let DbEvent::Language(Language::Sql(Dialect::MySql(mode))) = last[0] else {
+        let DbEvent::Language(Language::Sql(d @ (Dialect::MySql(mode) | Dialect::MariaDb(mode)))) = last[0] else {
             panic!("{role:?}: a language third from last: {before:?}")
         };
-        assert_eq!(mode.mariadb, maria, "{role:?}: {mode:?}");
+        assert_eq!(d.engine(), engine(maria), "{role:?}: {d:?}");
         assert!(!mode.ansi_quotes && !mode.no_backslash_escapes, "{role:?}: the server's default mode: {mode:?}");
         assert!(matches!(&last[1], DbEvent::Explain(e) if *e == explain), "{role:?}: {before:?}");
         assert!(matches!(&last[2], DbEvent::Edit(e) if *e == edit), "{role:?}: {before:?}");
@@ -309,8 +314,8 @@ async fn a_sql_mode_change_is_said_again_after_the_run() {
     let evs = c.ok(1, "SET SESSION sql_mode = 'ANSI_QUOTES'").await;
     let said = languages(&evs);
     assert_eq!(said.len(), 1, "{evs:?}");
-    assert!(said[0].ansi_quotes && !said[0].no_backslash_escapes, "{said:?}");
-    assert_eq!(said[0].mariadb, maria, "the server's engine stays: {said:?}");
+    assert!(said[0].1.ansi_quotes && !said[0].1.no_backslash_escapes, "{said:?}");
+    assert_eq!(said[0].0, engine(maria), "the server's engine stays: {said:?}");
     let at = |pred: fn(&DbEvent) -> bool| evs.iter().position(pred).unwrap();
     assert!(at(|e| matches!(e, DbEvent::Language(_))) < at(|e| matches!(e, DbEvent::Done { .. })), "{evs:?}");
     // In that mode `"x"` is a name: the session reads it so.
@@ -319,7 +324,7 @@ async fn a_sql_mode_change_is_said_again_after_the_run() {
     let evs = c.ok(3, "SET SESSION sql_mode = DEFAULT").await;
     let said = languages(&evs);
     assert_eq!(said.len(), 1, "{evs:?}");
-    assert!(!said[0].ansi_quotes && said[0].mariadb == maria, "{said:?}");
+    assert!(!said[0].1.ansi_quotes && said[0].0 == engine(maria), "{said:?}");
 }
 
 /// A run of several statements cancelled while its first one runs on the server (seen in its
@@ -389,7 +394,7 @@ async fn the_keyset_chunk_is_sent_as_written() {
     let evs = c.ok(2, &format!("SELECT * FROM {} LIMIT 1", t.q())).await;
     let Some(DbEvent::Page { columns: Some(cols), .. }) = evs.last() else { panic!("{evs:?}") };
     let names = ["id".to_string(), "v".to_string()];
-    let dialect = Dialect::MySql(MySqlMode { mariadb: maria, ..MySqlMode::default() });
+    let dialect = if maria { Dialect::MariaDb(MySqlMode::default()) } else { Dialect::MySql(MySqlMode::default()) };
     let k = Keyset::new(dialect, "shop", &t.name, &names[..1], cols, &names, true).unwrap();
     let last: Vec<Cell> = vec![Some("2".into()), Some("b".into())];
     let chunks = [k.first(), k.after(&last).expect("a chunk after key 2")];
@@ -498,15 +503,17 @@ async fn the_server_facts_come_first_once_and_the_words_before_connected_follow_
             EngineId::MySql => (
                 (version >= Version::new(8, 0, 16)).then_some(ExplainFormat::MySqlTree),
                 (version >= Version::new(8, 0, 17)).then_some(EditFormat::MySql(MySqlEdit { nowait: true })),
-                version >= Version::new(8, 1, 0),
+                if version >= Version::new(8, 1, 0) { DollarQuotes::Read } else { DollarQuotes::NotRead },
             ),
-            EngineId::MariaDb | EngineId::Postgres => (None, None, false),
+            EngineId::MariaDb | EngineId::Postgres => (None, None, DollarQuotes::NotRead),
         };
         let (languages, explains, edits) = words(&before);
         assert_eq!(explains, [explain], "{role:?}: {before:?}");
         assert_eq!(edits, [edit], "{role:?}: {before:?}");
-        let [Language::Sql(Dialect::MySql(mode))] = languages[..] else { panic!("{role:?}: {before:?}") };
-        assert_eq!(mode.mariadb, f.engine() == EngineId::MariaDb, "{role:?}: {mode:?}");
+        let [Language::Sql(d @ (Dialect::MySql(mode) | Dialect::MariaDb(mode)))] = languages[..] else {
+            panic!("{role:?}: {before:?}")
+        };
+        assert_eq!(d.engine(), f.engine(), "{role:?}: {d:?}");
         assert_eq!(mode.dollar_quotes, dollar_quotes, "{role:?}: {mode:?}");
     }
 }

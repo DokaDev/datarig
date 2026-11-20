@@ -28,6 +28,7 @@
 use super::dialect::Dialect;
 use super::ident;
 use super::lexer::{Tok, Token, lex_in};
+use super::risk::mysql::{Judge, tight_call};
 use std::ops::Range;
 
 /// What a dollar-quoted body is to `sqlformat`.
@@ -188,10 +189,10 @@ fn layout_only(d: Dialect, toks: &[Token], i: usize, src: &str, after: &str) -> 
         || match d {
             // A built-in function the server parses itself and its `(`: with a blank between
             // (and `IGNORE_SPACE` off, the default) the server reads `count (*)` otherwise.
-            Dialect::MySql(mode) | Dialect::MariaDb(mode) => {
+            Dialect::MySql(_) | Dialect::MariaDb(_) => {
                 b.kind == Tok::LParen
                     && a.is_word()
-                    && super::risk::mysql::tight_calls(mode).contains(&ta.to_ascii_uppercase().as_str())
+                    && Judge::of(d).is_some_and(|j| tight_call(&ta.to_ascii_uppercase(), j))
             }
             Dialect::Postgres => {
                 unicode_escape(a, b)

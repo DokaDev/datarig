@@ -7,7 +7,7 @@ use common::*;
 use datarig_core::config::Config;
 use datarig_core::driver::{DbError, DbEvent};
 use datarig_core::secret::PasswordSource;
-use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+use datarig_core::sql::dialect::{Dialect, DollarQuotes, Language, MySqlMode};
 use datarig_i18n::Lang;
 use datarig_tui::app::profiles::{Field, Section, SshChoice};
 use ratatui::crossterm::event::KeyCode;
@@ -40,7 +40,7 @@ fn a_sessions_sql_mode_reaches_the_editor_and_the_classifier() {
     assert_eq!(h.app.tab_language(tab), my(MySqlMode::default()), "the driver's until the session says");
     h.ctrl('e'); // a query session opens for the tab
     assert!(h.roles().contains(&datarig_core::driver::SessionRole::Query), "{:?}", h.roles());
-    let ansi = MySqlMode { ansi_quotes: true, dollar_quotes: true, ..MySqlMode::default() };
+    let ansi = MySqlMode { ansi_quotes: true, dollar_quotes: DollarQuotes::Read, ..MySqlMode::default() };
     h.tab_db(0, DbEvent::Language(my(ansi)));
     assert_eq!(h.app.tab_language(tab), my(ansi));
     assert_eq!(h.app.tab().editor.language(), my(ansi));

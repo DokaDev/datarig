@@ -75,8 +75,11 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
     let pages = s.next_pages(big, 3).await?;
     out.push(report("next_page", &pages));
     s.paging = PagingMode::NoHold;
-    let count =
-        datarig_core::sql::risk::mysql::count_query(small, MySqlMode::default()).map_err(|e| format!("{e:?}"))?;
+    let count = datarig_core::sql::risk::mysql::count_query(
+        small,
+        datarig_core::sql::risk::mysql::Judge::mysql(MySqlMode::default()),
+    )
+    .map_err(|e| format!("{e:?}"))?;
     let mut costs = Vec::new();
     for _ in 0..runs {
         let id = s.next_id();

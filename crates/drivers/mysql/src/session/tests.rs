@@ -1,6 +1,7 @@
 use super::*;
 use crate::route::Route;
 use datarig_core::profile::ConnectionConfig;
+use datarig_core::sql::dialect::Dialect;
 use datarig_core::transport::{DialerRef, TcpDialer};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -130,7 +131,7 @@ fn one_set_sets_the_session_up_by_role() {
 #[test]
 fn the_mode_follows_the_sql_mode_the_version_and_the_server() {
     let tracked = |mode: &str| Tracked { sql_mode: Some(mode.into()), ..Tracked::default() };
-    assert_eq!(tracked("").mode(&MYSQL_84), MySqlMode { dollar_quotes: true, ..MySqlMode::default() });
+    assert_eq!(tracked("").mode(&MYSQL_84), MySqlMode { dollar_quotes: DollarQuotes::Read, ..MySqlMode::default() });
     let ansi = tracked("REAL_AS_FLOAT,PIPES_AS_CONCAT,ANSI_QUOTES,IGNORE_SPACE,ONLY_FULL_GROUP_BY,ANSI");
     assert!(ansi.mode(&MYSQL_84).ansi_quotes);
     assert!(!ansi.mode(&MYSQL_84).no_backslash_escapes);
@@ -142,11 +143,16 @@ fn the_mode_follows_the_sql_mode_the_version_and_the_server() {
     // A flag is matched whole.
     assert!(!tracked("NO_ANSI_QUOTES_X").mode(&MYSQL_84).ansi_quotes);
     let mysql80 = Server { version: (8, 0, 45), mariadb: false };
-    assert!(!tracked("").mode(&mysql80).dollar_quotes);
-    let maria = tracked("").mode(&Server { version: (11, 4, 2), mariadb: true });
-    assert!(!maria.dollar_quotes);
+    assert_eq!(tracked("").mode(&mysql80).dollar_quotes, DollarQuotes::NotRead);
+    let maria_server = Server { version: (11, 4, 2), mariadb: true };
+    let maria = tracked("").mode(&maria_server);
+    assert_eq!(maria.dollar_quotes, DollarQuotes::NotRead);
     // Which server it is: the read check counts only the functions MariaDB provides as built-ins.
-    assert!(maria.mariadb && !tracked("").mode(&MYSQL_84).mariadb && !tracked("").mode(&mysql80).mariadb);
+    assert_eq!(crate::engine::dialect(&maria_server, maria), Dialect::MariaDb(maria));
+    let mode = tracked("").mode(&MYSQL_84);
+    assert_eq!(crate::engine::dialect(&MYSQL_84, mode), Dialect::MySql(mode));
+    let mode = tracked("").mode(&mysql80);
+    assert_eq!(crate::engine::dialect(&mysql80, mode), Dialect::MySql(mode));
 }
 
 #[test]

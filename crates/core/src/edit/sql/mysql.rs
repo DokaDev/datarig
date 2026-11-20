@@ -15,13 +15,13 @@ use crate::driver::structure::StructureColumn;
 use crate::edit::plan::Where;
 use crate::edit::target::{TableColumn, TableRef};
 use crate::export::{Kind, sql_value};
-use crate::sql::dialect::{Dialect, Language, MySqlMode};
+use crate::sql::dialect::{Dialect, DollarQuotes, Language, MySqlMode};
 
+/// MySQL's dialect in its default mode: the writer is MySQL's (MariaDB has none).
 const D: Dialect = Dialect::MySql(MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: false,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 });
 

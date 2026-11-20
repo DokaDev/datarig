@@ -18,7 +18,7 @@ use datarig_core::driver::{
     PagingMode, PingError, Session, SessionRole, StatementInfo, TxRule, ValueKind,
 };
 use datarig_core::profile::ConnectionConfig;
-use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+use datarig_core::sql::dialect::{Dialect, DollarQuotes, Language, MySqlMode};
 use datarig_core::transport::{Dialer, DialerRef, TcpDialer};
 use datarig_driver_mysql::MyDriver;
 use mysql_async::prelude::Queryable;
@@ -376,7 +376,8 @@ async fn a_query_session_says_how_its_text_is_read() {
     assert!(matches!(c.next(15).await, DbEvent::Server(_)), "what the server is, first");
     assert!(matches!(c.next(15).await, DbEvent::Encryption(_)), "how its traffic goes, second");
     assert!(matches!(c.next(15).await, DbEvent::Isolation(_)), "its level, before it is connected");
-    let DbEvent::Language(Language::Sql(Dialect::MySql(mode))) = c.next(5).await else {
+    let DbEvent::Language(Language::Sql(said @ (Dialect::MySql(mode) | Dialect::MariaDb(mode)))) = c.next(5).await
+    else {
         panic!("the language comes before Connected")
     };
     assert!(matches!(c.next(15).await, DbEvent::Explain(_)), "the plan format, before it is connected");
@@ -391,9 +392,11 @@ async fn a_query_session_says_how_its_text_is_read() {
     // `select $$` is a syntax error from MySQL 8.1 on (MySQL's client then reads dollar quotes);
     // MariaDB reads `$$` as a name.
     let mariadb = version.contains("MariaDB");
-    let dollar_quotes = !mariadb && (major, minor) >= (8, 1);
+    let dollar_quotes = if !mariadb && (major, minor) >= (8, 1) { DollarQuotes::Read } else { DollarQuotes::NotRead };
+    let mode = MySqlMode { dollar_quotes, ..MySqlMode::default() };
     // Which server it is: the read check counts only the functions MariaDB provides as built-ins.
-    assert_eq!(mode, MySqlMode { dollar_quotes, mariadb, ..MySqlMode::default() }, "{version}");
+    let expected = if mariadb { Dialect::MariaDb(mode) } else { Dialect::MySql(mode) };
+    assert_eq!(said, expected, "{version}");
     probe.disconnect().await.unwrap();
 }
 
@@ -569,7 +572,7 @@ async fn the_metadata_session_reads_the_databases_and_the_catalog() {
     assert!(matches!(c.next(15).await, DbEvent::Server(_)), "what the server is, first");
     assert!(matches!(c.next(15).await, DbEvent::Encryption(_)), "how its traffic goes, second");
     let lang = c.next(15).await;
-    assert!(matches!(lang, DbEvent::Language(Language::Sql(Dialect::MySql(_)))), "{lang:?}");
+    assert!(matches!(lang, DbEvent::Language(Language::Sql(Dialect::MySql(_) | Dialect::MariaDb(_)))), "{lang:?}");
     // The plan format of the server and the edits it takes (MySQL 8.0.17 on); none on MariaDB.
     let explain = c.next(15).await;
     let edit = c.next(15).await;
@@ -3149,7 +3152,7 @@ async fn a_changed_sql_mode_changes_the_language() {
     let mut c = Conn::open(&url, SessionRole::Query, false, "mode").await;
     let evs = c.run(1, &["SET SESSION sql_mode = 'ANSI_QUOTES,NO_BACKSLASH_ESCAPES'"]).await;
     let mode = evs.iter().rev().find_map(|e| match e {
-        DbEvent::Language(Language::Sql(Dialect::MySql(m))) => Some(*m),
+        DbEvent::Language(Language::Sql(Dialect::MySql(m) | Dialect::MariaDb(m))) => Some(*m),
         _ => None,
     });
     assert!(mode.is_some_and(|m| m.ansi_quotes && m.no_backslash_escapes), "{evs:?}");
@@ -3157,7 +3160,9 @@ async fn a_changed_sql_mode_changes_the_language() {
     let at = |pred: fn(&DbEvent) -> bool| evs.iter().rposition(pred).unwrap();
     assert!(at(|e| matches!(e, DbEvent::Language(_))) < at(|e| matches!(e, DbEvent::Done { .. })));
     let evs = c.run(2, &["SET SESSION sql_mode = DEFAULT"]).await;
-    assert!(evs.iter().any(|e| matches!(e, DbEvent::Language(Language::Sql(Dialect::MySql(m))) if !m.ansi_quotes)));
+    assert!(evs.iter().any(
+        |e| matches!(e, DbEvent::Language(Language::Sql(Dialect::MySql(m) | Dialect::MariaDb(m))) if !m.ansi_quotes)
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -5104,7 +5109,7 @@ fn reported(evs: &[DbEvent]) -> (Option<datarig_core::driver::SessionValues>, Op
         _ => None,
     });
     let mode = evs.iter().rev().find_map(|e| match e {
-        DbEvent::Language(Language::Sql(Dialect::MySql(m))) => Some(*m),
+        DbEvent::Language(Language::Sql(Dialect::MySql(m) | Dialect::MariaDb(m))) => Some(*m),
         _ => None,
     });
     (values, mode)
@@ -5259,7 +5264,7 @@ async fn rows_copied_as_sql_run_back_byte_for_byte() {
         // The session says its mode as it starts, which a statement that leaves it as it is
         // does not say again.
         let mut q = Conn::start(&url, SessionRole::Query, false, test);
-        let DbEvent::Language(Language::Sql(Dialect::MySql(started))) =
+        let DbEvent::Language(Language::Sql(Dialect::MySql(started) | Dialect::MariaDb(started))) =
             q.wait(|e| matches!(e, DbEvent::Language(_)), 15).await
         else {
             panic!("a MySQL language")
@@ -6191,7 +6196,7 @@ async fn a_query_session_starts_with_its_session_statements() {
         "SET @@session.group_concat_max_len = 8192",
     ];
     let (mut c, lang) = starting(&url, SessionRole::Query, test, false, &sql).await.expect("connects");
-    let Some(Language::Sql(Dialect::MySql(mode))) = lang else { panic!("{lang:?}") };
+    let Some(Language::Sql(Dialect::MySql(mode) | Dialect::MariaDb(mode))) = lang else { panic!("{lang:?}") };
     assert!(mode.ansi_quotes, "the classifier reads the session's mode");
     let ev = c.ok(1, "SELECT @@session.group_concat_max_len, @@session.sql_mode").await;
     let DbEvent::Page { rows, .. } = ev else { panic!("{ev:?}") };
@@ -6200,7 +6205,7 @@ async fn a_query_session_starts_with_its_session_statements() {
     assert!(cell(1).contains("ANSI_QUOTES"), "{}", cell(1));
     // The metadata session never gets them.
     let (_m, lang) = starting(&url, SessionRole::Meta, test, false, &sql).await.expect("connects");
-    let Some(Language::Sql(Dialect::MySql(mode))) = lang else { panic!("{lang:?}") };
+    let Some(Language::Sql(Dialect::MySql(mode) | Dialect::MariaDb(mode))) = lang else { panic!("{lang:?}") };
     assert!(!mode.ansi_quotes, "the account's own mode");
 }
 

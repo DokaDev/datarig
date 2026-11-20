@@ -13,6 +13,7 @@
 //! SQL text, goes through these.
 
 use super::{ident, lexer};
+use crate::engine::EngineId;
 
 /// The SQL dialect a tab's text is in. An exhaustive `match` makes every tool decide what to do
 /// with each.
@@ -27,10 +28,11 @@ pub enum Dialect {
     MariaDb(MySqlMode),
 }
 
-/// What of a MySQL session changes how its text is read and how strings are written: parts of
-/// its `sql_mode`, whether its server reads dollar quotes, and whether the server is MariaDB.
-/// The default is a default MySQL 8.0 server's: `"x"` is a string, a backslash escapes the next character in a string, and
-/// `$$` is no quote.
+/// What of a MySQL or MariaDB session changes how its text is read and how strings are written:
+/// parts of its `sql_mode`, and whether its server reads dollar quotes. Which engine the server
+/// is, is the dialect's ([`Dialect::MySql`], [`Dialect::MariaDb`]). The default is a default
+/// MySQL 8.0 server's: `"x"` is a string, a backslash escapes the next character in a string,
+/// and `$$` is no quote.
 ///
 /// Until a session says otherwise, text is read in the default mode. On a session whose mode
 /// differs, a string the app writes ([`Dialect::quote_literal`]) is read otherwise (under
@@ -45,23 +47,36 @@ pub struct MySqlMode {
     pub ansi_quotes: bool,
     /// `NO_BACKSLASH_ESCAPES`: a backslash in a string is an ordinary character.
     pub no_backslash_escapes: bool,
-    /// The server reads dollar quotes (`$$…$$`, `$tag$…$tag$`): MySQL's client asks it with
-    /// `select $$` (a syntax error there means yes: MySQL 8.4 and 9.x; 8.0 reads `$$` as a name)
-    /// and then does not end a statement inside one.
-    pub dollar_quotes: bool,
-    /// The server is MariaDB. An unqualified call of a name MariaDB does not have as a function
-    /// of its own is a stored function of the current database there, so the risk classifier
-    /// counts as built-ins only the functions MariaDB provides
-    /// (`risk::mysql::NOT_ON_MARIADB`). The default (a MySQL server) is the driver's until a
-    /// session says which server it is on.
-    pub mariadb: bool,
+    /// Whether the server reads dollar quotes (`$$…$$`, `$tag$…$tag$`): MySQL's client asks it
+    /// with `select $$` (a syntax error there means yes: MySQL 8.4 and 9.x; 8.0 reads `$$` as a
+    /// name) and then does not end a statement inside one.
+    pub dollar_quotes: DollarQuotes,
     /// `IGNORE_SPACE`: blanks (not comments) may come between a built-in's name and its `(`.
     /// Without it, the server reads a call of some built-ins written so as a stored function's
     /// (`risk::mysql::MYSQL_TIGHT_CALLS`), so off (the default) is the reading that refuses more.
     pub ignore_space: bool,
 }
 
+/// Whether a MySQL session's server reads dollar quotes ([`MySqlMode::dollar_quotes`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum DollarQuotes {
+    /// `$$` is no quote (MySQL before 8.1, MariaDB): the default.
+    #[default]
+    NotRead,
+    /// `$$…$$` and `$tag$…$tag$` are quotes: a statement does not end inside one.
+    Read,
+}
+
 impl Dialect {
+    /// The engine whose text this is.
+    pub fn engine(self) -> EngineId {
+        match self {
+            Self::Postgres => EngineId::Postgres,
+            Self::MySql(_) => EngineId::MySql,
+            Self::MariaDb(_) => EngineId::MariaDb,
+        }
+    }
+
     /// The character the app quotes an identifier with (PostgreSQL: `"`). Inside a quoted name
     /// it is written twice.
     pub fn ident_quote(self) -> char {

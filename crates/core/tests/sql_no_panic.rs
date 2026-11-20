@@ -15,11 +15,12 @@ use datarig_core::query::{
     has_subquery, parse_order, recognise, split_terms,
 };
 use datarig_core::sql::complete::{Catalog, ColumnInfo, Relation, complete_in_dialect};
-use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+use datarig_core::sql::dialect::{Dialect, DollarQuotes, Language, MySqlMode};
 use datarig_core::sql::format::{KeywordCase, Options, format_in};
 use datarig_core::sql::lexer::{Delimiter, LexState, changes_schema_in, lex_backslash_strings, lex_from, lex_in};
 use datarig_core::sql::plan::is_explain_in;
 use datarig_core::sql::requote::requote_strings;
+use datarig_core::sql::risk::mysql::Judge;
 use datarig_core::sql::risk::{self, Classifier};
 use datarig_core::sql::split::{segment_at_in, split_from, split_in};
 use datarig_core::sql::values::check_values;
@@ -83,40 +84,40 @@ const PREFIXES: &[&str] = &[
     "SELECT * FROM t WHERE (",
 ];
 
-/// Every MySQL sql mode the lexer reads differently, MariaDB's too.
+/// Every MySQL sql mode, each way of reading dollar quotes too.
 fn mysql_modes() -> Vec<MySqlMode> {
     let mut out = Vec::new();
-    for bits in 0..32u8 {
-        out.push(MySqlMode {
-            ansi_quotes: bits & 1 != 0,
-            no_backslash_escapes: bits & 2 != 0,
-            dollar_quotes: bits & 4 != 0,
-            mariadb: bits & 8 != 0,
-            ignore_space: bits & 16 != 0,
-        });
+    for bits in 0..8u8 {
+        for dollar_quotes in [DollarQuotes::NotRead, DollarQuotes::Read] {
+            out.push(MySqlMode {
+                ansi_quotes: bits & 1 != 0,
+                no_backslash_escapes: bits & 2 != 0,
+                dollar_quotes,
+                ignore_space: bits & 4 != 0,
+            });
+        }
     }
     out
 }
 
 /// The modes that change what the lexer reads (the others change only what a name means).
 fn lexing_modes() -> Vec<MySqlMode> {
-    mysql_modes().into_iter().filter(|m| !m.mariadb && !m.ignore_space).collect()
+    mysql_modes().into_iter().filter(|m| !m.ignore_space).collect()
 }
 
 /// PostgreSQL and every MySQL mode the lexer reads differently, on MySQL and on MariaDB.
 fn dialects() -> Vec<Dialect> {
     let mut out = vec![Dialect::Postgres];
     out.extend(lexing_modes().into_iter().map(Dialect::MySql));
-    out.extend(lexing_modes().into_iter().map(|m| Dialect::MariaDb(MySqlMode { mariadb: true, ..m })));
+    out.extend(lexing_modes().into_iter().map(Dialect::MariaDb));
     out
 }
 
-/// PostgreSQL, and MySQL and MariaDB in every combination of the sql mode flags, MariaDB's
-/// also as a MariaDB session says them.
+/// PostgreSQL, and MySQL and MariaDB in every combination of the sql mode flags.
 fn checked_dialects() -> Vec<Dialect> {
     let mut out = vec![Dialect::Postgres];
     out.extend(mysql_modes().into_iter().map(Dialect::MySql));
-    out.extend(mysql_modes().into_iter().filter(|m| m.mariadb).map(Dialect::MariaDb));
+    out.extend(mysql_modes().into_iter().map(Dialect::MariaDb));
     out
 }
 
@@ -280,13 +281,13 @@ fn the_classifiers_never_panic() {
             let _ = preset.problem();
             let _ = preset.read_only_refused();
         }
-        for m in mysql_modes() {
-            let _ = risk::mysql::repeatable(&src, m);
-            let _ = risk::mysql::names(&src, m);
-            let _ = risk::mysql::named(&src, m);
-            let _ = risk::mysql::reads_zone(&src, m);
-            let _ = risk::mysql::ordered(&src, m);
-            let _ = risk::mysql::count_query(&src, m);
+        for judge in mysql_modes().into_iter().flat_map(|m| [Judge::mysql(m), Judge::mariadb(m)]) {
+            let _ = risk::mysql::repeatable(&src, judge);
+            let _ = risk::mysql::names(&src, judge);
+            let _ = risk::mysql::named(&src, judge);
+            let _ = risk::mysql::reads_zone(&src, judge);
+            let _ = risk::mysql::ordered(&src, judge);
+            let _ = risk::mysql::count_query(&src, judge);
         }
         let _ = risk::mysql::session_set(&src);
     }
@@ -324,7 +325,7 @@ fn formatting_requoting_and_completing_never_panic() {
             let _ = and_filter("SELECT * FROM `shop`.`users` WHERE (id = 1)", &src, d);
         }
         for from in mysql_modes() {
-            for to in lexing_modes().into_iter().filter(|m| !m.dollar_quotes) {
+            for to in lexing_modes().into_iter().filter(|m| m.dollar_quotes == DollarQuotes::NotRead) {
                 let _ = requote_strings(&src, Dialect::MySql(from), Dialect::MySql(to));
             }
         }

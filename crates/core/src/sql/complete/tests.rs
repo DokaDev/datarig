@@ -542,13 +542,12 @@ fn check_values_follow_the_type_values() {
 /// string doubles `"`. What is typed is read back the same way to filter.
 #[test]
 fn values_are_escaped_for_their_literal() {
-    use crate::sql::dialect::MySqlMode;
+    use crate::sql::dialect::{DollarQuotes, MySqlMode};
     let my = |nbe: bool, ansi: bool| {
         Dialect::MySql(MySqlMode {
             ansi_quotes: ansi,
             no_backslash_escapes: nbe,
-            dollar_quotes: false,
-            mariadb: false,
+            dollar_quotes: DollarQuotes::NotRead,
             ignore_space: false,
         })
     };
@@ -587,7 +586,7 @@ fn values_are_escaped_for_their_literal() {
     let list = "SELECT * FROM shop.notes WHERE kind IN (_utf8mb4'plain', '|')";
     assert_eq!(value_labels(my(false, false), list).len(), 4);
     // MySQL: `$$` is a string when the server reads dollar quotes, but no value's.
-    let dollar = Dialect::MySql(MySqlMode { dollar_quotes: true, ..MySqlMode::default() });
+    let dollar = Dialect::MySql(MySqlMode { dollar_quotes: DollarQuotes::Read, ..MySqlMode::default() });
     assert_eq!(value_labels(dollar, &format!("{q}$$|$$")), Vec::<String>::new());
     assert_eq!(value_labels(my(false, false), &format!("{q}X'|'")), Vec::<String>::new());
 }

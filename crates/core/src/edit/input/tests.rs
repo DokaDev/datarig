@@ -1,14 +1,13 @@
 use super::*;
 use crate::driver::structure::{ColumnFill, StructureColumn};
 use crate::edit::Exactness;
-use crate::sql::dialect::MySqlMode;
+use crate::sql::dialect::{DollarQuotes, MySqlMode};
 
 const PG: Dialect = Dialect::Postgres;
 const MY: Dialect = Dialect::MySql(MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: false,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 });
 

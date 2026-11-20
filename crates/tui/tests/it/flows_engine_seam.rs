@@ -57,7 +57,7 @@ impl Engine {
         match self {
             Engine::Postgres => None,
             Engine::MySql => Some(mysql(MySqlMode::default())),
-            Engine::MariaDb => Some(mysql(mariadb())),
+            Engine::MariaDb => Some(mariadb()),
         }
     }
 }
@@ -66,8 +66,8 @@ fn mysql(mode: MySqlMode) -> Language {
     Language::Sql(Dialect::MySql(mode))
 }
 
-fn mariadb() -> MySqlMode {
-    MySqlMode { mariadb: true, ..MySqlMode::default() }
+fn mariadb() -> Language {
+    Language::Sql(Dialect::MariaDb(MySqlMode::default()))
 }
 
 fn no_backslash_escapes() -> MySqlMode {
@@ -266,7 +266,7 @@ async fn a_plan_asked_before_connect_on_a_mariadb_server_is_refused_after_explai
     h.keys(" ex");
     assert_eq!(waiting(&h), [["EXPLAIN FORMAT=TREE SELECT * FROM c"]], "asked before the server said");
     h.app.on_app_event(resolved);
-    h.meta_db("slow", DbEvent::Language(mysql(mariadb())));
+    h.meta_db("slow", DbEvent::Language(mariadb()));
     h.meta_db("slow", DbEvent::Explain(None));
     h.meta_db("slow", DbEvent::Edit(None));
     let pid = id(&h, "slow");
@@ -290,7 +290,7 @@ async fn a_plan_asked_before_connect_on_a_mariadb_server_is_refused_after_explai
     let resolved = next_event(&mut rx).await;
     h.app.on_app_event(resolved);
     assert_eq!(h.app.conns.get(pid).and_then(|c| c.explain), None, "forgotten at the new attempt");
-    h.meta_db("slow", DbEvent::Language(mysql(mariadb())));
+    h.meta_db("slow", DbEvent::Language(mariadb()));
     h.meta_db("slow", DbEvent::Explain(None));
     h.app.focus = Focus::Editor;
     assert_eq!(h.app.tab().profile, Some(pid), "the console is still on slow");
@@ -311,7 +311,7 @@ fn edit_none_is_stored_before_connected() {
     let cfg = Config { connections: vec![p], ..Config::default() };
     let mut h = Harness::with_driver(&cfg, Lang::En, driver(true));
     let pid = id(&h, "local-my");
-    h.meta_db("local-my", DbEvent::Language(mysql(mariadb())));
+    h.meta_db("local-my", DbEvent::Language(mariadb()));
     h.meta_db("local-my", DbEvent::Explain(None));
     h.meta_db("local-my", DbEvent::Edit(None));
     assert_eq!(h.app.conns.get(pid).and_then(|c| c.edit), Some(None), "stored before `Connected`");
@@ -433,7 +433,7 @@ async fn bin_to_uuid_runs_on_a_mysql_read_only_profile_before_connect() {
         assert_eq!(waiting(&h), [[sql]]);
         h.app.on_app_event(resolved);
         if mariadb_said {
-            h.meta_db("slow", DbEvent::Language(mysql(mariadb())));
+            h.meta_db("slow", DbEvent::Language(mariadb()));
         }
         h.meta_db("slow", DbEvent::Connected);
         if mariadb_said {
@@ -606,6 +606,84 @@ fn a_lost_connection_drops_the_session_mode_and_a_reconnect_takes_the_new_one() 
     assert_eq!(h.app.conns.state(pid), NodeState::Disconnected);
     assert_eq!(h.app.conns.get(pid).and_then(|c| c.language), Some(ansi), "kept for the next connect");
     assert_eq!(h.app.tab_language(h.app.tabs.iter().next().unwrap().id), ansi);
+}
+
+// ── The engines a profile expects and the language its sessions said ─────────────────────────
+
+/// A connected profile named `driver` (one tab on it) whose sessions run through the fake
+/// MySQL driver, and PostgreSQL's fake for a `postgres` profile.
+fn family_profile(driver_key: &str) -> Harness {
+    let p = ConnectionConfig { name: "fam".into(), driver: driver_key.into(), ..ConnectionConfig::test_db() };
+    let cfg = Config { connections: vec![p], ..Config::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver(true));
+    let (my, pg) = (h.driver.clone(), driver(false));
+    h.app.set_drivers(Arc::new(move |name: &str| match name {
+        "mysql" | "mariadb" => Some(Arc::new(my.clone()) as Arc<dyn Driver>),
+        "postgres" => Some(Arc::new(pg.clone()) as Arc<dyn Driver>),
+        _ => None,
+    }));
+    h.meta_db("fam", DbEvent::Connected);
+    h.app.focus = Focus::Editor;
+    h
+}
+
+/// MariaDB's language in sql mode `mode`.
+fn maria(mode: MySqlMode) -> Language {
+    Language::Sql(Dialect::MariaDb(mode))
+}
+
+/// On a `mariadb` profile, the MariaDB language a tab's session says is the tab's (its editor,
+/// splitter and classifier read text in it, each sql mode of it), and the profile's first word
+/// is what a new tab of it reads in.
+#[test]
+fn a_mariadb_language_is_kept_by_its_tab_and_profile() {
+    let mut h = family_profile("mariadb");
+    let pid = id(&h, "fam");
+    run_all(&mut h, "SELECT 1");
+    h.tab_db(0, DbEvent::Language(maria(MySqlMode::default())));
+    done(&mut h);
+    assert_eq!(tab_reads(&h, 0), (maria(MySqlMode::default()), maria(MySqlMode::default())));
+    assert_eq!(h.app.conns.get(pid).and_then(|c| c.language), Some(maria(MySqlMode::default())));
+    h.tab_db(0, DbEvent::Language(maria(no_backslash_escapes())));
+    assert_eq!(tab_reads(&h, 0), (maria(no_backslash_escapes()), maria(no_backslash_escapes())));
+    assert_eq!(split_in_tab(&mut h, 0, "SELECT 'a\\';\nSELECT 2;"), ["SELECT 'a\\'", "SELECT 2"]);
+    h.app.dispatch(Action::NewTab);
+    assert_eq!(h.app.tab().profile, Some(pid));
+    assert_eq!(tab_reads(&h, 1), (maria(MySqlMode::default()), maria(MySqlMode::default())));
+}
+
+/// A `mysql` profile whose server is MariaDB keeps the language the server said, as a
+/// `mariadb` profile does: the server decides, the profile only names the family.
+#[test]
+fn a_mysql_profile_on_a_mariadb_server_keeps_its_language() {
+    let mut h = family_profile("mysql");
+    let pid = id(&h, "fam");
+    run_all(&mut h, "SELECT 1");
+    h.tab_db(0, DbEvent::Language(maria(ansi_quotes())));
+    done(&mut h);
+    let tab = h.app.tab().id;
+    assert_eq!(h.app.tab_language(tab), maria(ansi_quotes()));
+    assert_eq!(tab_reads(&h, 0), (maria(ansi_quotes()), maria(ansi_quotes())));
+    assert_eq!(h.app.conns.get(pid).and_then(|c| c.language), Some(maria(ansi_quotes())));
+    // Its classifier is MariaDB's: a call MariaDB does not provide is one of a stored function.
+    let risk = h.app.tab().exec.prepared.clone().classify("SELECT BIN_TO_UUID(a) FROM t");
+    assert!(risk.unchecked_call.is_some(), "{risk:?}");
+}
+
+/// A profile that now names another engine's driver drops the language its sessions said,
+/// MySQL's and MariaDB's alike: its tabs read text in the new driver's language.
+#[test]
+fn a_profile_that_changed_its_driver_drops_the_other_engines_language() {
+    for said in [mysql(ansi_quotes()), maria(ansi_quotes())] {
+        let mut h = family_profile("mysql");
+        run_all(&mut h, "SELECT 1");
+        h.tab_db(0, DbEvent::Language(said));
+        done(&mut h);
+        let tab = h.app.tab().id;
+        assert_eq!(h.app.tab_language(tab), said);
+        h.app.profiles[0].driver = "postgres".into();
+        assert_eq!(h.app.tab_language(tab), Language::Sql(Dialect::Postgres), "{said:?}");
+    }
 }
 
 // ── A tab's prepared statements ─────────────────────────────────────────────────────────────

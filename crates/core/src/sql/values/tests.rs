@@ -1,5 +1,5 @@
 use super::*;
-use crate::sql::dialect::MySqlMode;
+use crate::sql::dialect::{DollarQuotes, MySqlMode};
 
 fn check(expression: &str, columns: &[&str]) -> CheckConstraint {
     CheckConstraint {
@@ -18,8 +18,7 @@ fn pg(expression: &str, column: &str) -> Option<Vec<String>> {
 const MYSQL: Dialect = Dialect::MySql(MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: false,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 });
 
@@ -99,8 +98,7 @@ fn mysql_clauses() {
     let ansi = Dialect::MySql(MySqlMode {
         ansi_quotes: true,
         no_backslash_escapes: true,
-        dollar_quotes: true,
-        mariadb: false,
+        dollar_quotes: DollarQuotes::Read,
         ignore_space: false,
     });
     let found = check_values(ansi, &[check("`s` in (_utf8mb4'it\\'s')", &["s"])]);

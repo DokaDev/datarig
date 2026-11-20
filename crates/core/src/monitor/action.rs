@@ -15,6 +15,7 @@ use super::format::{Flavour, MonitorFormat, Route};
 use super::model::{Need, SessionKey, SessionKind, SessionRow, SessionState, Timestamp, Visibility};
 use crate::driver::DbError;
 use crate::sql::dialect::MySqlMode;
+use crate::sql::risk::mysql::Judge;
 use crate::sql::risk::{Class, Explain};
 
 /// What to do to a session.
@@ -299,11 +300,12 @@ fn maintenance(text: &str) -> bool {
 }
 
 /// The MySQL classifier calls the whole text a read with no effect beyond it: no function that
-/// is not a built-in, nothing that runs code, no danger, no `EXPLAIN ANALYZE`. The session's
-/// sql mode is not known here; the classifier also reads the text as the other modes would and
-/// keeps the worse reading.
+/// is not a built-in, nothing that runs code, no danger, no `EXPLAIN ANALYZE`. The text is a
+/// MySQL server's (its `performance_schema`), judged on MySQL's lists. The session's sql mode is
+/// not known here; the classifier also reads the text as the other modes would and keeps the
+/// worse reading.
 fn plain_read(text: &str) -> bool {
-    let risk = crate::sql::risk::mysql::classify(text, MySqlMode::default());
+    let risk = crate::sql::risk::mysql::classify(text, Judge::mysql(MySqlMode::default()));
     risk.class == Class::Read
         && risk.danger.is_none()
         && !risk.writes

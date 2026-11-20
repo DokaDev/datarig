@@ -1,5 +1,5 @@
 use super::*;
-use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+use datarig_core::sql::dialect::{Dialect, DollarQuotes, Language, MySqlMode};
 use datarig_core::sql::lexer::{Tok, lex, lex_in};
 use datarig_core::sql::split::{segment_at_in, split, split_in, statement_at};
 
@@ -205,8 +205,7 @@ fn right_after_a_semicolon_that_starts_its_line_is_the_statement_it_ends() {
 const MYSQL: Dialect = Dialect::MySql(MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: false,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 });
 
@@ -267,8 +266,7 @@ const MODES: [Dialect; 2] = [
     Dialect::MySql(MySqlMode {
         ansi_quotes: true,
         no_backslash_escapes: true,
-        dollar_quotes: true,
-        mariadb: false,
+        dollar_quotes: DollarQuotes::Read,
         ignore_space: false,
     }),
 ];

@@ -12,7 +12,7 @@
 //! `DATARIG_TEST_MYSQL_CLIENT="docker exec -i datarig-mysql mysql -udatarig -pdatarig shop"`
 //! (split on blanks, no shell). Skipped without it, unless `DATARIG_REQUIRE_MYSQL=1`.
 
-use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+use datarig_core::sql::dialect::{Dialect, DollarQuotes, Language, MySqlMode};
 use datarig_core::sql::risk::mysql::{BUILTINS, MARIADB_CONSTRUCTORS, NEWER_THAN_OLDEST, NOT_ON_MARIADB};
 use datarig_core::sql::risk::{Class, Classifier};
 use std::collections::BTreeMap;
@@ -24,8 +24,7 @@ include!("../src/sql/risk/mysql/corpus.rs");
 const MODE: MySqlMode = MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: false,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 };
 
@@ -155,6 +154,11 @@ fn errors(client: &[String], prelude: &str, statements: &[(usize, &str)]) -> BTr
     found
 }
 
+/// The dialect a session reads in on a MariaDB server (`maria`) or a MySQL one, in sql mode
+/// `mode`.
+fn session_dialect(maria: bool, mode: MySqlMode) -> Dialect {
+    if maria { Dialect::MariaDb(mode) } else { Dialect::MySql(mode) }
+}
 #[test]
 fn reads_run_on_a_read_only_session_and_writes_fail_there() {
     let Some(client) = client() else { return };
@@ -296,7 +300,7 @@ fn built_ins_count_as_the_server_reads_them_however_written() {
         ("SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, ',IGNORE_SPACE');", true),
     ] {
         let errors = errors(&client, prelude, &statements);
-        let session = Language::Sql(Dialect::MySql(MySqlMode { mariadb: maria, ignore_space, ..MODE }));
+        let session = Language::Sql(session_dialect(maria, MySqlMode { ignore_space, ..MODE }));
         let looked_up = |i: usize| matches!(errors.get(&i), Some(1305 | 1630));
         let mut wrong = Vec::new();
         for (n, _) in names.iter().enumerate() {
@@ -325,7 +329,7 @@ fn built_ins_count_as_the_server_reads_them_however_written() {
 #[test]
 fn words_and_table_functions_count_as_the_server_reads_them() {
     let Some(client) = client() else { return };
-    let session = Language::Sql(Dialect::MySql(MySqlMode { mariadb: mariadb(&client), ..MODE }));
+    let session = Language::Sql(session_dialect(mariadb(&client), MODE));
     let columns = "'[1]', '$[*]' COLUMNS (d DATETIME(6) PATH '$', n NCHAR(10) PATH '$', \
                    NESTED PATH '$' COLUMNS (x DECIMAL(10, 2) PATH '$'))";
     let texts = [
@@ -375,7 +379,7 @@ fn functions_mariadb_does_not_provide(unknown: &[&str]) {
     assert!(not_listed.is_empty(), "add to NOT_ON_MARIADB: {not_listed:?}");
     let has: Vec<&&str> = listed.iter().filter(|n| !unknown.contains(n) && !ADDED_AFTER_10_6.contains(n)).collect();
     assert!(has.is_empty(), "functions of this server, drop from NOT_ON_MARIADB: {has:?}");
-    let session = Language::Sql(Dialect::MySql(MySqlMode { mariadb: true, ..MODE }));
+    let session = Language::Sql(Dialect::MariaDb(MODE));
     for name in &listed {
         let risk = Classifier::classify_once(session, &format!("SELECT {name}()"));
         assert!(risk.unchecked_call.is_some() && risk.read_only().is_err(), "{name}");
@@ -386,7 +390,7 @@ fn functions_mariadb_does_not_provide(unknown: &[&str]) {
 /// and a built-in to the read check of a MariaDB session; given others, the server looks it up
 /// as a stored function and the read check takes it as an unchecked call.
 fn geometry_constructors_on_mariadb(client: &[String]) {
-    let session = Language::Sql(Dialect::MySql(MySqlMode { mariadb: true, ..MODE }));
+    let session = Language::Sql(Dialect::MariaDb(MODE));
     let mut texts = Vec::new();
     for &(name, fewest, _) in MARIADB_CONSTRUCTORS {
         let point = if name == "POINT" { "1" } else { "POINT(1, 1)" };

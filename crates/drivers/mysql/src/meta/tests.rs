@@ -1,14 +1,19 @@
 use super::*;
+use datarig_core::sql::dialect::MySqlMode;
 
 /// `COLUMN_TYPE` of an `ENUM` as MySQL 8.4 writes it: a quote doubled, a backslash doubled.
 #[test]
 fn enum_values_from_the_column_type() {
+    let my = Dialect::MySql(MySqlMode::default());
     let v = |xs: &[&str]| Some(xs.iter().map(|x| x.to_string()).collect::<Vec<_>>());
-    assert_eq!(enum_values("enum('pending','paid')"), v(&["pending", "paid"]));
-    assert_eq!(enum_values("enum('a','it''s','b\\\\c','d\"q','x,y','')"), v(&["a", "it's", "b\\c", "d\"q", "x,y", ""]));
-    assert_eq!(enum_values("ENUM('a')"), v(&["a"]));
+    assert_eq!(enum_values("enum('pending','paid')", my), v(&["pending", "paid"]));
+    assert_eq!(
+        enum_values("enum('a','it''s','b\\\\c','d\"q','x,y','')", my),
+        v(&["a", "it's", "b\\c", "d\"q", "x,y", ""])
+    );
+    assert_eq!(enum_values("ENUM('a')", my), v(&["a"]));
     for other in ["set('p','q')", "varchar(10)", "enum()", "enum('a',)", "enum('a' 'b')", "enum('a'", "enu", ""] {
-        assert_eq!(enum_values(other), None, "{other}");
+        assert_eq!(enum_values(other, my), None, "{other}");
     }
 }
 
@@ -67,12 +72,16 @@ fn each_name_is_one_literal_in_the_statements_built_with_it() {
         let mut builders: Vec<(String, Build)> = servers
             .iter()
             .map(|&server| {
-                let build = move |schema: &str, table: &str| structure::statement(server, mode, schema, table);
+                let build =
+                    move |schema: &str, table: &str| structure::statement(server, Dialect::MySql(mode), schema, table);
                 (format!("structure {server:?}"), Box::new(build) as Build)
             })
             .collect();
         builders.push(("lookup".into(), Box::new(move |schema, name| ddl::find_named_sql(d, schema, name))));
-        builders.push(("order keys".into(), Box::new(move |schema, table| order_keys::statement(mode, schema, table))));
+        builders.push((
+            "order keys".into(),
+            Box::new(move |schema, table| order_keys::statement(Dialect::MySql(mode), schema, table)),
+        ));
         for (what, build) in &builders {
             let (plain_code, plain_literals) = shape(&build("zz_s", "zz_t"), d);
             assert!(plain_literals.iter().any(|l| l == "zz_s") && plain_literals.iter().any(|l| l == "zz_t"));

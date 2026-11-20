@@ -376,8 +376,7 @@ const MYSQL: datarig_core::sql::dialect::Dialect =
     datarig_core::sql::dialect::Dialect::MySql(datarig_core::sql::dialect::MySqlMode {
         ansi_quotes: false,
         no_backslash_escapes: false,
-        dollar_quotes: false,
-        mariadb: false,
+        dollar_quotes: datarig_core::sql::dialect::DollarQuotes::NotRead,
         ignore_space: false,
     });
 
@@ -509,12 +508,11 @@ fn mysql_hints_never_stay_on_text_that_is_not_their_statement() {
 /// statement another one, and the hint goes.
 #[test]
 fn a_hint_on_a_statement_starting_with_a_dollar_is_checked_in_full() {
-    use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+    use datarig_core::sql::dialect::{Dialect, DollarQuotes, Language, MySqlMode};
     let d = Dialect::MySql(MySqlMode {
         ansi_quotes: true,
         no_backslash_escapes: true,
-        dollar_quotes: true,
-        mariadb: false,
+        dollar_quotes: DollarQuotes::Read,
         ignore_space: false,
     });
     let text = " \\G$$ $$\n;\n\nSELECT 2;\nSELECT 3;";
