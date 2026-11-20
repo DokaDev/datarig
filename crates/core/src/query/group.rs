@@ -50,7 +50,7 @@ pub struct NoEquality;
 /// with an order, for equality only, or not at all ([`NoEquality`]). `enum_known`: the
 /// column's type is known to be a PostgreSQL enum (no kind of its own, ordered by its labels).
 pub fn compares(d: Dialect, m: &ColumnMeta, enum_known: bool) -> Result<Compares, NoEquality> {
-    let mysql = matches!(d, Dialect::MySql(_));
+    let mysql = matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_));
     let ty = m.type_name.to_ascii_lowercase();
     match m.kind {
         ValueKind::Integer

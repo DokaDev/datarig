@@ -200,7 +200,7 @@ impl OrderKey {
     pub fn nulls_first(&self, d: Dialect) -> bool {
         match self.nulls {
             Some(n) => n == Nulls::First,
-            None => (self.dir == Dir::Asc) == matches!(d, Dialect::MySql(_)),
+            None => (self.dir == Dir::Asc) == matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)),
         }
     }
 }

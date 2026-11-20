@@ -7,6 +7,7 @@ use datarig_core::query::{
     CaseMode, CmpOp, ColumnFacts, ColumnKind, Cond, Dir, Nulls, OrderKey, Query, TableName, Target, Value,
     compile_capped,
 };
+use datarig_core::sql::dialect::Dialect;
 
 /// What a filter case writes: one condition (with what the session's character set is known
 /// to be), a pattern on the `name` column with what is known of its collation and of the
@@ -30,11 +31,11 @@ pub struct Like {
 
 /// The table every case reads: a number key, text (of a deterministic collation), a float,
 /// bytes and a date.
-fn target(e: Engine, utf8mb4: bool) -> Target {
+fn target(d: Dialect, utf8mb4: bool) -> Target {
     let mut name = ColumnFacts::new("name", ColumnKind::Text);
     name.deterministic = Some(true);
     let mut t = Target::new(
-        e.dialect(),
+        d,
         vec![
             ColumnFacts::new("id", ColumnKind::Number),
             name,
@@ -50,13 +51,18 @@ fn target(e: Engine, utf8mb4: bool) -> Target {
 
 /// The SQL of a case on `e`, or the `Debug` of why it is not written.
 pub fn render(e: Engine, input: &Input) -> String {
+    render_in(e.dialect(), input)
+}
+
+/// [`render`] in dialect `d`.
+pub fn render_in(d: Dialect, input: &Input) -> String {
     match input {
-        Input::Cond { cond, utf8mb4 } => match datarig_core::query::render(cond, &target(e, *utf8mb4)) {
+        Input::Cond { cond, utf8mb4 } => match datarig_core::query::render(cond, &target(d, *utf8mb4)) {
             Ok(sql) => sql,
             Err(why) => format!("{why:?}"),
         },
         Input::Like(like) => {
-            let mut t = target(e, true);
+            let mut t = target(d, true);
             let name = t.columns.iter_mut().find(|c| c.name == "name").expect("the name column");
             name.deterministic = like.deterministic;
             name.collation = like.collation.map(str::to_string);
@@ -67,7 +73,7 @@ pub fn render(e: Engine, input: &Input) -> String {
                 Err(why) => format!("{why:?}"),
             }
         }
-        Input::Query(q) => compile_capped(q, &target(e, false)).sql,
+        Input::Query(q) => compile_capped(q, &target(d, false)).sql,
     }
 }
 
@@ -532,8 +538,13 @@ pub struct Column {
 
 /// How a filter compares the values of the column on `e`.
 pub fn compares(e: Engine, c: &Column) -> String {
+    compares_in(e.dialect(), c)
+}
+
+/// [`compares`] in dialect `d`.
+pub fn compares_in(d: Dialect, c: &Column) -> String {
     let meta = ColumnMeta::new("c".to_string(), c.type_name.to_string(), c.kind, None);
-    match datarig_core::query::compares(e.dialect(), &meta, c.enum_known) {
+    match datarig_core::query::compares(d, &meta, c.enum_known) {
         Ok(how) => format!("{how:?}"),
         Err(why) => format!("{why:?}"),
     }

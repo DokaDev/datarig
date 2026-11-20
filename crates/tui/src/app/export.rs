@@ -1445,7 +1445,7 @@ impl App {
                 }
                 _ => {
                     let lost = self.tabs.get(id).is_some_and(|t| t.exec.state == SessionState::Lost);
-                    let mysql = matches!(self.tab_dialect(id), Dialect::MySql(_));
+                    let mysql = matches!(self.tab_dialect(id), Dialect::MySql(_) | Dialect::MariaDb(_));
                     let why = if lost && mysql { Failure::MySqlLost } else { Failure::SessionEnded };
                     let Some(j) = self.exports.jobs.get_mut(&id) else { continue };
                     if let Some(ctl) = j.ctl.take() {

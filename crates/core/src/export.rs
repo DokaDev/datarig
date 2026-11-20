@@ -672,12 +672,14 @@ pub fn sql_value(d: Dialect, kind: Kind, v: Option<&str>) -> String {
         // MySQL shows bytes as `0x…` and bits as `b'…'` (every byte, every bit): written as its
         // hexadecimal and bit literals, which are the value itself (a string literal of that
         // text would be the text).
-        Some(v) if matches!(d, Dialect::MySql(_)) && kind == Kind::Bytes && mysql_hex(v) => {
+        Some(v) if matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)) && kind == Kind::Bytes && mysql_hex(v) => {
             format!("X'{}'", &v[2..])
         }
-        Some(v) if matches!(d, Dialect::MySql(_)) && kind == Kind::Bit && mysql_bits(v) => v.to_string(),
+        Some(v) if matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)) && kind == Kind::Bit && mysql_bits(v) => {
+            v.to_string()
+        }
         // The same string whatever the session's `NO_BACKSLASH_ESCAPES`.
-        Some(v) if matches!(d, Dialect::MySql(_)) => mysql_string(v),
+        Some(v) if matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)) => mysql_string(v),
         // Bytes (`\x…`) and bits too: PostgreSQL reads them from a string literal.
         Some(v) => d.quote_literal(v),
     }

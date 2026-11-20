@@ -75,10 +75,10 @@ fn looser_than_and(text: &str, toks: &[Token], i: usize, t: &Token, d: Dialect) 
             return !(after_is || before_op || leads);
         }
         // MySQL's `INTERVAL expr unit`: an `AND` up to the unit belongs to the interval.
-        return matches!(d, Dialect::MySql(_)) && s.eq_ignore_ascii_case("INTERVAL");
+        return matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)) && s.eq_ignore_ascii_case("INTERVAL");
     }
     match d {
-        Dialect::MySql(_) if t.kind == Tok::Op => match s {
+        Dialect::MySql(_) | Dialect::MariaDb(_) if t.kind == Tok::Op => match s {
             "|" | "&" => true,
             // `!=` compares; `!` alone is `NOT`.
             "!" => !glued(i + 1, "="),

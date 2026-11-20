@@ -39,7 +39,7 @@ impl App {
 
     /// Profile `id`'s sessions speak MySQL.
     fn mysql_profile(&self, id: ProfileId) -> bool {
-        matches!(self.profile_language(Some(id)), Language::Sql(Dialect::MySql(_)))
+        matches!(self.profile_language(Some(id)), Language::Sql(Dialect::MySql(_) | Dialect::MariaDb(_)))
     }
 
     /// The object explorer row `row` stands for, and where: its profile and database (`None`: the

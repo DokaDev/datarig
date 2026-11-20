@@ -112,7 +112,7 @@ pub(crate) fn admit(
     let cols = [export::SqlColumn { name: &m.name, type_name: &m.type_name, kind: m.kind, auto_increment: false }];
     let cells = export::sql_cells(d, &cols, from.read_in, server_zone).map_err(NotAdmitted::NotWhole)?;
     let cell = cells.cell(0, v).map_err(NotAdmitted::NotWhole)?;
-    let mysql = matches!(d, Dialect::MySql(_));
+    let mysql = matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_));
     let refused = |why| NotAdmitted::NotWhole(export::Refused { column: m.name.clone(), why });
     // A MySQL TIMESTAMP is shown in the session's zone: the session reads it back the same only
     // in the zone it was read in.

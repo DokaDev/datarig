@@ -494,7 +494,7 @@ pub(crate) fn column_kind(c: &ColumnMeta) -> ColumnKind {
 
 /// A result column of dialect `d` that is a MySQL `TIMESTAMP` ([`ColumnFacts::zoned`]).
 fn zoned(d: Dialect, c: &ColumnMeta) -> bool {
-    matches!(d, Dialect::MySql(_)) && c.kind == ValueKind::TimestampTz
+    matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)) && c.kind == ValueKind::TimestampTz
 }
 
 /// Why the bar refuses a filter, in words (the part in parentheses of the refusal).
@@ -720,7 +720,7 @@ impl App {
             target.primary_key = k.primary_key.clone();
             target.unique_keys = k.unique_not_null.clone();
         }
-        target.utf8mb4 = matches!(d, Dialect::MySql(_))
+        target.utf8mb4 = matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_))
             && t.exec.values.as_ref().is_some_and(|v| v.charset.eq_ignore_ascii_case("utf8mb4"));
         Some(target)
     }
@@ -1384,7 +1384,7 @@ impl App {
     /// ([`LockState`]); `None` when they never do (not MySQL).
     pub(in crate::app) fn lock_state(&self, id: TabId) -> Option<LockState> {
         let t = self.tabs.get(id)?;
-        if !matches!(t.exec.prepared.language().dialect(), Dialect::MySql(_)) {
+        if !matches!(t.exec.prepared.language().dialect(), Dialect::MySql(_) | Dialect::MariaDb(_)) {
             return None;
         }
         let e = &t.exec;

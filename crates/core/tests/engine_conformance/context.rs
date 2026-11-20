@@ -14,14 +14,18 @@ use datarig_core::sql::risk::{AllowedFunction, Classifier, ReadOnlyContext};
 /// `my_function`, and the hint the default context gives for the call it refuses) and run
 /// again, and `<expr> IS NOT NULL` as the filter of table `t`.
 pub fn verdicts(e: Engine, expr: &&'static str) -> String {
-    let d = e.dialect();
+    verdicts_in(e.dialect(), expr)
+}
+
+/// [`verdicts`] in dialect `d`.
+pub fn verdicts_in(d: Dialect, expr: &str) -> String {
     let filter = filter_verdicts(d, expr);
     format!("{} | {filter}", editor_verdicts(d, expr))
 }
 
 /// The verdicts of [`verdicts`] before the filter's, in dialect `d`: run, read-only (both
 /// contexts), hint and re-run.
-pub fn editor_verdicts(d: Dialect, expr: &str) -> String {
+fn editor_verdicts(d: Dialect, expr: &str) -> String {
     let mut classifier = Classifier::new(Language::Sql(d));
     let sql = format!("SELECT {expr} FROM t");
     let risk = classifier.classify(&sql);

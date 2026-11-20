@@ -224,7 +224,7 @@ fn literal(t: &Target, c: Option<&ColumnFacts>, v: &Value) -> String {
         // string as two doubles: a number for a number column is written as its exact decimal
         // (a number that has none is refused before, `RenderError::NotExact`).
         Value::Number(n) | Value::Text(n)
-            if matches!(t.dialect, Dialect::MySql(_))
+            if matches!(t.dialect, Dialect::MySql(_) | Dialect::MariaDb(_))
                 && c.is_some_and(|c| c.kind == ColumnKind::Number)
                 && sql_number(n)
                 && !negative_zero(n) =>
@@ -239,7 +239,7 @@ fn literal(t: &Target, c: Option<&ColumnFacts>, v: &Value) -> String {
         Value::Number(n) => text_literal(t, n),
         // A MySQL `FLOAT`: compared as a double whatever is written, the number as typed.
         Value::Text(s)
-            if matches!(t.dialect, Dialect::MySql(_))
+            if matches!(t.dialect, Dialect::MySql(_) | Dialect::MariaDb(_))
                 && c.is_some_and(|c| bare_numbers(t.dialect, c.kind))
                 && sql_number(s)
                 && !negative_zero(s) =>
@@ -253,10 +253,14 @@ fn literal(t: &Target, c: Option<&ColumnFacts>, v: &Value) -> String {
         // The instant is written in UTC (the source zone `+00:00`, which every server reads); a
         // value with an offset that is no such instant is refused before
         // (`RenderError::NotInstant`).
-        Value::Text(s) if matches!(t.dialect, Dialect::MySql(_)) && c.is_some_and(|c| c.zoned) => match instant(s) {
-            Some(Some(utc)) => format!("CONVERT_TZ({}, '+00:00', @@session.time_zone)", text_literal(t, &utc)),
-            _ => text_literal(t, s),
-        },
+        Value::Text(s)
+            if matches!(t.dialect, Dialect::MySql(_) | Dialect::MariaDb(_)) && c.is_some_and(|c| c.zoned) =>
+        {
+            match instant(s) {
+                Some(Some(utc)) => format!("CONVERT_TZ({}, '+00:00', @@session.time_zone)", text_literal(t, &utc)),
+                _ => text_literal(t, s),
+            }
+        }
         Value::Text(s) => text_literal(t, s),
         Value::Bytes(b) => match t.dialect {
             Dialect::Postgres => format!("{}::pg_catalog.bytea", text_literal(t, &format!("\\x{}", hex(b, false)))),
@@ -413,7 +417,7 @@ pub(super) fn exact_decimal(s: &str) -> Option<String> {
 pub(super) fn bare_numbers(d: Dialect, kind: ColumnKind) -> bool {
     match kind {
         ColumnKind::Number => true,
-        ColumnKind::Real => matches!(d, Dialect::MySql(_)),
+        ColumnKind::Real => matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)),
         _ => false,
     }
 }

@@ -65,7 +65,9 @@ pub const TX_ROLLBACK_ANSWER_WAIT_MYSQL: Duration = Duration::from_secs(60);
 /// How long tab `t`'s session may take to answer the rollback of its idle transaction.
 fn rollback_wait(t: &Tab) -> Duration {
     match t.exec.prepared.language().dialect() {
-        datarig_core::sql::dialect::Dialect::MySql(_) => TX_ROLLBACK_ANSWER_WAIT_MYSQL,
+        datarig_core::sql::dialect::Dialect::MySql(_) | datarig_core::sql::dialect::Dialect::MariaDb(_) => {
+            TX_ROLLBACK_ANSWER_WAIT_MYSQL
+        }
         _ => TX_ROLLBACK_ANSWER_WAIT,
     }
 }

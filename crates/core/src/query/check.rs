@@ -97,7 +97,7 @@ pub fn estimate_allowed(verdict: &FilterVerdict, text: &str, d: Dialect) -> Resu
     if *verdict != FilterVerdict::Clear {
         return Err(EstimateOff::Calls);
     }
-    if matches!(d, Dialect::MySql(_)) && has_subquery(text, d) {
+    if matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)) && has_subquery(text, d) {
         return Err(EstimateOff::Subquery);
     }
     Ok(())
@@ -447,7 +447,7 @@ pub fn check_filter(
                         calls.push(call);
                     }
                 }
-                let Dialect::MySql(mode) = r.dialect else { continue };
+                let (Dialect::MySql(mode) | Dialect::MariaDb(mode)) = r.dialect else { continue };
                 let unread_here = || BarRefusal::NotRead { class: risk.class, danger: Some(Danger::Unrecognized) };
                 for (name, looked_up) in risk::mysql::called(&sql, mode).ok_or_else(unread_here)? {
                     let call = Call {
@@ -580,7 +580,9 @@ fn problems(tokens: &[Token], text: &str, d: Dialect, own: bool) -> Result<(), (
         let problem = match t.kind {
             Tok::Semi => LexProblem::Semicolon,
             Tok::LineComment => LexProblem::Comment,
-            Tok::BlockComment if matches!(d, Dialect::MySql(_)) && text[at.clone()].starts_with("/*M!") => {
+            Tok::BlockComment
+                if matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)) && text[at.clone()].starts_with("/*M!") =>
+            {
                 LexProblem::ExecutableComment
             }
             Tok::BlockComment => LexProblem::Comment,

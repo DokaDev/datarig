@@ -1200,6 +1200,45 @@ fn calls_are_confirmed_refused_or_clear() {
     }
 }
 
+/// On the MariaDB variant the filter bar checks every call as it does on today's MariaDB (the
+/// flagged MySQL dialect): a stored function asks, or is refused on a read-only profile, a
+/// refused built-in is refused, and a built-in it knows is clear. None of them lets a call
+/// through unchecked.
+#[test]
+fn the_filter_bar_checks_calls_on_the_mariadb_variant() {
+    let mode = MySqlMode { mariadb: true, ..MySqlMode::default() };
+    let (variant, today) = (Dialect::MariaDb(mode), Dialect::MySql(mode));
+    let confirm = |calls: &[&str]| {
+        Ok(FilterVerdict::NeedsConfirm(vec![Confirm::Calls(calls.iter().map(|c| c.to_string()).collect())]))
+    };
+    assert_eq!(check(variant, "my_fn(id) > 0", false), confirm(&["MY_FN"]));
+    assert_eq!(check(variant, "my_fn(id) > 0", true), Err(BarRefusal::UncheckedCalls(vec!["MY_FN".into()])));
+    assert_eq!(check(variant, "SLEEP(1) = 0", false), Err(BarRefusal::RefusedCalls(vec!["SLEEP".into()])));
+    assert_eq!(check(variant, "id < NEXTVAL(s)", true), Err(BarRefusal::RefusedCalls(vec!["NEXTVAL".into()])));
+    assert_eq!(check(variant, "NOW() > id", true), Ok(FilterVerdict::Clear));
+    for text in [
+        "my_fn(id) > 0",
+        "shop.lower(name) = 'a'",
+        "SLEEP(1) = 0",
+        "BENCHMARK(1000, md5('a')) = 0",
+        "GET_LOCK('a', 1) = 1",
+        "FOUND_ROWS() >= 0",
+        "LOAD_FILE('/etc/passwd') IS NULL",
+        "`NOW`() > id",
+        "NOW () > id",
+        "BIN_TO_UUID(data) = 'a'",
+        "id > 1 $a$ OR my_fn(id) > 0 OR 2 $a$ > 0",
+        "/*M! my_fn(id) > 0 AND */ id > 0",
+        "id IN (SELECT my_fn(id))",
+        "NOW() > id",
+        "ABS(id) > 0",
+    ] {
+        for read_only in [false, true] {
+            assert_eq!(check(variant, text, read_only), check(today, text, read_only), "{text} read-only {read_only}");
+        }
+    }
+}
+
 /// The name of the first function `text` calls, upper case, without quotes.
 fn text_name(text: &str) -> String {
     let end = text.find(['(', ' ', '/', '\n']).unwrap_or(text.len());

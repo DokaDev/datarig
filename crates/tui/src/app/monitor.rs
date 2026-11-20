@@ -1611,7 +1611,7 @@ impl App {
         };
         let Some(id) = self.tab().profile else { return };
         use datarig_core::sql::dialect::{Dialect, Language};
-        let mysql = matches!(self.profile_language(Some(id)), Language::Sql(Dialect::MySql(_)));
+        let mysql = matches!(self.profile_language(Some(id)), Language::Sql(Dialect::MySql(_) | Dialect::MariaDb(_)));
         let context = match mysql {
             true => self.session_context(id, None, database.clone()),
             false => self.session_context(id, database.clone(), None),
