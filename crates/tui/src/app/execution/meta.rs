@@ -319,6 +319,8 @@ impl App {
                 c.meta = None;
                 c.connected = false;
                 c.read_only_unconfirmed = None;
+                // What its server was found to be goes with the session.
+                c.facts = None;
                 c.error = Some(m.clone());
                 // What it was asked for never comes: asked again on the next use.
                 c.checks.retain(|_, c| *c != TableChecks::Asked);
@@ -329,8 +331,8 @@ impl App {
             DbEvent::Language(lang) => self.set_profile_language(id, lang),
             // The plan format its server gives (the plan actions follow it).
             DbEvent::Explain(format) => self.conns.entry(id).explain = Some(format),
-            // What the server is: nothing reads it yet.
-            DbEvent::Server(_) => {}
+            // What the server is: the profile's rules until the attempt ends.
+            DbEvent::Server(facts) => self.conns.entry(id).facts = Some(facts),
             // The edits its server takes.
             DbEvent::Edit(format) => self.conns.entry(id).edit = Some(format),
             // A query session's own (copying its values as SQL needs it).

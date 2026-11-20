@@ -22,7 +22,7 @@ use datarig_core::driver::structure::RelationStats;
 use datarig_core::driver::{ApplyError, ApplyFailure, DbCommand, DbError, DbEvent, SchemaObjects};
 use datarig_core::fault::Fault;
 use datarig_core::sql::complete::{Catalog, ColumnInfo, Relation};
-use datarig_core::sql::dialect::Dialect;
+use datarig_core::sql::dialect::{Dialect, DollarQuotes};
 use datarig_core::sql::lexer::{Tok, lex_in};
 use mysql_async::prelude::{FromRow, Queryable};
 use mysql_async::{Conn, Row};
@@ -100,8 +100,9 @@ pub(crate) async fn meta_loop(
     events: UnboundedSender<DbEvent>,
     tracked: Tracked,
     server: Server,
+    dollar_quotes: DollarQuotes,
 ) {
-    let mode = tracked.mode(&server);
+    let mode = tracked.mode(dollar_quotes);
     let dialect = crate::engine::dialect(&server, mode);
     // The database the session opened in; its current one moves for the DDL reads ([`ddl`]).
     let home: Option<String> = conn.opts().db_name().filter(|d| !d.is_empty()).map(str::to_string);

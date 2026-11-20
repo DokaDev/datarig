@@ -280,13 +280,6 @@ impl Server {
         Err(DbError::VersionUnsupported { server, needed: format!("{name} {}.{}", min.0, min.1) })
     }
 
-    /// Whether the server reads `$$…$$` as a quote: MySQL's client asks with `select $$`,
-    /// which MySQL 8.4 and 9.x refuse as a syntax error (8.0 reads `$$` as a name), and
-    /// MariaDB reads as a name.
-    pub(crate) fn dollar_quotes(&self) -> DollarQuotes {
-        if !self.mariadb && self.version >= (8, 1, 0) { DollarQuotes::Read } else { DollarQuotes::NotRead }
-    }
-
     /// The session variable that makes its transactions read-only (`tx_read_only` before
     /// MariaDB 11.1).
     pub(crate) fn read_only_var(&self) -> &'static str {
@@ -565,13 +558,14 @@ impl Tracked {
         (self.time_zone, self.results_charset, self.connection_charset) = (unknown(), unknown(), unknown());
     }
 
-    /// The mode the session's text is read in.
-    pub(crate) fn mode(&self, server: &Server) -> MySqlMode {
+    /// The mode the session's text is read in, on a server that reads dollar quotes as
+    /// `dollar_quotes` says ([`crate::engine::dollar_quotes`]).
+    pub(crate) fn mode(&self, dollar_quotes: DollarQuotes) -> MySqlMode {
         let flags: Vec<&str> = self.sql_mode.as_deref().unwrap_or("").split(',').map(str::trim).collect();
         MySqlMode {
             ansi_quotes: flags.contains(&"ANSI_QUOTES"),
             no_backslash_escapes: flags.contains(&"NO_BACKSLASH_ESCAPES"),
-            dollar_quotes: server.dollar_quotes(),
+            dollar_quotes,
             // Only a reported `IGNORE_SPACE` counts: unknown reads as off, which refuses more.
             ignore_space: flags.contains(&"IGNORE_SPACE"),
         }
@@ -700,6 +694,9 @@ pub(crate) async fn open(
             return Err((e, false));
         }
     };
+    // How the session reads dollar quotes, as its server's facts say (how the session reaches
+    // the server plays no part in it).
+    let dollar_quotes = crate::engine::dollar_quotes(&crate::engine::facts(&greeting, &report, None));
     let mut tracked = Tracked::default();
     let set = conn.query_drop(init_sql(&server, &settings)).await;
     set.map_err(|e| (my_error(&e), false))?;
@@ -726,7 +723,7 @@ pub(crate) async fn open(
         }
         tracked.update(&conn);
         // Settings for the next transaction only, which the server does not report.
-        let dialect = crate::engine::dialect(&server, tracked.mode(&server));
+        let dialect = crate::engine::dialect(&server, tracked.mode(dollar_quotes));
         if crate::query::sets_next_transaction(sql, dialect) != crate::query::SetsNext::No {
             tracked.next_once = true;
         }

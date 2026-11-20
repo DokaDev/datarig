@@ -1,6 +1,7 @@
 //! MariaDB's row of the registry. Its profiles use MySQL's URL form, session presets, form
 //! row and icon.
 
+use super::mysql_family::{FamilyRisk, FamilyText};
 use super::{EngineId, EngineSpec, MYSQL_FAMILY, Transport};
 use crate::driver::Hierarchy;
 use crate::profile::dsn::Scheme;
@@ -15,4 +16,6 @@ pub static SPEC: EngineSpec = EngineSpec {
     preset_key: "mysql",
     form_key: "mysql",
     hierarchy: Hierarchy::SchemaOnly,
+    text: &FamilyText,
+    risk: &FamilyRisk,
 };

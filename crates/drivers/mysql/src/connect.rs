@@ -262,7 +262,9 @@ async fn run_session(
     }
     let link = Link::new(rx, wire);
     match role {
-        SessionRole::Meta => crate::meta::meta_loop(conn, link, events, tracked, server).await,
+        SessionRole::Meta => {
+            crate::meta::meta_loop(conn, link, events, tracked, server, crate::engine::dollar_quotes(&facts)).await
+        }
         SessionRole::Monitor => {
             let marker = token.map(|token| crate::monitor::Marker { token, handshake: conn.id() });
             crate::monitor::monitor_loop(conn, link, events, opts.read_only, marker).await

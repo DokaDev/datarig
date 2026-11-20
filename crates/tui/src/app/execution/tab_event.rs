@@ -79,8 +79,11 @@ impl App {
         if matches!(ev, DbEvent::StatementCacheOff) {
             return self.statement_cache_off(id, profile);
         }
-        // What the server is: nothing reads it yet.
-        if matches!(ev, DbEvent::Server(_)) {
+        // What the server is: the tab's rules while this session is open.
+        if let DbEvent::Server(facts) = ev {
+            if let Some(t) = self.tabs.get_mut(id) {
+                t.exec.facts = Some((t.exec.generation, facts));
+            }
             return;
         }
         // The plan format of the profile's server: a query session's word is the profile's.
@@ -155,11 +158,12 @@ impl App {
             }
             return;
         }
-        // The mode the lost session read its text in goes with it: the next run, in a new
-        // session, is checked in the mode that one starts in.
+        // The mode the lost session read its text in goes with it, as what it found its server
+        // to be: the next run, in a new session, is checked in the mode that one starts in.
         if matches!(ev, DbEvent::Lost { .. }) {
             if let Some(t) = self.tabs.get_mut(id) {
                 t.exec.language = None;
+                t.exec.facts = None;
                 t.exec.values = None;
                 t.exec.text = None;
             }

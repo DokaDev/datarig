@@ -1023,3 +1023,198 @@ fn an_unconfirmed_engine_says_the_greeting_and_stays_unconnected() {
     assert!(h.prompt().is_none(), "not a password problem");
     assert!(!h.app.conns.get(pid).is_some_and(|c| c.connected));
 }
+
+// ── What the app asks of a tab's server ─────────────────────────────────────────────────────
+
+/// The facts a session of `engine` at `version` says first, reached directly.
+fn facts_at(engine: Engine, version: datarig_core::engine::Version) -> Arc<datarig_core::engine::ServerFacts> {
+    use datarig_core::engine::{EngineFacts, EngineId, Fact, MyFacts, PgFacts, ServerFacts, Topology, Why};
+    let detail = match engine {
+        Engine::Postgres => EngineFacts::Postgres(PgFacts::default()),
+        Engine::MySql => EngineFacts::MySql(MyFacts { handshake: version, greeting: EngineId::MySql }),
+        Engine::MariaDb => EngineFacts::MariaDb(MyFacts { handshake: version, greeting: EngineId::MariaDb }),
+    };
+    Arc::new(ServerFacts {
+        version: Fact::Known(version),
+        version_text: None,
+        provider: Fact::Unknown(Why::NotChecked),
+        topology: Fact::Known(Topology::Direct),
+        detail,
+    })
+}
+
+/// Version `major.minor.patch`.
+fn v(major: u16, minor: u16, patch: u16) -> datarig_core::engine::Version {
+    datarig_core::engine::Version::new(major, minor, patch)
+}
+
+/// Tab `index`'s rules, which must answer the language its editor and classifier read text in
+/// (today's), with a fresh classifier of that language.
+fn rules_of(h: &Harness, index: usize) -> datarig_core::engine::Rules {
+    let tab = h.app.tabs.iter().nth(index).expect("tab").id;
+    let rules = h.app.rules(tab);
+    let lang = rules.language();
+    assert_eq!(tab_reads(h, index), (lang, lang), "{rules:?}");
+    assert_eq!(h.app.tab_language(tab), lang);
+    assert_eq!(rules.classifier(), datarig_core::sql::risk::Classifier::new(lang));
+    rules
+}
+
+/// The facts tab `index`'s rules carry: what a session said its server is, if one did.
+fn rules_facts(h: &Harness, index: usize) -> Option<Arc<datarig_core::engine::ServerFacts>> {
+    use datarig_core::engine::Rules;
+    match rules_of(h, index) {
+        Rules::Server { facts, .. } => Some(facts),
+        Rules::Unbound | Rules::Expected { .. } => None,
+    }
+}
+
+/// A profile `seam` whose driver is named `key` (the fake MySQL driver's when `mysql`), its
+/// first tab bound to it, not connected.
+fn seam_profile(key: &str, mysql: bool) -> Harness {
+    let p = ConnectionConfig { name: "seam".into(), driver: key.into(), ..ConnectionConfig::test_db() };
+    let cfg = Config { connections: vec![p], ..Config::default() };
+    let h = Harness::with_driver(&cfg, Lang::En, driver(mysql));
+    assert_eq!(h.app.tab().profile, Some(id(&h, "seam")), "the first tab is on it");
+    h
+}
+
+/// The rules answer each tab the language it reads its text in today: without a profile, on a
+/// profile no driver serves, before a session said anything, once the profile's session and
+/// then the tab's said their server and language (MySQL, MariaDB, PostgreSQL), and again after a
+/// reconnect, which drops what the old sessions found and keeps the last language said.
+#[test]
+fn rules_answer_todays_language_before_and_after_connect() {
+    use datarig_core::engine::{Expected, Rules, expected};
+    let pg = Language::Sql(Dialect::Postgres);
+    let default = mysql(MySqlMode::default());
+    // No profile: the tab bound to none, its language pushed again (as a new registry does).
+    let mut h = seam_profile("mysql", true);
+    let tab = h.app.tab().id;
+    h.app.tabs.bind(tab, None);
+    let h = h.with_fake_driver();
+    assert_eq!(h.app.tab().profile, None);
+    assert_eq!(rules_of(&h, 0), Rules::Unbound);
+    assert_eq!(rules_of(&h, 0).language(), pg);
+    // A driver name no engine (and no driver) serves.
+    let h = seam_profile("redis", true);
+    let unknown = Rules::Expected { expected: Expected::Unknown("redis".into()), last: None, driver: pg };
+    assert_eq!(rules_of(&h, 0), unknown);
+    for engine in ENGINES {
+        let mut h = seam_profile(engine.driver(), engine.mysql_driver());
+        let pid = id(&h, "seam");
+        let driver_lang = if engine.mysql_driver() { default } else { pg };
+        let said = engine.said().unwrap_or(pg);
+        // Never connected: the driver's language.
+        let never = Rules::Expected { expected: expected(engine.driver()), last: None, driver: driver_lang };
+        assert_eq!(rules_of(&h, 0), never, "{engine:?}");
+        // The profile's metadata session said its server and language.
+        let meta = facts_at(engine, v(8, 4, 6));
+        h.meta_db("seam", DbEvent::Server(meta.clone()));
+        for ev in connect_words(engine, false) {
+            h.meta_db("seam", ev);
+        }
+        assert_eq!(rules_of(&h, 0), Rules::Server { facts: meta.clone(), language: said }, "{engine:?}");
+        // The tab's own session said its server, then a sql mode of its own (MySQL family).
+        h.app.focus = Focus::Editor;
+        run_all(&mut h, "SELECT 1");
+        let own = facts_at(engine, v(8, 4, 7));
+        h.tab_db(0, DbEvent::Server(own.clone()));
+        assert_eq!(rules_facts(&h, 0), Some(own.clone()), "{engine:?}: the tab's session's");
+        let mine = match engine {
+            Engine::Postgres => None,
+            Engine::MySql => Some(mysql(ansi_quotes())),
+            Engine::MariaDb => Some(maria(ansi_quotes())),
+        };
+        if let Some(lang) = mine {
+            h.tab_db(0, DbEvent::Language(lang));
+        }
+        done(&mut h);
+        let mine = mine.unwrap_or(pg);
+        assert_eq!(rules_of(&h, 0), Rules::Server { facts: own, language: mine }, "{engine:?}");
+        // A reconnect: nothing the old sessions found is used; the last language said is kept.
+        h.app.dispatch(Action::ReconnectCurrent);
+        if h.overlay_kind().is_some() {
+            h.keys("y");
+        }
+        // The tab keeps the language its session said last, as the profile does (the tab
+        // session's first word was the profile's).
+        let last = engine.mysql_driver().then_some(mine);
+        let reconnecting = Rules::Expected { expected: expected(engine.driver()), last, driver: driver_lang };
+        assert_eq!(rules_of(&h, 0), reconnecting, "{engine:?}");
+        let again = facts_at(engine, v(8, 4, 8));
+        h.meta_db("seam", DbEvent::Server(again.clone()));
+        h.meta_db("seam", DbEvent::Connected);
+        assert_eq!(rules_of(&h, 0), Rules::Server { facts: again, language: last.unwrap_or(driver_lang) });
+        assert!(h.app.conns.get(pid).is_some_and(|c| c.connected), "{engine:?}");
+    }
+}
+
+/// What a session found its server to be is used only while that session is open: a lost tab
+/// session drops its facts (the profile's metadata session's answer again), a new tab session
+/// counts only once it says its own, a late word of an older session is dropped, a lost
+/// metadata session and a disconnect drop the profile's, an older attempt's word after a
+/// reconnect is dropped, and facts of an engine the profile no longer expects are not used.
+#[test]
+fn facts_are_dropped_with_the_connection() {
+    let mut h = seam_profile("mysql", true);
+    let pid = id(&h, "seam");
+    let meta = facts_at(Engine::MySql, v(8, 4, 6));
+    h.meta_db("seam", DbEvent::Server(meta.clone()));
+    h.meta_db("seam", DbEvent::Connected);
+    assert_eq!(rules_facts(&h, 0), Some(meta.clone()));
+    h.app.focus = Focus::Editor;
+    run_all(&mut h, "SELECT 1");
+    let first = facts_at(Engine::MySql, v(8, 4, 7));
+    h.tab_db(0, DbEvent::Server(first.clone()));
+    h.tab_db(0, DbEvent::Language(mysql(MySqlMode::default())));
+    done(&mut h);
+    assert_eq!(rules_facts(&h, 0), Some(first));
+    let old = h.app.tab().exec.generation;
+    // The tab's session is lost: its facts go with it.
+    h.tab_db(0, DbEvent::Lost { error: DbError::Closed });
+    assert_eq!(h.app.tab().exec.facts, None);
+    assert_eq!(rules_facts(&h, 0), Some(meta.clone()), "the profile's session's");
+    // A new session: the profile's until it says its own; an older session's late word is
+    // dropped.
+    run_all(&mut h, "SELECT 1");
+    assert_ne!(h.app.tab().exec.generation, old);
+    assert_eq!(rules_facts(&h, 0), Some(meta.clone()));
+    let late = facts_at(Engine::MySql, v(8, 0, 36));
+    let target = datarig_tui::app::EventTarget::Tab(h.app.tab().id);
+    h.app.on_app_event(AppEvent::Db { target, generation: old, ev: DbEvent::Server(late) });
+    assert_eq!(rules_facts(&h, 0), Some(meta.clone()), "an older session's word");
+    let second = facts_at(Engine::MySql, v(8, 4, 8));
+    h.tab_db(0, DbEvent::Server(second.clone()));
+    done(&mut h);
+    assert_eq!(rules_facts(&h, 0), Some(second.clone()));
+    // The profile no longer expects the engine: no facts of it are used.
+    h.app.profiles[0].driver = "postgres".into();
+    assert_eq!(rules_facts(&h, 0), None);
+    h.app.profiles[0].driver = "mysql".into();
+    // The metadata session is lost: the profile's facts go; the tab's open session keeps its own.
+    h.meta_db("seam", DbEvent::Lost { error: DbError::Closed });
+    assert_eq!(h.app.conns.get(pid).and_then(|c| c.facts.clone()), None);
+    assert_eq!(rules_facts(&h, 0), Some(second));
+    // A disconnect drops everything the sessions found; the language said is kept.
+    h.app.dispatch(Action::DisconnectCurrent);
+    if h.overlay_kind().is_some() {
+        h.keys("y");
+    }
+    assert_eq!(h.app.conns.state(pid), NodeState::Disconnected);
+    assert_eq!(rules_facts(&h, 0), None);
+    assert_eq!(h.app.conns.get(pid).and_then(|c| c.language), Some(mysql(MySqlMode::default())));
+    // A reconnect: the older attempt's late word is dropped, the new attempt's counts.
+    let attempt = h.app.conns.get(pid).map_or(0, |c| c.generation);
+    h.app.dispatch(Action::ReconnectCurrent);
+    if h.overlay_kind().is_some() {
+        h.keys("y");
+    }
+    let target = datarig_tui::app::EventTarget::Meta(pid);
+    let stale = DbEvent::Server(facts_at(Engine::MySql, v(8, 0, 36)));
+    h.app.on_app_event(AppEvent::Db { target, generation: attempt, ev: stale });
+    assert_eq!(rules_facts(&h, 0), None, "an older attempt's word");
+    let fresh = facts_at(Engine::MySql, v(8, 4, 9));
+    h.meta_db("seam", DbEvent::Server(fresh.clone()));
+    assert_eq!(rules_facts(&h, 0), Some(fresh));
+}

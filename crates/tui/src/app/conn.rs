@@ -190,6 +190,9 @@ pub struct ProfileConn {
     /// (`DbEvent::Language`: a MySQL server's sql mode): what a tab of the profile reads its text
     /// in until its own session says. Kept while the profile is not connected.
     pub language: Option<datarig_core::sql::dialect::Language>,
+    /// What the current attempt's metadata session found its server to be (`DbEvent::Server`);
+    /// `None` until it says, and from when that session ends or another attempt starts.
+    pub facts: Option<std::sync::Arc<datarig_core::engine::ServerFacts>>,
     /// The plan format the current attempt's server gives, as a session of it said
     /// (`DbEvent::Explain`: none on MariaDB); `None` until one says, when the driver's
     /// (`Capabilities::explain`) holds.
@@ -245,6 +248,7 @@ impl ProfileConn {
             tunnel_wait: None,
             tunnel_lost: None,
             language: None,
+            facts: None,
             explain: None,
             edit: None,
             encryption: None,
@@ -254,8 +258,9 @@ impl ProfileConn {
         }
     }
 
-    /// Back to "not connected": the session state, the tree and what waited for the attempt
-    /// are dropped (the sessions must be closed already).
+    /// Back to "not connected": the session state, the tree, what the server was found to be
+    /// and what waited for the attempt are dropped (the sessions must be closed already); only
+    /// the language its sessions last said is kept.
     pub fn reset(&mut self) {
         let (generation, language) = (self.generation, self.language);
         *self = Self::new();
@@ -350,6 +355,7 @@ impl ConnectionManager {
         c.encryption = None;
         c.extension_functions = None;
         c.read_only_unconfirmed = None;
+        c.facts = None;
         c.explain = None;
         c.edit = None;
         generation
