@@ -175,7 +175,7 @@ impl App {
                 Msg::SessionNotFoundProfile { name, preset: preset.clone() }
             }
             SessionError::NotFound { preset, by: PickedBy::Environment(env) } => {
-                let dbms = Dbms::of_driver(&cfg.driver).map_or_else(String::new, |d| d.display().to_string());
+                let dbms = cfg.dbms().map_or_else(String::new, |d| d.display().to_string());
                 match env {
                     Some(e) => {
                         Msg::SessionNotFoundEnvironment { name, preset: preset.clone(), environment: e.clone(), dbms }
@@ -185,7 +185,8 @@ impl App {
             }
             SessionError::WrongDbms { preset, by, dbms, driver } => {
                 let source = self.session_source_text(&Source::Preset { name: preset.clone(), by: by.clone() });
-                let driver = Dbms::of_driver(driver).map_or(driver.clone(), |d| d.display().to_string());
+                let driver =
+                    datarig_core::engine::expected(driver).preset().map_or(driver.clone(), |d| d.display().to_string());
                 Msg::SessionWrongDbms { name, source, dbms: dbms.display().to_string(), driver }
             }
             SessionError::Statement { source, index, statement, problem } => Msg::SessionStatement {
@@ -288,8 +289,8 @@ impl App {
         // A value of the plan that differs from the saved profile's (or a new profile): unsaved.
         let saved = f.editing.and_then(|i| self.profiles.get(i));
         let unsaved = saved.is_none_or(|p| {
-            (&p.name, Dbms::of_driver(&p.driver), &p.policy, &p.session, &p.session_sql)
-                != (&cfg.name, Dbms::of_driver(&cfg.driver), &cfg.policy, &cfg.session, &cfg.session_sql)
+            (&p.name, p.dbms(), &p.policy, &p.session, &p.session_sql)
+                != (&cfg.name, cfg.dbms(), &cfg.policy, &cfg.session, &cfg.session_sql)
         });
         // The environment the form makes when it is saved has its rules there only.
         let made = f.made_environment().map(|e| e.policy.clone());
@@ -319,7 +320,7 @@ impl App {
             (true, true) => self.i18n.label(Label::SessionViewTitleNew),
         };
         // The profile, its database, its environment.
-        let dbms = Dbms::of_driver(&cfg.driver).map_or(cfg.driver.clone(), |d| d.display().to_string());
+        let dbms = cfg.dbms().map_or(cfg.driver.clone(), |d| d.display().to_string());
         let place = self.session_source_text(&match env {
             Some(e) => Source::Environment(e.to_string()),
             None => Source::DefaultRules,
@@ -331,7 +332,7 @@ impl App {
         {
             head.push(SessionLine::Text(label(Label::SessionViewReadOnly), Tone::Warning));
             // What runs there although it is not a built-in (PostgreSQL only), as written.
-            if Dbms::of_driver(&cfg.driver) == Some(Dbms::Postgres) {
+            if cfg.dbms() == Some(Dbms::Postgres) {
                 let functions = r.read_only_functions.iter().map(|f| f.entry.as_str()).collect::<Vec<_>>();
                 let mut said = |m: Msg| head.push(SessionLine::Text(self.i18n.msg(&m).to_string(), Tone::Muted));
                 if !functions.is_empty() {
@@ -550,7 +551,7 @@ impl App {
             SessionRef::Named(n) => Some(n.clone()),
             SessionRef::Off => None,
             SessionRef::Inherit => {
-                let dbms = Dbms::of_driver(&c.driver)?;
+                let dbms = c.dbms()?;
                 self.policies.get(c.policy.as_deref()).ok()?.session.get(dbms).map(str::to_string)
             }
         }
@@ -809,7 +810,7 @@ impl App {
         if !users.is_empty() {
             return users;
         }
-        self.profiles.iter().filter(|c| Dbms::of_driver(&c.driver) == Some(p.dbms)).map(|c| c.id).collect()
+        self.profiles.iter().filter(|c| c.dbms() == Some(p.dbms)).map(|c| c.id).collect()
     }
 
     /// Test `p` on a connected profile that may use it: the one there is, else the user picks.

@@ -311,7 +311,7 @@ pub const KEYS: &[KeyDoc] = &[
         "driver",
         "\"postgres\"",
         "`\"postgres\"` (also `\"postgresql\"`, `\"pg\"`), `\"mysql\"` (also `\"mariadb\"`)",
-        "The kind of database.",
+        "The kind of database, in any case (`\"MySQL\"` is `\"mysql\"`).",
     ),
     key("connections", "host", "\"127.0.0.1\"", "a host name or address", "The server's host."),
     key(

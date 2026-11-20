@@ -131,7 +131,7 @@ One table per connection profile, in the explorer's order. Passwords are never w
 |---|---|---|---|
 | `id` | a new one, written by the launch-time upgrade | a UUID | The profile's stable id: its keychain entries and `last_used` refer to it, so a rename keeps them. datarig assigns it; two profiles with one id are an error. |
 | `name` | `"local-pg"` | text | The name the explorer shows and `datarig <profile>` takes. |
-| `driver` | `"postgres"` | `"postgres"` (also `"postgresql"`, `"pg"`), `"mysql"` (also `"mariadb"`) | The kind of database. |
+| `driver` | `"postgres"` | `"postgres"` (also `"postgresql"`, `"pg"`), `"mysql"` (also `"mariadb"`) | The kind of database, in any case (`"MySQL"` is `"mysql"`). |
 | `host` | `"127.0.0.1"` | a host name or address | The server's host. |
 | `port` | `5432` | a port number | The server's port. Left out it is 5432 whatever the driver, so a MySQL profile says `3306`. |
 | `user` | `""` | text | The database user. |

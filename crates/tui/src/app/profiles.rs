@@ -16,6 +16,7 @@
 
 use crate::widgets::statement_list::StatementList;
 use crate::widgets::text_input::{InputResult, TextInput};
+use datarig_core::engine;
 use datarig_core::policy::{self, CommitRule, Confirm, Environment, EnvironmentId, PagingMode, Policy};
 use datarig_core::profile::color::{self, ProfileColor};
 use datarig_core::profile::dsn::{self, Dsn, DsnError, Scheme};
@@ -983,7 +984,7 @@ impl ProfileForm {
             env_session: policy::SessionMap::default(),
             env_read_only_calls: Default::default(),
             session_dbms: Dbms::Postgres,
-            session_sql: StatementList::new(Dbms::of_driver(&c.driver), &c.session_sql),
+            session_sql: StatementList::new(c.dbms(), &c.session_sql),
             session_ref: c.session.clone(),
             session_presets: Vec::new(),
             session_new_for: None,
@@ -1403,7 +1404,7 @@ impl ProfileForm {
 
     /// The URL scheme of the driver picked: what the DSN field is written in.
     pub fn scheme(&self) -> Scheme {
-        Scheme::of_driver(DRIVERS[self.driver].0)
+        engine::expected(DRIVERS[self.driver].0).form_scheme()
     }
 
     /// The driver picked is a MySQL one: the PostgreSQL-only setting (the statement cache) is
@@ -1436,7 +1437,7 @@ impl ProfileForm {
     /// picked since.
     fn sslmode_unset(&self) -> bool {
         let raw = self.base.sslmode.trim();
-        let legacy = Scheme::of_driver(&self.base.driver) == Scheme::MySql
+        let legacy = self.base.scheme() == Scheme::MySql
             && matches!(TlsMode::parse(Scheme::Postgres, raw), Some(TlsMode::Disable | TlsMode::Prefer));
         !self.sslmode_picked && self.unknown_sslmode.is_none() && (raw.is_empty() || legacy)
     }
@@ -2224,7 +2225,7 @@ impl ProfileForm {
 
     /// The database of the profile's driver, which its session presets are for.
     pub fn profile_dbms(&self) -> Option<Dbms> {
-        Dbms::of_driver(DRIVERS[self.driver].0)
+        engine::expected(DRIVERS[self.driver].0).preset()
     }
 
     /// The profile form's session preset choice.
@@ -2454,7 +2455,7 @@ pub const COMMITS: [CommitRule; 2] = [CommitRule::Auto, CommitRule::Manual];
 /// MySQL, the `prefer`/`disable` it never read) shows the mode it connects with; a MySQL profile
 /// with a stricter libpq spelling shows the MySQL mode it means (as `TlsSettings::new` reads it).
 fn form_mode(c: &ConnectionConfig) -> (usize, Option<String>) {
-    let scheme = Scheme::of_driver(&c.driver);
+    let scheme = c.scheme();
     let raw = c.sslmode.trim();
     let pinned = c.server_public_key_file.as_deref().is_some_and(|k| !k.trim().is_empty());
     let default = TlsMode::default_for(scheme, pinned);
@@ -2473,13 +2474,10 @@ fn form_mode(c: &ConnectionConfig) -> (usize, Option<String>) {
     }
 }
 
-/// Index of a profile's driver in [`DRIVERS`] (`postgresql`/`pg` are `postgres`).
+/// Index of a profile's driver in [`DRIVERS`]: its engine's row (`pg` is `postgres`), else the
+/// row of the name in lower case, else the first.
 fn driver_index(driver: &str) -> usize {
-    let d = match driver.to_ascii_lowercase().as_str() {
-        "postgresql" | "pg" => "postgres".to_string(),
-        "mariadb" => "mysql".to_string(),
-        d => d.to_string(),
-    };
+    let d = engine::expected(driver).form_key().map_or_else(|| driver.to_ascii_lowercase(), str::to_string);
     DRIVERS.iter().position(|x| x.0 == d).unwrap_or(0)
 }
 

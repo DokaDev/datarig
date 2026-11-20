@@ -140,5 +140,8 @@ tunnel = "office"              # a tunnel preset (see SSH tunnels)
 sslmode = "verify-full"        # see TLS
 ```
 
+The `driver` name may be written in any case: `MySQL` and `PG` are `mysql` and `pg`, for the
+connection, the form, the session presets and the profile's default icon alike.
+
 Related pages: [SSH tunnels](ssh-tunnels.md), [TLS](tls.md), [Poolers](poolers.md),
 [Environments and safety](environments.md), [Startup SQL](startup-sql.md).

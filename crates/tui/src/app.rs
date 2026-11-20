@@ -38,6 +38,7 @@ mod dialog_mouse;
 mod dispatch;
 pub mod edit;
 pub mod effects;
+pub mod engine_why;
 pub mod environments;
 pub mod estimate;
 mod execution;

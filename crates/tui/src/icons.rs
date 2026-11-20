@@ -370,13 +370,10 @@ pub fn by_name(name: &str) -> Option<&'static str> {
     CURATED.iter().find(|c| c.0 == name).map(|c| c.2)
 }
 
-/// The glyph of a driver's default icon (`postgresql`/`pg` count as `postgres`).
+/// The glyph of a driver's default icon: an engine's name in any case (`pg`, `MySQL`) shows its
+/// engine's icon, any other name the icon of its exact name (`redis`), else the unknown one.
 pub fn for_driver(driver: &str) -> &'static str {
-    let d = match driver {
-        "postgresql" | "pg" => "postgres",
-        "mariadb" => "mysql",
-        d => d,
-    };
+    let d = datarig_core::engine::expected(driver).form_key().unwrap_or(driver);
     DRIVERS.iter().find(|x| x.0 == d).map_or(UNKNOWN_DRIVER, |x| x.2)
 }
 

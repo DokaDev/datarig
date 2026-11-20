@@ -4,6 +4,7 @@
 //! sessions are plain channels.
 
 use datarig_core::driver::Driver;
+use datarig_core::engine::{self, EngineId, Expected};
 use datarig_driver_mysql::MyDriver;
 use datarig_driver_postgres::PgDriver;
 use std::sync::Arc;
@@ -12,11 +13,19 @@ use std::sync::Arc;
 pub type DriverLookup = Arc<dyn Fn(&str) -> Option<Arc<dyn Driver>> + Send + Sync>;
 
 pub(crate) fn driver_for(name: &str) -> Option<Arc<dyn Driver>> {
-    match name.to_ascii_lowercase().as_str() {
-        "postgres" | "postgresql" | "pg" => Some(Arc::new(PgDriver)),
-        // MariaDB speaks the same protocol: a best effort.
-        "mysql" | "mariadb" => Some(Arc::new(MyDriver)),
-        _ => None,
+    match engine::expected(name) {
+        Expected::One(id) => Some(serving(id)),
+        // A family's engines share one driver.
+        Expected::Family(ids) => ids.first().copied().map(serving),
+        Expected::Unknown(_) => None,
+    }
+}
+
+/// The driver that serves engine `id`.
+fn serving(id: EngineId) -> Arc<dyn Driver> {
+    match id {
+        EngineId::Postgres => Arc::new(PgDriver),
+        EngineId::MySql | EngineId::MariaDb => Arc::new(MyDriver),
     }
 }
 

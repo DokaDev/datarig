@@ -138,7 +138,7 @@ fn schemes_of_drivers() {
         ("mysql", Scheme::MySql),
         ("MariaDB", Scheme::MySql),
     ] {
-        assert_eq!(Scheme::of_driver(driver), scheme, "{driver}");
+        assert_eq!(crate::engine::expected(driver).form_scheme(), scheme, "{driver}");
     }
     assert_eq!((Scheme::Postgres.default_port(), Scheme::MySql.default_port()), (5432, 3306));
 }

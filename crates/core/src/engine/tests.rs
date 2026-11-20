@@ -71,8 +71,6 @@ fn the_scheme_and_preset_of_every_driver_string_are_todays() {
         assert_eq!(e.form_scheme(), scheme, "{driver:?}");
         assert_eq!(e.preset(), dbms, "{driver:?}");
         assert_eq!(e.form_key(), form_key, "{driver:?}");
-        assert_eq!(dsn::Scheme::of_driver(driver), scheme, "{driver:?}");
-        assert_eq!(Dbms::of_driver(driver), dbms, "{driver:?}");
     }
     assert_eq!(LEGACY_FORM_SCHEME, PgScheme);
 }

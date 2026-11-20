@@ -132,7 +132,7 @@ impl App {
     /// and PostgreSQL 18's built-ins called in `pg_catalog`, which need no server version.
     /// Nothing more on a profile that is not PostgreSQL's.
     pub(super) fn read_only_context(&self, tab: TabId, pid: ProfileId) -> ReadOnlyContext {
-        let postgres = self.profile(pid).is_some_and(|p| Dbms::of_driver(&p.driver) == Some(Dbms::Postgres));
+        let postgres = self.profile(pid).is_some_and(|p| p.dbms() == Some(Dbms::Postgres));
         if !postgres {
             return ReadOnlyContext::default();
         }
@@ -185,7 +185,7 @@ impl App {
     /// session lost before it answered for this list reopens, to ask again once connected
     /// (the run that asks is still refused as pending).
     pub(super) fn ask_extension_functions(&mut self, pid: ProfileId) {
-        let postgres = self.profile(pid).is_some_and(|p| Dbms::of_driver(&p.driver) == Some(Dbms::Postgres));
+        let postgres = self.profile(pid).is_some_and(|p| p.dbms() == Some(Dbms::Postgres));
         let rules = self.rules_of(pid);
         if !postgres || !rules.read_only || rules.read_only_extensions.is_empty() {
             return;
