@@ -741,3 +741,18 @@ fn a_lost_tunnel_takes_the_metadata_sessions_read_only_warning_with_it() {
     let screen = shown(&mut h);
     assert!(!screen.contains(warning), "{screen}");
 }
+
+/// A lost tunnel ends the profile's metadata session on the app's side, which may never say it
+/// was lost: what that session found its server to be is not used after it.
+#[test]
+fn a_lost_tunnel_drops_what_its_sessions_found_the_server_to_be() {
+    let (mut h, id) = harness();
+    let generation = connect(&mut h, id);
+    tunnel(&mut h, id, generation, TunnelEvent::Opened(Arc::new(FakeTunnel::default())));
+    h.meta_db("local-pg", DbEvent::Server(pg_facts()));
+    h.meta_db("local-pg", DbEvent::Connected);
+    assert!(judged_by_facts(&mut h, 0, id), "the metadata session's facts");
+    tunnel(&mut h, id, generation, TunnelEvent::Lost(Loss::Keepalive));
+    assert_eq!(h.app.conns.get(id).and_then(|c| c.facts.clone()), None);
+    assert!(!judged_by_facts(&mut h, 0, id), "the closed session's facts are not used");
+}
