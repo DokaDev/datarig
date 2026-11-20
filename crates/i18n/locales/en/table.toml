@@ -11,6 +11,7 @@
 "table.filter.why.unclosed" = "a parenthesis is not closed"
 "table.filter.why.closes_outside" = "a ) closes a parenthesis the filter did not open"
 "table.filter.why.unterminated" = "a string or a quoted name does not end"
+"table.filter.why.escape" = "a backslash at the end would take the character after it"
 "table.filter.why.ambiguous" = "a backslash in a string may be read otherwise, so what would run is not known"
 "table.filter.why.not_one_select" = "not one condition on this table"
 "table.filter.why.source" = "it would read another table or other columns"

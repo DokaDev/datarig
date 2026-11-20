@@ -22,14 +22,38 @@ use datarig_core::sql::split::{segment_at_in, split_from, split_in};
 
 /// The characters the lexers' rules turn on, and one of two, three and four bytes.
 const ALPHABET: &[&str] = &[
-    "\\", "'", "\"", "`", "$", "/", "*", "!", "M", "-", "#", "@", "\n", "\r", " ", ";", "x", "0", "e", ".", "(",
-    ")", "é", "あ", "🐘",
+    "\\", "'", "\"", "`", "$", "/", "*", "!", "M", "-", "#", "@", "\n", "\r", " ", ";", "x", "0", "e", ".", "(", ")",
+    "é", "あ", "🐘",
 ];
 
 /// Openings of the longer constructs, put before the generated text.
 const PREFIXES: &[&str] = &[
-    "", "/*!", "/*!8", "/*!80023", "/*M!", "/*M!100", "/*+", "$$", "$t$", "x'", "b'", "N'", "E'", "U&'", "_utf8mb4'",
-    "@'", "@@", "--", "-- ", "#", "delimiter ", "DELIMITER //\n", "\\g", "id = 1 ", "id IN (", "SELECT ",
+    "",
+    "/*!",
+    "/*!8",
+    "/*!80023",
+    "/*M!",
+    "/*M!100",
+    "/*+",
+    "$$",
+    "$t$",
+    "x'",
+    "b'",
+    "N'",
+    "E'",
+    "U&'",
+    "_utf8mb4'",
+    "@'",
+    "@@",
+    "--",
+    "-- ",
+    "#",
+    "delimiter ",
+    "DELIMITER //\n",
+    "\\g",
+    "id = 1 ",
+    "id IN (",
+    "SELECT ",
 ];
 
 /// Every MySQL sql mode the lexer reads differently, MariaDB's too.
@@ -69,7 +93,13 @@ fn checked_dialects() -> Vec<Dialect> {
         MySqlMode { no_backslash_escapes: true, ..d },
         MySqlMode { dollar_quotes: true, ..d },
         MySqlMode { ignore_space: true, ..d },
-        MySqlMode { ansi_quotes: true, no_backslash_escapes: true, dollar_quotes: true, mariadb: true, ignore_space: true },
+        MySqlMode {
+            ansi_quotes: true,
+            no_backslash_escapes: true,
+            dollar_quotes: true,
+            mariadb: true,
+            ignore_space: true,
+        },
     ];
     let mut out = vec![Dialect::Postgres];
     out.extend(modes.into_iter().map(Dialect::MySql));
@@ -203,8 +233,6 @@ fn splitting_never_panics() {
         for dbms in Dbms::ALL {
             let parts = split_statements(dbms, src);
             let _ = join_statements(dbms, &parts);
-            let _ = SessionPreset::new("p", dbms, vec![src.clone()]).problem();
-            let _ = SessionPreset::new("p", dbms, vec![src.clone()]).read_only_refused();
         }
     }
 }
@@ -219,13 +247,24 @@ fn checked_texts() -> Vec<String> {
 
 #[test]
 fn the_classifiers_never_panic() {
+    let d = MySqlMode::default();
+    let all_on = MySqlMode {
+        ansi_quotes: true,
+        no_backslash_escapes: true,
+        dollar_quotes: true,
+        mariadb: true,
+        ignore_space: true,
+    };
     for src in checked_texts() {
         for d in checked_dialects() {
             let _ = Classifier::new(Language::Sql(d)).classify(&src);
-            let _ = Classifier::session_set(Language::Sql(d), &src);
         }
-        for m in checked_dialects().into_iter().filter_map(|d| match d { Dialect::MySql(m) => Some(m), Dialect::Postgres => None }) {
-            let _ = risk::mysql::classify(&src, m);
+        for dbms in Dbms::ALL {
+            let preset = SessionPreset::new("p", dbms, vec![src.clone()]);
+            let _ = preset.problem();
+            let _ = preset.read_only_refused();
+        }
+        for m in [d, all_on] {
             let _ = risk::mysql::repeatable(&src, m);
             let _ = risk::mysql::names(&src, m);
             let _ = risk::mysql::named(&src, m);

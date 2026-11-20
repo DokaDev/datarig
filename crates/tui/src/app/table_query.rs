@@ -510,6 +510,7 @@ pub(super) fn refusal_why(i18n: &I18n, r: &BarRefusal) -> String {
             LexProblem::Unclosed => Label::TableFilterWhyUnclosed,
             LexProblem::ClosesOutside => Label::TableFilterWhyClosesOutside,
             LexProblem::Unterminated => Label::TableFilterWhyUnterminated,
+            LexProblem::Escape => Label::TableFilterWhyEscape,
             LexProblem::Ambiguous => Label::TableFilterWhyAmbiguous,
         }),
         BarRefusal::Shape { problem, .. } => label(match problem {

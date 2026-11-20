@@ -9,6 +9,7 @@
 "table.filter.why.unclosed" = "닫히지 않은 괄호가 있습니다"
 "table.filter.why.closes_outside" = "필터가 열지 않은 괄호를 )가 닫습니다"
 "table.filter.why.unterminated" = "끝나지 않은 문자열이나 따옴표 이름이 있습니다"
+"table.filter.why.escape" = "끝에 있는 백슬래시가 그 뒤의 문자까지 가져갑니다"
 "table.filter.why.ambiguous" = "문자열 안의 백슬래시를 달리 읽을 수 있어 무엇이 실행될지 알 수 없습니다"
 "table.filter.why.not_one_select" = "이 테이블에 대한 조건 하나가 아닙니다"
 "table.filter.why.source" = "다른 테이블이나 다른 열을 읽게 됩니다"

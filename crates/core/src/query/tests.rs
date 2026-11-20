@@ -1041,6 +1041,7 @@ fn a_filter_that_ends_inside_a_token_is_refused_at_it() {
                 }
             }
         }
+        assert_eq!(lexical(d, "id = 1 \\"), Some((LexProblem::Escape, "\\".into())), "{d:?}");
         // A quoted variable name left open runs over the parenthesis too.
         for text in ["id = @'x", "id = @\"x", "id = @`x"] {
             assert_eq!(lexical(d, text), Some((LexProblem::Unterminated, text[5..].into())), "{d:?} {text:?}");
