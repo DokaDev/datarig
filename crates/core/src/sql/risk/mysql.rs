@@ -1017,17 +1017,16 @@ fn statements(sql: &str, judge: Judge) -> Result<(Vec<Vec<W<'_>>>, bool), Unread
 /// loadable function's whatever the name (written with its database, or a built-in's name
 /// written otherwise than the server reads a built-in: see [`Call::looked_up`]). `None` when
 /// the text is not read in that mode (see [`Unread`]).
-/// On several engines, each engine's answers together: a call one of them looks up comes
-/// once as looked up.
+/// Each name comes once, looked up when any call of it is, on any engine `judge` judges for.
 pub(crate) fn called(sql: &str, judge: Judge) -> Option<Vec<(String, bool)>> {
     let (stmts, _) = statements(sql, judge).ok()?;
-    let mut out = Vec::new();
+    let mut out: Vec<(String, bool)> = Vec::new();
     for j in judge.engines() {
         for c in stmts.iter().flat_map(|ws| calls(ws, j)) {
             let looked_up = c.looked_up(j);
-            let call = (c.name, looked_up);
-            if !out.contains(&call) {
-                out.push(call);
+            match out.iter_mut().find(|(name, _)| *name == c.name) {
+                Some((_, before)) => *before |= looked_up,
+                None => out.push((c.name, looked_up)),
             }
         }
     }

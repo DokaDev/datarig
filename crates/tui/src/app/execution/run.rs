@@ -90,15 +90,28 @@ impl App {
     }
 
     /// Run `statements` in tab `id` once the checks passed or the user confirmed them: on its
-    /// session, or queued until its profile connects. The read-only check is made again right
-    /// before, so nothing it refuses ever reaches a session.
+    /// session, or queued until its profile connects. Right before they are sent they are
+    /// judged again from scratch, under the rules the tab has then ([`App::run_approved_as`]).
     pub(in crate::app) fn run_approved(&mut self, id: TabId, statements: Vec<String>) {
-        self.run_approved_as(id, statements, false)
+        self.run_approved_as(id, statements, false, None)
     }
 
     /// [`App::run_approved`]; `as_is`: with manual commit, every statement runs as it is (no
     /// transaction is opened for it: a procedure the user chose to run outside one).
-    pub(in crate::app) fn run_approved_as(&mut self, id: TabId, statements: Vec<String>, as_is: bool) {
+    /// `confirmed`: the engines they were judged on when the user said yes to them.
+    ///
+    /// Statements that waited (for their profile to connect, for the user's answer) are judged
+    /// again from scratch on the session they go to, right before they are sent, as a new run
+    /// is (refused, read-only, the open transaction, what asks): the rules may have changed
+    /// meanwhile (the server said its reports name two engines). A refusal sends nothing;
+    /// anything that asks is asked again unless the user said yes to it under the same rules.
+    pub(in crate::app) fn run_approved_as(
+        &mut self,
+        id: TabId,
+        statements: Vec<String>,
+        as_is: bool,
+        confirmed: Option<datarig_core::sql::risk::mysql::Judged>,
+    ) {
         if self.tab_busy(id) {
             self.flash_busy();
             return;
@@ -127,7 +140,7 @@ impl App {
             && self.conns.get(pid).is_none_or(|c| c.resolved.is_none() || c.idle_closed.is_some())
         {
             // Bound to this tab, this profile and this tab generation.
-            let q = Queued { tab: id, profile: pid, binding: t.binding, statements };
+            let q = Queued { tab: id, profile: pid, binding: t.binding, statements, confirmed };
             let c = self.conns.entry(pid);
             c.pending.push(q);
             if c.connecting.is_none() {
@@ -138,11 +151,21 @@ impl App {
         if t.exec.session.is_none() && !self.open_query_session(id) {
             return self.unstage_run(id);
         }
-        // Checked again on the session it goes to (a run that waited for its connection).
+        // Judged again on the session it goes to, under its rules as they are now (a run that
+        // waited for its connection or for the user's answer).
+        if let Some(refused) = self.unsupported(id, &statements) {
+            self.unstage_run(id);
+            return self.tab_status(id, refused);
+        }
         let check = self.tx_check(id, &statements);
         if let Some(refused) = check.refused {
             self.unstage_run(id);
             return self.tab_status(id, refused);
+        }
+        let items =
+            crate::app::safety::with_tx_reasons(self.dangerous(id, pid, &statements), &statements, check.reasons);
+        if !items.is_empty() && confirmed != Some(self.classifier(id).judged()) {
+            return self.ask_before_run_as(id, pid, statements, items, as_is);
         }
         // A table tab's read, checked again right before it is sent on the session it goes to
         // (its state as it is now, a session still opening as not known yet): one that locks

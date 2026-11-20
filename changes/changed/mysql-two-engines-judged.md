@@ -5,5 +5,8 @@
   (`BIN_TO_UUID` on MariaDB, a quoted `` `DATABASE`() `` on MySQL), a statement either engine
   finds dangerous asks before it runs, results are run again or counted only when both
   engines allow it, the filter bar lets a call run only when both do, and a MySQL version
-  comment (`/*!80000 … */`) counts as possibly setting the next transaction. Sessions whose
-  greeting and `VERSION()` name the same engine are checked as before.
+  comment (`/*!80000 … */`) counts as possibly setting the next transaction. A statement
+  that waited (for its connection, or for an answer to a question about it) is checked again
+  right before it is sent, by the rules known then, and asks again if those rules ask about
+  more; a tab whose session closed is checked by its connection's rules as they are now.
+  Sessions whose greeting and `VERSION()` name the same engine are checked as before.

@@ -56,6 +56,9 @@ pub struct Queued {
     pub profile: ProfileId,
     pub binding: u64,
     pub statements: Vec<String>,
+    /// The engines its statements were judged on when the user said yes to them (`None`:
+    /// nothing asked): judged on others when it is sent, what asks is asked again.
+    pub confirmed: Option<datarig_core::sql::risk::mysql::Judged>,
 }
 
 /// The key constraints of a profile's tables. Not knowing them is never taken for "no keys":

@@ -347,6 +347,8 @@ pub struct RunConfirm {
     /// itself): only on the tab's session `generation`, still open.
     pub as_is: bool,
     pub generation: u64,
+    /// The engines the statements were judged on when it was asked.
+    pub judged: datarig_core::sql::risk::mysql::Judged,
     pub buttons: Buttons,
 }
 

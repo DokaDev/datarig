@@ -265,7 +265,7 @@ impl App {
     /// STDIN` and `COPY … TO STDOUT` need the COPY protocol, which the app does not carry yet
     /// (sent, the first broke the tab's connection).
     pub(super) fn unsupported(&self, tab: TabId, statements: &[String]) -> Option<Notice> {
-        let classifier = self.tabs.get(tab).map_or_else(|| self.rules(tab).classifier(), |t| t.exec.prepared.fresh());
+        let classifier = self.classifier(tab).fresh();
         let sql = statements.iter().find(|sql| classifier.clone().classify(sql).stdio)?;
         let sql = super::runlog::excerpt(sql, 60);
         Some(Notice::new(Msg::SafetyCopyStdio { sql }, Level::Error))
@@ -281,10 +281,12 @@ impl App {
             let lang = self.tab_language(tab);
             t.exec.prepared.language() == lang && t.editor.language() == lang
         }));
+        // Without a session, the tab's rules as they are now (the profile's server as its open
+        // metadata session found it, else before any server said): never what a closed
+        // session found.
         match self.tabs.get(tab) {
             Some(t) if t.exec.session.is_some() => t.exec.prepared.clone(),
-            Some(t) => t.exec.prepared.fresh(),
-            None => self.rules(tab).classifier(),
+            Some(_) | None => self.rules(tab).classifier(),
         }
     }
 
@@ -329,6 +331,7 @@ impl App {
         as_is: bool,
     ) {
         let Some((binding, generation)) = self.tabs.get(id).map(|t| (t.binding, t.exec.generation)) else { return };
+        let judged = self.classifier(id).judged();
         self.overlays.close(OverlayKind::Commands);
         self.overlays.close(OverlayKind::WhichKey);
         self.key_state.clear();
@@ -341,6 +344,7 @@ impl App {
             run_focused: false,
             as_is,
             generation,
+            judged,
             buttons: Default::default(),
         }));
     }
@@ -380,7 +384,7 @@ impl App {
         let same_session = |t: &Tab| !c.as_is || (t.exec.generation == c.generation && t.exec.session.is_some());
         match self.tabs.get(c.tab).map(|t| (t.profile, t.binding, same_session(t))) {
             Some((Some(p), b, true)) if p == c.profile && b == c.binding => {
-                self.run_approved_as(c.tab, c.statements, c.as_is)
+                self.run_approved_as(c.tab, c.statements, c.as_is, Some(c.judged))
             }
             Some(_) => {
                 self.unstage_run(c.tab);

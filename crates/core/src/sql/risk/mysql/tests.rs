@@ -1206,3 +1206,15 @@ fn a_disagreeing_session_reruns_only_what_both_engines_rerun() {
         assert_eq!(c.repeatable(zone), own.repeatable(zone));
     }
 }
+
+/// The calls of a text, as the filter bar asks for them: each name once, looked up when any
+/// call of it is on any engine judged for (a quoted `COALESCE` is MariaDB's built-in and a
+/// stored function to MySQL).
+#[test]
+fn each_call_comes_once_looked_up_when_either_engine_looks_it_up() {
+    let sql = "SELECT `COALESCE`(a, 1), COALESCE(b, 2), NOW() FROM t";
+    let both = Judge::mariadb(MODE).with_sibling();
+    assert_eq!(called(sql, both), Some(vec![("COALESCE".to_string(), true), ("NOW".to_string(), false)]));
+    assert_eq!(called(sql, MARIADB), Some(vec![("COALESCE".to_string(), false), ("NOW".to_string(), false)]));
+    assert_eq!(called(sql, MYSQL), Some(vec![("COALESCE".to_string(), true), ("NOW".to_string(), false)]));
+}
