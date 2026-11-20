@@ -820,6 +820,9 @@ impl TwoEngines {
                 }
                 DbEvent::Counted { id: i, result, .. } if *i == id => result.clone().map(|n| n.to_string()),
                 DbEvent::RepeatChecked { id: i, result } if *i == id => result.clone().map(|()| "repeatable".into()),
+                DbEvent::Exported { id: i, result, .. } if *i == id => {
+                    result.as_ref().map(|_| "exported".to_string()).map_err(Clone::clone)
+                }
                 _ => continue,
             };
             return result;
@@ -926,4 +929,85 @@ async fn the_next_transaction_state_after_success_and_after_failure() {
     let mut s = TwoEngines::open(&url, test, false, &["/*!80000 SET TRANSACTION READ ONLY */"]).await;
     let got = s.ask(1, TwoEngines::count(1, "SELECT 1 AS a")).await;
     assert!(waits(&got), "after the start-up statement: {got:?}");
+}
+
+/// Whether `got` is the refusal of a command judged on fewer engines than the session's
+/// server's reports name (its rules changed after it was judged: run it again).
+fn judged_on_fewer(got: &Result<String, DbError>) -> bool {
+    got.as_ref().is_err_and(|e| format!("{e:?}") == "ReportsChanged")
+}
+
+/// A command judged before the session said its server's reports name two engines (judged on
+/// one engine's rules, as every command the app judged before such facts) reaches no server
+/// whose session found two engines: `Execute`, `Resume`, `Count` and `Export` are refused with
+/// the reason that the server's reports changed, and nothing of them is sent. The user runs it
+/// again, judged anew.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_command_judged_on_fewer_engines_than_the_session_is_not_sent() {
+    let test = "a_command_judged_on_fewer_engines_than_the_session_is_not_sent";
+    let Some(url) = my_url(test) else { return };
+    let mut s = TwoEngines::open(&url, test, false, &[]).await;
+    let (sink, _keep) = tokio::sync::mpsc::channel(4);
+    let commands = [
+        ("Execute", 1, TwoEngines::execute(1, "DO BIN_TO_UUID(UNHEX('00112233445566778899AABBCCDDEEFF'))")),
+        (
+            "Resume",
+            2,
+            DbCommand::Resume {
+                id: 2,
+                sql: "SELECT 1 AS a".into(),
+                skip: 0,
+                paging: PagingMode::NoHold,
+                max_rows: None,
+            },
+        ),
+        ("Count", 3, TwoEngines::count(3, "SELECT 1 AS a")),
+        (
+            "Export",
+            4,
+            DbCommand::Export {
+                id: 4,
+                sql: "SELECT 1 AS a".into(),
+                guard: datarig_core::driver::ExportGuard::Confirmed,
+                sink,
+                batch: 10,
+            },
+        ),
+    ];
+    let mut through = Vec::new();
+    for (what, id, cmd) in commands {
+        let from = s.proxy.queries().len();
+        let got = s.ask(id, cmd).await;
+        let sent = s.proxy.queries()[from..].to_vec();
+        if !judged_on_fewer(&got) || !sent.is_empty() {
+            through.push(format!("{what}: {got:?}, sent {sent:?}"));
+        }
+    }
+    assert!(through.is_empty(), "{} got through:\n{}", through.len(), through.join("\n"));
+}
+
+/// A session whose reports name one engine is unchanged: a command judged on that engine's
+/// rules is sent and answered as before.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_command_on_an_agreeing_session_is_sent_as_before() {
+    let test = "a_command_on_an_agreeing_session_is_sent_as_before";
+    let Some(url) = my_url(test) else { return };
+    let proxy = Proxy::start(&upstream(&url)).await;
+    let (tx, mut rx) = unbounded_channel();
+    let o = ConnectOptions::new(PAGE, SessionRole::Query, &format!("x13{}-{test}", std::process::id()));
+    let session = MyDriver.connect(&profile(&proxy.url(&url), "mysql"), SessionRole::Query, o, tx);
+    loop {
+        match tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.expect("an answer") {
+            Some(DbEvent::Connected) => break,
+            Some(DbEvent::ConnectFailed { error, .. }) => panic!("connect failed: {error:?}"),
+            Some(_) => {}
+            None => panic!("event channel closed"),
+        }
+    }
+    let mut s = TwoEngines { proxy, session, rx };
+    let got = s.ask(1, TwoEngines::execute(1, "SELECT 1 AS a")).await;
+    assert!(got.as_deref().is_ok_and(|ev| ev.starts_with("Page")), "{got:?}");
+    assert!(s.proxy.queries().iter().any(|q| q == "SELECT 1 AS a"), "sent");
+    let got = s.ask(2, TwoEngines::count(2, "SELECT 1 AS a")).await;
+    assert!(!judged_on_fewer(&got), "{got:?}");
 }
