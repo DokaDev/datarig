@@ -3,13 +3,18 @@
 
 use crate::Engine::{MariaDb, MySql, MySqlNoBackslashEscapes, Pg};
 use crate::{Case, Engine, verdict};
-use datarig_core::sql::dialect::Language;
+use datarig_core::sql::dialect::{Dialect, Language};
 use datarig_core::sql::risk::Classifier;
 
 /// The class, the danger and the read-only verdict of `sql` on a session of `e` that prepared
 /// nothing.
 pub fn classify(e: Engine, sql: &&'static str) -> String {
-    let risk = Classifier::classify_once(Language::Sql(e.dialect()), sql);
+    classify_in(e.dialect(), sql)
+}
+
+/// [`classify`] on a session of dialect `d`.
+pub fn classify_in(d: Dialect, sql: &str) -> String {
+    let risk = Classifier::classify_once(Language::Sql(d), sql);
     format!("{:?} {:?} read-only {}", risk.class, risk.danger, verdict(&risk.read_only()))
 }
 

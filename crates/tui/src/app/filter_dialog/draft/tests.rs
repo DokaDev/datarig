@@ -97,7 +97,7 @@ fn untouched(d: Dialect) -> Vec<(&'static str, Vec<(&'static str, bool)>)> {
                 vec![("name ILIKE '%a!%%' ESCAPE '!'", false), ("id <> 3", false)],
             ),
         ]),
-        Dialect::MySql(_) => cases.extend([
+        Dialect::MySql(_) | Dialect::MariaDb(_) => cases.extend([
             ("`Mixed Case` = 'a AND b' AND id = 2", vec![("`Mixed Case` = 'a AND b'", false), ("id = 2", false)]),
             ("id = 1 XOR price = 2", vec![("id = 1 XOR price = 2", true)]),
             ("id = 1 || price = 2 AND name = 'a'", vec![("id = 1 || price = 2 AND name = 'a'", true)]),

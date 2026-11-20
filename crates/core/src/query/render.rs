@@ -144,8 +144,8 @@ fn render_at(c: &Cond, t: &Target, place: Place) -> Result<String, RenderError> 
         Cond::NotDistinct { col: name, value, negated } => match (d, negated) {
             (Dialect::Postgres, false) => format!("{} IS NOT DISTINCT FROM {}", col(name), lit(name, value)),
             (Dialect::Postgres, true) => format!("{} IS DISTINCT FROM {}", col(name), lit(name, value)),
-            (Dialect::MySql(_), false) => format!("{} <=> {}", col(name), lit(name, value)),
-            (Dialect::MySql(_), true) => format!("NOT ({} <=> {})", col(name), lit(name, value)),
+            (Dialect::MySql(_) | Dialect::MariaDb(_), false) => format!("{} <=> {}", col(name), lit(name, value)),
+            (Dialect::MySql(_) | Dialect::MariaDb(_), true) => format!("NOT ({} <=> {})", col(name), lit(name, value)),
         },
         Cond::IsNull { col: name, negated } => format!("{} IS {}NULL", col(name), not(*negated)),
         Cond::In { col: name, values, negated } => {
@@ -173,7 +173,9 @@ fn render_at(c: &Cond, t: &Target, place: Place) -> Result<String, RenderError> 
                     }
                     format!("{} {}LIKE {p} ESCAPE {e}", col(name), not(*negated))
                 }
-                (Dialect::MySql(_), CaseMode::Server) => format!("{} {}LIKE {p} ESCAPE {e}", col(name), not(*negated)),
+                (Dialect::MySql(_) | Dialect::MariaDb(_), CaseMode::Server) => {
+                    format!("{} {}LIKE {p} ESCAPE {e}", col(name), not(*negated))
+                }
                 (Dialect::Postgres, CaseMode::Insensitive) => {
                     match facts.and_then(|f| f.deterministic) {
                         Some(true) => {}
@@ -183,10 +185,12 @@ fn render_at(c: &Cond, t: &Target, place: Place) -> Result<String, RenderError> 
                     format!("{} {}ILIKE {p} ESCAPE {e}", col(name), not(*negated))
                 }
                 // A `_ci` collation compares without case already (and keeps an index usable).
-                (Dialect::MySql(_), CaseMode::Insensitive) if facts.is_some_and(case_insensitive) => {
+                (Dialect::MySql(_) | Dialect::MariaDb(_), CaseMode::Insensitive)
+                    if facts.is_some_and(case_insensitive) =>
+                {
                     format!("{} {}LIKE {p} ESCAPE {e}", col(name), not(*negated))
                 }
-                (Dialect::MySql(_), CaseMode::Insensitive) => {
+                (Dialect::MySql(_) | Dialect::MariaDb(_), CaseMode::Insensitive) => {
                     format!("LOWER({}) {}LIKE LOWER({p}) ESCAPE {e}", col(name), not(*negated))
                 }
             }
@@ -256,7 +260,7 @@ fn literal(t: &Target, c: Option<&ColumnFacts>, v: &Value) -> String {
         Value::Text(s) => text_literal(t, s),
         Value::Bytes(b) => match t.dialect {
             Dialect::Postgres => format!("{}::pg_catalog.bytea", text_literal(t, &format!("\\x{}", hex(b, false)))),
-            Dialect::MySql(_) => format!("X'{}'", hex(b, true)),
+            Dialect::MySql(_) | Dialect::MariaDb(_) => format!("X'{}'", hex(b, true)),
         },
     }
 }
@@ -470,8 +474,12 @@ fn text_literal(t: &Target, s: &str) -> String {
             format!("E'{body}'")
         }
         Dialect::Postgres => d.quote_literal(s),
-        Dialect::MySql(_) if t.utf8mb4 && !s.contains(['\\', '\0']) && !s.contains(LINE_BREAKS) => d.quote_literal(s),
-        Dialect::MySql(_) => format!("_utf8mb4 X'{}'", hex(s.as_bytes(), true)),
+        Dialect::MySql(_) | Dialect::MariaDb(_)
+            if t.utf8mb4 && !s.contains(['\\', '\0']) && !s.contains(LINE_BREAKS) =>
+        {
+            d.quote_literal(s)
+        }
+        Dialect::MySql(_) | Dialect::MariaDb(_) => format!("_utf8mb4 X'{}'", hex(s.as_bytes(), true)),
     }
 }
 

@@ -259,3 +259,85 @@ fn where_statements_run_on_mysql() {
         assert_eq!(c.tx_step(sql), step, "{sql}");
     }
 }
+
+/// Every sql mode, the `mariadb` flag set or not.
+fn every_mode() -> Vec<MySqlMode> {
+    (0..32u8)
+        .map(|b| MySqlMode {
+            ansi_quotes: b & 1 != 0,
+            no_backslash_escapes: b & 2 != 0,
+            dollar_quotes: b & 4 != 0,
+            mariadb: b & 8 != 0,
+            ignore_space: b & 16 != 0,
+        })
+        .collect()
+}
+
+/// A MariaDB classifier answers every question as the MySQL one of the same mode: the mode's
+/// `mariadb` flag picks the calls MariaDB has.
+#[test]
+fn a_mariadb_classifier_is_the_flagged_mysql_one() {
+    let texts = [
+        "SELECT 1",
+        "SELECT * FROM t ORDER BY a",
+        "SELECT @@time_zone, NOW()",
+        "SELECT @a",
+        "SELECT BIN_TO_UUID(a) FROM t",
+        "SELECT POINT(1, 2)",
+        "SELECT SYSDATE ()",
+        "SELECT `DATABASE`()",
+        "SELECT LATERAL(1)",
+        "SELECT \"a\" FROM t",
+        "SELECT 'a\\'; DROP TABLE t; -- '",
+        "SELECT $$a; b$$",
+        "SELECT 1 /*!50000 ; SELECT 2 */; SELECT 3",
+        "/*M! DROP TABLE t */ SELECT 1",
+        "DELETE FROM t",
+        "UPDATE t SET a = 1 WHERE id = 2",
+        "INSERT INTO t VALUES (1) RETURNING id",
+        "ANALYZE SELECT 1",
+        "SET SESSION sql_mode = 'ANSI_QUOTES'",
+        "SET TRANSACTION READ ONLY",
+        "/*!80000 SET TRANSACTION READ ONLY */",
+        "START TRANSACTION",
+        "LOCK TABLES t READ",
+        "CREATE TABLE t (a int)",
+        "SHOW TABLES",
+        "EXPLAIN SELECT 1",
+        "EXECUTE s",
+        "PREPARE s FROM 'DELETE FROM t'",
+        "SELECT 1; SELECT 2",
+        "SELEC 1",
+        "",
+    ];
+    for mode in every_mode() {
+        let mysql = Classifier::new(Language::Sql(Dialect::MySql(mode)));
+        let mariadb = Classifier::new(Language::Sql(Dialect::MariaDb(mode)));
+        assert_eq!(mariadb, Classifier::MariaDb(mode));
+        assert_eq!(mariadb.language(), Language::Sql(Dialect::MariaDb(mode)));
+        for sql in texts {
+            let at = format!("{sql:?} in {mode:?}");
+            assert_eq!(mariadb.clone().classify(sql), mysql.clone().classify(sql), "{at}");
+            assert_eq!(
+                Classifier::classify_once(mariadb.language(), sql),
+                Classifier::classify_once(mysql.language(), sql),
+                "{at}"
+            );
+            assert_eq!(mariadb.repeatable(sql), mysql.repeatable(sql), "{at}");
+            assert_eq!(mariadb.reads_zone(sql), mysql.reads_zone(sql), "{at}");
+            assert_eq!(mariadb.ordered(sql), mysql.ordered(sql), "{at}");
+            assert_eq!(mariadb.tx_step(sql), mysql.tx_step(sql), "{at}");
+            assert_eq!(mariadb.count_query(sql), mysql.count_query(sql), "{at}");
+            assert_eq!(mariadb.knows(sql), mysql.knows(sql), "{at}");
+            assert_eq!(
+                Classifier::session_set(mariadb.language(), sql),
+                Classifier::session_set(mysql.language(), sql),
+                "{at}"
+            );
+            let (mut a, mut b) = (mariadb.clone(), mysql.clone());
+            a.forget(sql);
+            b.forget(sql);
+            assert_eq!((a, b), (mariadb.clone(), mysql.clone()), "{at}");
+        }
+    }
+}

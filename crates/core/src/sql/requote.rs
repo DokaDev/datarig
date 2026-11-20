@@ -30,7 +30,11 @@ pub enum RequoteError {
 /// `text`, written in `from`, with every string written as `to` reads the same value. The text as
 /// it is when the two read strings alike.
 pub fn requote_strings(text: &str, from: Dialect, to: Dialect) -> Result<String, RequoteError> {
-    let (Dialect::MySql(f), Dialect::MySql(t)) = (from, to) else { return Err(RequoteError::NotMySql) };
+    let mode = |d: Dialect| match d {
+        Dialect::Postgres => None,
+        Dialect::MySql(m) | Dialect::MariaDb(m) => Some(m),
+    };
+    let (Some(f), Some(t)) = (mode(from), mode(to)) else { return Err(RequoteError::NotMySql) };
     let tokens = lex_in(text, from);
     let double_quoted = tokens.iter().any(|k| k.text(text).starts_with('"'));
     if f.ansi_quotes != t.ansi_quotes && double_quoted {

@@ -186,6 +186,55 @@ fn tx_step_cases_on_every_engine() {
     run("tx step", &tx::cases(), tx::step);
 }
 
+/// The dialect today's MariaDB session reads in (`MySqlMode { mariadb: true, .. }`), in the
+/// MariaDB variant: what a MariaDB session says once sessions name their engine.
+fn mariadb_variant() -> Dialect {
+    Dialect::MariaDb(MySqlMode { mariadb: true, ..MySqlMode::default() })
+}
+
+/// The differences between `f`'s output on each case of `table` and the case's MariaDB
+/// expectation (`expected` reads the part of it `f` answers).
+fn against_mariadb<I>(
+    report: &mut String,
+    table: &str,
+    cases: &[Case<I>],
+    f: impl Fn(&I) -> String,
+    expected: impl Fn(&'static str) -> &'static str,
+) {
+    for c in cases {
+        let Some((_, today)) = c.expect.iter().find(|(e, _)| *e == Engine::MariaDb) else {
+            let _ = writeln!(report, "{table}: case `{}` has no MariaDB expectation", c.name);
+            continue;
+        };
+        let (expected, actual) = (expected(today), f(&c.input));
+        if actual != expected {
+            let _ = writeln!(
+                report,
+                "{table}: case `{}` on the MariaDB variant\n  expected: {expected:?}\n  actual:   {actual:?}",
+                c.name
+            );
+        }
+    }
+}
+
+/// The tables whose answers the SQL tools alone give (risk, quoting and splitting, the
+/// transaction step, the editor's verdicts of a call) answer on the MariaDB variant exactly
+/// as on today's MariaDB.
+#[test]
+fn the_mariadb_variant_answers_as_today() {
+    let d = mariadb_variant();
+    let mut report = String::new();
+    let whole = |s: &'static str| s;
+    against_mariadb(&mut report, "classifier", &risk::classifier_cases(), |s| risk::classify_in(d, s), whole);
+    against_mariadb(&mut report, "quoting", &text::quoting_cases(), |s| text::quoting_in(d, s), whole);
+    against_mariadb(&mut report, "split", &text::split_cases(), |s| text::split_in_dialect(d, s), whole);
+    against_mariadb(&mut report, "tx step", &tx::cases(), |s| tx::step_in(d, s), whole);
+    // The editor's rows of each call: the filter's come after them.
+    let editor = |s: &'static str| s.split_once(" | filter ").map_or(s, |(editor, _)| editor);
+    against_mariadb(&mut report, "function verdicts", &context::cases(), |s| context::editor_verdicts(d, s), editor);
+    assert!(report.is_empty(), "{report}");
+}
+
 #[test]
 fn every_case_names_every_engine() {
     let all: Vec<Named> = [

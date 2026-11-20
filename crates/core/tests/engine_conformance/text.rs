@@ -2,12 +2,17 @@
 
 use crate::Engine::{MariaDb, MySql, MySqlAnsiQuotes, MySqlNoBackslashEscapes, Pg};
 use crate::{Case, Engine};
+use datarig_core::sql::dialect::Dialect;
 use datarig_core::sql::lexer::{Tok, lex_in};
 use datarig_core::sql::split::split_in;
 
 /// `quote_ident`, `force_quote_ident` and `quote_literal` of `s` on `e`.
 pub fn quoting(e: Engine, s: &&'static str) -> String {
-    let d = e.dialect();
+    quoting_in(e.dialect(), s)
+}
+
+/// [`quoting`] in dialect `d`.
+pub fn quoting_in(d: Dialect, s: &str) -> String {
     format!("{} | {} | {}", d.quote_ident(s), d.force_quote_ident(s), d.quote_literal(s))
 }
 
@@ -15,7 +20,11 @@ pub fn quoting(e: Engine, s: &&'static str) -> String {
 /// and client commands its lexer finds, each with its kind (a `"…"` is a string or a name by
 /// the sql mode).
 pub fn split(e: Engine, src: &&'static str) -> String {
-    let d = e.dialect();
+    split_in_dialect(e.dialect(), src)
+}
+
+/// [`split`] in dialect `d`.
+pub fn split_in_dialect(d: Dialect, src: &str) -> String {
     let bodies: Vec<&str> = split_in(src, d).iter().map(|s| s.body(src)).collect();
     let marks: Vec<String> = lex_in(src, d)
         .iter()

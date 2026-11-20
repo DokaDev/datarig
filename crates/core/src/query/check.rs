@@ -437,7 +437,7 @@ pub fn check_filter(
                 None => return Err(unread()),
             }
         }
-        Dialect::MySql(_) => {
+        Dialect::MySql(_) | Dialect::MariaDb(_) => {
             let mut calls = Vec::new();
             for r in &readings {
                 mysql_shape(&r.tokens, text).map_err(|(problem, at)| BarRefusal::Shape { problem, at: Some(at) })?;
@@ -529,9 +529,10 @@ fn readings(text: &str, d: Dialect) -> Result<Vec<Reading>, BarRefusal> {
             all.push(Reading { tokens: lex_backslash_strings(&ext), dialect: d });
         }
         Dialect::Postgres => {}
-        Dialect::MySql(mode) => {
+        Dialect::MySql(mode) | Dialect::MariaDb(mode) => {
             for m in risk::mysql::other_readings(text, mode) {
-                all.push(Reading { tokens: lex_in(&ext, Dialect::MySql(m)), dialect: Dialect::MySql(m) });
+                let read = d.with_mode(m);
+                all.push(Reading { tokens: lex_in(&ext, read), dialect: read });
             }
         }
     }

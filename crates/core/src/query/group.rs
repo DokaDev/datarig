@@ -204,11 +204,13 @@ fn statement(d: Dialect, table: &TableName, column: &ColumnMeta, other: Option<&
         (Dialect::Postgres, Some(len)) => {
             (format!("CASE WHEN {len} OPERATOR(pg_catalog.<=) {GROUP_PREVIEW} THEN {c} END"), len)
         }
-        (Dialect::MySql(_), Some(len)) => (format!("IF({len} <= {GROUP_PREVIEW}, {c}, NULL)"), len),
+        (Dialect::MySql(_) | Dialect::MariaDb(_), Some(len)) => {
+            (format!("IF({len} <= {GROUP_PREVIEW}, {c}, NULL)"), len)
+        }
     };
     let count = match d {
         Dialect::Postgres => "pg_catalog.count(*)",
-        Dialect::MySql(_) => "COUNT(*)",
+        Dialect::MySql(_) | Dialect::MariaDb(_) => "COUNT(*)",
     };
     let limit = GROUP_VALUES + 1;
     format!("SELECT {preview}, {length}, {count} FROM {from}{filter} GROUP BY {c} ORDER BY {count} DESC LIMIT {limit}")
@@ -245,6 +247,6 @@ fn length(d: Dialect, column: &ColumnMeta, c: &str) -> Option<String> {
             _ => None,
         },
         // Bytes in every mode: `LENGTH` counts characters under MariaDB's `sql_mode=ORACLE`.
-        Dialect::MySql(_) => Some(format!("OCTET_LENGTH({c})")),
+        Dialect::MySql(_) | Dialect::MariaDb(_) => Some(format!("OCTET_LENGTH({c})")),
     }
 }
