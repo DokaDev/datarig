@@ -12,6 +12,7 @@ pub mod session;
 pub mod ssh;
 pub mod tunnel;
 
+use crate::engine::{self, Expected};
 use crate::secret::{PasswordSource, SourceKind};
 use crate::tls::{TlsFile, TlsMode, TlsProblem, TlsSettings};
 use serde::{Deserialize, Deserializer};
@@ -306,6 +307,22 @@ impl ConnectionConfig {
         }
     }
 
+    /// The engines the profile's `driver` name expects before a server answered.
+    pub fn expected(&self) -> Expected {
+        engine::expected(&self.driver)
+    }
+
+    /// The URL form, default port and TLS names of the profile's driver.
+    pub fn scheme(&self) -> dsn::Scheme {
+        self.expected().form_scheme()
+    }
+
+    /// The database whose session presets apply to the profile (`None`: no preset is for its
+    /// driver).
+    pub fn dbms(&self) -> Option<session::Dbms> {
+        self.expected().preset()
+    }
+
     /// Where the password comes from. A `command` or `env` source without its setting has an
     /// empty one (the config loader rejects that; the form asks for it).
     pub fn source(&self) -> PasswordSource {
@@ -359,7 +376,7 @@ impl ConnectionConfig {
                 Err(_) => d.clone(),
             };
         }
-        let scheme = dsn::Scheme::of_driver(&self.driver);
+        let scheme = self.scheme();
         dsn::format(&dsn::Dsn {
             scheme,
             user: self.user.clone(),
@@ -415,7 +432,7 @@ impl ConnectionConfig {
     pub(crate) fn normalize(&mut self) {
         let Some(text) = &self.dsn else { return };
         let Ok(d) = dsn::parse(text) else { return };
-        if d.scheme != dsn::Scheme::of_driver(&self.driver) {
+        if d.scheme != self.scheme() {
             return;
         }
         let tls = |k: &str, v: &str| {
@@ -453,7 +470,7 @@ impl ConnectionConfig {
     /// `sslrootcert`, `sslcert`, `sslkey`, in a URL or in `key=value` form), each over the
     /// field of the same name.
     pub fn tls(&self) -> Result<TlsSettings, TlsProblem> {
-        let scheme = dsn::Scheme::of_driver(&self.driver);
+        let scheme = self.scheme();
         let pinned = self.server_public_key_file.as_deref().is_some_and(|k| !k.trim().is_empty());
         let mut mode = self.sslmode.clone();
         let mut files = [self.sslrootcert.clone(), self.sslcert.clone(), self.sslkey.clone()];

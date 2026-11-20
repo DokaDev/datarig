@@ -1,0 +1,6 @@
+# datarig: English messages, engine. The English catalog is the source of truth for keys;
+# placeholders use {name}; text that is not English is written with \u escapes. See
+# docs/architecture.md, "UI strings (i18n)".
+
+"engine.why.not_checked" = "not checked on this connection yet"
+"engine.why.version_unknown" = "the server's version could not be read"

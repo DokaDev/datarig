@@ -150,39 +150,8 @@ pub enum Readable {
     Unknown,
 }
 
-/// Who runs the server, as far as the server itself tells. It decides which statements stop a
-/// session (a provider may have procedures of its own for it) and which privilege a refusal
-/// names.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Flavour {
-    /// No provider's marker found: a self-managed server, or a provider not listed.
-    Standard,
-    /// Amazon RDS (PostgreSQL or MySQL).
-    AmazonRds,
-    /// Amazon Aurora (PostgreSQL or MySQL).
-    AmazonAurora,
-    /// Google Cloud SQL.
-    GoogleCloudSql,
-    /// Google AlloyDB.
-    GoogleAlloyDb,
-    /// Azure Database.
-    AzureDatabase,
-}
-
-impl Flavour {
-    /// The provider's product name (a proper name, the same in every language), `None` for
-    /// [`Flavour::Standard`].
-    pub fn product(self) -> Option<&'static str> {
-        match self {
-            Flavour::Standard => None,
-            Flavour::AmazonRds => Some("Amazon RDS"),
-            Flavour::AmazonAurora => Some("Amazon Aurora"),
-            Flavour::GoogleCloudSql => Some("Cloud SQL"),
-            Flavour::GoogleAlloyDb => Some("AlloyDB"),
-            Flavour::AzureDatabase => Some("Azure Database"),
-        }
-    }
-}
+/// Who runs the server ([`crate::engine::Provider`]), by its name in the monitor.
+pub use crate::engine::Provider as Flavour;
 
 /// What on a server shows it belongs to a provider.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
