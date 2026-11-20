@@ -19,3 +19,6 @@ pub(crate) fn driver_for(name: &str) -> Option<Arc<dyn Driver>> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests;
