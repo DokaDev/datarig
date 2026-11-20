@@ -17,7 +17,7 @@ mod my_proxy;
 
 use datarig_core::driver::{
     CancelFailure, Cell, ConnectOptions, DbCommand, DbError, DbEvent, Driver, EditFormat, ExplainFormat, ExportBatch,
-    ExportGuard, MySqlEdit, OwnSession, PagingMode, Session, SessionRole, TxRule,
+    ExportGuard, MySqlEdit, OwnSession, PagingMode, Session, SessionRole, SessionStatement, TxRule,
 };
 use datarig_core::engine::{EngineId, Fact, ServerFacts, Topology, Version, Why};
 use datarig_core::export::keyset::{CHUNK_ROWS, Keyset};
@@ -941,4 +941,79 @@ async fn dollar_text_on_an_agreeing_session_runs_as_today() {
         assert!(proxy.queries().iter().any(|q| q == sql), "{way}: sent: {got:?}");
         assert!(matches!(&got, Err(DbError::Server(_))), "{way}: the server's own answer: {got:?}");
     }
+}
+
+/// What a query session with start-up statement `startup`, through `proxy`, ended its opening
+/// with: `Ok` once connected, else its error.
+async fn open_with_startup(proxy: &Proxy, url: &str, test: &str, startup: &str) -> Result<Vec<DbEvent>, DbError> {
+    let (tx, mut rx) = unbounded_channel();
+    let tag = format!("seam{}-{test}", std::process::id());
+    let statement = SessionStatement { sql: startup.into(), per_transaction: None, identity: false };
+    let options = ConnectOptions::new(PAGE, SessionRole::Query, &tag).session_sql(vec![statement]);
+    let _session = MyDriver.connect(&profile(&proxy.url(url)), SessionRole::Query, options, tx);
+    let mut before = Vec::new();
+    loop {
+        match tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.expect("an answer") {
+            Some(DbEvent::Connected) => return Ok(before),
+            Some(DbEvent::ConnectFailed { error, .. }) => return Err(error),
+            Some(ev) => before.push(ev),
+            None => panic!("event channel closed"),
+        }
+    }
+}
+
+/// A start-up statement is user text too: on a session whose reports disagree on dollar quotes,
+/// one whose bytes hold a dollar-quote opener (here inside a string, as a setting's value) fails
+/// the session with the refusal as that statement's error, and nothing of it reaches the
+/// server. One without an opener runs as before, and so does the same statement on a session
+/// whose reports agree.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_startup_statement_with_a_dollar_opener_is_refused_when_the_reports_disagree() {
+    let test = "a_startup_statement_with_a_dollar_opener_is_refused_when_the_reports_disagree";
+    let Some(url) = my_url(test) else { return };
+    let opener = "SET @zz_x12_startup = '$$'";
+    let way = Disagreeing::start(&url).await;
+    way.arm();
+    let got = open_with_startup(&way.proxy, &url, test, opener).await;
+    match &got {
+        Err(DbError::SessionSql { index: 0, statement, error }) => {
+            assert_eq!(statement, opener);
+            assert!(dollar_refusal(error), "{got:?}");
+        }
+        _ => panic!("refused as the start-up statement's error: {got:?}"),
+    }
+    assert!(way.proxy.queries().iter().all(|q| !q.contains('$')), "{:?}", way.proxy.queries());
+    // No opener: it runs.
+    let plain = "SET @zz_x12_startup = 'price$'";
+    way.arm();
+    let got = open_with_startup(&way.proxy, &url, test, plain).await;
+    assert!(got.is_ok(), "{got:?}");
+    assert!(way.proxy.queries().iter().any(|q| q == plain), "sent");
+    // Agreeing reports: the opener runs as before.
+    let proxy = Proxy::start(&upstream(&url)).await;
+    let got = open_with_startup(&proxy, &url, test, opener).await;
+    assert!(got.is_ok(), "{got:?}");
+    assert!(proxy.queries().iter().any(|q| q == opener), "sent");
+}
+
+/// A `VERSION()` line of the other engine without a number still answers for dollar quotes as
+/// far as it can: a MariaDB line never reads them, so behind a greeting of MySQL 8.4 (which
+/// does) the reading is not known; a MySQL line without a number gives no answer, so behind a
+/// MariaDB greeting the reading is not known either, and is not taken from the greeting. An
+/// opener is then refused and not sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_line_of_the_other_engine_without_a_number_leaves_dollar_quotes_unknown() {
+    let test = "a_line_of_the_other_engine_without_a_number_leaves_dollar_quotes_unknown";
+    let Some(url) = my_url(test) else { return };
+    let maria = mariadb(&url).await;
+    let proxy = Proxy::start(&upstream(&url)).await;
+    let (greeting, line) =
+        if maria { ("8.4.6", "MariaDB-custom") } else { ("5.5.5-11.4.13-MariaDB", "8.0.mysql_aurora.3.04.0") };
+    proxy.greet_as(greeting);
+    proxy.fault_start("SELECT VERSION()", Fault::Instead(format!("SELECT '{line}'")));
+    let (mut c, before) = Conn::start(&proxy.url(&url), SessionRole::Query, test).await;
+    assert_eq!(said_dollar_quotes(&before), DollarQuotes::NotKnown, "{greeting} / {line}: {before:?}");
+    let got = c.failure(1, execute(1, &["SELECT $$a; b$$"])).await;
+    assert!(got.as_ref().is_err_and(dollar_refusal), "{got:?}");
+    assert!(proxy.queries().iter().all(|q| !q.contains('$')), "{:?}", proxy.queries());
 }

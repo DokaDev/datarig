@@ -251,7 +251,7 @@ fn dollar_quotes_follow_the_facts() {
         (EngineId::MariaDb, Version::new(11, 4, 13)),
     ];
     // Each line, and its answer.
-    let lines: [(&str, Option<DollarQuotes>); 10] = [
+    let lines: [(&str, Option<DollarQuotes>); 11] = [
         ("8.0.36", Some(NotRead)),
         ("8.0.40-log", Some(NotRead)),
         ("8.1.0", Some(Read)),
@@ -262,6 +262,8 @@ fn dollar_quotes_follow_the_facts() {
         ("5.5.5-10.6.12-MariaDB", Some(NotRead)),
         ("1", None),
         ("8.0.mysql_aurora.3.04.0", None),
+        // MariaDB reads none whatever its number: its line answers without one.
+        ("MariaDB-custom", Some(NotRead)),
     ];
     let greeted = |engine: EngineId, v: Version| match engine {
         EngineId::MySql if v >= Version::new(8, 1, 0) => Read,
@@ -276,9 +278,14 @@ fn dollar_quotes_follow_the_facts() {
     for (engine, handshake) in greetings {
         let by_greeting = greeted(engine, handshake);
         for (line, by_line) in lines {
+            let line_engine = if mysql_family::line_names_mariadb(line) { EngineId::MariaDb } else { EngineId::MySql };
             let want = match by_line {
                 Some(answer) if answer != by_greeting => NotKnown,
-                Some(_) | None => by_greeting,
+                Some(_) => by_greeting,
+                // A MySQL line without a number behind a MariaDB greeting: no answer to set
+                // against the greeting's, which is another engine's.
+                None if line_engine != engine => NotKnown,
+                None => by_greeting,
             };
             for topology in &topologies {
                 let facts = reported(engine, handshake, Some(line), topology.clone());
@@ -302,6 +309,19 @@ fn dollar_quotes_follow_the_facts() {
     // A line without a number (version unknown): the greeting's answer.
     let f = reported(EngineId::MySql, v84, Some("8.0.mysql_aurora.3.04.0"), Fact::Known(Topology::Direct));
     assert_eq!(f.engine().spec().text.dollar_quotes(&f), Read);
+    // A line of the other engine without a number: MariaDB's answers all the same, MySQL's
+    // gives no answer, so the greeting's is not taken for it.
+    let f = reported(EngineId::MySql, v84, Some("MariaDB-custom"), Fact::Unknown(Why::EnginesDisagree));
+    assert_eq!(f.engine().spec().text.dollar_quotes(&f), NotKnown);
+    let f = reported(EngineId::MySql, Version::new(8, 0, 36), Some("MariaDB-custom"), Fact::Unknown(Why::EnginesDisagree));
+    assert_eq!(f.engine().spec().text.dollar_quotes(&f), NotRead);
+    let f = reported(
+        EngineId::MariaDb,
+        Version::new(11, 4, 13),
+        Some("8.0.mysql_aurora.3.04.0"),
+        Fact::Unknown(Why::EnginesDisagree),
+    );
+    assert_eq!(f.engine().spec().text.dollar_quotes(&f), NotKnown);
     // Numbers that disagree: not known only across 8.1.0.
     let f = reported(EngineId::MySql, Version::new(8, 0, 36), Some("8.4.6"), Fact::Known(Topology::Direct));
     assert_eq!(f.engine().spec().text.dollar_quotes(&f), NotKnown);
