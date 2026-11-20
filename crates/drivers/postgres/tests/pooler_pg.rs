@@ -1469,3 +1469,57 @@ async fn without_limits_or_startup_sql_direct_is_unknown_until_asked() {
         assert_eq!(outside, OwnSession::NotDirect, "limit {limit:?}");
     }
 }
+
+/// What a session of role `role` with `opts` behind the pooler said before `Connected`, the
+/// facts of its server (said first, once) separately.
+async fn said_first(
+    url: &str,
+    role: SessionRole,
+    opts: ConnectOptions,
+) -> (std::sync::Arc<datarig_core::engine::ServerFacts>, Vec<DbEvent>) {
+    let cfg = ConnectionConfig { name: "pooler".into(), dsn: Some(url.to_string()), ..ConnectionConfig::default() };
+    let (tx, mut rx) = unbounded_channel();
+    let _session = PgDriver.connect(&cfg, role, opts, tx);
+    let mut before = Vec::new();
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.expect("an answer") {
+            Some(DbEvent::Connected) => break,
+            Some(DbEvent::ConnectFailed { error, .. }) => panic!("connect failed: {error:?}"),
+            Some(ev) => before.push(ev),
+            None => panic!("event channel closed"),
+        }
+    }
+    let said = before.iter().filter(|e| matches!(e, DbEvent::Server(_))).count();
+    assert_eq!(said, 1, "{role:?}: once: {before:?}");
+    let Some(DbEvent::Server(facts)) = before.first() else { panic!("{role:?}: the facts first: {before:?}") };
+    (facts.clone(), before)
+}
+
+/// Behind the pooler a query session whose connect checks whether it reaches the server
+/// directly (it has a lock wait limit) says in its facts that it does not: pooled.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_facts_say_pooled_when_the_connect_check_ran() {
+    use datarig_core::engine::{EngineId, Fact, Topology};
+    let Some(url) = pooler_url("the_facts_say_pooled_when_the_connect_check_ran") else { return };
+    let _pool = POOL.read().await;
+    let tag = format!("poolfacts{}", std::process::id());
+    let opts = ConnectOptions::new(PAGE, SessionRole::Query, &tag).lock_wait(Some(Duration::from_secs(5)));
+    let (facts, _) = said_first(&url, SessionRole::Query, opts).await;
+    assert_eq!(facts.engine(), EngineId::Postgres, "{facts:?}");
+    assert_eq!(facts.topology, Fact::Known(Topology::Pooled), "{facts:?}");
+}
+
+/// A session whose connect makes no check (no limits, no start-up statements; a metadata or
+/// monitor session never has them) says in its facts that its way to the server was not checked.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_facts_say_not_checked_without_limits() {
+    use datarig_core::engine::{EngineId, Fact, Why};
+    let Some(url) = pooler_url("the_facts_say_not_checked_without_limits") else { return };
+    let _pool = POOL.read().await;
+    let tag = format!("poolfacts{}", std::process::id());
+    for role in [SessionRole::Query, SessionRole::Meta, SessionRole::Monitor] {
+        let (facts, _) = said_first(&url, role, ConnectOptions::new(PAGE, role, &tag)).await;
+        assert_eq!(facts.engine(), EngineId::Postgres, "{role:?}: {facts:?}");
+        assert_eq!(facts.topology, Fact::Unknown(Why::NotChecked), "{role:?}: {facts:?}");
+    }
+}

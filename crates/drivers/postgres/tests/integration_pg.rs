@@ -9040,3 +9040,57 @@ async fn a_cancel_between_a_group_counts_preparation_and_its_run_is_kept() {
     q.session.send(DbCommand::ClosePortal { id: 9 });
     q.wait(|e| matches!(e, DbEvent::TxOpen(false)), 10).await;
 }
+
+/// Every role's session says what the server is first and once, before anything else it says
+/// at connect: PostgreSQL, its version as the server reported it at startup (the same text
+/// `SHOW server_version` answers), parsed when it starts with a number; whether it reaches the
+/// server directly is not checked by a session with no limits or start-up statements, and the
+/// provider is not checked.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_server_facts_come_first_and_say_postgres() {
+    use datarig_core::engine::{EngineId, Fact, Version, Why};
+    let Some(url) = pg_url("the_server_facts_come_first_and_say_postgres") else { return };
+    let shown = PgDriver.ping(&url_profile(&url), Duration::from_secs(5), dialer()).await.expect("test connection");
+    let version = match Version::parse(&shown.server_version) {
+        Some(v) => Fact::Known(v),
+        None => Fact::Unknown(Why::VersionUnknown),
+    };
+    for role in [SessionRole::Query, SessionRole::Meta, SessionRole::Monitor] {
+        let cfg = url_profile(&url);
+        let (tx, mut rx) = unbounded_channel();
+        let _session = PgDriver.connect(&cfg, role, opts(role), tx);
+        let mut before = Vec::new();
+        loop {
+            match tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.expect("an answer") {
+                Some(DbEvent::Connected) => break,
+                Some(DbEvent::ConnectFailed { error, .. }) => panic!("connect failed: {error:?}"),
+                Some(ev) => before.push(ev),
+                None => panic!("event channel closed"),
+            }
+        }
+        let said = before.iter().filter(|e| matches!(e, DbEvent::Server(_))).count();
+        assert_eq!(said, 1, "{role:?}: once: {before:?}");
+        let Some(DbEvent::Server(f)) = before.first() else { panic!("{role:?}: the facts first: {before:?}") };
+        assert_eq!(f.engine(), EngineId::Postgres, "{role:?}: {f:?}");
+        assert_eq!(f.version_text.as_deref(), Some(shown.server_version.as_str()), "{role:?}: {f:?}");
+        assert_eq!(f.version, version, "{role:?}: {f:?}");
+        assert_eq!(f.topology, Fact::Unknown(Why::NotChecked), "{role:?}: {f:?}");
+        assert_eq!(f.provider, Fact::Unknown(Why::NotChecked), "{role:?}: {f:?}");
+    }
+}
+
+/// A test connection says the server's engine and its version, as `SHOW server_version` answers
+/// it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_test_connection_says_the_engine_and_version() {
+    use datarig_core::engine::{EngineId, Fact, Version, Why};
+    let Some(url) = pg_url("a_test_connection_says_the_engine_and_version") else { return };
+    let info = PgDriver.ping(&url_profile(&url), Duration::from_secs(5), dialer()).await.expect("test connection");
+    assert_eq!(info.identity.engine, Fact::Known(EngineId::Postgres), "{info:?}");
+    let version = match Version::parse(&info.server_version) {
+        Some(v) => Fact::Known(v),
+        None => Fact::Unknown(Why::VersionUnknown),
+    };
+    assert_eq!(info.identity.version, version, "{info:?}");
+    assert!(matches!(info.identity.version, Fact::Known(_)), "the dev and CI servers report a number: {info:?}");
+}

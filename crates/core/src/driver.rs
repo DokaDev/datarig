@@ -18,6 +18,7 @@ pub use protocol::{
 };
 pub use text_style::{DatePart, Dated, TextStyle};
 
+use crate::engine::{EngineId, PingIdentity};
 use crate::profile::ConnectionConfig;
 use crate::sql::dialect::Language;
 use crate::transport::DialerRef;
@@ -300,6 +301,9 @@ impl ConnectOptions {
 
 pub trait Driver: Send + Sync {
     fn capabilities(&self) -> Capabilities;
+    /// The engines the driver serves: a session of it may reach any of them, and says which one
+    /// it reached ([`DbEvent::Server`]).
+    fn engines(&self) -> &'static [EngineId];
     /// Start opening one connection for `role` in the background. Progress and results arrive
     /// as [`DbEvent`]s: `Connected` or `ConnectFailed` first. Commands sent before `Connected`
     /// wait for the connection.
@@ -327,6 +331,8 @@ pub struct PingInfo {
     pub latency: Duration,
     /// How the test connection's traffic went.
     pub encryption: crate::tls::Encryption,
+    /// The engine and version the server reported.
+    pub identity: PingIdentity,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

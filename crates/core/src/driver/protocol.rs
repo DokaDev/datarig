@@ -4,6 +4,7 @@
 use super::ddl::{DdlObject, DdlSource, ObjectKind};
 use super::keys::{KeyCatalog, OrderKeys};
 use super::structure::{RelationStats, TableStructure};
+use crate::engine::ServerFacts;
 use crate::fault::Fault;
 use crate::query::GROUP_VALUES;
 use crate::sql::complete::Catalog;
@@ -12,6 +13,7 @@ use crate::tls::{Encryption, TlsProblem};
 use crate::transport::DialError;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// How long a count or an estimate of the app's own ([`DbCommand::Count`] with a `limit`,
@@ -1361,6 +1363,10 @@ impl ReadIn {
 
 #[derive(Debug)]
 pub enum DbEvent {
+    /// What the server is, as the session's connection found it ([`ServerFacts`]): the first
+    /// event of a session that connects, said once, after every step of opening it that can
+    /// fail and before `Encryption` (a session that fails to open says only `ConnectFailed`).
+    Server(Arc<ServerFacts>),
     /// How the connection's traffic goes (encrypted with TLS or not): sent right before
     /// `Connected`.
     Encryption(Encryption),

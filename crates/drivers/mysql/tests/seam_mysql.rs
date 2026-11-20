@@ -12,17 +12,22 @@
 //!
 //! Every table a test makes is `shop.zz_seam_*` of this process, dropped again when it ends.
 
+#[allow(dead_code)]
+mod my_proxy;
+
 use datarig_core::driver::{
-    Cell, ConnectOptions, DbCommand, DbError, DbEvent, Driver, EditFormat, ExplainFormat, ExportBatch, ExportGuard,
-    MySqlEdit, PagingMode, Session, SessionRole, TxRule,
+    CancelFailure, Cell, ConnectOptions, DbCommand, DbError, DbEvent, Driver, EditFormat, ExplainFormat, ExportBatch,
+    ExportGuard, MySqlEdit, OwnSession, PagingMode, Session, SessionRole, TxRule,
 };
+use datarig_core::engine::{EngineId, Fact, ServerFacts, Topology, Version, Why};
 use datarig_core::export::keyset::{CHUNK_ROWS, Keyset};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_driver_mysql::MyDriver;
+use my_proxy::{Fault, Proxy, upstream};
 use mysql_async::prelude::Queryable;
 use std::io::Write;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
@@ -446,4 +451,188 @@ async fn the_keyset_chunk_is_sent_as_written() {
     // then each chunk once, as sent.
     let chunks_sent: Vec<&String> = sent.iter().filter(|s| s.contains("ORDER BY")).collect();
     assert_eq!(chunks_sent, want.iter().collect::<Vec<_>>(), "{sent:?}");
+}
+
+/// The facts a session said first, once, before `Connected` (`before`: every word it said
+/// before it).
+fn facts_first(role: SessionRole, before: &[DbEvent]) -> Arc<ServerFacts> {
+    let said = before.iter().filter(|e| matches!(e, DbEvent::Server(_))).count();
+    assert_eq!(said, 1, "{role:?}: once: {before:?}");
+    let Some(DbEvent::Server(facts)) = before.first() else { panic!("{role:?}: the facts first: {before:?}") };
+    facts.clone()
+}
+
+/// The language, plan format and edits a session said before `Connected`.
+fn words(before: &[DbEvent]) -> (Vec<Language>, Vec<Option<ExplainFormat>>, Vec<Option<EditFormat>>) {
+    let language = before.iter().filter_map(|e| if let DbEvent::Language(l) = e { Some(*l) } else { None });
+    let explain = before.iter().filter_map(|e| if let DbEvent::Explain(f) = e { Some(*f) } else { None });
+    let edit = before.iter().filter_map(|e| if let DbEvent::Edit(f) = e { Some(*f) } else { None });
+    (language.collect(), explain.collect(), edit.collect())
+}
+
+/// Every role's session says what the server is first and once: the engine its own version line
+/// names, the version of its greeting (no text of it read), reached directly, the provider not
+/// checked. The plan format and the edits it says before `Connected` are the ones that engine
+/// and version imply (MySQL's tree from 8.0.16 on, its edits from 8.0.17 on, none on MariaDB),
+/// and the language is MariaDB's exactly when the engine is (with dollar quotes on MySQL 8.1
+/// and later).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_server_facts_come_first_once_and_the_words_before_connected_follow_from_them() {
+    let test = "the_server_facts_come_first_once_and_the_words_before_connected_follow_from_them";
+    let Some(url) = my_url(test) else { return };
+    let maria = mariadb(&url).await;
+    let mut c = side(&url).await;
+    let line: String = c.query_first("SELECT VERSION()").await.unwrap().expect("a version");
+    c.disconnect().await.unwrap();
+    let version = Version::parse(&line).expect("the server's version line starts with its number");
+    for role in [SessionRole::Query, SessionRole::Meta, SessionRole::Monitor] {
+        let (_c, before) = Conn::start(&url, role, test).await;
+        let f = facts_first(role, &before);
+        let engine = if maria { EngineId::MariaDb } else { EngineId::MySql };
+        assert_eq!(f.engine(), engine, "{role:?}: {f:?}");
+        assert_eq!(f.version, Fact::Known(version), "{role:?}: {f:?}");
+        assert_eq!(f.version_text, None, "{role:?}: {f:?}");
+        assert_eq!(f.provider, Fact::Unknown(Why::NotChecked), "{role:?}: {f:?}");
+        assert_eq!(f.topology, Fact::Known(Topology::Direct), "{role:?}: {f:?}");
+        let (explain, edit, dollar_quotes) = match f.engine() {
+            EngineId::MySql => (
+                (version >= Version::new(8, 0, 16)).then_some(ExplainFormat::MySqlTree),
+                (version >= Version::new(8, 0, 17)).then_some(EditFormat::MySql(MySqlEdit { nowait: true })),
+                version >= Version::new(8, 1, 0),
+            ),
+            EngineId::MariaDb | EngineId::Postgres => (None, None, false),
+        };
+        let (languages, explains, edits) = words(&before);
+        assert_eq!(explains, [explain], "{role:?}: {before:?}");
+        assert_eq!(edits, [edit], "{role:?}: {before:?}");
+        let [Language::Sql(Dialect::MySql(mode))] = languages[..] else { panic!("{role:?}: {before:?}") };
+        assert_eq!(mode.mariadb, f.engine() == EngineId::MariaDb, "{role:?}: {mode:?}");
+        assert_eq!(mode.dollar_quotes, dollar_quotes, "{role:?}: {mode:?}");
+    }
+}
+
+/// Where a session's facts say it reaches the server, by the connection's own check of its id
+/// as it opened: straight to the server, directly; through a proxy whose greeting carries an id
+/// of its own, pooled; through one that fails the check's read, not checked (the session still
+/// opens). On each way every role's language, plan format and edits are the server's, as
+/// straight to it, and a query session answers which server session is its own and takes a
+/// cancel as it did before: straight to the server the statement is stopped (its `SLEEP`
+/// answers 1 on MySQL, fails cancelled on MariaDB) and the session goes on; behind the proxy numbering its clients the session is
+/// not its own, and after the failed read it checks its id when asked and finds it its own, but
+/// on both ways its marker was never confirmed, so no kill is sent: the run ends cancelled and
+/// the session is given up, as the cancel could not be confirmed.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_facts_topology_is_the_own_id_check() {
+    let test = "the_facts_topology_is_the_own_id_check";
+    let Some((url, admin)) = urls(test) else { return };
+    let maria = mariadb(&admin).await;
+    let numbering = Proxy::start(&upstream(&url)).await;
+    numbering.offset_ids(0x0100_0000);
+    let failing = Proxy::start(&upstream(&url)).await;
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Way {
+        Direct,
+        Numbering,
+        FailedRead,
+    }
+    let mut straight = Vec::new();
+    for way in [Way::Direct, Way::Numbering, Way::FailedRead] {
+        let at = match way {
+            Way::Direct => url.clone(),
+            Way::Numbering => numbering.url(&url),
+            Way::FailedRead => failing.url(&url),
+        };
+        let topology = match way {
+            Way::Direct => Fact::Known(Topology::Direct),
+            Way::Numbering => Fact::Known(Topology::Pooled),
+            Way::FailedRead => Fact::Unknown(Why::NotChecked),
+        };
+        for (n, role) in [SessionRole::Query, SessionRole::Meta, SessionRole::Monitor].into_iter().enumerate() {
+            if way == Way::FailedRead {
+                failing.fault_start("SELECT CONNECTION_ID(), ", Fault::Instead("SELECT zz_seam_no_such_column".into()));
+            }
+            let (mut c, before) = Conn::start(&at, role, test).await;
+            assert!(!failing.fault_pending(), "{way:?} {role:?}: the read met its fault");
+            let f = facts_first(role, &before);
+            assert_eq!(f.topology, topology, "{way:?} {role:?}: {f:?}");
+            match way {
+                Way::Direct => straight.push(words(&before)),
+                Way::Numbering | Way::FailedRead => assert_eq!(words(&before), straight[n], "{way:?} {role:?}"),
+            }
+            if role != SessionRole::Query {
+                continue;
+            }
+            c.session.send(DbCommand::ServerSession { request: 7 });
+            let own = loop {
+                if let DbEvent::ServerSession { request: 7, own } = c.next(15).await {
+                    break own;
+                }
+            };
+            match way {
+                Way::Direct | Way::FailedRead => assert!(matches!(own, OwnSession::Direct { .. }), "{way:?}: {own:?}"),
+                Way::Numbering => assert_eq!(own, OwnSession::NotDirect, "{way:?}"),
+            }
+            let marker = format!("zz_seam_topology_{}_{n}_{way:?}", std::process::id());
+            let mut a = side(&admin).await;
+            let t0 = Instant::now();
+            c.send(1, &[&format!("SELECT SLEEP(3) AS {marker}")]);
+            running(&mut a, &marker).await;
+            c.session.cancel();
+            let evs = c.answer(1).await;
+            a.disconnect().await.unwrap();
+            match way {
+                Way::Direct => {
+                    // `SLEEP` stopped by a `KILL QUERY` answers 1 on MySQL, fails on MariaDB; the
+                    // session goes on.
+                    match maria {
+                        false => {
+                            let Some(DbEvent::Page { rows, .. }) = evs.last() else { panic!("{way:?}: {evs:?}") };
+                            assert_eq!(rows[0][0].as_deref(), Some("1"), "{way:?}: stopped: {evs:?}");
+                        }
+                        true => assert!(
+                            matches!(
+                                evs.last(),
+                                Some(DbEvent::Failed { error: DbError::Cancelled, cancelled: true, .. })
+                            ),
+                            "{way:?}: {evs:?}"
+                        ),
+                    }
+                    assert!(t0.elapsed() < Duration::from_secs(3), "{way:?}: {:?}", t0.elapsed());
+                    let evs = c.ok(2, "SELECT 1").await;
+                    assert!(matches!(evs.last(), Some(DbEvent::Page { .. })), "{way:?}: {evs:?}");
+                }
+                Way::Numbering | Way::FailedRead => {
+                    // No kill is sent for a session not confirmed: the run ends cancelled and the
+                    // connection is given up.
+                    assert!(
+                        matches!(evs.last(), Some(DbEvent::Failed { error: DbError::Cancelled, cancelled: true, .. })),
+                        "{way:?}: {evs:?}"
+                    );
+                    let lost = loop {
+                        if let DbEvent::Lost { error } = c.next(15).await {
+                            break error;
+                        }
+                    };
+                    assert!(
+                        matches!(&lost, DbError::CancelNotTaken(CancelFailure::NotSent(why)) if **why == DbError::CancelUnconfirmed),
+                        "{way:?}: {lost:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// A test connection says the server's engine (MariaDB on a MariaDB server) and the version of
+/// its greeting, the number its version line starts with.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_test_connection_says_the_engine_and_version() {
+    let test = "a_test_connection_says_the_engine_and_version";
+    let Some(url) = my_url(test) else { return };
+    let maria = mariadb(&url).await;
+    let info = MyDriver.ping(&profile(&url), Duration::from_secs(10), None).await.expect("test connection");
+    let engine = if maria { EngineId::MariaDb } else { EngineId::MySql };
+    assert_eq!(info.identity.engine, Fact::Known(engine), "{info:?}");
+    let version = Version::parse(&info.server_version).expect("the version line starts with its number");
+    assert_eq!(info.identity.version, Fact::Known(version), "{info:?}");
 }

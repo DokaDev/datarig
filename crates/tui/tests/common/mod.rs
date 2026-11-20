@@ -113,7 +113,17 @@ pub struct FakeDriver {
     pub no_cancel: Arc<AtomicBool>,
 }
 
+/// What a test connection to a PostgreSQL server of version `17.2` says of it.
+pub fn pg_identity() -> datarig_core::engine::PingIdentity {
+    use datarig_core::engine::{EngineId, Fact, PingIdentity, Version};
+    PingIdentity { engine: Fact::Known(EngineId::Postgres), version: Fact::Known(Version::new(17, 2, 0)) }
+}
+
 impl Driver for FakeDriver {
+    fn engines(&self) -> &'static [datarig_core::engine::EngineId] {
+        datarig_core::engine::EngineId::ALL
+    }
+
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             server_paging: true,

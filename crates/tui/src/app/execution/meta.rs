@@ -329,6 +329,8 @@ impl App {
             DbEvent::Language(lang) => self.set_profile_language(id, lang),
             // The plan format its server gives (the plan actions follow it).
             DbEvent::Explain(format) => self.conns.entry(id).explain = Some(format),
+            // What the server is: nothing reads it yet.
+            DbEvent::Server(_) => {}
             // The edits its server takes.
             DbEvent::Edit(format) => self.conns.entry(id).edit = Some(format),
             // A query session's own (copying its values as SQL needs it).

@@ -127,7 +127,7 @@ pub(super) async fn apply(
         return Ok(());
     }
     // The statements need what only MySQL 8.0.17 on has; the app does not send them otherwise.
-    if env.server.edit().is_none() {
+    if crate::engine::derive(env.facts, &s.tracked).edit.is_none() {
         answer(Err(fail(None, DbError::NotSupported)));
         return Ok(());
     }

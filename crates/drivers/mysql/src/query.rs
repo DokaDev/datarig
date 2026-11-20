@@ -102,7 +102,8 @@ use datarig_core::driver::{
     CancelFailure, CancelMark, Cell, ColumnMeta, DbCommand, DbError, DbEvent, ESTIMATE_LIMIT, Isolation, Outcome,
     OwnSession, PagingMode, ServerEnd, SessionValues, StatementInfo, TxOutcome, TxRule, TxStep,
 };
-use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+use datarig_core::engine::ServerFacts;
+use datarig_core::sql::dialect::{Dialect, MySqlMode};
 use datarig_core::sql::lexer::{Tok, Token, lex_in};
 use datarig_core::sql::risk::mysql as risk;
 use datarig_core::sql::risk::repeat::NotRepeatable;
@@ -198,6 +199,8 @@ struct Env<'a> {
     page_size: usize,
     read_only: bool,
     server: Server,
+    /// What the server is, as the session's connection found it (`server` is its greeting).
+    facts: &'a ServerFacts,
 }
 
 /// What statements change in the session, as the server confirmed it.
@@ -450,11 +453,12 @@ pub(crate) async fn query_loop(
     busy: Arc<AtomicBool>,
     events: UnboundedSender<DbEvent>,
     settings: Settings,
-    server: Server,
+    facts: Arc<ServerFacts>,
     tracked: Tracked,
     select_limit: Option<u64>,
     own: Option<bool>,
 ) {
+    let server = Server::of(&facts);
     let failed = AtomicBool::new(false);
     // Known from the open's own read, else read when first asked.
     let own = own.map_or_else(OnceLock::new, OnceLock::from);
@@ -468,6 +472,7 @@ pub(crate) async fn query_loop(
         page_size: settings.page_size,
         read_only: settings.read_only,
         server,
+        facts: &facts,
     };
     let mode = tracked.mode(&server);
     let values = tracked.values();
@@ -1344,7 +1349,7 @@ async fn after(
     let mode = s.tracked.mode(&env.server);
     if mode != s.mode {
         s.mode = mode;
-        let _ = env.events.send(DbEvent::Language(Language::Sql(Dialect::MySql(mode))));
+        let _ = env.events.send(DbEvent::Language(crate::engine::derive(env.facts, &s.tracked).language));
     }
     let values = s.tracked.values();
     if values.is_some() && values != s.values {
@@ -2706,7 +2711,9 @@ async fn estimate(
     s: &mut State,
     sql: &str,
 ) -> Result<Result<u64, DbError>, Stop> {
-    let Some(format) = env.server.explain() else { return Ok(Err(DbError::NotSupported)) };
+    let Some(format) = crate::engine::derive(env.facts, &s.tracked).explain else {
+        return Ok(Err(DbError::NotSupported));
+    };
     if let Err(why) = risk::repeatable(sql, s.mode) {
         return Ok(Err(DbError::NotRepeatable(why)));
     }
