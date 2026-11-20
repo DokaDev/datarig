@@ -1655,3 +1655,49 @@ async fn waiting_runs_of_two_tabs_are_asked_about_in_turn() {
     h.keys("y");
     assert_eq!(executes(&mut h), [["DO BIN_TO_UUID(b)"]]);
 }
+
+/// A question about one profile's waiting run holds no other profile's: a profile that
+/// connects while the question is open keeps its run waiting (one question at a time), and it
+/// is sent once the question is answered, without a question of its own.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_question_for_one_profile_holds_another_profiles_run_only_until_it_is_answered() {
+    let slow = |name: &str| {
+        let mut p = ConnectionConfig {
+            name: name.into(),
+            driver: "mysql".into(),
+            password: String::new(),
+            ..ConnectionConfig::test_db()
+        };
+        p.set_source(PasswordSource::Command("printf datarig".into()));
+        p
+    };
+    let cfg = Config { connections: vec![slow("slow"), slow("other")], ..Config::default() };
+    let (h, mut rx) = Harness::started(&cfg, Lang::En, Arc::new(MemoryStore::new()), Startup::Normal);
+    h.driver.mysql.store(true, Ordering::SeqCst);
+    let mut h = h.with_fake_driver();
+    let resolved = console_on_slow(&mut h, &mut rx).await;
+    run_all(&mut h, "DO BIN_TO_UUID(a)");
+    assert!(h.app.is_queued(h.app.tab().id));
+    h.explore("other");
+    h.keys("o");
+    let other_resolved = next_event(&mut rx).await;
+    h.app.focus = Focus::Editor;
+    assert_eq!(h.app.tab().profile, Some(id(&h, "other")));
+    let other_tab = h.app.tab().id;
+    run_all(&mut h, "SELECT 1");
+    assert!(h.app.is_queued(other_tab));
+    h.sent();
+    h.app.on_app_event(resolved);
+    h.meta_db("slow", disagreeing_facts(Engine::MySql));
+    h.meta_db("slow", DbEvent::Language(mysql(MySqlMode::default())));
+    h.meta_db("slow", DbEvent::Connected);
+    assert!(h.app.overlays.run_confirm().is_some(), "slow's run asks");
+    h.app.on_app_event(other_resolved);
+    h.meta_db("other", facts_of(Engine::MySql));
+    h.meta_db("other", DbEvent::Language(mysql(MySqlMode::default())));
+    h.meta_db("other", DbEvent::Connected);
+    assert!(executes(&mut h).is_empty(), "nothing sent while the question is open");
+    h.keys("n");
+    assert_eq!(executes(&mut h), [["SELECT 1"]], "other's run is sent once the question is answered");
+    assert!(!h.app.is_queued(other_tab));
+}
