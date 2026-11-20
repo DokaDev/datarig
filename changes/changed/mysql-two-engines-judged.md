@@ -10,5 +10,7 @@
   engines' rules until it connects again. A statement that waited (for its connection, or for
   an answer to a question about it) is checked again right before it is sent, and asks again
   for anything the earlier answer did not cover; waiting statements of several tabs are asked
-  about one at a time.
+  about one at a time. A statement checked before its session said its server names two
+  engines is not sent once the session finds that: it fails with a message that says to run it
+  again, and run again it is checked by both engines' rules.
   Sessions whose greeting and `VERSION()` name the same engine are checked as before.

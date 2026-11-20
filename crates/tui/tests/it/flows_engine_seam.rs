@@ -1701,3 +1701,56 @@ async fn a_question_for_one_profile_holds_another_profiles_run_only_until_it_is_
     assert_eq!(executes(&mut h), [["SELECT 1"]], "other's run is sent once the question is answered");
     assert!(!h.app.is_queued(other_tab));
 }
+
+/// The engines each command of user text sent to session `i` was judged on, in order.
+fn judged_sent(h: &mut Harness, i: usize) -> Vec<Option<datarig_core::sql::risk::mysql::Judged>> {
+    h.sent_to(i);
+    h.driver.sessions.lock().unwrap()[i].judged.clone()
+}
+
+/// Every command of user text goes with the engines whose rules it was judged on. The first
+/// run on a query session that has not said what its server is goes judged on the profile's
+/// (one engine, its metadata session's reports agree); the driver refuses it once the session
+/// found two engines, the refusal is worded, and run again it is judged on both: it asks
+/// first, and goes with both.
+#[test]
+fn a_run_judged_before_its_session_named_two_engines_is_refused_and_judged_anew() {
+    use datarig_core::sql::risk::mysql::Judged;
+    let p = ConnectionConfig { name: "two".into(), driver: "mysql".into(), ..ConnectionConfig::test_db() };
+    let cfg = Config { connections: vec![p], ..Config::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver(true));
+    meta_says(&mut h, facts_of(Engine::MySql));
+    h.app.focus = Focus::Editor;
+    let sql = "DO BIN_TO_UUID(a)";
+    run_all(&mut h, sql);
+    assert!(h.app.overlays.run_confirm().is_none(), "one engine: not asked");
+    let query = h.roles().iter().rposition(|r| *r == SessionRole::Query).expect("a query session");
+    assert_eq!(judged_sent(&mut h, query), [Some(Judged::Own)]);
+    // The session says its server's reports name two engines; the driver refused the run.
+    h.tab_db(0, disagreeing_facts(Engine::MySql));
+    h.tab_db(0, DbEvent::Language(mysql(MySqlMode::default())));
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(0, DbEvent::Failed { id, error: DbError::ReportsChanged, cancelled: false });
+    assert!(h.app.tab().exec.running.is_none(), "the run ended");
+    let want = h.app.i18n.label(Label::EngineReportsChanged).to_string();
+    let shown = h.status(400, 45);
+    let start: String = want.chars().take(30).collect();
+    assert!(shown.contains(&start), "{shown}");
+    // Run again: judged on both, it asks, and goes with both.
+    run_all(&mut h, sql);
+    assert!(h.app.overlays.run_confirm().is_some(), "asked: two engines");
+    h.keys("y");
+    assert_eq!(judged_sent(&mut h, query), [Some(Judged::Own), Some(Judged::WithSibling)]);
+}
+
+/// On a profile whose reports agree every command of user text goes judged on its one engine,
+/// and nothing else changes.
+#[test]
+fn an_agreeing_profiles_commands_go_judged_on_its_engine() {
+    use datarig_core::sql::risk::mysql::Judged;
+    let lang = mysql(MySqlMode::default());
+    let mut h = two_engines(false, facts_of(Engine::MySql), lang);
+    run_all(&mut h, "SELECT 1");
+    let query = h.roles().iter().rposition(|r| *r == SessionRole::Query).expect("a query session");
+    assert!(judged_sent(&mut h, query).iter().all(|j| *j == Some(Judged::Own)));
+}

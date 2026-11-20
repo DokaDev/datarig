@@ -15,8 +15,16 @@ impl App {
     }
 
     /// Send a statement command to tab `id`'s query session.
+    /// A command of the user's text goes with the engines whose rules it was judged on (the
+    /// classifier of the tab's open session): a session whose server's reports name more sends
+    /// nothing of it.
     pub(in crate::app) fn send_tab(&self, id: TabId, cmd: DbCommand) {
-        if let Some(s) = self.tabs.get(id).and_then(|t| t.exec.session.as_ref()) {
+        let Some(t) = self.tabs.get(id) else { return };
+        let Some(s) = t.exec.session.as_ref() else { return };
+        if cmd.carries_user_text() {
+            let judged = t.exec.prepared.judged();
+            s.send(DbCommand::Judged { judged, command: Box::new(cmd) });
+        } else {
             s.send(cmd);
         }
     }

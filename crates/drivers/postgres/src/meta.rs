@@ -277,7 +277,8 @@ pub(crate) async fn meta_loop(client: Client, mut link: Link, events: UnboundedS
                 | DbCommand::MonitorReplication { .. }
                 | DbCommand::MonitorAction { .. }
                 | DbCommand::MonitorFollowUp { .. }
-                | DbCommand::ServerSession { .. }) => cmd.not_supported(),
+                | DbCommand::ServerSession { .. }
+                | DbCommand::Judged { .. }) => cmd.not_supported(),
             }
         };
         let Ok(ev) = link.guard(None, request).await else { return };

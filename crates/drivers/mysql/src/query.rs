@@ -507,7 +507,14 @@ pub(crate) async fn query_loop(
         request: 0,
     };
     let stop = loop {
-        let next = link.next().await;
+        // A command of user text comes with the engines whose rules the app judged it on.
+        let (judged, next) = match link.next().await {
+            Next::Command(cmd) => {
+                let (judged, cmd) = cmd.unwrap_judged();
+                (judged, Next::Command(cmd))
+            }
+            next => (Judged::Own, next),
+        };
         // Cancelled while it waited its turn: answered, never run.
         if let Next::Command(cmd) = &next
             && cmd.cancelled_before_start(&asked, &events)
@@ -521,6 +528,18 @@ pub(crate) async fn query_loop(
             && user_text(cmd).into_iter().any(has_dollar_opener)
         {
             if let Some(answer) = cmd.unsent(DbError::DollarQuotesUnknown, false) {
+                let _ = events.send(answer);
+            }
+            continue;
+        }
+        // Judged on fewer engines' rules than the session's server's reports name (the app
+        // judged it before the session said so): nothing of it is sent, and the user runs it
+        // again, judged anew.
+        if let Next::Command(cmd) = &next
+            && cmd.carries_user_text()
+            && judged_on_fewer(judged, s.judged)
+        {
+            if let Some(answer) = cmd.unsent(DbError::ReportsChanged, false) {
                 let _ = events.send(answer);
             }
             continue;
@@ -681,6 +700,16 @@ fn user_text(cmd: &DbCommand) -> Vec<&str> {
         | DbCommand::MonitorReplication { .. }
         | DbCommand::MonitorAction { .. }
         | DbCommand::MonitorFollowUp { .. } => Vec::new(),
+        DbCommand::Judged { command, .. } => user_text(command),
+    }
+}
+
+/// Whether a command judged on the engines of `judged` was judged on fewer than a session
+/// judged on `session`.
+fn judged_on_fewer(judged: Judged, session: Judged) -> bool {
+    match (judged, session) {
+        (Judged::Own, Judged::WithSibling) => true,
+        (Judged::Own, Judged::Own) | (Judged::WithSibling, _) => false,
     }
 }
 
@@ -700,6 +729,7 @@ fn unanswered(events: &UnboundedSender<DbEvent>, c: DbCommand, error: &DbError) 
             let why = datarig_core::driver::ApplyError::Db(error.clone());
             DbEvent::Applied { id, result: Err(datarig_core::driver::ApplyFailure { step: None, why }) }
         }
+        DbCommand::Judged { command, .. } => return unanswered(events, *command, error),
         // Nothing to answer: a page of a result that is gone, a close of one.
         _ => return,
     };
@@ -1689,6 +1719,16 @@ async fn hold_on(
                 continue;
             }
         };
+        // A command that waits keeps the engines it was judged on (checked when its turn
+        // comes); what it is decides what happens here.
+        let (judged, next) = match next {
+            Next::Command(DbCommand::Judged { judged, command }) => (Some(judged), Next::Command(*command)),
+            next => (None, next),
+        };
+        let kept = |command: DbCommand| match judged {
+            Some(judged) => DbCommand::Judged { judged, command: Box::new(command) },
+            None => command,
+        };
         match next {
             Next::Command(DbCommand::FetchMore { id: fid }) if fid == id => {
                 let t0 = Instant::now();
@@ -1732,7 +1772,7 @@ async fn hold_on(
                 | DbCommand::GroupCount { .. }
                 | DbCommand::Estimate { .. }
                 | DbCommand::CheckRepeat { .. }),
-            ) => held.waiting.push(c),
+            ) => held.waiting.push(kept(c)),
             // Answered from what is known (nothing is sent while the result is read): it goes on.
             Next::Command(DbCommand::ServerSession { request }) => {
                 let _ = env.events.send(DbEvent::ServerSession { request, own: own_answer(env) });
@@ -1741,7 +1781,7 @@ async fn hold_on(
             // Behind what waited already: commands run in the order they were sent, which the
             // numbers of a session's runs rely on.
             Next::Command(other) => {
-                held.waiting.push(other);
+                held.waiting.push(kept(other));
                 break;
             }
             Next::Closed => {

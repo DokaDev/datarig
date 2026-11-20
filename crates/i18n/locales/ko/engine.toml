@@ -5,4 +5,5 @@
 "engine.why.versions_disagree" = "서버가 스스로 알린 버전이 서로 다름"
 "engine.why.engines_disagree" = "서버 인사말과 VERSION()이 서로 다른 엔진을 가리킴"
 "engine.unconfirmed" = "서버 엔진을 확인할 수 없습니다: VERSION()이 답하지 않아(인사말로는 {greeting}) 다른 것을 실행하기 전에 세션을 닫았습니다"
+"engine.reports_changed" = "확인한 뒤에 서버 인사말과 VERSION()이 두 엔진을 가리키는 것으로 드러났습니다. 아무것도 보내지 않았습니다. 다시 실행하면 두 엔진의 규칙으로 새로 확인합니다"
 "engine.dollar_quotes_unknown" = "이 글에는 `$$` 따옴표가 있는데, 서버 인사말과 VERSION()이 서버가 이를 읽는지에 대해 서로 다릅니다. 아무것도 보내지 않았습니다"

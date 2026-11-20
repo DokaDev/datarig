@@ -829,6 +829,13 @@ impl TwoEngines {
         }
     }
 
+    /// [`TwoEngines::ask`] for `cmd` judged on both engines' rules, as the app judges a
+    /// command once the session said its reports name two engines.
+    async fn ask_both(&mut self, id: u64, cmd: DbCommand) -> Result<String, DbError> {
+        let judged = datarig_core::sql::risk::mysql::Judged::WithSibling;
+        self.ask(id, DbCommand::Judged { judged, command: Box::new(cmd) }).await
+    }
+
     fn execute(id: u64, sql: &str) -> DbCommand {
         DbCommand::Execute {
             id,
@@ -870,7 +877,7 @@ async fn a_disagreeing_session_is_judged_on_both_engines() {
     ];
     for (what, id, cmd) in commands {
         let from = s.proxy.queries().len();
-        let got = s.ask(id, cmd).await;
+        let got = s.ask_both(id, cmd).await;
         let sent = s.proxy.queries()[from..].to_vec();
         assert!(
             matches!(got, Err(DbError::NotRepeatable(NotRepeatable::UserFunction))),
@@ -879,10 +886,10 @@ async fn a_disagreeing_session_is_judged_on_both_engines() {
         assert!(sent.is_empty(), "{what}: nothing sent: {sent:?}");
     }
     let plain = "SELECT 1 AS a";
-    let got = s.ask(10, TwoEngines::execute(10, plain)).await;
+    let got = s.ask_both(10, TwoEngines::execute(10, plain)).await;
     assert!(got.as_deref().is_ok_and(|ev| ev.starts_with("Page")), "{got:?}");
     let from = s.proxy.queries().len();
-    let got = s.ask(11, DbCommand::CheckRepeat { id: 11, sql: plain.into() }).await;
+    let got = s.ask_both(11, DbCommand::CheckRepeat { id: 11, sql: plain.into() }).await;
     assert!(!matches!(got, Err(DbError::NotRepeatable(_))), "{got:?}");
     assert!(s.proxy.queries().len() > from, "the server was asked, as before: {got:?}");
 }
@@ -918,16 +925,16 @@ async fn the_next_transaction_state_after_success_and_after_failure() {
     ];
     for (sql, succeeds, then_waits) in steps {
         let (n, sql) = step(sql);
-        let ran = s.ask(n, TwoEngines::execute(n, sql)).await;
+        let ran = s.ask_both(n, TwoEngines::execute(n, sql)).await;
         if let Some(ok) = succeeds {
             assert_eq!(ran.is_ok(), ok, "{sql}: {ran:?}");
         }
-        let got = s.ask(n + 1, TwoEngines::count(n + 1, "SELECT 1 AS a")).await;
+        let got = s.ask_both(n + 1, TwoEngines::count(n + 1, "SELECT 1 AS a")).await;
         assert_eq!(waits(&got), then_waits, "after {sql} ({ran:?}): {got:?}");
     }
     // A start-up statement counts the same way.
     let mut s = TwoEngines::open(&url, test, false, &["/*!80000 SET TRANSACTION READ ONLY */"]).await;
-    let got = s.ask(1, TwoEngines::count(1, "SELECT 1 AS a")).await;
+    let got = s.ask_both(1, TwoEngines::count(1, "SELECT 1 AS a")).await;
     assert!(waits(&got), "after the start-up statement: {got:?}");
 }
 
