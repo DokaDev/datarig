@@ -1258,3 +1258,144 @@ fn a_dollar_quotes_unknown_refusal_is_worded_and_nothing_else_runs() {
         assert_eq!(executes(&mut h), [["SELECT 1"]], "{lang:?}: the tab runs again");
     }
 }
+
+// ── A session whose greeting and VERSION() name two engines ─────────────────────────────────
+
+/// The facts a MySQL-driver session says whose greeting names `greeting` (MySQL 8.4.6 or
+/// MariaDB 11.4.13) and whose `VERSION()` line names the other engine (a proxy wrote the
+/// greeting).
+fn disagreeing_facts(greeting: Engine) -> DbEvent {
+    use datarig_core::engine::{EngineFacts, EngineId, Fact, MyFacts, ServerFacts, Version, Why};
+    let (detail, line) = match greeting {
+        Engine::MySql => (
+            EngineFacts::MariaDb(MyFacts { handshake: Version::new(8, 4, 6), greeting: EngineId::MySql }),
+            "11.4.13-MariaDB",
+        ),
+        Engine::MariaDb | Engine::Postgres => {
+            (EngineFacts::MySql(MyFacts { handshake: Version::new(11, 4, 13), greeting: EngineId::MariaDb }), "8.4.6")
+        }
+    };
+    DbEvent::Server(Arc::new(ServerFacts {
+        version: Fact::Unknown(Why::EnginesDisagree),
+        version_text: Some(line.into()),
+        provider: Fact::Unknown(Why::NotChecked),
+        topology: Fact::Unknown(Why::EnginesDisagree),
+        detail,
+    }))
+}
+
+/// A connected MySQL-driver profile `two` (read-only when `read_only`) whose metadata session
+/// said `lang`, and whose first tab's session said `facts`, then `lang`.
+fn two_engines(read_only: bool, facts: DbEvent, lang: Language) -> Harness {
+    let mut p = ConnectionConfig { name: "two".into(), driver: "mysql".into(), ..ConnectionConfig::test_db() };
+    if read_only {
+        p.policy = Some("prod".into());
+    }
+    let mut cfg = Config { connections: vec![p], ..Config::default() };
+    cfg.policies.insert("prod", Policy { read_only: true, ..Policy::default() });
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver(true));
+    h.meta_db("two", DbEvent::Language(lang));
+    h.db(DbEvent::Connected);
+    h.app.focus = Focus::Editor;
+    run_all(&mut h, "SELECT 1");
+    h.tab_db(0, facts);
+    h.tab_db(0, DbEvent::Language(lang));
+    done(&mut h);
+    h.sent();
+    h
+}
+
+/// Statements one engine refuses on a read-only profile and the other runs, each behind the
+/// greeting of the engine that runs it today (its language).
+fn one_engine_refuses() -> Vec<(Engine, &'static str)> {
+    vec![
+        (Engine::MySql, "SELECT BIN_TO_UUID(a) FROM t"),
+        (Engine::MySql, "SELECT POINT()"),
+        (Engine::MySql, "SELECT LATERAL(1)"),
+        (Engine::MySql, "SELECT OF(1)"),
+        (Engine::MariaDb, "SELECT SYSDATE ()"),
+        (Engine::MariaDb, "SELECT `DATABASE`()"),
+        (Engine::MariaDb, "SELECT `COALESCE`(a, 1) FROM t"),
+    ]
+}
+
+/// On a read-only profile, a session whose greeting names one engine and whose `VERSION()` line
+/// the other refuses what either engine refuses, before anything is sent: behind a MySQL
+/// greeting the calls MariaDB does not read as built-ins, behind a MariaDB greeting those MySQL
+/// does not.
+#[test]
+fn a_disagreeing_session_refuses_on_read_only_what_either_engine_refuses() {
+    for (greeting, sql) in one_engine_refuses() {
+        let lang = greeting.said().expect("a MySQL-family language");
+        let mut h = two_engines(true, disagreeing_facts(greeting), lang);
+        run_all(&mut h, sql);
+        assert!(executes(&mut h).is_empty(), "{greeting:?} greeting: {sql}: nothing sent");
+        assert!(matches!(tab_status(&h), Some(Msg::SafetyReadOnlyBlocked { .. })), "{sql}: {:?}", tab_status(&h));
+    }
+}
+
+/// A session whose two reports name one engine keeps that engine's rules: each statement the
+/// other engine refuses runs on a read-only profile, as before.
+#[test]
+fn an_agreeing_session_keeps_one_engines_rules() {
+    for (engine, sql) in one_engine_refuses() {
+        let lang = engine.said().expect("a MySQL-family language");
+        let mut h = two_engines(true, facts_of(engine), lang);
+        run_all(&mut h, sql);
+        assert_eq!(executes(&mut h), [[sql]], "{engine:?}: it runs");
+    }
+}
+
+/// On a profile that asks before a dangerous statement, a session whose reports name two
+/// engines asks when either engine's rules ask: `DO` of a call one engine reads as the user's
+/// code (MariaDB has no `BIN_TO_UUID`; MySQL reads a quoted `DATABASE` as a stored function).
+/// Nothing is sent before the answer. A session whose reports agree runs it as before.
+#[test]
+fn a_disagreeing_session_asks_before_what_either_engine_asks_for() {
+    for (greeting, sql) in [(Engine::MySql, "DO BIN_TO_UUID(a)"), (Engine::MariaDb, "DO `DATABASE`()")] {
+        let lang = greeting.said().expect("a MySQL-family language");
+        let mut h = two_engines(false, disagreeing_facts(greeting), lang);
+        run_all(&mut h, sql);
+        assert!(executes(&mut h).is_empty(), "{greeting:?} greeting: {sql}: asked first");
+        assert!(h.app.overlays.run_confirm().is_some(), "{greeting:?} greeting: {sql}: the confirm is open");
+        let mut h = two_engines(false, facts_of(greeting), lang);
+        run_all(&mut h, sql);
+        assert_eq!(executes(&mut h), [[sql]], "{greeting:?}, agreeing: it runs");
+    }
+}
+
+/// A tab that reads MySQL's language before its session said anything, whose session then says
+/// facts whose two reports name different engines and the same language, gets a classifier
+/// that judges on both engines: the language alone does not decide when it is rebuilt.
+#[test]
+fn the_same_language_with_disagreeing_facts_rebuilds_the_classifier() {
+    use datarig_core::sql::risk::Classifier;
+    let lang = mysql(MySqlMode::default());
+    let h = two_engines(false, disagreeing_facts(Engine::MySql), lang);
+    let tab = h.app.tab().id;
+    assert_eq!(h.app.tab_language(tab), lang, "the same language");
+    let prepared = h.app.tab().exec.prepared.clone();
+    assert_eq!(prepared, h.app.rules(tab).classifier(), "the tab's rules' classifier");
+    assert_ne!(prepared, Classifier::new(lang), "not the greeting's engine's alone");
+    let risk = prepared.clone().classify("SELECT BIN_TO_UUID(a) FROM t");
+    assert!(risk.read_only().is_err(), "judged on MariaDB's rules too: {risk:?}");
+}
+
+/// PostgreSQL's classifier keeps the statements its session prepared when the session's facts
+/// arrive: they rebuild nothing there.
+#[test]
+fn a_pg_tab_keeps_its_prepared_statements_when_its_facts_arrive() {
+    let mut h = Harness::connected(Lang::En);
+    let knows = |h: &Harness, name: &str| h.app.tab().exec.prepared.knows(name);
+    run_all(&mut h, "PREPARE ok AS SELECT 1");
+    done(&mut h);
+    assert!(knows(&h, "ok"));
+    h.tab_db(0, facts_of(Engine::Postgres));
+    assert!(knows(&h, "ok"), "kept through the facts");
+    let tab = h.app.tab().id;
+    let meta_facts = facts_at(Engine::Postgres, v(17, 2, 0));
+    let name = h.app.profiles.iter().next().expect("a profile").name.clone();
+    h.meta_db(&name, DbEvent::Server(meta_facts));
+    assert!(knows(&h, "ok"), "kept through the profile's facts");
+    assert_eq!(h.app.rules(tab).language(), Language::Sql(Dialect::Postgres));
+}

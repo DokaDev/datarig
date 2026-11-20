@@ -23,6 +23,7 @@ use datarig_core::driver::{EditFormat, ExplainFormat, MySqlEdit, SessionStatemen
 use datarig_core::engine::{EngineId, Fact, ServerFacts, Topology, Version, Why};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::{Dialect, DollarQuotes, Language};
+use datarig_core::sql::risk::repeat::NotRepeatable;
 use datarig_driver_mysql::MyDriver;
 use my_proxy::{Fault, Proxy, upstream};
 use mysql_async::prelude::Queryable;
@@ -761,4 +762,168 @@ async fn a_reconnect_reads_the_version_again() {
     if let Ok((_, before)) = &opened {
         assert_engines_disagree(&facts(before), server.engine(), &server.line, "reconnect");
     }
+}
+
+// ── A session whose reports name two engines is judged on both ──────────────────────────────
+
+/// A query session through a proxy that greets as the other engine, with its events.
+struct TwoEngines {
+    proxy: Proxy,
+    session: Session,
+    rx: tokio::sync::mpsc::UnboundedReceiver<DbEvent>,
+}
+
+impl TwoEngines {
+    /// A query session on `url` behind a greeting of the other engine: read-only with the
+    /// tests' start-up statement when `read_only`, else with start-up statements `startup`.
+    async fn open(url: &str, test: &str, read_only: bool, startup: &[&str]) -> TwoEngines {
+        let server = Server::of(url).await;
+        let proxy = Proxy::start(&upstream(url)).await;
+        proxy.greet_as(server.other_greeting().0);
+        let (tx, mut rx) = unbounded_channel();
+        let tag = format!("x13{}-{test}", std::process::id());
+        let o = match read_only {
+            true => options(SessionRole::Query, test),
+            false => ConnectOptions::new(PAGE, SessionRole::Query, &tag).session_sql(
+                startup
+                    .iter()
+                    .map(|s| SessionStatement { sql: s.to_string(), per_transaction: None, identity: false })
+                    .collect(),
+            ),
+        };
+        let session = MyDriver.connect(&profile(&proxy.url(url), "mysql"), SessionRole::Query, o, tx);
+        let mut before = Vec::new();
+        loop {
+            match tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.expect("an answer") {
+                Some(DbEvent::Connected) => break,
+                Some(DbEvent::ConnectFailed { error, .. }) => panic!("connect failed: {error:?}"),
+                Some(ev) => before.push(ev),
+                None => panic!("event channel closed"),
+            }
+        }
+        assert_engines_disagree(&facts(&before), server.engine(), &server.line, test);
+        TwoEngines { proxy, session, rx }
+    }
+
+    /// The answer to command `cmd` (number `id`): its error, or the answer in debug text.
+    async fn ask(&mut self, id: u64, cmd: DbCommand) -> Result<String, DbError> {
+        self.session.send(cmd);
+        loop {
+            let ev = tokio::time::timeout(Duration::from_secs(60), self.rx.recv())
+                .await
+                .expect("an event")
+                .expect("the session goes on");
+            let result = match &ev {
+                DbEvent::Failed { id: i, error, .. } if *i == id => Err(error.clone()),
+                DbEvent::Page { id: i, columns: Some(_), .. } | DbEvent::Done { id: i, .. } if *i == id => {
+                    Ok(format!("{ev:?}"))
+                }
+                DbEvent::Counted { id: i, result, .. } if *i == id => result.clone().map(|n| n.to_string()),
+                DbEvent::RepeatChecked { id: i, result } if *i == id => result.clone().map(|()| "repeatable".into()),
+                _ => continue,
+            };
+            return result;
+        }
+    }
+
+    fn execute(id: u64, sql: &str) -> DbCommand {
+        DbCommand::Execute {
+            id,
+            statements: vec![sql.to_string()],
+            paging: PagingMode::NoHold,
+            tx: TxRule::Auto,
+            max_rows: None,
+        }
+    }
+
+    fn count(id: u64, sql: &str) -> DbCommand {
+        DbCommand::Count { id, sql: sql.into(), limit: None }
+    }
+}
+
+/// A session whose greeting names the other engine is judged on both engines' rules: on a
+/// read-only profile the driver's re-run allowlist refuses what either engine refuses, whatever
+/// command asks (`CheckRepeat`, a `Resume` of a later page and a `Count`, which ask the server
+/// about the names first), and sends nothing of it. On the MariaDB server behind a MySQL 8.4.6
+/// greeting `BIN_TO_UUID` (no built-in of MariaDB's, which MySQL's rules allow); on the MySQL
+/// server behind a MariaDB 11.4.13 greeting a quoted `DATABASE` (which only MariaDB reads as
+/// the built-in). A plain read runs and is asked about as before.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_disagreeing_session_is_judged_on_both_engines() {
+    let test = "a_disagreeing_session_is_judged_on_both_engines";
+    let Some(url) = my_url(test) else { return };
+    let server = Server::of(&url).await;
+    let sql = if server.mariadb {
+        "SELECT BIN_TO_UUID(UNHEX('00112233445566778899AABBCCDDEEFF')) AS u"
+    } else {
+        "SELECT `DATABASE`() AS d"
+    };
+    let mut s = TwoEngines::open(&url, test, true, &[]).await;
+    let resume = |id| DbCommand::Resume { id, sql: sql.into(), skip: 1, paging: PagingMode::NoHold, max_rows: None };
+    let commands = [
+        ("CheckRepeat", 1, DbCommand::CheckRepeat { id: 1, sql: sql.into() }),
+        ("Resume", 2, resume(2)),
+        ("Count", 3, TwoEngines::count(3, sql)),
+    ];
+    for (what, id, cmd) in commands {
+        let from = s.proxy.queries().len();
+        let got = s.ask(id, cmd).await;
+        let sent = s.proxy.queries()[from..].to_vec();
+        assert!(
+            matches!(got, Err(DbError::NotRepeatable(NotRepeatable::UserFunction))),
+            "{what}: {got:?}, sent {sent:?}"
+        );
+        assert!(sent.is_empty(), "{what}: nothing sent: {sent:?}");
+    }
+    let plain = "SELECT 1 AS a";
+    let got = s.ask(10, TwoEngines::execute(10, plain)).await;
+    assert!(got.as_deref().is_ok_and(|ev| ev.starts_with("Page")), "{got:?}");
+    let from = s.proxy.queries().len();
+    let got = s.ask(11, DbCommand::CheckRepeat { id: 11, sql: plain.into() }).await;
+    assert!(!matches!(got, Err(DbError::NotRepeatable(_))), "{got:?}");
+    assert!(s.proxy.queries().len() > from, "the server was asked, as before: {got:?}");
+}
+
+/// The next transaction's settings on a session whose greeting names the other engine: a
+/// statement counts as setting them when either engine's reading says so, the stronger answer
+/// winning. An executable comment for MySQL 8 (`/*!80000 … */`, which MariaDB reads as a
+/// comment) may set them: after it, whether it succeeded or failed, a count waits for a
+/// transaction to start or end (`NextTransactionSet`); a `COMMIT` clears that. A plain `SET
+/// TRANSACTION` sets them only once it succeeded. A start-up statement counts the same way. On
+/// the MariaDB server (behind a MySQL greeting) MySQL's reading counted it before too; on the
+/// MySQL server (behind a MariaDB greeting) MariaDB's reading alone counted it as nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_next_transaction_state_after_success_and_after_failure() {
+    let test = "the_next_transaction_state_after_success_and_after_failure";
+    let Some(url) = my_url(test) else { return };
+    let mut s = TwoEngines::open(&url, test, false, &[]).await;
+    let waits = |got: &Result<String, DbError>| matches!(got, Err(DbError::NextTransactionSet));
+    let mut id = 0;
+    let mut step = |sql: &'static str| {
+        id += 2;
+        (id, sql)
+    };
+    let steps: [(&str, Option<bool>, bool); 6] = [
+        // (statement, whether it succeeds where known, whether a count then waits)
+        ("/*!80000 SET TRANSACTION READ ONLY */", None, true),
+        ("COMMIT", Some(true), false),
+        // MySQL refuses the level; MariaDB reads only a comment, which it answers with OK.
+        ("/*!80000 SET TRANSACTION ISOLATION LEVEL NO_SUCH_LEVEL */", None, true),
+        ("COMMIT", Some(true), false),
+        ("SET TRANSACTION ISOLATION LEVEL NO_SUCH_LEVEL", Some(false), false),
+        ("SET TRANSACTION READ ONLY", Some(true), true),
+    ];
+    for (sql, succeeds, then_waits) in steps {
+        let (n, sql) = step(sql);
+        let ran = s.ask(n, TwoEngines::execute(n, sql)).await;
+        if let Some(ok) = succeeds {
+            assert_eq!(ran.is_ok(), ok, "{sql}: {ran:?}");
+        }
+        let got = s.ask(n + 1, TwoEngines::count(n + 1, "SELECT 1 AS a")).await;
+        assert_eq!(waits(&got), then_waits, "after {sql} ({ran:?}): {got:?}");
+    }
+    // A start-up statement counts the same way.
+    let mut s = TwoEngines::open(&url, test, false, &["/*!80000 SET TRANSACTION READ ONLY */"]).await;
+    let got = s.ask(1, TwoEngines::count(1, "SELECT 1 AS a")).await;
+    assert!(waits(&got), "after the start-up statement: {got:?}");
 }

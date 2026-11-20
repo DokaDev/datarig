@@ -2242,3 +2242,61 @@ fn a_group_counts_answer_is_read_within_its_budget() {
     assert_eq!(budget.take(GROUP_PREVIEW + GROUP_ROW_OVERHEAD), Ok(()));
     assert_eq!(budget.take(GROUP_PREVIEW + GROUP_ROW_OVERHEAD + 1), Err(DbError::SchemaChanged));
 }
+
+/// The classifier a session gets whose greeting names `greeting` and whose `VERSION()` line
+/// names the other engine, as the app's rules build it, and the dialect its text is read in.
+fn disagreeing(greeting: crate::engine::EngineId) -> (Dialect, Classifier) {
+    use crate::engine::{EngineFacts, EngineId, Fact, MyFacts, Rules, ServerFacts, Version, Why};
+    let Dialect::MySql(mode) = MY else { unreachable!() };
+    let (handshake, line, d) = match greeting {
+        EngineId::MySql => (Version::new(8, 4, 6), "11.4.13-MariaDB", Dialect::MySql(mode)),
+        EngineId::MariaDb | EngineId::Postgres => (Version::new(11, 4, 13), "8.4.6", Dialect::MariaDb(mode)),
+    };
+    let my = MyFacts { handshake, greeting };
+    let detail = match greeting {
+        EngineId::MySql => EngineFacts::MariaDb(my),
+        EngineId::MariaDb | EngineId::Postgres => EngineFacts::MySql(my),
+    };
+    let facts = ServerFacts {
+        version: Fact::Unknown(Why::EnginesDisagree),
+        version_text: Some(line.into()),
+        provider: Fact::Unknown(Why::NotChecked),
+        topology: Fact::Unknown(Why::EnginesDisagree),
+        detail,
+    };
+    (d, Rules::Server { facts: std::sync::Arc::new(facts), language: Language::Sql(d) }.classifier())
+}
+
+/// The filter bar of a session whose greeting and `VERSION()` line name different engines
+/// refuses what either engine's rules refuse, and allows a call only when both allow it. Behind a
+/// MariaDB greeting a quoted `COALESCE` or `MOD` is MariaDB's built-in but a stored function to
+/// MySQL, so it is answered as MySQL answers it (asked on a read-write profile, refused on a
+/// read-only one), where the greeting's engine lets it run. Every call of the filter allowlist
+/// is a built-in of MariaDB written either way, so behind a MySQL greeting the answers are the
+/// same on both engines, and so stay: `BIN_TO_UUID` asks and is refused on read-only as before.
+#[test]
+fn the_filter_bar_refuses_what_either_engine_refuses() {
+    use crate::engine::EngineId;
+    let Dialect::MySql(mode) = MY else { unreachable!() };
+    let (maria, maria_classifier) = disagreeing(EngineId::MariaDb);
+    for text in ["`COALESCE`(name, 'a') = 'a'", "`MOD`(id, 2) = 0"] {
+        for read_only in [false, true] {
+            let got = check_filter(text, &users(), &target(maria), &maria_classifier, read_only);
+            let today = check(maria, text, read_only);
+            let refusing = check(Dialect::MySql(mode), text, read_only);
+            assert_eq!(today, Ok(FilterVerdict::Clear), "{text}: MariaDB lets it run");
+            assert_ne!(refusing, today, "{text}: MySQL does not");
+            assert_eq!(got, refusing, "MariaDB greeting, read-only {read_only}: {text}");
+        }
+    }
+    let (my, my_classifier) = disagreeing(EngineId::MySql);
+    for text in ["BIN_TO_UUID(data) = 'a'", "id > 1", "NOW() > id"] {
+        for read_only in [false, true] {
+            let got = check_filter(text, &users(), &target(my), &my_classifier, read_only);
+            assert_eq!(got, check(my, text, read_only), "MySQL greeting, read-only {read_only}: {text}");
+            assert_eq!(got, check(Dialect::MariaDb(mode), text, read_only), "{text}");
+        }
+    }
+    let plain = "id > 1";
+    assert_eq!(check_filter(plain, &users(), &target(maria), &maria_classifier, true), check(maria, plain, true));
+}
