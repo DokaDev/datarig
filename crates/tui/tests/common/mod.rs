@@ -113,6 +113,29 @@ pub struct FakeDriver {
     pub no_cancel: Arc<AtomicBool>,
 }
 
+/// What a session on a PostgreSQL server of version `17.2` reached directly found it to be.
+pub fn pg_facts() -> Arc<datarig_core::engine::ServerFacts> {
+    use datarig_core::engine::{EngineFacts, Fact, PgFacts, ServerFacts, Topology, Version, Why};
+    Arc::new(ServerFacts {
+        version: Fact::Known(Version::new(17, 2, 0)),
+        version_text: None,
+        provider: Fact::Unknown(Why::NotChecked),
+        topology: Fact::Known(Topology::Direct),
+        detail: EngineFacts::Postgres(PgFacts::default()),
+    })
+}
+
+/// Whether tab `index` is judged by what a session found its server to be
+/// (`Rules::Server`), on profile `profile` (the tab is bound to it first).
+pub fn judged_by_facts(h: &mut Harness, index: usize, profile: datarig_core::profile::ProfileId) -> bool {
+    let tab = h.app.tabs.iter().nth(index).expect("tab").id;
+    h.app.tabs.bind(tab, Some(profile));
+    match h.app.rules(tab) {
+        datarig_core::engine::Rules::Server { .. } => true,
+        datarig_core::engine::Rules::Unbound | datarig_core::engine::Rules::Expected { .. } => false,
+    }
+}
+
 /// What a test connection to a PostgreSQL server of version `17.2` says of it.
 pub fn pg_identity() -> datarig_core::engine::PingIdentity {
     use datarig_core::engine::{EngineId, Fact, PingIdentity, Version};

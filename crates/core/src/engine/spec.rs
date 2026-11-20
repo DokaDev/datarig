@@ -1,8 +1,11 @@
 //! What is fixed per engine, known without a connection: one [`EngineSpec`] per engine.
 
-use super::EngineId;
+use super::{EngineId, ServerFacts};
 use crate::driver::Hierarchy;
 use crate::profile::dsn::Scheme;
+use crate::sql::dialect::{Dialect, DollarQuotes};
+use crate::sql::risk::Classifier;
+use crate::sql::risk::mysql::Judged;
 
 /// How datarig reaches an engine's server.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,4 +35,21 @@ pub struct EngineSpec {
     pub form_key: &'static str,
     /// How its namespaces nest.
     pub hierarchy: Hierarchy,
+    /// How its text is read.
+    pub text: &'static dyn TextRules,
+    /// How its statements are judged.
+    pub risk: &'static dyn RiskRules,
+}
+
+/// How an engine's text is read on a server.
+pub trait TextRules: Sync {
+    /// Whether a session on the server of `f` reads `$$…$$` as a quote.
+    fn dollar_quotes(&self, f: &ServerFacts) -> DollarQuotes;
+}
+
+/// How an engine's statements are judged.
+pub trait RiskRules: Sync {
+    /// A fresh classifier of text in dialect `d`, its calls judged on the engines `j` says, for
+    /// a session that prepared nothing.
+    fn new_classifier(&self, d: Dialect, j: Judged) -> Classifier;
 }

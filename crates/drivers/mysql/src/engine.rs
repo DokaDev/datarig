@@ -210,7 +210,7 @@ pub(crate) struct Derived {
 pub(crate) fn derive(facts: &ServerFacts, tracked: &Tracked) -> Derived {
     // The greeting's engine and number, whichever engine the version line names.
     let server = Server::of(facts);
-    let language = Language::Sql(dialect(&server, tracked.mode(&server)));
+    let language = Language::Sql(dialect(&server, tracked.mode(dollar_quotes(facts))));
     let (major, minor, patch) = server.version;
     let version = Version::new(major, minor, patch);
     let (explain, edit) = match server.mariadb {
@@ -221,6 +221,12 @@ pub(crate) fn derive(facts: &ServerFacts, tracked: &Tracked) -> Derived {
         true => (None, None),
     };
     Derived { language, explain, edit, capabilities: Capabilities { language, explain, edit, ..CAPABILITIES } }
+}
+
+/// Whether a session on the server of `facts` reads dollar quotes: as the rules of the engine
+/// its version line names say ([`datarig_core::engine::TextRules`]).
+pub(crate) fn dollar_quotes(facts: &ServerFacts) -> DollarQuotes {
+    facts.engine().spec().text.dollar_quotes(facts)
 }
 
 /// The dialect a session on `server` (as its greeting says) reads its text in, in sql mode

@@ -481,7 +481,7 @@ pub(crate) async fn query_loop(
         server,
         facts: &facts,
     };
-    let dialect = crate::engine::dialect(&server, tracked.mode(&server));
+    let dialect = crate::engine::dialect(&server, tracked.mode(crate::engine::dollar_quotes(&facts)));
     let values = tracked.values();
     let isolation = tracked.isolation();
     let autocommit = tracked.autocommit != Some(false);
@@ -1353,7 +1353,7 @@ async fn after(
         let limit = limit_value(&v);
         s.limit = Limit { current: limit, user: limit };
     }
-    let dialect = crate::engine::dialect(&env.server, s.tracked.mode(&env.server));
+    let dialect = crate::engine::dialect(&env.server, s.tracked.mode(crate::engine::dollar_quotes(env.facts)));
     if dialect != s.dialect {
         s.dialect = dialect;
         let _ = env.events.send(DbEvent::Language(crate::engine::derive(env.facts, &s.tracked).language));

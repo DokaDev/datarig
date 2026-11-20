@@ -1,8 +1,9 @@
 //! Engine identity: the engines by name ([`EngineId`]), what a profile's driver name expects
 //! before a server answered ([`Expected`], from [`expected`], the one reader of driver names),
 //! what one connection found its server to be ([`ServerFacts`], each answer a [`Fact`] with a
-//! [`Why`] when it is not known) and what is fixed per engine ([`EngineSpec`], one row per
-//! engine in the registry [`EngineId::spec`]).
+//! [`Why`] when it is not known), what is fixed per engine ([`EngineSpec`], one row per
+//! engine in the registry [`EngineId::spec`], with the rules its text and statements are read
+//! and judged by) and what the app knows of a tab's server ([`Rules`]).
 //!
 //! `id`, `why` and `facts` are plain vocabulary: they import nothing else of this crate.
 
@@ -12,12 +13,14 @@ mod mariadb;
 mod mysql;
 pub mod mysql_family;
 mod postgres;
+mod rules;
 mod spec;
 mod why;
 
 pub use facts::{EngineFacts, Fact, MyFacts, PgFacts, PingIdentity, Provider, ServerFacts, Support, Topology, Version};
 pub use id::{EngineId, Expected};
-pub use spec::{EngineSpec, Transport};
+pub use rules::{Rules, UNBOUND_TAB_DIALECT};
+pub use spec::{EngineSpec, RiskRules, TextRules, Transport};
 pub use why::Why;
 
 use crate::profile::dsn::Scheme;

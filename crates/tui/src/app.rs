@@ -128,6 +128,7 @@ use crate::widgets::tree::TreeAction;
 use action::{Action, ExplorerAction, GridAction, LangSetting, REGISTRY};
 use datarig_core::config::{self, Config, ConfigError, IconsSetting, KeychainAccess, Profiles, Settings};
 use datarig_core::driver::{ConnectOptions, DbCommand, DbEvent, Outcome, PingError, PingInfo, Session, SessionRole};
+use datarig_core::engine::Rules;
 use datarig_core::migrate::{self, Keychain};
 use datarig_core::paths::Paths;
 use datarig_core::policy::Policies;
@@ -985,20 +986,41 @@ impl App {
         }
     }
 
-    /// The language tab `tab`'s text is in: its profile's driver's
-    /// (`Capabilities::language`), as its session said it reads it (`DbEvent::Language`: a
-    /// MySQL or MariaDB session's engine and sql mode), else as the profile's last session said;
-    /// the default for a tab without a profile, or whose profile or driver is unknown.
-    pub fn tab_language(&self, tab: TabId) -> Language {
+    /// What the app knows of the server tab `tab`'s text is for: every engine question of the
+    /// tab is asked of it. Without a profile (or with one that is not there), [`Rules::Unbound`].
+    /// Before a session of its profile said what its server is, [`Rules::Expected`], the
+    /// pre-connect judge: the language its session said it reads its text in
+    /// (`DbEvent::Language`: a MySQL or MariaDB session's engine and sql mode), else the one the
+    /// profile's last session said, each only when it is of an engine the profile expects (a
+    /// MySQL profile may reach MariaDB, and the reverse; the profile may have changed its
+    /// driver), else its driver's (`Capabilities::language`; the default when no driver serves
+    /// it). Once the tab's open session, else the profile's open metadata session of the
+    /// current attempt, said what its server is (of an engine the profile expects), [`Rules::Server`]
+    /// with those facts, its text read in the same language.
+    pub fn rules(&self, tab: TabId) -> Rules {
         let t = self.tabs.get(tab);
-        let profile = t.and_then(|t| t.profile);
-        let driver = self.profile_language(profile);
-        // Only a language of an engine the profile expects (a MySQL profile may reach MariaDB,
-        // and the reverse): the profile may have changed its driver.
-        let expected = profile.and_then(|id| self.profile(id)).map(|p| p.expected());
-        let same = |l: &Language| expected.as_ref().is_some_and(|e| e.admits(l.dialect().engine()));
-        let last = profile.and_then(|p| self.conns.get(p)).and_then(|c| c.language);
-        t.and_then(|t| t.exec.language).filter(same).or(last.filter(same)).unwrap_or(driver)
+        let Some((id, profile)) = t.and_then(|t| t.profile).and_then(|id| Some((id, self.profile(id)?))) else {
+            return Rules::Unbound;
+        };
+        let expected = profile.expected();
+        let same = |l: &Language| expected.admits(l.dialect().engine());
+        let conn = self.conns.get(id);
+        let profile_last = conn.and_then(|c| c.language);
+        let last = t.and_then(|t| t.exec.language).filter(same).or(profile_last.filter(same));
+        // The profile's: only while its metadata session that said them is open.
+        let meta = conn.filter(|c| c.meta.is_some()).and_then(|c| c.facts.as_ref());
+        let facts = t.and_then(|t| t.exec.current_facts()).or(meta);
+        let facts = facts.filter(|f| expected.admits(f.engine())).cloned();
+        let rules = Rules::Expected { expected, last, driver: self.profile_language(Some(id)) };
+        match facts {
+            Some(facts) => Rules::Server { facts, language: rules.language() },
+            None => rules,
+        }
+    }
+
+    /// The language tab `tab`'s text is in ([`App::rules`]).
+    pub fn tab_language(&self, tab: TabId) -> Language {
+        self.rules(tab).language()
     }
 
     /// The SQL dialect the app writes in for tab `tab`: its classifier's language (what its
@@ -1047,15 +1069,17 @@ impl App {
         self.driver(&profile.driver).map(|d| d.capabilities())
     }
 
-    /// Tab `tab`'s editor and risk classifier follow its language ([`App::tab_language`]), once
-    /// the tab appears or its binding (or its profile's driver) changes. Another language gets
-    /// a new classifier, with nothing prepared.
+    /// Tab `tab`'s editor and risk classifier follow its language ([`App::rules`]), once the
+    /// tab appears or its binding (or its profile's driver) changes. Another language gets a
+    /// new classifier of the tab's rules, with nothing prepared; what the server was found to be
+    /// rebuilds none.
     pub(crate) fn sync_tab_language(&mut self, tab: TabId) {
-        let lang = self.tab_language(tab);
+        let rules = self.rules(tab);
+        let lang = rules.language();
         let Some(t) = self.tabs.get_mut(tab) else { return };
         t.editor.set_language(lang);
         if t.exec.prepared.language() != lang {
-            t.exec.prepared = Classifier::new(lang);
+            t.exec.prepared = rules.classifier();
         }
     }
 

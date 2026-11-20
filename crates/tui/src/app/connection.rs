@@ -253,8 +253,9 @@ impl App {
         t.exec.session_pooled = false;
         // A new session is another server session: asked again which.
         t.exec.own = super::tabs::OwnAsk::NotAsked;
-        // The new session says its own language once it connects.
+        // The new session says its own language and server once it connects.
         t.exec.language = None;
+        t.exec.facts = None;
         let context = t.context.clone();
         let session = self.open_session(cfg, SessionRole::Query, EventTarget::Tab(id), generation, context);
         let read_only = self.session_read_only(cfg);
@@ -360,8 +361,12 @@ impl App {
         // A DDL that was asked for is never answered now (one waiting for the connection
         // still waits: a new attempt may follow).
         self.ddl_stop(id, None, super::tabs::DdlState::NotLoaded, false);
-        if let Some(s) = self.conns.get_mut(id).and_then(|c| c.meta.take()) {
-            s.close();
+        if let Some(c) = self.conns.get_mut(id) {
+            if let Some(s) = c.meta.take() {
+                s.close();
+            }
+            // What the closed session found its server to be goes with it.
+            c.facts = None;
         }
         self.conns.close_aux(Some(id));
     }
@@ -374,6 +379,7 @@ impl App {
             if let Some(s) = c.meta.take() {
                 s.close();
             }
+            c.facts = None;
         }
     }
 
@@ -473,6 +479,7 @@ impl App {
         let c = self.conns.entry(id);
         c.connecting = None;
         c.connected = false;
+        c.facts = None;
         c.expand_on_connect = false;
         c.console = None;
         c.error = Some(why);

@@ -15,6 +15,14 @@ fn facts_84() -> Arc<datarig_core::engine::ServerFacts> {
     crate::engine::facts(&g, &crate::engine::VersionReport::agreeing(&g), None)
 }
 
+/// How a session on `server` reads dollar quotes when nothing is in between: its facts' answer.
+fn dollar_quotes(server: &Server) -> DollarQuotes {
+    let (major, minor, patch) = server.version;
+    let handshake = datarig_core::engine::Version::new(major, minor, patch);
+    let g = crate::engine::Greeting { mariadb: server.mariadb, handshake };
+    crate::engine::dollar_quotes(&crate::engine::facts(&g, &crate::engine::VersionReport::agreeing(&g), None))
+}
+
 #[test]
 fn versions_before_mysql_8_and_mariadb_10_6_are_refused_with_their_name() {
     let refused = |version, mariadb| Server { version, mariadb }.check().err();
@@ -131,27 +139,36 @@ fn one_set_sets_the_session_up_by_role() {
 #[test]
 fn the_mode_follows_the_sql_mode_the_version_and_the_server() {
     let tracked = |mode: &str| Tracked { sql_mode: Some(mode.into()), ..Tracked::default() };
-    assert_eq!(tracked("").mode(&MYSQL_84), MySqlMode { dollar_quotes: DollarQuotes::Read, ..MySqlMode::default() });
+    assert_eq!(
+        tracked("").mode(dollar_quotes(&MYSQL_84)),
+        MySqlMode { dollar_quotes: DollarQuotes::Read, ..MySqlMode::default() }
+    );
     let ansi = tracked("REAL_AS_FLOAT,PIPES_AS_CONCAT,ANSI_QUOTES,IGNORE_SPACE,ONLY_FULL_GROUP_BY,ANSI");
-    assert!(ansi.mode(&MYSQL_84).ansi_quotes);
-    assert!(!ansi.mode(&MYSQL_84).no_backslash_escapes);
+    assert!(ansi.mode(dollar_quotes(&MYSQL_84)).ansi_quotes);
+    assert!(!ansi.mode(dollar_quotes(&MYSQL_84)).no_backslash_escapes);
     // `IGNORE_SPACE` (which `ANSI` has): only as reported; not known reads as off.
-    assert!(ansi.mode(&MYSQL_84).ignore_space && tracked("IGNORE_SPACE").mode(&MYSQL_84).ignore_space);
-    assert!(!tracked("").mode(&MYSQL_84).ignore_space && !Tracked::default().mode(&MYSQL_84).ignore_space);
-    assert!(!tracked("NO_IGNORE_SPACE_X").mode(&MYSQL_84).ignore_space);
-    assert!(tracked("STRICT_TRANS_TABLES,NO_BACKSLASH_ESCAPES").mode(&MYSQL_84).no_backslash_escapes);
+    assert!(
+        ansi.mode(dollar_quotes(&MYSQL_84)).ignore_space
+            && tracked("IGNORE_SPACE").mode(dollar_quotes(&MYSQL_84)).ignore_space
+    );
+    assert!(
+        !tracked("").mode(dollar_quotes(&MYSQL_84)).ignore_space
+            && !Tracked::default().mode(dollar_quotes(&MYSQL_84)).ignore_space
+    );
+    assert!(!tracked("NO_IGNORE_SPACE_X").mode(dollar_quotes(&MYSQL_84)).ignore_space);
+    assert!(tracked("STRICT_TRANS_TABLES,NO_BACKSLASH_ESCAPES").mode(dollar_quotes(&MYSQL_84)).no_backslash_escapes);
     // A flag is matched whole.
-    assert!(!tracked("NO_ANSI_QUOTES_X").mode(&MYSQL_84).ansi_quotes);
+    assert!(!tracked("NO_ANSI_QUOTES_X").mode(dollar_quotes(&MYSQL_84)).ansi_quotes);
     let mysql80 = Server { version: (8, 0, 45), mariadb: false };
-    assert_eq!(tracked("").mode(&mysql80).dollar_quotes, DollarQuotes::NotRead);
+    assert_eq!(tracked("").mode(dollar_quotes(&mysql80)).dollar_quotes, DollarQuotes::NotRead);
     let maria_server = Server { version: (11, 4, 2), mariadb: true };
-    let maria = tracked("").mode(&maria_server);
+    let maria = tracked("").mode(dollar_quotes(&maria_server));
     assert_eq!(maria.dollar_quotes, DollarQuotes::NotRead);
     // Which server it is: the read check counts only the functions MariaDB provides as built-ins.
     assert_eq!(crate::engine::dialect(&maria_server, maria), Dialect::MariaDb(maria));
-    let mode = tracked("").mode(&MYSQL_84);
+    let mode = tracked("").mode(dollar_quotes(&MYSQL_84));
     assert_eq!(crate::engine::dialect(&MYSQL_84, mode), Dialect::MySql(mode));
-    let mode = tracked("").mode(&mysql80);
+    let mode = tracked("").mode(dollar_quotes(&mysql80));
     assert_eq!(crate::engine::dialect(&mysql80, mode), Dialect::MySql(mode));
 }
 

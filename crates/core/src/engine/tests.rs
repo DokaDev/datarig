@@ -170,3 +170,71 @@ fn the_engine_of_facts_is_its_detail() {
     assert_eq!(facts(EngineFacts::MySql(my.clone())).engine(), EngineId::MySql);
     assert_eq!(facts(EngineFacts::MariaDb(my)).engine(), EngineId::MariaDb);
 }
+
+/// The facts of a server reached directly whose greeting and version line agree: `engine` at
+/// `version`.
+fn agreeing(engine: EngineId, version: Version) -> ServerFacts {
+    let my = MyFacts { handshake: version, greeting: engine };
+    ServerFacts {
+        version: Fact::Known(version),
+        version_text: None,
+        provider: Fact::Unknown(Why::NotChecked),
+        topology: Fact::Known(Topology::Direct),
+        detail: match engine {
+            EngineId::Postgres => EngineFacts::Postgres(PgFacts::default()),
+            EngineId::MySql => EngineFacts::MySql(my),
+            EngineId::MariaDb => EngineFacts::MariaDb(my),
+        },
+    }
+}
+
+#[test]
+fn every_spec_answers_dollar_quotes_as_the_greeting_did() {
+    use crate::sql::dialect::DollarQuotes::{NotRead, Read};
+    // Each server, and what its greeting said: MySQL from 8.1.0 on reads them, MySQL 8.0 and
+    // MariaDB do not; PostgreSQL always does.
+    let table = [
+        (EngineId::MySql, Version::new(8, 0, 36), NotRead),
+        (EngineId::MySql, Version::new(8, 1, 0), Read),
+        (EngineId::MySql, Version::new(8, 4, 6), Read),
+        (EngineId::MariaDb, Version::new(11, 4, 13), NotRead),
+        (EngineId::Postgres, Version::new(17, 2, 0), Read),
+    ];
+    for (engine, version, want) in table {
+        let facts = agreeing(engine, version);
+        assert_eq!(engine.spec().text.dollar_quotes(&facts), want, "{engine:?} {version:?}");
+        // The family's engines share the rule: the greeting decides, not the spec asked.
+        if engine != EngineId::Postgres {
+            for other in [EngineId::MySql, EngineId::MariaDb] {
+                assert_eq!(other.spec().text.dollar_quotes(&facts), want, "{other:?} on {engine:?} {version:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn rules_answer_the_language_before_and_after_the_server_said() {
+    use crate::sql::dialect::{Dialect, Language, MySqlMode};
+    use crate::sql::risk::Classifier;
+    use std::sync::Arc;
+    let pg = Language::Sql(Dialect::Postgres);
+    let my = Language::Sql(Dialect::MySql(MySqlMode::default()));
+    let maria = Language::Sql(Dialect::MariaDb(MySqlMode { ansi_quotes: true, ..MySqlMode::default() }));
+    let family = expected("mysql");
+    assert_eq!(Rules::Unbound.language(), pg);
+    assert_eq!(Rules::Unbound.language().dialect(), UNBOUND_TAB_DIALECT);
+    // Before the server said: the last language said of an expected engine, else the driver's.
+    let before = |expected: &Expected, last| Rules::Expected { expected: expected.clone(), last, driver: my };
+    assert_eq!(before(&family, None).language(), my);
+    assert_eq!(before(&family, Some(maria)).language(), maria);
+    assert_eq!(before(&expected("postgres"), Some(maria)).language(), my, "not an engine it expects");
+    assert_eq!(before(&expected("redis"), Some(pg)).language(), my, "no engine serves it");
+    // Once it said: the language it was given, whatever the facts.
+    let facts = Arc::new(agreeing(EngineId::MySql, Version::new(8, 4, 6)));
+    assert_eq!(Rules::Server { facts, language: maria }.language(), maria);
+    // A fresh classifier of that language, as `Classifier::new` builds it.
+    for lang in [pg, my, maria] {
+        let rules = Rules::Expected { expected: family.clone(), last: None, driver: lang };
+        assert_eq!(rules.classifier(), Classifier::new(lang), "{lang:?}");
+    }
+}

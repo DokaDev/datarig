@@ -1410,3 +1410,24 @@ fn the_profile_forms_test_comes_back_after_a_new_tunnel() {
     assert_eq!(h.form().ssh_choice(), SshChoice::Preset("hq".into()));
     assert_eq!(test_lines(&h), shown, "saved");
 }
+
+/// A lost shared tunnel ends the metadata session of every profile on it on the app's side:
+/// what those sessions found their servers to be is not used after it.
+#[test]
+fn a_lost_shared_tunnel_drops_what_the_sessions_on_it_found_the_server_to_be() {
+    let mut h = harness();
+    let (a, b) = (id_of(&h, "local-pg"), id_of(&h, "v6"));
+    connect(&mut h, "local-pg");
+    connect(&mut h, "v6");
+    shared(&mut h, 1, TunnelEvent::Opened(Arc::new(FakeTunnel::default())));
+    for name in ["local-pg", "v6"] {
+        h.meta_db(name, DbEvent::Server(pg_facts()));
+        h.meta_db(name, DbEvent::Connected);
+    }
+    assert!(judged_by_facts(&mut h, 0, a) && judged_by_facts(&mut h, 0, b));
+    shared(&mut h, 1, TunnelEvent::Lost(Loss::Keepalive));
+    for p in [a, b] {
+        assert_eq!(h.app.conns.get(p).and_then(|c| c.facts.clone()), None);
+        assert!(!judged_by_facts(&mut h, 0, p), "the closed session's facts are not used");
+    }
+}

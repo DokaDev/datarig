@@ -281,6 +281,9 @@ pub struct TabSession {
     /// The language `session` said its text is read in (`DbEvent::Language`: a MySQL session's
     /// sql mode); `None` until it says, and for a driver whose sessions do not.
     pub language: Option<datarig_core::sql::dialect::Language>,
+    /// What `session` found its server to be (`DbEvent::Server`), with the generation of the
+    /// session that said it: only that session's ([`TabSession::current_facts`]).
+    pub facts: Option<(u64, std::sync::Arc<datarig_core::engine::ServerFacts>)>,
     /// What `session`'s values are read in (`DbEvent::SessionValues`: a MySQL session's time
     /// zone and results character set); `None` until it says, and for a driver whose sessions
     /// do not.
@@ -365,6 +368,15 @@ pub struct Reading {
 }
 
 impl TabSession {
+    /// What the tab's session that is open now found its server to be; `None` before it says,
+    /// without a session, and for the facts of a session that ended (another generation).
+    pub fn current_facts(&self) -> Option<&std::sync::Arc<datarig_core::engine::ServerFacts>> {
+        match &self.facts {
+            Some((generation, facts)) if *generation == self.generation && self.session.is_some() => Some(facts),
+            Some(_) | None => None,
+        }
+    }
+
     fn new() -> Self {
         Self {
             session: None,
@@ -407,6 +419,7 @@ impl TabSession {
             context: None,
             path_per_transaction: false,
             language: None,
+            facts: None,
             values: None,
             text: None,
             reading: Reading::default(),
@@ -1459,8 +1472,9 @@ impl TabManager {
         t.context = context;
         t.doc.kept_profile = None;
         t.binding = binding;
-        // What the old binding's session said of its language is not this one's.
+        // What the old binding's session said of its language and its server is not this one's.
         t.exec.language = None;
+        t.exec.facts = None;
         self.last_used.retain(|_, t| *t != id);
         if let (Some(p), true) = (profile, active) {
             self.last_used.insert(p, id);
