@@ -347,6 +347,9 @@ pub struct RunConfirm {
     /// itself): only on the tab's session `generation`, still open.
     pub as_is: bool,
     pub generation: u64,
+    /// What a yes approves: what it shows, and for a statement offered to run as it is, what
+    /// the user said yes to for it before.
+    pub approved: Vec<super::safety::Dangerous>,
     pub buttons: Buttons,
 }
 

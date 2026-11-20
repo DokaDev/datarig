@@ -434,6 +434,9 @@ impl DbCommand {
     /// Whether this command starts a run; one that is part of a run, or that a cancel never
     /// stops, does not.
     pub fn starts_run(&self) -> bool {
+        if let DbCommand::Judged { command, .. } = self {
+            return command.starts_run();
+        }
         matches!(
             self,
             DbCommand::Execute { .. }
@@ -468,6 +471,7 @@ impl DbCommand {
             DbCommand::ApplyEdits { id, .. } => {
                 DbEvent::Applied { id: *id, result: Err(ApplyFailure { step: None, why: ApplyError::Db(error) }) }
             }
+            DbCommand::Judged { command, .. } => return command.unsent(error, cancelled),
             _ => return None,
         })
     }

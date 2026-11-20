@@ -698,7 +698,10 @@ pub(crate) async fn open(
     };
     // How the session reads dollar quotes, as its server's facts say (how the session reaches
     // the server plays no part in it).
-    let dollar_quotes = crate::engine::dollar_quotes(&crate::engine::facts(&greeting, &report, None));
+    let facts = crate::engine::facts(&greeting, &report, None);
+    let dollar_quotes = crate::engine::dollar_quotes(&facts);
+    // On which engines' rules its statements are judged.
+    let judged = facts.judged();
     // Start-up statements are user text: when whether the server reads dollar quotes is not
     // known, one that could open a dollar quote is sent in no reading, and nothing else of the
     // session's set-up runs.
@@ -738,7 +741,7 @@ pub(crate) async fn open(
         tracked.update(&conn);
         // Settings for the next transaction only, which the server does not report.
         let dialect = crate::engine::dialect(&server, tracked.mode(dollar_quotes));
-        if crate::query::sets_next_transaction(sql, dialect) != crate::query::SetsNext::No {
+        if crate::query::sets_next_transaction(sql, dialect, judged) != crate::query::SetsNext::No {
             tracked.next_once = true;
         }
     }

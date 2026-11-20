@@ -333,3 +333,52 @@ fn each_family_classifier_judges_on_its_engines_lists() {
         }
     }
 }
+
+/// On a session whose greeting and `VERSION()` line name different engines, a statement whose
+/// transaction step the two engines' rules give differently opens the transaction; where they
+/// agree, that step. `BIN_TO_UUID` and `` `DATABASE`() `` are a plain read on one engine and a
+/// call of the user's code on the other.
+#[test]
+fn with_sibling_a_step_the_engines_disagree_on_opens() {
+    use crate::engine::{EngineFacts, EngineId, Fact, MyFacts, Rules, ServerFacts, Version, Why};
+    let mode = MySqlMode::default();
+    let mysql = Classifier::new(Language::Sql(Dialect::MySql(mode)));
+    let mariadb = Classifier::new(Language::Sql(Dialect::MariaDb(mode)));
+    let disagreeing = |greeting: EngineId| {
+        let (handshake, line, d) = match greeting {
+            EngineId::MySql => (Version::new(8, 4, 6), "11.4.13-MariaDB", Dialect::MySql(mode)),
+            EngineId::MariaDb | EngineId::Postgres => (Version::new(11, 4, 13), "8.4.6", Dialect::MariaDb(mode)),
+        };
+        let my = MyFacts { handshake, greeting };
+        let detail = match greeting {
+            EngineId::MySql => EngineFacts::MariaDb(my),
+            EngineId::MariaDb | EngineId::Postgres => EngineFacts::MySql(my),
+        };
+        let facts = ServerFacts {
+            version: Fact::Unknown(Why::EnginesDisagree),
+            version_text: Some(line.into()),
+            provider: Fact::Unknown(Why::NotChecked),
+            topology: Fact::Unknown(Why::EnginesDisagree),
+            detail,
+        };
+        Rules::Server { facts: std::sync::Arc::new(facts), language: Language::Sql(d) }.classifier()
+    };
+    for greeting in [EngineId::MySql, EngineId::MariaDb] {
+        let c = disagreeing(greeting);
+        for sql in [
+            "SELECT BIN_TO_UUID(a) FROM t",
+            "SELECT `DATABASE`()",
+            "SELECT a FROM t",
+            "UPDATE t SET a = 1 WHERE id = 2",
+            "SHOW TABLES",
+            "COMMIT",
+        ] {
+            let (a, b) = (mysql.tx_step(sql), mariadb.tx_step(sql));
+            let want = if a == b { a } else { TxStep::Opens };
+            assert_eq!(c.tx_step(sql), want, "{greeting:?} greeting: {sql}");
+        }
+        assert_ne!(mysql.tx_step("SELECT BIN_TO_UUID(a) FROM t"), mariadb.tx_step("SELECT BIN_TO_UUID(a) FROM t"));
+        assert_eq!(c.tx_step("SELECT BIN_TO_UUID(a) FROM t"), TxStep::Opens, "{greeting:?}");
+        assert_eq!(c.tx_step("SELECT `DATABASE`()"), TxStep::Opens, "{greeting:?}");
+    }
+}

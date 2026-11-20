@@ -84,7 +84,8 @@ impl App {
             if let Some(t) = self.tabs.get_mut(id) {
                 t.exec.facts = Some((t.exec.generation, facts));
             }
-            return;
+            // What the profile's statements are judged on was fed already (`on_target_event`).
+            return self.sync_tab_language(id);
         }
         // The plan format of the profile's server: a query session's word is the profile's.
         if let DbEvent::Explain(format) = ev {
@@ -1000,7 +1001,7 @@ impl App {
                     let m = Notice::new(
                         crate::app::pages::first_page_only(
                             &self.i18n,
-                            t.exec.prepared.language(),
+                            &t.exec.prepared.fresh(),
                             t.answer_sql(),
                             &r,
                             count as u64,

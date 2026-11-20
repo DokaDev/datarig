@@ -106,7 +106,7 @@ use datarig_core::engine::ServerFacts;
 use datarig_core::sql::dialect::{Dialect, DollarQuotes};
 use datarig_core::sql::lexer::mysql::has_dollar_opener;
 use datarig_core::sql::lexer::{Tok, Token, lex_in};
-use datarig_core::sql::risk::mysql::{self as risk, Judge};
+use datarig_core::sql::risk::mysql::{self as risk, Judge, Judged};
 use datarig_core::sql::risk::repeat::NotRepeatable;
 use datarig_core::sql::risk::{Class, Danger, Risk};
 use futures::future::BoxFuture;
@@ -209,6 +209,8 @@ struct State {
     tracked: Tracked,
     /// The dialect and sql mode last reported to the app (`DbEvent::Language`).
     dialect: Dialect,
+    /// On which engines' rules the session's text is judged, as its server's facts say.
+    judged: Judged,
     /// What the values are read in, as last reported to the app (`DbEvent::SessionValues`).
     values: Option<SessionValues>,
     /// The isolation level as last reported to the app (`DbEvent::Isolation`).
@@ -228,9 +230,11 @@ struct State {
 }
 
 impl State {
-    /// How the classifier judges the session's text: its engine's lists, in its sql mode.
+    /// How the classifier judges the session's text: its engine's lists (and the other
+    /// engine's, when its server's reports name both), in its sql mode. Every judgement of the
+    /// session's text goes through it.
     fn judge(&self) -> Judge {
-        crate::engine::risk_judge(self.dialect)
+        crate::engine::risk_judge(self.dialect, self.judged)
     }
 }
 
@@ -492,6 +496,7 @@ pub(crate) async fn query_loop(
     let mut s = State {
         tracked,
         dialect,
+        judged: facts.judged(),
         values,
         isolation,
         routine: false,
@@ -502,7 +507,14 @@ pub(crate) async fn query_loop(
         request: 0,
     };
     let stop = loop {
-        let next = link.next().await;
+        // A command of user text comes with the engines whose rules the app judged it on.
+        let (judged, next) = match link.next().await {
+            Next::Command(cmd) => {
+                let (judged, cmd) = cmd.unwrap_judged();
+                (judged, Next::Command(cmd))
+            }
+            next => (Judged::Own, next),
+        };
         // Cancelled while it waited its turn: answered, never run.
         if let Next::Command(cmd) = &next
             && cmd.cancelled_before_start(&asked, &events)
@@ -516,6 +528,18 @@ pub(crate) async fn query_loop(
             && user_text(cmd).into_iter().any(has_dollar_opener)
         {
             if let Some(answer) = cmd.unsent(DbError::DollarQuotesUnknown, false) {
+                let _ = events.send(answer);
+            }
+            continue;
+        }
+        // Judged on fewer engines' rules than the session's server's reports name (the app
+        // judged it before the session said so): nothing of it is sent, and the user runs it
+        // again, judged anew.
+        if let Next::Command(cmd) = &next
+            && cmd.carries_user_text()
+            && judged_on_fewer(judged, s.judged)
+        {
+            if let Some(answer) = cmd.unsent(DbError::ReportsChanged, false) {
                 let _ = events.send(answer);
             }
             continue;
@@ -676,6 +700,16 @@ fn user_text(cmd: &DbCommand) -> Vec<&str> {
         | DbCommand::MonitorReplication { .. }
         | DbCommand::MonitorAction { .. }
         | DbCommand::MonitorFollowUp { .. } => Vec::new(),
+        DbCommand::Judged { command, .. } => user_text(command),
+    }
+}
+
+/// Whether a command judged on the engines of `judged` was judged on fewer than a session
+/// judged on `session`.
+fn judged_on_fewer(judged: Judged, session: Judged) -> bool {
+    match (judged, session) {
+        (Judged::Own, Judged::WithSibling) => true,
+        (Judged::Own, Judged::Own) | (Judged::WithSibling, _) => false,
     }
 }
 
@@ -695,6 +729,7 @@ fn unanswered(events: &UnboundedSender<DbEvent>, c: DbCommand, error: &DbError) 
             let why = datarig_core::driver::ApplyError::Db(error.clone());
             DbEvent::Applied { id, result: Err(datarig_core::driver::ApplyFailure { step: None, why }) }
         }
+        DbCommand::Judged { command, .. } => return unanswered(events, *command, error),
         // Nothing to answer: a page of a result that is gone, a close of one.
         _ => return,
     };
@@ -1097,7 +1132,7 @@ async fn statement<'a>(
     }
     // Only what is sent may set the next transaction's own settings: a statement refused before
     // it was sent sets nothing.
-    s.sets_next = sets_next_transaction(sql, s.dialect);
+    s.sets_next = sets_next_transaction(sql, s.dialect, s.judged);
     let sent = halt!(link.guard(Some(env.killer), conn.query_iter(sql)).await, Some(reply));
     let mut qr = match sent {
         Ok(qr) => qr,
@@ -1684,6 +1719,16 @@ async fn hold_on(
                 continue;
             }
         };
+        // A command that waits keeps the engines it was judged on (checked when its turn
+        // comes); what it is decides what happens here.
+        let (judged, next) = match next {
+            Next::Command(DbCommand::Judged { judged, command }) => (Some(judged), Next::Command(*command)),
+            next => (None, next),
+        };
+        let kept = |command: DbCommand| match judged {
+            Some(judged) => DbCommand::Judged { judged, command: Box::new(command) },
+            None => command,
+        };
         match next {
             Next::Command(DbCommand::FetchMore { id: fid }) if fid == id => {
                 let t0 = Instant::now();
@@ -1727,7 +1772,7 @@ async fn hold_on(
                 | DbCommand::GroupCount { .. }
                 | DbCommand::Estimate { .. }
                 | DbCommand::CheckRepeat { .. }),
-            ) => held.waiting.push(c),
+            ) => held.waiting.push(kept(c)),
             // Answered from what is known (nothing is sent while the result is read): it goes on.
             Next::Command(DbCommand::ServerSession { request }) => {
                 let _ = env.events.send(DbEvent::ServerSession { request, own: own_answer(env) });
@@ -1736,7 +1781,7 @@ async fn hold_on(
             // Behind what waited already: commands run in the order they were sent, which the
             // numbers of a session's runs rely on.
             Next::Command(other) => {
-                held.waiting.push(other);
+                held.waiting.push(kept(other));
                 break;
             }
             Next::Closed => {
@@ -2380,9 +2425,15 @@ pub(crate) enum SetsNext {
 /// `CALL`, an `EXECUTE` of a prepared text, an executable comment `/*! … */`, whose text is not
 /// read). A stored function cannot: the statement that calls it is a transaction already. On a
 /// session that does not know whether its server reads dollar quotes, the stronger answer of
-/// the two readings.
-pub(crate) fn sets_next_transaction(sql: &str, d: Dialect) -> SetsNext {
-    crate::engine::dollar_readings(d).into_iter().map(|d| sets_next_in(sql, d)).max().unwrap_or_default()
+/// the two readings; on one judged on both engines of the family (`judged`), the stronger
+/// answer of the two engines' readings (MariaDB reads a MySQL 8 version comment as a comment).
+pub(crate) fn sets_next_transaction(sql: &str, d: Dialect, judged: Judged) -> SetsNext {
+    crate::engine::judged_dialects(d, judged)
+        .into_iter()
+        .flat_map(crate::engine::dollar_readings)
+        .map(|d| sets_next_in(sql, d))
+        .max()
+        .unwrap_or_default()
 }
 
 /// [`sets_next_transaction`] in one reading, dialect `d`.

@@ -1258,3 +1258,567 @@ fn a_dollar_quotes_unknown_refusal_is_worded_and_nothing_else_runs() {
         assert_eq!(executes(&mut h), [["SELECT 1"]], "{lang:?}: the tab runs again");
     }
 }
+
+// ── A session whose greeting and VERSION() name two engines ─────────────────────────────────
+
+/// The facts a MySQL-driver session says whose greeting names `greeting` (MySQL 8.4.6 or
+/// MariaDB 11.4.13) and whose `VERSION()` line names the other engine (a proxy wrote the
+/// greeting).
+fn disagreeing_facts(greeting: Engine) -> DbEvent {
+    use datarig_core::engine::{EngineFacts, EngineId, Fact, MyFacts, ServerFacts, Version, Why};
+    let (detail, line) = match greeting {
+        Engine::MySql => (
+            EngineFacts::MariaDb(MyFacts { handshake: Version::new(8, 4, 6), greeting: EngineId::MySql }),
+            "11.4.13-MariaDB",
+        ),
+        Engine::MariaDb | Engine::Postgres => {
+            (EngineFacts::MySql(MyFacts { handshake: Version::new(11, 4, 13), greeting: EngineId::MariaDb }), "8.4.6")
+        }
+    };
+    DbEvent::Server(Arc::new(ServerFacts {
+        version: Fact::Unknown(Why::EnginesDisagree),
+        version_text: Some(line.into()),
+        provider: Fact::Unknown(Why::NotChecked),
+        topology: Fact::Unknown(Why::EnginesDisagree),
+        detail,
+    }))
+}
+
+/// A connected MySQL-driver profile `two` (read-only when `read_only`) whose metadata session
+/// said `lang`, and whose first tab's session said `facts`, then `lang`.
+fn two_engines(read_only: bool, facts: DbEvent, lang: Language) -> Harness {
+    let mut p = ConnectionConfig { name: "two".into(), driver: "mysql".into(), ..ConnectionConfig::test_db() };
+    if read_only {
+        p.policy = Some("prod".into());
+    }
+    let mut cfg = Config { connections: vec![p], ..Config::default() };
+    cfg.policies.insert("prod", Policy { read_only: true, ..Policy::default() });
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver(true));
+    h.meta_db("two", DbEvent::Language(lang));
+    h.db(DbEvent::Connected);
+    h.app.focus = Focus::Editor;
+    run_all(&mut h, "SELECT 1");
+    h.tab_db(0, facts);
+    h.tab_db(0, DbEvent::Language(lang));
+    done(&mut h);
+    h.sent();
+    h
+}
+
+/// Statements one engine refuses on a read-only profile and the other runs, each behind the
+/// greeting of the engine that runs it today (its language).
+fn one_engine_refuses() -> Vec<(Engine, &'static str)> {
+    vec![
+        (Engine::MySql, "SELECT BIN_TO_UUID(a) FROM t"),
+        (Engine::MySql, "SELECT POINT()"),
+        (Engine::MySql, "SELECT LATERAL(1)"),
+        (Engine::MySql, "SELECT OF(1)"),
+        (Engine::MariaDb, "SELECT SYSDATE ()"),
+        (Engine::MariaDb, "SELECT `DATABASE`()"),
+        (Engine::MariaDb, "SELECT `COALESCE`(a, 1) FROM t"),
+    ]
+}
+
+/// On a read-only profile, a session whose greeting names one engine and whose `VERSION()` line
+/// the other refuses what either engine refuses, before anything is sent: behind a MySQL
+/// greeting the calls MariaDB does not read as built-ins, behind a MariaDB greeting those MySQL
+/// does not.
+#[test]
+fn a_disagreeing_session_refuses_on_read_only_what_either_engine_refuses() {
+    for (greeting, sql) in one_engine_refuses() {
+        let lang = greeting.said().expect("a MySQL-family language");
+        let mut h = two_engines(true, disagreeing_facts(greeting), lang);
+        run_all(&mut h, sql);
+        assert!(executes(&mut h).is_empty(), "{greeting:?} greeting: {sql}: nothing sent");
+        assert!(matches!(tab_status(&h), Some(Msg::SafetyReadOnlyBlocked { .. })), "{sql}: {:?}", tab_status(&h));
+    }
+}
+
+/// A session whose two reports name one engine keeps that engine's rules: each statement the
+/// other engine refuses runs on a read-only profile, as before.
+#[test]
+fn an_agreeing_session_keeps_one_engines_rules() {
+    for (engine, sql) in one_engine_refuses() {
+        let lang = engine.said().expect("a MySQL-family language");
+        let mut h = two_engines(true, facts_of(engine), lang);
+        run_all(&mut h, sql);
+        assert_eq!(executes(&mut h), [[sql]], "{engine:?}: it runs");
+    }
+}
+
+/// On a profile that asks before a dangerous statement, a session whose reports name two
+/// engines asks when either engine's rules ask: `DO` of a call one engine reads as the user's
+/// code (MariaDB has no `BIN_TO_UUID`; MySQL reads a quoted `DATABASE` as a stored function).
+/// Nothing is sent before the answer. A session whose reports agree runs it as before.
+#[test]
+fn a_disagreeing_session_asks_before_what_either_engine_asks_for() {
+    for (greeting, sql) in [(Engine::MySql, "DO BIN_TO_UUID(a)"), (Engine::MariaDb, "DO `DATABASE`()")] {
+        let lang = greeting.said().expect("a MySQL-family language");
+        let mut h = two_engines(false, disagreeing_facts(greeting), lang);
+        run_all(&mut h, sql);
+        assert!(executes(&mut h).is_empty(), "{greeting:?} greeting: {sql}: asked first");
+        assert!(h.app.overlays.run_confirm().is_some(), "{greeting:?} greeting: {sql}: the confirm is open");
+        let mut h = two_engines(false, facts_of(greeting), lang);
+        run_all(&mut h, sql);
+        assert_eq!(executes(&mut h), [[sql]], "{greeting:?}, agreeing: it runs");
+    }
+}
+
+/// A tab that reads MySQL's language before its session said anything, whose session then says
+/// facts whose two reports name different engines and the same language, gets a classifier
+/// that judges on both engines: the language alone does not decide when it is rebuilt.
+#[test]
+fn the_same_language_with_disagreeing_facts_rebuilds_the_classifier() {
+    use datarig_core::sql::risk::Classifier;
+    let lang = mysql(MySqlMode::default());
+    let h = two_engines(false, disagreeing_facts(Engine::MySql), lang);
+    let tab = h.app.tab().id;
+    assert_eq!(h.app.tab_language(tab), lang, "the same language");
+    let prepared = h.app.tab().exec.prepared.clone();
+    assert_eq!(prepared, h.app.rules(tab).classifier(), "the tab's rules' classifier");
+    assert_ne!(prepared, Classifier::new(lang), "not the greeting's engine's alone");
+    let risk = prepared.clone().classify("SELECT BIN_TO_UUID(a) FROM t");
+    assert!(risk.read_only().is_err(), "judged on MariaDB's rules too: {risk:?}");
+}
+
+/// PostgreSQL's classifier keeps the statements its session prepared when the session's facts
+/// arrive: they rebuild nothing there.
+#[test]
+fn a_pg_tab_keeps_its_prepared_statements_when_its_facts_arrive() {
+    let mut h = Harness::connected(Lang::En);
+    let knows = |h: &Harness, name: &str| h.app.tab().exec.prepared.knows(name);
+    run_all(&mut h, "PREPARE ok AS SELECT 1");
+    done(&mut h);
+    assert!(knows(&h, "ok"));
+    h.tab_db(0, facts_of(Engine::Postgres));
+    assert!(knows(&h, "ok"), "kept through the facts");
+    let tab = h.app.tab().id;
+    let meta_facts = facts_at(Engine::Postgres, v(17, 2, 0));
+    let name = h.app.profiles.first().expect("a profile").name.clone();
+    h.meta_db(&name, DbEvent::Server(meta_facts));
+    assert!(knows(&h, "ok"), "kept through the profile's facts");
+    assert_eq!(h.app.rules(tab).language(), Language::Sql(Dialect::Postgres));
+}
+
+// ── The engines a tab's text is judged on after its session closed ─────────────────────────
+
+/// The idle limit of the tabs' and the profile's sessions in these tests.
+const IDLE: Duration = Duration::from_secs(300);
+
+/// A connected MySQL-driver profile `two` (read-only when `read_only`) whose sessions close
+/// after [`IDLE`] unused: its metadata session said `meta`, then `lang`; the first tab's
+/// session said `tab`, then `lang`, and ran a statement.
+fn idle_two(read_only: bool, meta: DbEvent, tab: DbEvent, lang: Language) -> Harness {
+    let mut p = ConnectionConfig { name: "two".into(), driver: "mysql".into(), ..ConnectionConfig::test_db() };
+    if read_only {
+        p.policy = Some("prod".into());
+    }
+    let mut cfg = Config { connections: vec![p], ..Config::default() };
+    cfg.prefs.idle_disconnect = Some(IDLE);
+    cfg.policies.insert("prod", Policy { read_only: true, ..Policy::default() });
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver(true));
+    h.meta_db("two", meta);
+    h.meta_db("two", DbEvent::Language(lang));
+    h.db(DbEvent::Connected);
+    h.app.focus = Focus::Editor;
+    run_all(&mut h, "SELECT 1");
+    h.tab_db(0, tab);
+    h.tab_db(0, DbEvent::Language(lang));
+    done(&mut h);
+    h.sent();
+    h
+}
+
+/// The tab's session closes for being idle while the profile's metadata session stays open.
+fn close_tab_idle(h: &mut Harness) {
+    h.advance(Duration::from_secs(200));
+    h.db(DbEvent::Schemas(Ok(vec!["shop".into()])));
+    h.advance(Duration::from_secs(100));
+    assert!(h.app.tab().exec.session.is_none(), "the tab's session closed");
+    assert!(h.app.conns.get(id(h, "two")).is_some_and(|c| c.meta.is_some()), "the profile's is open");
+}
+
+/// A tab whose own session said its reports agree (judged on one engine) and closed for being
+/// idle is judged, with no session, on the profile's: its metadata session's reports name two
+/// engines, so a dangerous call either engine asks about asks before it runs, and nothing is
+/// sent before the answer.
+#[test]
+fn a_closed_sessions_engines_do_not_judge_the_next_run() {
+    let lang = mysql(MySqlMode::default());
+    let mut h = idle_two(false, disagreeing_facts(Engine::MySql), facts_of(Engine::MySql), lang);
+    close_tab_idle(&mut h);
+    run_all(&mut h, "DO BIN_TO_UUID(a)");
+    assert!(h.app.overlays.run_confirm().is_some(), "asked: the profile's facts name two engines");
+    assert!(executes(&mut h).is_empty(), "nothing sent before the answer");
+}
+
+/// The other way round: a tab whose own session's reports named two engines and closed for
+/// being idle, on a profile whose metadata session's reports agree. Within the profile's
+/// connection the engines a statement is judged on never shrink: the refusal stays while that
+/// connection lasts. Once the profile closed and connected again (a new connection, whose
+/// reports agree), no refusal of the closed one stays.
+#[test]
+fn a_closed_sessions_refusal_does_not_stay() {
+    let lang = mysql(MySqlMode::default());
+    let sql = "SELECT BIN_TO_UUID(a) FROM t";
+    let mut h = idle_two(true, facts_of(Engine::MySql), disagreeing_facts(Engine::MySql), lang);
+    run_all(&mut h, sql);
+    assert!(executes(&mut h).is_empty(), "refused while the session that named two engines is open");
+    close_tab_idle(&mut h);
+    run_all(&mut h, sql);
+    assert!(executes(&mut h).is_empty(), "still refused within the same connection");
+    h.advance(IDLE);
+    assert!(h.app.conns.get(id(&h, "two")).is_none_or(|c| c.meta.is_none()), "the profile closed");
+    h.app.focus = Focus::Editor;
+    run_all(&mut h, sql);
+    meta_says(&mut h, facts_of(Engine::MySql));
+    assert_eq!(executes(&mut h), [[sql]], "it runs on the new connection: {:?}", tab_status(&h));
+}
+
+/// A tab whose own session's reports named two engines and closed for being idle, on a profile
+/// whose metadata session's reports agree, keeps being judged on both engines while the
+/// profile's connection lasts: a dangerous call either engine asks about asks before it runs.
+#[test]
+fn a_closed_sessions_two_engines_keep_judging_the_profile() {
+    let lang = mysql(MySqlMode::default());
+    let mut h = idle_two(false, facts_of(Engine::MySql), disagreeing_facts(Engine::MySql), lang);
+    close_tab_idle(&mut h);
+    run_all(&mut h, "DO BIN_TO_UUID(a)");
+    assert!(executes(&mut h).is_empty(), "nothing sent before the answer");
+    assert!(h.app.overlays.run_confirm().is_some(), "asked: the profile's connection named two engines");
+}
+
+/// A run queued while the profile connects again (its sessions closed for being idle) is
+/// judged before connect on one engine; when the profile's new metadata session says its
+/// reports name two engines, a dangerous call either engine asks about asks before it is
+/// sent, not after.
+#[test]
+fn a_queued_run_is_asked_about_again_when_the_reconnected_server_names_two_engines() {
+    let lang = mysql(MySqlMode::default());
+    let mut h = idle_two(false, facts_of(Engine::MySql), facts_of(Engine::MySql), lang);
+    close_tab_idle(&mut h);
+    h.advance(IDLE);
+    assert!(h.app.conns.get(id(&h, "two")).is_none_or(|c| c.meta.is_none()), "the profile closed");
+    h.app.focus = Focus::Editor;
+    run_all(&mut h, "DO BIN_TO_UUID(a)");
+    assert!(h.app.overlays.run_confirm().is_none(), "one engine before connect: not asked");
+    assert!(h.app.is_queued(h.app.tab().id), "queued until the profile connects");
+    h.meta_db("two", disagreeing_facts(Engine::MySql));
+    h.meta_db("two", DbEvent::Language(lang));
+    h.meta_db("two", DbEvent::Connected);
+    assert!(executes(&mut h).is_empty(), "not sent once the server named two engines");
+    assert!(h.app.overlays.run_confirm().is_some(), "asked before it runs");
+}
+
+/// A MySQL-driver profile `two` that connected once and was disconnected: the next run
+/// connects it again and waits for it, the editor focused.
+fn connecting_two() -> Harness {
+    let p = ConnectionConfig { name: "two".into(), driver: "mysql".into(), ..ConnectionConfig::test_db() };
+    let cfg = Config { connections: vec![p], ..Config::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver(true));
+    h.db(DbEvent::Connected);
+    h.app.dispatch(Action::DisconnectCurrent);
+    h.app.focus = Focus::Editor;
+    h.sent();
+    h
+}
+
+/// The profile's metadata session says `facts`, MySQL's language, then that it connected.
+fn meta_says(h: &mut Harness, facts: DbEvent) {
+    h.meta_db("two", facts);
+    h.meta_db("two", DbEvent::Language(mysql(MySqlMode::default())));
+    h.meta_db("two", DbEvent::Connected);
+}
+
+/// A statement queued before the profile connects is judged again when it is sent: once the
+/// server's reports name two engines, `EXPLAIN ANALYZE` of a call MariaDB runs as the user's
+/// code asks before it runs (it is not sent), where before connect, on MySQL's rules alone, it
+/// did not ask.
+#[test]
+fn a_run_queued_before_connect_is_judged_again_when_the_server_names_two_engines() {
+    let sql = "EXPLAIN ANALYZE SELECT BIN_TO_UUID(a) FROM t";
+    let mut h = connecting_two();
+    run_all(&mut h, sql);
+    assert!(h.app.overlays.run_confirm().is_none(), "one engine before connect: not asked");
+    assert!(h.app.is_queued(h.app.tab().id), "queued until the profile connects");
+    meta_says(&mut h, disagreeing_facts(Engine::MySql));
+    assert!(executes(&mut h).is_empty(), "not sent once the server named two engines");
+    assert!(h.app.overlays.run_confirm().is_some(), "asked before it runs");
+}
+
+/// Judged again under the same rules, a waiting run gets the same answer: an ordinary
+/// statement queued before connect runs once connected without a question, and a dangerous
+/// one the user confirmed before connect is not asked about again.
+#[test]
+fn a_waiting_run_judged_again_under_the_same_rules_asks_nothing_more() {
+    let mut h = connecting_two();
+    run_all(&mut h, "SELECT 1");
+    assert!(h.app.is_queued(h.app.tab().id));
+    meta_says(&mut h, facts_of(Engine::MySql));
+    assert!(h.app.overlays.run_confirm().is_none(), "no question");
+    assert_eq!(executes(&mut h), [["SELECT 1"]]);
+    let mut h = connecting_two();
+    run_all(&mut h, "DROP TABLE t");
+    assert!(h.app.overlays.run_confirm().is_some(), "asked before connect");
+    h.keys("y");
+    assert!(h.app.is_queued(h.app.tab().id), "queued once confirmed");
+    meta_says(&mut h, facts_of(Engine::MySql));
+    assert!(h.app.overlays.run_confirm().is_none(), "not asked again");
+    assert_eq!(executes(&mut h), [["DROP TABLE t"]]);
+}
+
+/// A run whose question was asked under one engine's rules, answered after the tab's session
+/// said its server's reports name two engines, asks again for what only the new rules ask
+/// about, and nothing is sent before that answer.
+#[test]
+fn a_question_answered_after_the_rules_changed_is_asked_again_for_what_is_new() {
+    let p = ConnectionConfig { name: "two".into(), driver: "mysql".into(), ..ConnectionConfig::test_db() };
+    let cfg = Config { connections: vec![p], ..Config::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver(true));
+    h.meta_db("two", facts_of(Engine::MySql));
+    h.meta_db("two", DbEvent::Language(mysql(MySqlMode::default())));
+    h.db(DbEvent::Connected);
+    h.app.focus = Focus::Editor;
+    // The tab's session opens and answers before it says what its server is.
+    run_all(&mut h, "SELECT 1");
+    done(&mut h);
+    h.sent();
+    run_all(&mut h, "DROP TABLE t;\nDO BIN_TO_UUID(a);");
+    let asked = |h: &Harness| -> Vec<usize> {
+        h.app.overlays.run_confirm().map(|c| c.items.iter().map(|d| d.index).collect()).unwrap_or_default()
+    };
+    assert_eq!(asked(&h), [0], "MySQL's rules ask about the DROP only");
+    h.tab_db(0, disagreeing_facts(Engine::MySql));
+    h.tab_db(0, DbEvent::Language(mysql(MySqlMode::default())));
+    h.keys("y");
+    assert!(executes(&mut h).is_empty(), "nothing sent");
+    assert_eq!(asked(&h), [0, 1], "asked again, the DO too");
+    h.keys("y");
+    assert_eq!(executes(&mut h), [["DROP TABLE t", "DO BIN_TO_UUID(a)"]]);
+}
+
+/// An approval covers what the user saw: a run whose `DROP` was confirmed under MariaDB's rules,
+/// queued while its profile connects again, asks again once the server is MySQL, where its
+/// `DO` of a quoted `DATABASE` (a stored function to MySQL) asks too, and nothing is sent.
+#[test]
+fn an_approval_under_one_engine_does_not_cover_what_another_asks_about() {
+    // The profile's server said it is MariaDB, then the profile was disconnected: its last
+    // language is MariaDB's.
+    let p = ConnectionConfig { name: "two".into(), driver: "mysql".into(), ..ConnectionConfig::test_db() };
+    let cfg = Config { connections: vec![p], ..Config::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver(true));
+    h.meta_db("two", facts_of(Engine::MariaDb));
+    h.meta_db("two", DbEvent::Language(mariadb()));
+    h.db(DbEvent::Connected);
+    h.app.dispatch(Action::DisconnectCurrent);
+    h.app.focus = Focus::Editor;
+    h.sent();
+    assert_eq!(h.app.tab_language(h.app.tab().id), mariadb());
+    let asked = |h: &Harness| -> Vec<usize> {
+        h.app.overlays.run_confirm().map(|c| c.items.iter().map(|d| d.index).collect()).unwrap_or_default()
+    };
+    run_all(&mut h, "DROP TABLE t;\nDO `DATABASE`();");
+    assert_eq!(asked(&h), [0], "MariaDB's rules ask about the DROP only");
+    h.keys("y");
+    assert!(h.app.is_queued(h.app.tab().id), "queued once confirmed");
+    meta_says(&mut h, facts_of(Engine::MySql));
+    assert!(executes(&mut h).is_empty(), "nothing sent");
+    assert_eq!(asked(&h), [0, 1], "asked again: MySQL asks about the DO");
+}
+
+/// Questions are asked one at a time: two tabs whose runs waited for their profile to connect
+/// (its password still being read), each asking once the server names two engines, are asked
+/// about in turn; each yes sends its own run, and no question replaces another.
+#[tokio::test(flavor = "multi_thread")]
+async fn waiting_runs_of_two_tabs_are_asked_about_in_turn() {
+    let (mut h, mut rx) = slow_harness(Engine::MySql, false);
+    let resolved = console_on_slow(&mut h, &mut rx).await;
+    h.sent();
+    run_all(&mut h, "DO BIN_TO_UUID(a)");
+    assert!(h.app.is_queued(h.app.tab().id));
+    h.app.dispatch(Action::NewTab);
+    assert_eq!(h.app.tab().profile, Some(id(&h, "slow")));
+    h.app.focus = Focus::Editor;
+    run_all(&mut h, "DO BIN_TO_UUID(b)");
+    assert!(h.app.is_queued(h.app.tab().id), "{:?}", tab_status(&h));
+    h.app.on_app_event(resolved);
+    h.meta_db("slow", disagreeing_facts(Engine::MySql));
+    h.meta_db("slow", DbEvent::Language(mysql(MySqlMode::default())));
+    h.meta_db("slow", DbEvent::Connected);
+    assert!(executes(&mut h).is_empty(), "nothing sent before the answers");
+    let first = h.app.overlays.run_confirm().map(|c| c.statements.clone()).expect("the first question");
+    assert_eq!(first, ["DO BIN_TO_UUID(a)"]);
+    h.keys("y");
+    assert_eq!(executes(&mut h), [["DO BIN_TO_UUID(a)"]]);
+    let second = h.app.overlays.run_confirm().map(|c| c.statements.clone()).expect("the second question");
+    assert_eq!(second, ["DO BIN_TO_UUID(b)"]);
+    h.keys("y");
+    assert_eq!(executes(&mut h), [["DO BIN_TO_UUID(b)"]]);
+}
+
+/// A question about one profile's waiting run holds no other profile's: a profile that
+/// connects while the question is open keeps its run waiting (one question at a time), and it
+/// is sent once the question is answered, without a question of its own.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_question_for_one_profile_holds_another_profiles_run_only_until_it_is_answered() {
+    let slow = |name: &str| {
+        let mut p = ConnectionConfig {
+            name: name.into(),
+            driver: "mysql".into(),
+            password: String::new(),
+            ..ConnectionConfig::test_db()
+        };
+        p.set_source(PasswordSource::Command("printf datarig".into()));
+        p
+    };
+    let cfg = Config { connections: vec![slow("slow"), slow("other")], ..Config::default() };
+    let (h, mut rx) = Harness::started(&cfg, Lang::En, Arc::new(MemoryStore::new()), Startup::Normal);
+    h.driver.mysql.store(true, Ordering::SeqCst);
+    let mut h = h.with_fake_driver();
+    let resolved = console_on_slow(&mut h, &mut rx).await;
+    run_all(&mut h, "DO BIN_TO_UUID(a)");
+    assert!(h.app.is_queued(h.app.tab().id));
+    h.explore("other");
+    h.keys("o");
+    let other_resolved = next_event(&mut rx).await;
+    h.app.focus = Focus::Editor;
+    assert_eq!(h.app.tab().profile, Some(id(&h, "other")));
+    let other_tab = h.app.tab().id;
+    run_all(&mut h, "SELECT 1");
+    assert!(h.app.is_queued(other_tab));
+    h.sent();
+    h.app.on_app_event(resolved);
+    h.meta_db("slow", disagreeing_facts(Engine::MySql));
+    h.meta_db("slow", DbEvent::Language(mysql(MySqlMode::default())));
+    h.meta_db("slow", DbEvent::Connected);
+    assert!(h.app.overlays.run_confirm().is_some(), "slow's run asks");
+    h.app.on_app_event(other_resolved);
+    h.meta_db("other", facts_of(Engine::MySql));
+    h.meta_db("other", DbEvent::Language(mysql(MySqlMode::default())));
+    h.meta_db("other", DbEvent::Connected);
+    assert!(executes(&mut h).is_empty(), "nothing sent while the question is open");
+    h.keys("n");
+    assert_eq!(executes(&mut h), [["SELECT 1"]], "other's run is sent once the question is answered");
+    assert!(!h.app.is_queued(other_tab));
+}
+
+/// The engines each command of user text sent to session `i` was judged on, in order.
+fn judged_sent(h: &mut Harness, i: usize) -> Vec<Option<datarig_core::sql::risk::mysql::Judged>> {
+    h.sent_to(i);
+    h.driver.sessions.lock().unwrap()[i].judged.clone()
+}
+
+/// Every command of user text goes with the engines whose rules it was judged on. The first
+/// run on a query session that has not said what its server is goes judged on the profile's
+/// (one engine, its metadata session's reports agree); the driver refuses it once the session
+/// found two engines, the refusal is worded, and run again it is judged on both: it asks
+/// first, and goes with both.
+#[test]
+fn a_run_judged_before_its_session_named_two_engines_is_refused_and_judged_anew() {
+    use datarig_core::sql::risk::mysql::Judged;
+    let p = ConnectionConfig { name: "two".into(), driver: "mysql".into(), ..ConnectionConfig::test_db() };
+    let cfg = Config { connections: vec![p], ..Config::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver(true));
+    meta_says(&mut h, facts_of(Engine::MySql));
+    h.app.focus = Focus::Editor;
+    let sql = "DO BIN_TO_UUID(a)";
+    run_all(&mut h, sql);
+    assert!(h.app.overlays.run_confirm().is_none(), "one engine: not asked");
+    let query = h.roles().iter().rposition(|r| *r == SessionRole::Query).expect("a query session");
+    assert_eq!(judged_sent(&mut h, query), [Some(Judged::Own)]);
+    // The session says its server's reports name two engines; the driver refused the run.
+    h.tab_db(0, disagreeing_facts(Engine::MySql));
+    h.tab_db(0, DbEvent::Language(mysql(MySqlMode::default())));
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(0, DbEvent::Failed { id, error: DbError::ReportsChanged, cancelled: false });
+    assert!(h.app.tab().exec.running.is_none(), "the run ended");
+    let want = h.app.i18n.label(Label::EngineReportsChanged).to_string();
+    let shown = h.status(400, 45);
+    let start: String = want.chars().take(30).collect();
+    assert!(shown.contains(&start), "{shown}");
+    // Run again: judged on both, it asks, and goes with both.
+    run_all(&mut h, sql);
+    assert!(h.app.overlays.run_confirm().is_some(), "asked: two engines");
+    h.keys("y");
+    assert_eq!(judged_sent(&mut h, query), [Some(Judged::Own), Some(Judged::WithSibling)]);
+}
+
+/// On a profile whose reports agree every command of user text goes judged on its one engine,
+/// and nothing else changes.
+#[test]
+fn an_agreeing_profiles_commands_go_judged_on_its_engine() {
+    use datarig_core::sql::risk::mysql::Judged;
+    let lang = mysql(MySqlMode::default());
+    let mut h = two_engines(false, facts_of(Engine::MySql), lang);
+    run_all(&mut h, "SELECT 1");
+    let query = h.roles().iter().rposition(|r| *r == SessionRole::Query).expect("a query session");
+    assert!(judged_sent(&mut h, query).iter().all(|j| *j == Some(Judged::Own)));
+}
+
+/// The kinds of session a profile's server may say what it is through.
+#[derive(Clone, Copy, Debug)]
+enum Kind {
+    /// A tab's query session.
+    Query,
+    /// The profile's metadata session.
+    Meta,
+    /// A metadata session of the profile in another database.
+    Aux,
+    /// A Monitor tab's connection.
+    Monitor,
+}
+
+/// Every kind of session of a profile feeds what the profile's statements are judged on through
+/// one path: a server whose reports name two engines, said by any of them, has every tab of the
+/// profile judged on both from then on (`DO BIN_TO_UUID(a)` asks first in the profile's
+/// console), and reports that agree, said by any of them, change nothing (it runs).
+#[test]
+fn every_kind_of_session_feeds_the_profiles_engines_alike() {
+    let mut wrong = Vec::new();
+    for kind in [Kind::Query, Kind::Meta, Kind::Aux, Kind::Monitor] {
+        for disagree in [true, false] {
+            let case = format!("{kind:?}, reports disagree: {disagree}");
+            let p = ConnectionConfig { name: "two".into(), driver: "mysql".into(), ..ConnectionConfig::test_db() };
+            let cfg = Config { connections: vec![p], ..Config::default() };
+            let mut h = Harness::with_driver(&cfg, Lang::En, driver(true));
+            h.driver.monitor.store(true, Ordering::SeqCst);
+            meta_says(&mut h, facts_of(Engine::MySql));
+            h.app.focus = Focus::Editor;
+            run_all(&mut h, "SELECT 1");
+            h.tab_db(0, facts_of(Engine::MySql));
+            h.tab_db(0, DbEvent::Language(mysql(MySqlMode::default())));
+            done(&mut h);
+            let facts = if disagree { disagreeing_facts(Engine::MySql) } else { facts_of(Engine::MySql) };
+            match kind {
+                Kind::Query => h.tab_db(0, facts),
+                Kind::Meta => h.meta_db("two", facts),
+                Kind::Aux => {
+                    let pid = id(&h, "two");
+                    let now = h.clock.now();
+                    let aux = h.app.conns.add_aux(pid, "other", now);
+                    h.app.on_app_event(AppEvent::Db {
+                        target: datarig_tui::app::EventTarget::Aux(aux),
+                        generation: aux,
+                        ev: facts,
+                    });
+                }
+                Kind::Monitor => {
+                    h.command("monitor");
+                    h.monitor_db(DbEvent::Connected);
+                    h.monitor_db(facts);
+                    assert!(h.app.tabs.activate(0), "{case}");
+                    h.app.focus = Focus::Editor;
+                }
+            }
+            h.sent();
+            run_all(&mut h, "DO BIN_TO_UUID(a)");
+            let asked = h.app.overlays.run_confirm().is_some();
+            let sent = executes(&mut h);
+            let ran = sent == [["DO BIN_TO_UUID(a)"]];
+            if asked != disagree || ran == disagree {
+                wrong.push(format!("{case}: asked {asked}, sent {sent:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "not judged alike:\n{}", wrong.join("\n"));
+}

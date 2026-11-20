@@ -170,6 +170,10 @@ pub enum DbError {
     /// and in its `VERSION()` line that it does not, or the other way round, so where the
     /// server would end its statements is not known. Nothing of the command was sent.
     DollarQuotesUnknown,
+    /// The command was judged on fewer engines' rules than the session's server's reports name
+    /// (the app judged it before the session said its greeting and `VERSION()` name two
+    /// engines): nothing of it was sent. Run again, it is judged anew.
+    ReportsChanged,
     /// The server started a COPY to or from the client that no request asked for (a `COPY …
     /// TO STDOUT` or `FROM STDIN` the driver's own check missed): the connection was closed, so
     /// the server stopped it.
@@ -424,6 +428,7 @@ impl DbError {
             | DbError::CopyStdio
             | DbError::CappedOutcome
             | DbError::DollarQuotesUnknown
+            | DbError::ReportsChanged
             | DbError::CopyStarted
             | DbError::NotRepeatable(_)
             | DbError::Locked
@@ -852,6 +857,13 @@ pub enum DbCommand {
     ServerSession {
         request: u64,
     },
+    /// A command of user text (`command`), with the engines whose rules the app judged it on.
+    /// A MySQL-family session whose server's reports name more engines sends nothing of it and
+    /// answers [`DbError::ReportsChanged`]; any other session takes `command` as it is.
+    Judged {
+        judged: crate::sql::risk::mysql::Judged,
+        command: Box<DbCommand>,
+    },
 }
 
 /// The answer to [`DbCommand::ServerSession`].
@@ -1070,6 +1082,31 @@ impl GroupCounts {
 }
 
 impl DbCommand {
+    /// Whether this command carries the user's text (a statement the app judged before
+    /// sending it): the ones a [`DbCommand::Judged`] wraps.
+    pub fn carries_user_text(&self) -> bool {
+        matches!(
+            self,
+            DbCommand::Execute { .. }
+                | DbCommand::Resume { .. }
+                | DbCommand::Count { .. }
+                | DbCommand::GroupCount { .. }
+                | DbCommand::Estimate { .. }
+                | DbCommand::CheckRepeat { .. }
+                | DbCommand::Export { .. }
+                | DbCommand::ApplyEdits { .. }
+        )
+    }
+
+    /// The command and the engines it was judged on: those a [`DbCommand::Judged`] names, else
+    /// its own engine's (a command no judgement names claims no more).
+    pub fn unwrap_judged(self) -> (crate::sql::risk::mysql::Judged, DbCommand) {
+        match self {
+            DbCommand::Judged { judged, command } => (judged, *command),
+            command => (crate::sql::risk::mysql::Judged::Own, command),
+        }
+    }
+
     /// The answer of a session that does not do this command: [`DbError::NotSupported`] in the
     /// event its kind is answered with, so the caller's wait for it ends.
     pub fn not_supported(&self) -> DbEvent {
@@ -1120,6 +1157,7 @@ impl DbCommand {
             DbCommand::ServerSession { request } => {
                 DbEvent::ServerSession { request: *request, own: OwnSession::NotKnown }
             }
+            DbCommand::Judged { command, .. } => command.not_supported(),
         }
     }
 

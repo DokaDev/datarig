@@ -108,7 +108,7 @@ fn a_level_for_the_next_transaction_only_is_read_from_the_text() {
         "SET @@tx_isolation = 'SERIALIZABLE'",
         "SET time_zone = '+00:00', @@transaction_isolation = 'READ-COMMITTED'",
     ] {
-        assert_eq!(sets_next_transaction(sql, Dialect::MySql(MODE)), SetsNext::Yes, "{sql}");
+        assert_eq!(sets_next_transaction(sql, Dialect::MySql(MODE), Judged::Own), SetsNext::Yes, "{sql}");
     }
     for sql in [
         "SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE",
@@ -122,7 +122,7 @@ fn a_level_for_the_next_transaction_only_is_read_from_the_text() {
         "SELECT @@transaction_isolation",
         "SELECT 'SET TRANSACTION ISOLATION LEVEL SERIALIZABLE'",
     ] {
-        assert_eq!(sets_next_transaction(sql, Dialect::MySql(MODE)), SetsNext::No, "{sql}");
+        assert_eq!(sets_next_transaction(sql, Dialect::MySql(MODE), Judged::Own), SetsNext::No, "{sql}");
     }
 }
 
@@ -207,7 +207,7 @@ fn mariadb_does_not_count_a_mysql8_set_transaction_comment() {
         "/*!99999 SET @@transaction_isolation = 'SERIALIZABLE' */",
         "/*!80000 SET TRANSACTION READ ONLY*/",
     ] {
-        assert_eq!(sets_next_transaction(sql, maria), SetsNext::No, "{sql}");
+        assert_eq!(sets_next_transaction(sql, maria, Judged::Own), SetsNext::No, "{sql}");
     }
     for sql in [
         "/*! SET TRANSACTION READ ONLY */",
@@ -222,7 +222,7 @@ fn mariadb_does_not_count_a_mysql8_set_transaction_comment() {
         "SELECT 1 /*!80000 , 2 */",
         "CALL p()",
     ] {
-        assert_ne!(sets_next_transaction(sql, maria), SetsNext::No, "{sql}");
+        assert_ne!(sets_next_transaction(sql, maria, Judged::Own), SetsNext::No, "{sql}");
     }
 }
 
@@ -237,7 +237,7 @@ fn a_version_comment_may_set_the_next_transaction() {
         "/*! SET TRANSACTION READ ONLY */",
         "SELECT 1 /*!80000 , 2 */",
     ] {
-        assert_eq!(sets_next_transaction(sql, Dialect::MySql(MODE)), SetsNext::Maybe, "{sql}");
+        assert_eq!(sets_next_transaction(sql, Dialect::MySql(MODE), Judged::Own), SetsNext::Maybe, "{sql}");
     }
 }
 
@@ -245,7 +245,7 @@ fn a_version_comment_may_set_the_next_transaction() {
 fn settings_of_the_next_transaction_only_are_seen_in_every_spelling() {
     let ansi = MySqlMode { ansi_quotes: true, ..MODE };
     for mode in [MODE, ansi] {
-        let sets = |sql| sets_next_transaction(sql, Dialect::MySql(mode)) != SetsNext::No;
+        let sets = |sql| sets_next_transaction(sql, Dialect::MySql(mode), Judged::Own) != SetsNext::No;
         for sql in [
             "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
             "set transaction read write",
@@ -258,11 +258,11 @@ fn settings_of_the_next_transaction_only_are_seen_in_every_spelling() {
             "SET @a = 1, @@transaction_isolation = 'SERIALIZABLE'",
             "SET @a = (SELECT 1), @@tx_read_only := 1",
         ] {
-            assert_eq!(sets_next_transaction(sql, Dialect::MySql(mode)), SetsNext::Yes, "{sql}");
+            assert_eq!(sets_next_transaction(sql, Dialect::MySql(mode), Judged::Own), SetsNext::Yes, "{sql}");
         }
         // Not read: may set them.
         for sql in ["CALL p()", "EXECUTE s", "/*!80000 SET TRANSACTION ISOLATION LEVEL SERIALIZABLE */"] {
-            assert_eq!(sets_next_transaction(sql, Dialect::MySql(mode)), SetsNext::Maybe, "{sql}");
+            assert_eq!(sets_next_transaction(sql, Dialect::MySql(mode), Judged::Own), SetsNext::Maybe, "{sql}");
         }
         for sql in [
             "SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE",
@@ -419,7 +419,10 @@ fn only_plain_reads_get_the_paging_limit() {
             "VALUES ROW(1), ROW(2)",
             "(SELECT 1) UNION (SELECT 2)",
         ] {
-            assert!(pages_plainly(&risk::classify(sql, crate::engine::risk_judge(mode)), sql, mode), "{sql}");
+            assert!(
+                pages_plainly(&risk::classify(sql, crate::engine::risk_judge(mode, Judged::Own)), sql, mode),
+                "{sql}"
+            );
         }
         for sql in [
             // The limit would cut the file the server writes.
@@ -435,7 +438,10 @@ fn only_plain_reads_get_the_paging_limit() {
             // Code the classifier does not read.
             "/*!80000 SELECT zz_f(id) FROM t */",
         ] {
-            assert!(!pages_plainly(&risk::classify(sql, crate::engine::risk_judge(mode)), sql, mode), "{sql}");
+            assert!(
+                !pages_plainly(&risk::classify(sql, crate::engine::risk_judge(mode, Judged::Own)), sql, mode),
+                "{sql}"
+            );
         }
     }
 }
@@ -522,14 +528,47 @@ fn reported_dialect(greeting: (u16, u16, u16), line: &str) -> Dialect {
 fn an_unknown_dollar_reading_counts_a_hidden_set_transaction() {
     let hidden = "SELECT $$'$$ /*!80000 SET TRANSACTION READ ONLY */ '";
     let disagreeing = reported_dialect((8, 0, 36), "8.4.6");
-    assert_eq!(sets_next_transaction(hidden, disagreeing), SetsNext::Maybe, "{disagreeing:?}");
+    assert_eq!(sets_next_transaction(hidden, disagreeing, Judged::Own), SetsNext::Maybe, "{disagreeing:?}");
     let shown = "SELECT $$'$$; SET TRANSACTION READ ONLY; '";
-    assert_eq!(sets_next_transaction(shown, disagreeing), SetsNext::No, "{disagreeing:?}: one statement, a SELECT");
+    assert_eq!(
+        sets_next_transaction(shown, disagreeing, Judged::Own),
+        SetsNext::No,
+        "{disagreeing:?}: one statement, a SELECT"
+    );
     let plain = "SET TRANSACTION READ ONLY";
-    assert_eq!(sets_next_transaction(plain, disagreeing), SetsNext::Yes);
+    assert_eq!(sets_next_transaction(plain, disagreeing, Judged::Own), SetsNext::Yes);
     // Agreeing reports: one reading each, as before.
     let read = reported_dialect((8, 4, 6), "8.4.6");
-    assert_eq!(sets_next_transaction(hidden, read), SetsNext::Maybe, "{read:?}");
+    assert_eq!(sets_next_transaction(hidden, read, Judged::Own), SetsNext::Maybe, "{read:?}");
     let not_read = reported_dialect((8, 0, 36), "8.0.36");
-    assert_eq!(sets_next_transaction(hidden, not_read), SetsNext::No, "{not_read:?}");
+    assert_eq!(sets_next_transaction(hidden, not_read, Judged::Own), SetsNext::No, "{not_read:?}");
+}
+
+/// On a session whose greeting names MariaDB and whose `VERSION()` line names MySQL 8 (judged on
+/// both engines), a statement that is only a MySQL 8 version comment (`/*!80000 … */`, which
+/// MariaDB reads as a comment and MySQL runs) may set the next transaction: each engine's
+/// reading answers, `Maybe` over `Yes` over `No`. Judged on MariaDB alone it sets nothing, as
+/// before; plain statements answer as on either engine.
+#[test]
+fn a_disagreeing_session_counts_a_mysql8_comment_as_maybe() {
+    let comment = "/*!80000 SET TRANSACTION READ ONLY */";
+    let maria = Dialect::MariaDb(MODE);
+    let my = Dialect::MySql(MODE);
+    assert_eq!(sets_next_transaction(comment, maria, Judged::Own), SetsNext::No);
+    assert_eq!(sets_next_transaction(comment, maria, Judged::WithSibling), SetsNext::Maybe);
+    assert_eq!(sets_next_transaction(comment, my, Judged::Own), SetsNext::Maybe);
+    assert_eq!(sets_next_transaction(comment, my, Judged::WithSibling), SetsNext::Maybe);
+    for d in [maria, my] {
+        let both = |sql| sets_next_transaction(sql, d, Judged::WithSibling);
+        assert_eq!(both("SET TRANSACTION READ ONLY"), SetsNext::Yes, "{d:?}");
+        assert_eq!(both("SELECT 1"), SetsNext::No, "{d:?}");
+        assert_eq!(both("CALL p()"), SetsNext::Maybe, "{d:?}");
+    }
+    // The facts of such a session say so.
+    let g = crate::engine::Greeting { mariadb: true, handshake: datarig_core::engine::Version::new(11, 4, 13) };
+    let report = crate::engine::judge(&g, Some(mysql_async::Value::Bytes(b"8.4.6".to_vec()))).expect("a line");
+    assert_eq!(crate::engine::facts(&g, &report, None).judged(), Judged::WithSibling);
+    let report =
+        crate::engine::judge(&g, Some(mysql_async::Value::Bytes(b"11.4.13-MariaDB".to_vec()))).expect("a line");
+    assert_eq!(crate::engine::facts(&g, &report, None).judged(), Judged::Own);
 }

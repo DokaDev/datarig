@@ -9,7 +9,7 @@ use datarig_core::driver::{Capabilities, DbError, EditFormat, ExplainFormat, Hie
 use datarig_core::engine::mysql_family::line_names_mariadb;
 use datarig_core::engine::{EngineFacts, EngineId, Fact, MyFacts, PingIdentity, ServerFacts, Topology, Version, Why};
 use datarig_core::sql::dialect::{Dialect, DollarQuotes, Language, MySqlMode};
-use datarig_core::sql::risk::mysql::Judge;
+use datarig_core::sql::risk::mysql::{Judge, Judged};
 use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, Row, Value};
 use std::sync::Arc;
@@ -238,14 +238,30 @@ pub(crate) fn dialect(server: &Server, mode: MySqlMode) -> Dialect {
     }
 }
 
-/// How the classifier judges text of a session's dialect `d`: on the lists of its engine, in
-/// its sql mode.
-pub(crate) fn risk_judge(d: Dialect) -> Judge {
+/// How the classifier judges text of a session's dialect `d`: on the lists of its engine, and
+/// of the other engine of the family too when `judged` says so (the session's facts,
+/// [`datarig_core::engine::ServerFacts::judged`]), in its sql mode.
+pub(crate) fn risk_judge(d: Dialect, judged: Judged) -> Judge {
     match d {
-        Dialect::MariaDb(mode) => Judge::mariadb(mode),
-        Dialect::MySql(mode) => Judge::mysql(mode),
+        Dialect::MariaDb(mode) => Judge::mariadb(mode).judged(judged),
+        Dialect::MySql(mode) => Judge::mysql(mode).judged(judged),
         // Never a dialect of this driver's sessions: MySQL's default reading.
-        Dialect::Postgres => Judge::mysql(MySqlMode::default()),
+        Dialect::Postgres => Judge::mysql(MySqlMode::default()).judged(judged),
+    }
+}
+
+/// The dialects a session of dialect `d` judged on `judged` reads its text in for what only an
+/// engine's reading tells (whether an executable comment runs): its own, and with its sibling
+/// the other engine's of the family in the same sql mode.
+pub(crate) fn judged_dialects(d: Dialect, judged: Judged) -> Vec<Dialect> {
+    match judged {
+        Judged::Own => vec![d],
+        Judged::WithSibling => match d {
+            Dialect::MySql(mode) => vec![d, Dialect::MariaDb(mode)],
+            Dialect::MariaDb(mode) => vec![d, Dialect::MySql(mode)],
+            // Never a dialect of this driver's sessions.
+            Dialect::Postgres => vec![d],
+        },
     }
 }
 

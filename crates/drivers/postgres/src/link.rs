@@ -66,7 +66,11 @@ impl Link {
     /// The next command, or why there is none. A lost connection is reported before queued
     /// commands are tried on it. A command begins a new request ([`Unsent::next_request`]).
     pub(crate) async fn next(&mut self) -> Next {
-        let next = self.take().await;
+        // PostgreSQL has no other engine: a command judged on its rules is taken as it is.
+        let next = match self.take().await {
+            Next::Command(cmd) => Next::Command(cmd.unwrap_judged().1),
+            next => next,
+        };
         if let (Next::Command(_), Some(unsent)) = (&next, &self.unsent) {
             unsent.next_request();
         }

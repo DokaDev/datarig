@@ -47,6 +47,15 @@ pub struct Dangerous {
     pub sql: String,
 }
 
+/// Whether the user's yes to `approved` covers `item`, a statement's verdict judged again: the
+/// same statement was asked about for each reason it asks for now (its risk, what it does to
+/// the open transaction).
+pub(super) fn covers(approved: &[Dangerous], item: &Dangerous) -> bool {
+    let at = |a: &&Dangerous| a.index == item.index;
+    item.why.as_ref().is_none_or(|w| approved.iter().filter(at).any(|a| a.why.as_ref() == Some(w)))
+        && item.tx.as_ref().is_none_or(|t| approved.iter().filter(at).any(|a| a.tx.as_ref() == Some(t)))
+}
+
 impl App {
     /// The rules of profile `id`: its environment's, the default rules without one, or the
     /// name of the environment it names that is not defined.
@@ -265,8 +274,8 @@ impl App {
     /// STDIN` and `COPY … TO STDOUT` need the COPY protocol, which the app does not carry yet
     /// (sent, the first broke the tab's connection).
     pub(super) fn unsupported(&self, tab: TabId, statements: &[String]) -> Option<Notice> {
-        let lang = self.tabs.get(tab).map_or_else(|| self.tab_language(tab), |t| t.exec.prepared.language());
-        let sql = statements.iter().find(|sql| Classifier::classify_once(lang, sql).stdio)?;
+        let classifier = self.classifier(tab).fresh();
+        let sql = statements.iter().find(|sql| classifier.clone().classify(sql).stdio)?;
         let sql = super::runlog::excerpt(sql, 60);
         Some(Notice::new(Msg::SafetyCopyStdio { sql }, Level::Error))
     }
@@ -281,10 +290,12 @@ impl App {
             let lang = self.tab_language(tab);
             t.exec.prepared.language() == lang && t.editor.language() == lang
         }));
+        // Without a session, the tab's rules as they are now (the profile's server as its open
+        // metadata session found it, else before any server said): never what a closed
+        // session found.
         match self.tabs.get(tab) {
             Some(t) if t.exec.session.is_some() => t.exec.prepared.clone(),
-            Some(t) => Classifier::new(t.exec.prepared.language()),
-            None => self.rules(tab).classifier(),
+            Some(_) | None => self.rules_classifier(tab),
         }
     }
 
@@ -332,6 +343,7 @@ impl App {
         self.overlays.close(OverlayKind::Commands);
         self.overlays.close(OverlayKind::WhichKey);
         self.key_state.clear();
+        let approved = items.clone();
         self.overlays.push(Overlay::RunConfirm(RunConfirm {
             tab: id,
             profile: pid,
@@ -341,6 +353,7 @@ impl App {
             run_focused: false,
             as_is,
             generation,
+            approved,
             buttons: Default::default(),
         }));
     }
@@ -369,6 +382,21 @@ impl App {
     /// The run confirmation was answered: run (only on the tab, profile and tab generation it
     /// was asked for), or say it did not run.
     fn run_confirm_answered(&mut self, run: bool) {
+        if self.overlays.run_confirm().is_none() {
+            return;
+        }
+        self.run_confirm_answer(run);
+        // The runs that waited behind this question, one at a time: of every connected profile
+        // (one may have connected while it was open).
+        let waiting: Vec<ProfileId> =
+            self.conns.iter().filter(|(_, c)| c.connected && !c.pending.is_empty()).map(|(id, _)| id).collect();
+        for id in waiting {
+            self.send_waiting(id);
+        }
+    }
+
+    /// [`App::run_confirm_answered`] for the question itself.
+    fn run_confirm_answer(&mut self, run: bool) {
         let Some(c) = self.overlays.take_run_confirm() else { return };
         if !run {
             self.unstage_run(c.tab);
@@ -380,7 +408,7 @@ impl App {
         let same_session = |t: &Tab| !c.as_is || (t.exec.generation == c.generation && t.exec.session.is_some());
         match self.tabs.get(c.tab).map(|t| (t.profile, t.binding, same_session(t))) {
             Some((Some(p), b, true)) if p == c.profile && b == c.binding => {
-                self.run_approved_as(c.tab, c.statements, c.as_is)
+                self.run_approved_as(c.tab, c.statements, c.as_is, c.approved)
             }
             Some(_) => {
                 self.unstage_run(c.tab);

@@ -15,8 +15,16 @@ impl App {
     }
 
     /// Send a statement command to tab `id`'s query session.
+    /// A command of the user's text goes with the engines whose rules it was judged on (the
+    /// classifier of the tab's open session): a session whose server's reports name more sends
+    /// nothing of it.
     pub(in crate::app) fn send_tab(&self, id: TabId, cmd: DbCommand) {
-        if let Some(s) = self.tabs.get(id).and_then(|t| t.exec.session.as_ref()) {
+        let Some(t) = self.tabs.get(id) else { return };
+        let Some(s) = t.exec.session.as_ref() else { return };
+        if cmd.carries_user_text() {
+            let judged = t.exec.prepared.judged();
+            s.send(DbCommand::Judged { judged, command: Box::new(cmd) });
+        } else {
             s.send(cmd);
         }
     }
@@ -90,15 +98,29 @@ impl App {
     }
 
     /// Run `statements` in tab `id` once the checks passed or the user confirmed them: on its
-    /// session, or queued until its profile connects. The read-only check is made again right
-    /// before, so nothing it refuses ever reaches a session.
+    /// session, or queued until its profile connects. Right before they are sent they are
+    /// judged again from scratch, under the rules the tab has then ([`App::run_approved_as`]).
     pub(in crate::app) fn run_approved(&mut self, id: TabId, statements: Vec<String>) {
-        self.run_approved_as(id, statements, false)
+        self.run_approved_as(id, statements, false, Vec::new())
     }
 
     /// [`App::run_approved`]; `as_is`: with manual commit, every statement runs as it is (no
     /// transaction is opened for it: a procedure the user chose to run outside one).
-    pub(in crate::app) fn run_approved_as(&mut self, id: TabId, statements: Vec<String>, as_is: bool) {
+    /// `confirmed`: what the user saw and said yes to for them.
+    ///
+    /// Statements that waited (for their profile to connect, for the user's answer) are judged
+    /// again from scratch on the session they go to, right before they are sent, as a new run
+    /// is (refused, read-only, the open transaction, what asks): the rules may have changed
+    /// meanwhile (the server said its reports name two engines, or is another engine). A
+    /// refusal sends nothing; when the verdict asks for anything the user's yes did not cover
+    /// ([`crate::app::safety::covers`]), it is asked again with all it asks for.
+    pub(in crate::app) fn run_approved_as(
+        &mut self,
+        id: TabId,
+        statements: Vec<String>,
+        as_is: bool,
+        confirmed: Vec<crate::app::safety::Dangerous>,
+    ) {
         if self.tab_busy(id) {
             self.flash_busy();
             return;
@@ -127,7 +149,7 @@ impl App {
             && self.conns.get(pid).is_none_or(|c| c.resolved.is_none() || c.idle_closed.is_some())
         {
             // Bound to this tab, this profile and this tab generation.
-            let q = Queued { tab: id, profile: pid, binding: t.binding, statements };
+            let q = Queued { tab: id, profile: pid, binding: t.binding, statements, confirmed };
             let c = self.conns.entry(pid);
             c.pending.push(q);
             if c.connecting.is_none() {
@@ -138,11 +160,21 @@ impl App {
         if t.exec.session.is_none() && !self.open_query_session(id) {
             return self.unstage_run(id);
         }
-        // Checked again on the session it goes to (a run that waited for its connection).
+        // Judged again on the session it goes to, under its rules as they are now (a run that
+        // waited for its connection or for the user's answer).
+        if let Some(refused) = self.unsupported(id, &statements) {
+            self.unstage_run(id);
+            return self.tab_status(id, refused);
+        }
         let check = self.tx_check(id, &statements);
         if let Some(refused) = check.refused {
             self.unstage_run(id);
             return self.tab_status(id, refused);
+        }
+        let items =
+            crate::app::safety::with_tx_reasons(self.dangerous(id, pid, &statements), &statements, check.reasons);
+        if !items.iter().all(|i| crate::app::safety::covers(&confirmed, i)) {
+            return self.ask_before_run_as(id, pid, statements, items, as_is);
         }
         // A table tab's read, checked again right before it is sent on the session it goes to
         // (its state as it is now, a session still opening as not known yet): one that locks
@@ -191,11 +223,12 @@ impl App {
             t.exec.replace_pending = true;
             t.exec.messages_scroll = 0;
             let lang = t.exec.prepared.language();
+            let classifier = t.exec.prepared.fresh();
             // A statement that commits the user's open transaction before it runs (MySQL's
             // implicit commit): said in the run's Messages (with manual commit it asked).
             if t.exec.user_tx()
                 && !manual
-                && let Some(i) = statements.iter().position(|s| Classifier::classify_once(lang, s).implicit_commit)
+                && let Some(i) = statements.iter().position(|s| classifier.clone().classify(s).implicit_commit)
             {
                 let m = Notice::new(Msg::QueryImplicitCommit { step: (i + 1).to_string() }, Level::Warning);
                 t.exec.run.notes.push(m);
@@ -211,8 +244,7 @@ impl App {
             t.exec.run_id = qid;
             t.exec.outside_offer = None;
             t.exec.ddl = statements.iter().any(|s| changes_schema_in(s, lang.dialect()));
-            t.exec.explain_rolled_back =
-                statements.iter().any(|s| Classifier::classify_once(lang, s).rollback_matters());
+            t.exec.explain_rolled_back = statements.iter().any(|s| classifier.clone().classify(s).rollback_matters());
             // What the run prepares and deallocates counts once the server says each statement
             // succeeded (`TabSession::succeeded`), never when it is sent.
             t.exec.unconfirmed = statements.iter().cloned().enumerate().collect();

@@ -428,9 +428,13 @@ pub static MARIADB_TABLES: FamilyTables = FamilyTables {
 
 static ON_MYSQL: [&FamilyTables; 1] = [&MYSQL_TABLES];
 static ON_MARIADB: [&FamilyTables; 1] = [&MARIADB_TABLES];
+static ON_MYSQL_AND_MARIADB: [&FamilyTables; 2] = [&MYSQL_TABLES, &MARIADB_TABLES];
+static ON_MARIADB_AND_MYSQL: [&FamilyTables; 2] = [&MARIADB_TABLES, &MYSQL_TABLES];
 
 /// How a MySQL-family session's text is judged: read in its sql mode `mode`, its calls read with
-/// the lists of the engine it judges for ([`FamilyTables`]).
+/// the lists of the engines it judges for ([`FamilyTables`]): its own engine's, and with
+/// [`Judge::with_sibling`] the other engine's too. Every function of this module that judges
+/// text takes one, and on two engines judges on each and keeps the stricter result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Judge {
     /// The sql mode its text is read in.
@@ -459,19 +463,43 @@ impl Judge {
         }
     }
 
+    /// The same judge on its own engine's lists and on the other engine's of the family: for a
+    /// session whose server's reports name both engines.
+    pub fn with_sibling(self) -> Self {
+        let own_is_mysql = self.on.first().is_some_and(|t| std::ptr::eq(*t, &MYSQL_TABLES));
+        Judge { on: if own_is_mysql { &ON_MYSQL_AND_MARIADB } else { &ON_MARIADB_AND_MYSQL }, ..self }
+    }
+
+    /// The same judge on the engines `judged` says: its own, or with its sibling.
+    pub fn judged(self, judged: Judged) -> Self {
+        match judged {
+            Judged::Own => self,
+            Judged::WithSibling => self.with_sibling(),
+        }
+    }
+
     /// The lists it reads calls with. Where they answer differently, the answer that refuses
     /// more counts.
     fn tables(self) -> impl Iterator<Item = &'static FamilyTables> {
         self.on.iter().copied()
     }
+
+    /// One judge per engine it judges for, its own engine's first, each in its sql mode.
+    fn engines(self) -> impl Iterator<Item = Judge> {
+        self.on.iter().map(move |t| Judge { mode: self.mode, on: std::slice::from_ref(t) })
+    }
 }
 
-/// Which engines' lists judge a session's text: its own engine's.
+/// Which engines' lists judge a session's text.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Judged {
     /// The engine the session's dialect names.
     #[default]
     Own,
+    /// That engine and the other of the family: the server's greeting names one and its
+    /// `VERSION()` line the other, so either may be the one that runs the text. Each check
+    /// runs on both, and the stricter result counts.
+    WithSibling,
 }
 
 /// Built-ins that read a file of the server.
@@ -885,13 +913,14 @@ pub fn classify(sql: &str, judge: Judge) -> Risk {
     })
 }
 
-/// The sql modes to read `sql` in, each with `judge`'s lists: its mode first, then the others that read it differently
-/// ([`other_readings`]). The session's mode is the driver's to keep current, and a server's
-/// default may differ from what the app was told.
+/// The readings of `sql`: each sql mode to read it in, its mode first, then the others that read
+/// it differently ([`other_readings`]), each on every engine `judge` judges for (one judge per
+/// engine, [`Judge::engines`]). The session's mode is the driver's to keep current, and a
+/// server's default may differ from what the app was told.
 fn readings(sql: &str, judge: Judge) -> Vec<Judge> {
-    let mut out = vec![judge];
-    out.extend(other_readings(sql, judge.mode).into_iter().map(|mode| Judge { mode, ..judge }));
-    out
+    let mut modes = vec![judge.mode];
+    modes.extend(other_readings(sql, judge.mode));
+    modes.into_iter().flat_map(|mode| Judge { mode, ..judge }.engines()).collect()
 }
 
 /// The sql modes other than `mode` that read MySQL text `sql` differently: a backslash in it
@@ -988,18 +1017,20 @@ fn statements(sql: &str, judge: Judge) -> Result<(Vec<Vec<W<'_>>>, bool), Unread
 /// loadable function's whatever the name (written with its database, or a built-in's name
 /// written otherwise than the server reads a built-in: see [`Call::looked_up`]). `None` when
 /// the text is not read in that mode (see [`Unread`]).
+/// Each name comes once, looked up when any call of it is, on any engine `judge` judges for.
 pub(crate) fn called(sql: &str, judge: Judge) -> Option<Vec<(String, bool)>> {
     let (stmts, _) = statements(sql, judge).ok()?;
-    Some(
-        stmts
-            .iter()
-            .flat_map(|ws| calls(ws, judge))
-            .map(|c| {
-                let looked_up = c.looked_up(judge);
-                (c.name, looked_up)
-            })
-            .collect(),
-    )
+    let mut out: Vec<(String, bool)> = Vec::new();
+    for j in judge.engines() {
+        for c in stmts.iter().flat_map(|ws| calls(ws, j)) {
+            let looked_up = c.looked_up(j);
+            match out.iter_mut().find(|(name, _)| *name == c.name) {
+                Some((_, before)) => *before |= looked_up,
+                None => out.push((c.name, looked_up)),
+            }
+        }
+    }
+    Some(out)
 }
 
 /// The worse of two risks ([`Risk::merge`]), keeping the danger a read-only policy refuses by
@@ -2466,9 +2497,9 @@ pub fn names(sql: &str, judge: Judge) -> Result<Vec<String>, NotRepeatable> {
         || Err(NotRepeatable::Unreadable),
         || {
             let mut all: Vec<String> = Vec::new();
-            for (k, m) in readings(sql, judge).into_iter().enumerate() {
+            for m in readings(sql, judge) {
                 match names_as(sql, m) {
-                    None if k == 0 => return Err(NotRepeatable::Unreadable),
+                    None if m.mode == judge.mode => return Err(NotRepeatable::Unreadable),
                     // Another mode that reads the text as a syntax error: no way it runs so.
                     None => {}
                     Some(Err(why)) => return Err(why),
@@ -2496,9 +2527,9 @@ pub fn named(sql: &str, judge: Judge) -> Option<Vec<String>> {
         || None,
         || {
             let mut all: Vec<String> = Vec::new();
-            for (k, m) in readings(sql, judge).into_iter().enumerate() {
+            for m in readings(sql, judge) {
                 let Ok((stmts, _)) = statements(sql, m) else {
-                    if k == 0 {
+                    if m.mode == judge.mode {
                         return None;
                     }
                     continue;
@@ -2645,17 +2676,17 @@ pub(super) fn form(sql: &str, judge: Judge) -> Option<super::Form> {
         || None,
         || {
             let mut agreed = None;
-            for (k, m) in readings(sql, judge).into_iter().enumerate() {
+            for m in readings(sql, judge) {
                 let stmts = match statements(sql, m) {
                     Ok((stmts, _)) => stmts,
-                    Err(Unread::Syntax) if k > 0 => continue,
+                    Err(Unread::Syntax) if m.mode != judge.mode => continue,
                     Err(_) => return None,
                 };
                 let [ws] = stmts.as_slice() else { return None };
                 let first = ws.first().map(|w| w.up.as_str());
                 let query = starts_query(ws, 0)
                     || (first == Some("WITH") && with_main(ws).is_some_and(|i| starts_query(ws, i)));
-                let form = if calls(ws, judge).iter().any(|c| VOLATILE.contains(&c.name.as_str())) {
+                let form = if calls(ws, m).iter().any(|c| VOLATILE.contains(&c.name.as_str())) {
                     Form::Opens
                 } else if query {
                     Form::Query
@@ -2675,8 +2706,13 @@ pub(super) fn form(sql: &str, judge: Judge) -> Option<super::Form> {
 }
 
 /// Whether the query `sql` sorts its rows at the top (`ORDER BY` outside every parenthesis,
-/// once the parentheses around all of it are left out).
+/// once the parentheses around all of it are left out), on every engine `judge` judges for.
 pub fn ordered(sql: &str, judge: Judge) -> bool {
+    judge.engines().all(|j| ordered_as(sql, j))
+}
+
+/// [`ordered`] on one engine.
+fn ordered_as(sql: &str, judge: Judge) -> bool {
     guarded(
         || false,
         || {
@@ -2705,8 +2741,21 @@ fn without_semicolons(sql: &str, judge: Judge) -> &str {
 /// The query that counts the rows of `sql` when the user asks: `SELECT COUNT(*) FROM (<sql>)
 /// AS datarig_count`, for a statement on the allowlist ([`repeatable`]). The statement goes on
 /// lines of its own, so a trailing `#` or `--` comment ends before the closing parenthesis, and
-/// a trailing `;` is left out. The text is read again and must itself be on the allowlist.
+/// a trailing `;` is left out. The text is read again and must itself be on the allowlist. On
+/// several engines, a statement on each one's allowlist whose count each writes the same.
 pub fn count_query(sql: &str, judge: Judge) -> Result<String, NotRepeatable> {
+    let mut texts = judge.engines().map(|j| count_query_as(sql, j));
+    let first = texts.next().unwrap_or(Err(NotRepeatable::Unreadable))?;
+    for text in texts {
+        if text? != first {
+            return Err(NotRepeatable::Unreadable);
+        }
+    }
+    Ok(first)
+}
+
+/// [`count_query`] on one engine.
+fn count_query_as(sql: &str, judge: Judge) -> Result<String, NotRepeatable> {
     repeatable(sql, judge)?;
     let text = format!("SELECT COUNT(*) FROM (\n{}\n) AS datarig_count", without_semicolons(sql, judge));
     repeatable(&text, judge)?;

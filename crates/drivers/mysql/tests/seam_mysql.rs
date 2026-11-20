@@ -169,6 +169,12 @@ async fn on_server(a: &mut mysql_async::Conn, marker: &str) -> Option<u64> {
     .unwrap()
 }
 
+/// `cmd` judged on both engines' rules: no session's reports name more, so only what the
+/// session itself decides answers it.
+fn both(cmd: DbCommand) -> DbCommand {
+    DbCommand::Judged { judged: datarig_core::sql::risk::mysql::Judged::WithSibling, command: Box::new(cmd) }
+}
+
 struct Conn {
     session: Session,
     rx: UnboundedReceiver<DbEvent>,
@@ -220,15 +226,16 @@ impl Conn {
         }
     }
 
+    /// Run `sql` as run `id`, judged on both engines' rules (the most a session may name).
     fn send(&self, id: u64, sql: &[&str]) {
         let statements = sql.iter().map(|s| s.to_string()).collect();
-        self.session.send(DbCommand::Execute {
+        self.session.send(both(DbCommand::Execute {
             max_rows: None,
             id,
             statements,
             paging: PagingMode::NoHold,
             tx: TxRule::Auto,
-        });
+        }));
     }
 
     async fn run(&mut self, id: u64, sql: &[&str]) -> Vec<DbEvent> {
@@ -705,7 +712,7 @@ impl Conn {
     /// The error command `cmd` (number `id`) failed with, or its answer in debug text (`ended`
     /// when the session ended without one).
     async fn failure(&mut self, id: u64, cmd: DbCommand) -> Result<String, DbError> {
-        self.session.send(cmd);
+        self.session.send(both(cmd));
         self.until(60, |ev| match ev {
             DbEvent::Failed { id: i, error, .. } if *i == id => Some(Err(error.clone())),
             DbEvent::Page { id: i, columns: Some(_), .. } | DbEvent::Done { id: i, .. } if *i == id => {

@@ -1087,3 +1087,134 @@ fn each_engine_reads_its_own_tables() {
     assert_eq!(render(&classify("SELECT LATERAL(1)", MARIADB)), render(&classify("SELECT my_fn(1)", MARIADB)));
     assert_eq!(render(&classify("SELECT JSON_TABLE(1)", MARIADB)), render(&classify("SELECT my_fn(1)", MARIADB)));
 }
+
+/// The classifier of a session whose greeting names `greeting` and whose `VERSION()` line names
+/// the other engine (a proxy wrote the greeting), as the app's rules build it: its text is read
+/// in the greeting's dialect.
+fn disagreeing(greeting: crate::engine::EngineId) -> Classifier {
+    use crate::engine::{EngineFacts, EngineId, Fact, MyFacts, Rules, ServerFacts, Version, Why};
+    use crate::sql::dialect::Language;
+    let (handshake, line, d) = match greeting {
+        EngineId::MySql => (Version::new(8, 4, 6), "11.4.13-MariaDB", Dialect::MySql(MODE)),
+        EngineId::MariaDb | EngineId::Postgres => (Version::new(11, 4, 13), "8.4.6", Dialect::MariaDb(MODE)),
+    };
+    let my = MyFacts { handshake, greeting };
+    let detail = match greeting {
+        EngineId::MySql => EngineFacts::MariaDb(my),
+        EngineId::MariaDb | EngineId::Postgres => EngineFacts::MySql(my),
+    };
+    let facts = ServerFacts {
+        version: Fact::Unknown(Why::EnginesDisagree),
+        version_text: Some(line.into()),
+        provider: Fact::Unknown(Why::NotChecked),
+        topology: Fact::Unknown(Why::EnginesDisagree),
+        detail,
+    };
+    Rules::Server { facts: std::sync::Arc::new(facts), language: Language::Sql(d) }.classifier()
+}
+
+/// Statements one engine refuses on a read-only profile and the other allows, with the greeting
+/// that allows them today: MariaDB refuses the first four (no such built-in, a constructor
+/// called with no arguments, words it does not reserve), so they come behind a MySQL greeting;
+/// MySQL refuses the last three (a blank before a built-in's `(`, built-ins it reads only
+/// unquoted), so they come behind a MariaDB greeting.
+const ONE_ENGINE_REFUSES: &[(crate::engine::EngineId, &str)] = &[
+    (crate::engine::EngineId::MySql, "SELECT BIN_TO_UUID(a) FROM t"),
+    (crate::engine::EngineId::MySql, "SELECT POINT()"),
+    (crate::engine::EngineId::MySql, "SELECT LATERAL(1)"),
+    (crate::engine::EngineId::MySql, "SELECT OF(1)"),
+    (crate::engine::EngineId::MariaDb, "SELECT SYSDATE ()"),
+    (crate::engine::EngineId::MariaDb, "SELECT `DATABASE`()"),
+    (crate::engine::EngineId::MariaDb, "SELECT `COALESCE`(a, 1) FROM t"),
+];
+
+/// A session whose greeting and `VERSION()` line name different engines is judged on both
+/// engines' rules, and the stricter result counts, verdict by verdict: the later class, a danger
+/// that refuses on read-only by itself over one that does not, every risk flag either sets,
+/// read-only allowed only when both allow it (the merged risk's answer is that one), a confirm
+/// when either asks. What the greeting's engine allows today is refused when the other refuses
+/// it; `SELECT NOW()` reads on both, as before.
+#[test]
+fn a_disagreeing_session_is_refused_what_either_engine_refuses() {
+    use crate::engine::EngineId;
+    let blocks = |r: &Risk| r.danger.is_some_and(|d| Risk::danger(Class::Read, d).read_only().is_err());
+    for &(greeting, sql) in ONE_ENGINE_REFUSES.iter().chain(&[(EngineId::MySql, "SELECT NOW()")]) {
+        let (own, other) = match greeting {
+            EngineId::MySql => (classify(sql, MYSQL), classify(sql, MARIADB)),
+            EngineId::MariaDb | EngineId::Postgres => (classify(sql, MARIADB), classify(sql, MYSQL)),
+        };
+        let got = disagreeing(greeting).classify(sql);
+        let case = format!("{greeting:?} greeting: {sql}");
+        assert_eq!(got.class, own.class.max(other.class), "{case}: class");
+        match (own.danger, other.danger) {
+            (None, None) => assert_eq!(got.danger, None, "{case}"),
+            (Some(d), None) | (None, Some(d)) => assert_eq!(got.danger, Some(d), "{case}"),
+            (Some(a), Some(b)) if blocks(&own) != blocks(&other) => {
+                assert_eq!(got.danger, Some(if blocks(&own) { a } else { b }), "{case}")
+            }
+            (Some(a), Some(b)) => assert!(got.danger == Some(a) || got.danger == Some(b), "{case}"),
+        }
+        assert_eq!(got.writes, own.writes || other.writes, "{case}: writes");
+        assert_eq!(got.read_write, own.read_write || other.read_write, "{case}: read_write");
+        assert_eq!(got.implicit_commit, own.implicit_commit || other.implicit_commit, "{case}");
+        assert_eq!(got.runs_code, own.runs_code || other.runs_code, "{case}: runs_code");
+        assert_eq!(got.no_where.is_some(), own.no_where.is_some() || other.no_where.is_some(), "{case}");
+        assert_eq!(
+            got.unchecked_call.is_some(),
+            own.unchecked_call.is_some() || other.unchecked_call.is_some(),
+            "{case}: unchecked call"
+        );
+        let both = own.read_only().is_ok() && other.read_only().is_ok();
+        assert_eq!(got.read_only().is_ok(), both, "{case}: read-only allowed only when both allow");
+        for writes in [false, true] {
+            let either = own.confirm(writes).is_some() || other.confirm(writes).is_some();
+            assert_eq!(got.confirm(writes).is_some(), either, "{case}: confirm ({writes})");
+        }
+        if sql == "SELECT NOW()" {
+            assert!(got.read_only().is_ok(), "{case}");
+        } else {
+            assert!(own.read_only().is_ok(), "{case}: the greeting's engine allows it today");
+            assert!(other.read_only().is_err() && got.read_only().is_err(), "{case}: refused as the other refuses it");
+        }
+    }
+}
+
+/// On such a session the re-run allowlist, the count and the keyset guard refuse when either
+/// engine refuses (`BIN_TO_UUID` is no built-in of MariaDB's; a quoted `DATABASE` none of
+/// MySQL's), and a plain read keeps today's answers: the same count text, the zone and order
+/// read as before.
+#[test]
+fn a_disagreeing_session_reruns_only_what_both_engines_rerun() {
+    use crate::engine::EngineId;
+    use crate::sql::dialect::Language;
+    let my = disagreeing(EngineId::MySql);
+    let maria = disagreeing(EngineId::MariaDb);
+    assert_eq!(my.repeatable("SELECT BIN_TO_UUID(a) FROM t"), Err(NotRepeatable::UserFunction));
+    assert_eq!(my.count_query("SELECT BIN_TO_UUID(a) FROM t"), Err(NotRepeatable::UserFunction));
+    assert_eq!(maria.repeatable("SELECT `DATABASE`()"), Err(NotRepeatable::UserFunction));
+    assert_eq!(maria.count_query("SELECT `DATABASE`()"), Err(NotRepeatable::UserFunction));
+    let plain = "SELECT a FROM t ORDER BY a";
+    let zone = "SELECT a FROM t WHERE ts > CONVERT_TZ('2026-01-01 00:00:00', '+00:00', @@session.time_zone)";
+    for (c, own) in [
+        (&my, Classifier::new(Language::Sql(Dialect::MySql(MODE)))),
+        (&maria, Classifier::new(Language::Sql(Dialect::MariaDb(MODE)))),
+    ] {
+        assert_eq!(c.repeatable(plain), Ok(()));
+        assert_eq!(c.count_query(plain), own.count_query(plain));
+        assert_eq!((c.ordered(plain), c.ordered(zone)), (true, false));
+        assert_eq!((c.reads_zone(plain), c.reads_zone(zone)), (false, true));
+        assert_eq!(c.repeatable(zone), own.repeatable(zone));
+    }
+}
+
+/// The calls of a text, as the filter bar asks for them: each name once, looked up when any
+/// call of it is on any engine judged for (a quoted `COALESCE` is MariaDB's built-in and a
+/// stored function to MySQL).
+#[test]
+fn each_call_comes_once_looked_up_when_either_engine_looks_it_up() {
+    let sql = "SELECT `COALESCE`(a, 1), COALESCE(b, 2), NOW() FROM t";
+    let both = Judge::mariadb(MODE).with_sibling();
+    assert_eq!(called(sql, both), Some(vec![("COALESCE".to_string(), true), ("NOW".to_string(), false)]));
+    assert_eq!(called(sql, MARIADB), Some(vec![("COALESCE".to_string(), false), ("NOW".to_string(), false)]));
+    assert_eq!(called(sql, MYSQL), Some(vec![("COALESCE".to_string(), true), ("NOW".to_string(), false)]));
+}

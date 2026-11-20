@@ -447,7 +447,10 @@ pub fn check_filter(
                         calls.push(call);
                     }
                 }
-                let Some(judge) = risk::mysql::Judge::of(r.dialect) else { continue };
+                // On the engines the session's classifier judges on.
+                let Some(judge) = risk::mysql::Judge::of(r.dialect).map(|j| j.judged(classifier.judged())) else {
+                    continue;
+                };
                 let unread_here = || BarRefusal::NotRead { class: risk.class, danger: Some(Danger::Unrecognized) };
                 for (name, looked_up) in risk::mysql::called(&sql, judge).ok_or_else(unread_here)? {
                     let call = Call {

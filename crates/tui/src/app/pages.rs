@@ -72,18 +72,19 @@ pub(super) fn zone_moved(t: &Tab, sql: &str) -> bool {
     )
 }
 
-/// A statement (in `lang`) that changes rows and keeps the change (not an `EXPLAIN ANALYZE`,
-/// whose changes are rolled back).
-fn commits_a_write(lang: Language, sql: &str) -> bool {
-    let risk = Classifier::classify_once(lang, sql);
+/// A statement (judged by `classifier`, a tab's with nothing prepared) that changes rows and
+/// keeps the change (not an `EXPLAIN ANALYZE`, whose changes are rolled back).
+fn commits_a_write(classifier: &Classifier, sql: &str) -> bool {
+    let risk = classifier.clone().classify(sql);
     risk.writes && !risk.rolls_back()
 }
 
-/// Why a result not held shows `count` rows only (its statement `sql`, in `lang`, is not run
-/// again for the user, for `r`): a statement that changes rows ran to its end and is committed
-/// (running it again would change rows again), anything else stopped after its first page.
-pub(super) fn first_page_only(i18n: &I18n, lang: Language, sql: &str, r: &NotRepeatable, count: u64) -> Msg {
-    if commits_a_write(lang, sql) {
+/// Why a result not held shows `count` rows only (its statement `sql`, judged by `classifier`,
+/// is not run again for the user, for `r`): a statement that changes rows ran to its end and is
+/// committed (running it again would change rows again), anything else stopped after its first
+/// page.
+pub(super) fn first_page_only(i18n: &I18n, classifier: &Classifier, sql: &str, r: &NotRepeatable, count: u64) -> Msg {
+    if commits_a_write(classifier, sql) {
         Msg::ResultsFirstPageOnlyWrite { count }
     } else {
         Msg::ResultsFirstPageOnly { count, why: i18n.msg(&why(r)).to_string() }
@@ -236,14 +237,14 @@ impl App {
         if let Err(why) = self.table_recheck(id).and_then(|()| self.table_locks_recheck(id)) {
             return self.tab_status(id, Notice::new(refused(why), Level::Warning));
         }
-        let lang = t.exec.prepared.language();
+        let classifier = t.exec.prepared.fresh();
         if let Err(r) = t.exec.prepared.repeatable(&sql) {
-            if released && commits_a_write(lang, &sql) {
+            if released && commits_a_write(&classifier, &sql) {
                 let count = match &t.results {
                     Results::Rows(rs) => rs.rows.len() as u64,
                     _ => 0,
                 };
-                let m = first_page_only(&self.i18n, lang, &sql, &r, count);
+                let m = first_page_only(&self.i18n, &classifier, &sql, &r, count);
                 return self.tab_status(id, Notice::new(m, Level::Warning));
             }
             let why = self.i18n.msg(&why(&r)).to_string();

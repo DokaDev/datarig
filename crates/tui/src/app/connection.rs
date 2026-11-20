@@ -246,7 +246,7 @@ impl App {
             s.close();
         }
         t.exec.generation = generation;
-        t.exec.prepared = Classifier::new(t.exec.prepared.language());
+        t.exec.prepared = t.exec.prepared.fresh();
         t.exec.unconfirmed.clear();
         t.exec.context = None;
         t.exec.path_per_transaction = false;
@@ -396,7 +396,6 @@ impl App {
             c.expanded = true;
         }
         let console = c.console.take();
-        let pending = std::mem::take(&mut c.pending);
         let mut flash = None;
         let mut to_keychain = None;
         if let Some((_, kind)) = self.save_on_connect.take_if(|(sid, _)| *sid == id)
@@ -454,12 +453,24 @@ impl App {
         // A statement runs only in the tab, on the profile and under the tab generation it was
         // queued for; a tab that moved to another connection (or was rebound to this one
         // again) meanwhile gets a notice instead.
-        for q in pending {
+        self.send_waiting(id);
+    }
+
+    /// The runs that waited for profile `id` to connect, in order, once it is connected: each
+    /// judged again as it is sent ([`App::run_approved_as`]). One at a time: a run that asks
+    /// first stops here, and the rest wait in order for the answer (no question replaces
+    /// another).
+    pub(super) fn send_waiting(&mut self, id: ProfileId) {
+        let Some(name) = self.profile(id).map(|p| p.name.clone()) else { return };
+        let mut left = self.conns.get(id).map_or(0, |c| c.pending.len());
+        while left > 0 && self.overlays.run_confirm().is_none() {
+            left -= 1;
+            let Some(c) = self.conns.get_mut(id).filter(|c| c.connected && !c.pending.is_empty()) else { return };
+            let q = c.pending.remove(0);
             let current = self.tabs.get(q.tab).map(|t| (t.profile, t.binding));
             match current {
-                // Checked (and confirmed) before it was queued.
                 Some((profile, binding)) if q.profile == id && profile == Some(id) && binding == q.binding => {
-                    self.run_approved(q.tab, q.statements);
+                    self.run_approved_as(q.tab, q.statements, false, q.confirmed);
                 }
                 Some(_) => {
                     self.tab_status(q.tab, Notice::new(Msg::QueryQueuedDropped { name: name.clone() }, Level::Warning))

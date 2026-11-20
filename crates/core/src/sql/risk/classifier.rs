@@ -20,8 +20,8 @@ pub enum Classifier {
     /// unknown statement.
     MySql(MySqlMode, Judged),
     /// MariaDB, read as MySQL's classifier reads MySQL, its calls judged on the engines `Judged`
-    /// says: MariaDB's own lists ([`mysql::MARIADB_TABLES`]). Prepared statements are not
-    /// remembered.
+    /// says: MariaDB's own lists ([`mysql::MARIADB_TABLES`]), and MySQL's too when the server's
+    /// reports name both engines. Prepared statements are not remembered.
     MariaDb(MySqlMode, Judged),
 }
 
@@ -42,6 +42,22 @@ impl Classifier {
         }
     }
 
+    /// A classifier of the same language judged on the same engines, with nothing prepared.
+    pub fn fresh(&self) -> Self {
+        match self {
+            Self::Pg(_) => Self::Pg(Prepared::default()),
+            Self::MySql(..) | Self::MariaDb(..) => self.clone(),
+        }
+    }
+
+    /// The engines it judges a MySQL-family session's text on; PostgreSQL's always its own.
+    pub fn judged(&self) -> Judged {
+        match self {
+            Self::Pg(_) => Judged::Own,
+            Self::MySql(_, j) | Self::MariaDb(_, j) => *j,
+        }
+    }
+
     /// The language it classifies.
     pub fn language(&self) -> Language {
         match self {
@@ -56,8 +72,8 @@ impl Classifier {
     pub fn classify(&mut self, sql: &str) -> Risk {
         match self {
             Self::Pg(p) => p.classify(sql),
-            Self::MySql(mode, Judged::Own) => mysql::classify(sql, Judge::mysql(*mode)),
-            Self::MariaDb(mode, Judged::Own) => mysql::classify(sql, Judge::mariadb(*mode)),
+            Self::MySql(mode, j) => mysql::classify(sql, Judge::mysql(*mode).judged(*j)),
+            Self::MariaDb(mode, j) => mysql::classify(sql, Judge::mariadb(*mode).judged(*j)),
         }
     }
 
@@ -88,8 +104,8 @@ impl Classifier {
     pub fn repeatable(&self, sql: &str) -> Result<(), NotRepeatable> {
         match self {
             Self::Pg(_) => repeat::repeatable(sql),
-            Self::MySql(mode, Judged::Own) => mysql::repeatable(sql, Judge::mysql(*mode)),
-            Self::MariaDb(mode, Judged::Own) => mysql::repeatable(sql, Judge::mariadb(*mode)),
+            Self::MySql(mode, j) => mysql::repeatable(sql, Judge::mysql(*mode).judged(*j)),
+            Self::MariaDb(mode, j) => mysql::repeatable(sql, Judge::mariadb(*mode).judged(*j)),
         }
     }
 
@@ -98,8 +114,8 @@ impl Classifier {
     fn plain_read(&self, sql: &str) -> Result<(), NotRepeatable> {
         match self {
             Self::Pg(_) => repeat::plain_read(sql),
-            Self::MySql(mode, Judged::Own) => mysql::repeatable(sql, Judge::mysql(*mode)),
-            Self::MariaDb(mode, Judged::Own) => mysql::repeatable(sql, Judge::mariadb(*mode)),
+            Self::MySql(mode, j) => mysql::repeatable(sql, Judge::mysql(*mode).judged(*j)),
+            Self::MariaDb(mode, j) => mysql::repeatable(sql, Judge::mariadb(*mode).judged(*j)),
         }
     }
 
@@ -108,8 +124,8 @@ impl Classifier {
     pub fn reads_zone(&self, sql: &str) -> bool {
         match self {
             Self::Pg(_) => false,
-            Self::MySql(mode, Judged::Own) => mysql::reads_zone(sql, Judge::mysql(*mode)),
-            Self::MariaDb(mode, Judged::Own) => mysql::reads_zone(sql, Judge::mariadb(*mode)),
+            Self::MySql(mode, j) => mysql::reads_zone(sql, Judge::mysql(*mode).judged(*j)),
+            Self::MariaDb(mode, j) => mysql::reads_zone(sql, Judge::mariadb(*mode).judged(*j)),
         }
     }
 
@@ -117,8 +133,8 @@ impl Classifier {
     pub fn ordered(&self, sql: &str) -> bool {
         match self {
             Self::Pg(_) => repeat::ordered(sql),
-            Self::MySql(mode, Judged::Own) => mysql::ordered(sql, Judge::mysql(*mode)),
-            Self::MariaDb(mode, Judged::Own) => mysql::ordered(sql, Judge::mariadb(*mode)),
+            Self::MySql(mode, j) => mysql::ordered(sql, Judge::mysql(*mode).judged(*j)),
+            Self::MariaDb(mode, j) => mysql::ordered(sql, Judge::mariadb(*mode).judged(*j)),
         }
     }
 
@@ -131,9 +147,17 @@ impl Classifier {
     /// variable), or a `SHOW`, a `HELP`, a `DESCRIBE` or an `EXPLAIN` without `ANALYZE` that
     /// calls nothing. Several statements, a text that cannot be read and anything unknown open
     /// it.
+    ///
+    /// Judged on two engines ([`Judged::WithSibling`]), a statement whose step the two give
+    /// differently opens the transaction.
     pub fn tx_step(&self, sql: &str) -> TxStep {
         let (form, risk) = match self {
             Self::Pg(p) => (super::form(sql), p.clone().classify(sql)),
+            Self::MySql(mode, Judged::WithSibling) | Self::MariaDb(mode, Judged::WithSibling) => {
+                let mysql = Self::MySql(*mode, Judged::Own).tx_step(sql);
+                let mariadb = Self::MariaDb(*mode, Judged::Own).tx_step(sql);
+                return if mysql == mariadb { mysql } else { TxStep::Opens };
+            }
             Self::MySql(mode, Judged::Own) => {
                 (mysql::form(sql, Judge::mysql(*mode)), mysql::classify(sql, Judge::mysql(*mode)))
             }
@@ -173,8 +197,8 @@ impl Classifier {
     pub fn count_query(&self, sql: &str) -> Result<String, NotRepeatable> {
         match self {
             Self::Pg(_) => repeat::count_query(sql),
-            Self::MySql(mode, Judged::Own) => mysql::count_query(sql, Judge::mysql(*mode)),
-            Self::MariaDb(mode, Judged::Own) => mysql::count_query(sql, Judge::mariadb(*mode)),
+            Self::MySql(mode, j) => mysql::count_query(sql, Judge::mysql(*mode).judged(*j)),
+            Self::MariaDb(mode, j) => mysql::count_query(sql, Judge::mariadb(*mode).judged(*j)),
         }
     }
 }

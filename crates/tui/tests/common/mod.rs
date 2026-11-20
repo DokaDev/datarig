@@ -71,6 +71,9 @@ pub struct FakeSession {
     pub cancelled: Arc<AtomicBool>,
     /// Commands already drained from `cmds`.
     pub seen: Vec<DbCommand>,
+    /// The engines each command of user text was judged on, in the order sent (`None`: sent
+    /// without them), kept for the test to read; `seen` holds the commands themselves.
+    pub judged: Vec<Option<datarig_core::sql::risk::mysql::Judged>>,
 }
 
 impl FakeSession {
@@ -78,7 +81,16 @@ impl FakeSession {
     pub fn closed(&mut self) -> bool {
         loop {
             match self.cmds.try_recv() {
-                Ok(c) => self.seen.push(c),
+                Ok(DbCommand::Judged { judged, command }) => {
+                    self.judged.push(Some(judged));
+                    self.seen.push(*command);
+                }
+                Ok(c) => {
+                    if c.carries_user_text() {
+                        self.judged.push(None);
+                    }
+                    self.seen.push(c);
+                }
                 Err(TryRecvError::Empty) => return false,
                 Err(TryRecvError::Disconnected) => return true,
             }
@@ -190,7 +202,14 @@ impl Driver for FakeDriver {
         let (tx, cmds) = unbounded_channel();
         let own = Arc::new(AtomicBool::new(false));
         let cancel = Arc::new(FakeCancel { own: own.clone(), any: self.any_cancel.clone() });
-        self.sessions.lock().unwrap().push(FakeSession { role, opts, cmds, cancelled: own, seen: Vec::new() });
+        self.sessions.lock().unwrap().push(FakeSession {
+            role,
+            opts,
+            cmds,
+            cancelled: own,
+            seen: Vec::new(),
+            judged: Vec::new(),
+        });
         Session::new(self.capabilities(), role, tx, cancel)
     }
 
