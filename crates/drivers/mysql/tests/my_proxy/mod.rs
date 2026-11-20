@@ -4,8 +4,9 @@
 //! records the text of every `COM_QUERY` a client sends, in order, and a fault can be set for
 //! the next one that starts with a given text ([`Proxy::fault_start`]): the server gets another
 //! text, or the connection is closed in its place. It can also leave every new session with a
-//! `sql_select_limit` of 0 ([`Proxy::zero_select_limit`]), as a proxy or an `init_connect` that
-//! sets it would. Everything else, authentication included, passes through unchanged.
+//! `sql_select_limit` of 0 ([`Proxy::zero_select_limit`]), or with results sent in another
+//! character set ([`Proxy::results_charset`]), as a proxy or an `init_connect` that sets it
+//! would. Everything else, authentication included, passes through unchanged.
 
 use datarig_core::profile::dsn;
 use std::sync::{Arc, Mutex};
@@ -40,8 +41,8 @@ struct Greeting {
     version: Option<String>,
     /// Added to the connection id (wrapping), so it is not the server's own.
     id_offset: u32,
-    /// Whether the session gets [`ZERO_SELECT_LIMIT`] once it logged in.
-    zero_select_limit: bool,
+    /// The statement the session gets once it logged in, before its first one.
+    after_login: Option<String>,
 }
 
 type Faults = Arc<Mutex<Vec<(String, Fault)>>>;
@@ -89,7 +90,14 @@ impl Proxy {
     /// the client's first statement reaches the server; its answer never reaches the client
     /// (nor the log of [`Proxy::queries`]).
     pub fn zero_select_limit(&self) {
-        self.greeting.lock().unwrap().zero_select_limit = true;
+        self.greeting.lock().unwrap().after_login = Some(ZERO_SELECT_LIMIT.to_string());
+    }
+
+    /// Every connection from now on runs `SET character_set_results = <charset>` right after its
+    /// login, as [`Proxy::zero_select_limit`] does its statement: the server sends the results
+    /// in `charset` until the session sets another.
+    pub fn results_charset(&self, charset: &str) {
+        self.greeting.lock().unwrap().after_login = Some(format!("SET character_set_results = {charset}"));
     }
 
     /// The next `COM_QUERY` (on any connection) whose text starts with `start` meets `fault`,
@@ -197,16 +205,15 @@ async fn relay(
     });
     // A packet that continues the one before (that one was `0xFFFFFF` bytes) is no command.
     let mut continued = false;
-    let mut zero_select_limit = how.zero_select_limit;
+    let mut after_login = how.after_login;
     while let Ok((seq, payload)) = read_packet(&mut cr).await {
         let mut payload = payload;
         // The client's first command comes once the login is done: the relay's own statement
         // goes first, and its answer (an OK packet) is taken before the client's is sent.
-        if !continued && seq == 0 && zero_select_limit {
-            zero_select_limit = false;
+        if let Some(own) = after_login.take_if(|_| !continued && seq == 0) {
             let (taken, answered) = oneshot::channel();
             *swallow.lock().unwrap() = Some(taken);
-            write_packet(&mut sw, 0, &[&[COM_QUERY], ZERO_SELECT_LIMIT.as_bytes()].concat()).await?;
+            write_packet(&mut sw, 0, &[&[COM_QUERY], own.as_bytes()].concat()).await?;
             if answered.await.is_err() {
                 return Ok(());
             }

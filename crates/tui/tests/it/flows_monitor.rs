@@ -3115,3 +3115,22 @@ fn the_statement_is_read_in_the_sql_mode_the_sessions_said() {
     assert_eq!(cell("\"total\"").fg, th.syn_quoted_ident.fg.unwrap(), "a quoted name");
     assert_eq!(cell("'x'").fg, th.syn_string.fg.unwrap(), "a string");
 }
+
+/// A monitor connection refused because the server's version line confirmed no engine is not
+/// opened again on its own: the server answers no better on a retry. The tab says why.
+#[test]
+fn an_unconfirmed_engine_is_not_retried() {
+    let mut h = Harness::connected(Lang::En);
+    h.driver.monitor.store(true, Ordering::SeqCst);
+    h.sent();
+    h.command("monitor");
+    let monitors = |h: &Harness| h.roles().iter().filter(|r| **r == SessionRole::Monitor).count();
+    assert_eq!(monitors(&h), 1);
+    let error = DbError::EngineUnconfirmed { greeting: "MySQL 8.4.6".into() };
+    h.monitor_db(DbEvent::ConnectFailed { error, auth: false });
+    let MonState::Unavailable(why) = &monitor(&h).state else { panic!("{:?}", monitor(&h).state) };
+    assert!(why.contains("could not be confirmed"), "{why}");
+    h.advance(Duration::from_secs(600));
+    assert_eq!(monitors(&h), 1, "no new monitor connection");
+    assert!(matches!(monitor(&h).state, MonState::Unavailable(_)));
+}

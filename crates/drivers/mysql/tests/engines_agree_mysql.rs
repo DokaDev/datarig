@@ -1,8 +1,11 @@
-//! A MySQL-family session runs nothing on a server whose two reports of what it is disagree: the
-//! greeting (which a proxy in front of the server may write itself) and the answer to
-//! `SELECT VERSION() LIMIT 1`, read first on every session and in a test connection. Against a
-//! real MySQL or MariaDB loaded with `dev/init-mysql/*.sql` (CI runs this file in both jobs),
-//! through the test proxy (`my_proxy`), which rewrites the greeting or the version answer.
+//! A MySQL-family session reads the server's own version line (`SELECT VERSION() LIMIT 1`) before
+//! anything that depends on the engine, and its facts name the engine that line names: the
+//! greeting may be a proxy's. A greeting naming the other engine is not refused: the session
+//! says and sends what the greeting implies, as it did before the line was read, with the
+//! version and how it reaches the server unknown. A line that confirms no engine closes the
+//! session. Against a real MySQL or MariaDB loaded with `dev/init-mysql/*.sql` (CI runs this file
+//! in both jobs), through the test proxy (`my_proxy`), which rewrites the greeting or the version
+//! answer.
 //!
 //! Connection: `DATARIG_TEST_MYSQL_URL` (e.g. `mysql://datarig:datarig@127.0.0.1:53306/shop`).
 //! * unset locally  -> each test prints a visible `SKIPPED` line to stderr and returns;
@@ -13,9 +16,11 @@
 #[allow(dead_code)]
 mod my_proxy;
 
-use datarig_core::driver::{ConnectOptions, DbError, DbEvent, Driver, PingError, PingInfo, Session, SessionRole};
+use datarig_core::driver::{
+    ConnectOptions, DbCommand, DbError, DbEvent, Driver, PagingMode, PingError, PingInfo, Session, SessionRole, TxRule,
+};
 use datarig_core::driver::{EditFormat, ExplainFormat, MySqlEdit, SessionStatement};
-use datarig_core::engine::{EngineId, Fact, ServerFacts, Version, Why};
+use datarig_core::engine::{EngineId, Fact, ServerFacts, Topology, Version, Why};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::{Dialect, Language};
 use datarig_driver_mysql::MyDriver;
@@ -30,6 +35,9 @@ const PAGE: usize = 500;
 
 /// What every session and a test connection ask first.
 const VERSION_SQL: &str = "SELECT VERSION() LIMIT 1";
+
+/// What every session sends before its settings.
+const OPENING: [&str; 1] = [VERSION_SQL];
 
 /// The start of [`VERSION_SQL`], and of the text a test connection asked before it.
 const VERSION_START: &str = "SELECT VERSION()";
@@ -100,19 +108,31 @@ impl Server {
         if self.mariadb { ("8.4.6", "MySQL 8.4.6") } else { ("5.5.5-11.4.13-MariaDB", "MariaDB 11.4.13") }
     }
 
-    /// A version line of the other engine.
-    fn other_line(&self) -> &'static str {
-        if self.mariadb { "8.4.6" } else { "11.4.13-MariaDB-ubu2404" }
+    /// Greetings naming the other engine (a proxy's), each with a line of its engine that
+    /// agrees with it.
+    fn other_greetings(&self) -> &'static [(&'static str, &'static str)] {
+        if self.mariadb {
+            // A MySQL-format greeting, and MariaDB's number with no engine in it.
+            &[("8.4.6", "8.4.6"), ("11.4.13", "11.4.13")]
+        } else {
+            &[("5.5.5-11.4.13-MariaDB", "11.4.13-MariaDB")]
+        }
+    }
+
+    /// Version lines of the other engine (MariaDB's also in the form of its greeting).
+    fn other_lines(&self) -> &'static [&'static str] {
+        if self.mariadb { &["8.4.6"] } else { &["11.4.13-MariaDB-ubu2404", "5.5.5-11.4.13-MariaDB"] }
+    }
+
+    /// The engine a version line of the other engine names.
+    fn other_engine(&self) -> EngineId {
+        if self.mariadb { EngineId::MySql } else { EngineId::MariaDb }
     }
 
     /// The driver's key of the other engine.
     fn other_key(&self) -> &'static str {
         if self.mariadb { "mysql" } else { "mariadb" }
     }
-}
-
-fn disagree(greeting: &str, version: &str) -> String {
-    format!("EnginesDisagree {{ greeting: {greeting:?}, version: {version:?} }}")
 }
 
 fn unconfirmed(greeting: &str) -> String {
@@ -177,6 +197,91 @@ fn ping_refused(pinged: Result<PingInfo, PingError>, what: &str) -> String {
     }
 }
 
+/// One session through its own proxy, and what came of it.
+struct Run {
+    /// What it said before `Connected` but its facts, in debug text, or why it failed.
+    outcome: Result<Vec<String>, String>,
+    facts: Option<Arc<ServerFacts>>,
+    /// The proxy's log once it connected or failed.
+    log: Vec<String>,
+}
+
+/// How the proxy of a [`Run`] is set: the greeting it writes, the version answer it puts in place
+/// of the server's (a statement), the results charset it leaves the session with.
+#[derive(Clone, Copy, Default)]
+struct Setup<'a> {
+    greeting: Option<&'a str>,
+    answer: Option<&'a str>,
+    charset: Option<&'a str>,
+}
+
+impl Setup<'_> {
+    async fn proxy(&self, url: &str) -> Proxy {
+        let proxy = Proxy::start(&upstream(url)).await;
+        if let Some(c) = self.charset {
+            proxy.results_charset(c);
+        }
+        if let Some(g) = self.greeting {
+            proxy.greet_as(g);
+        }
+        if let Some(a) = self.answer {
+            proxy.fault_start(VERSION_START, Fault::Instead(a.into()));
+        }
+        proxy
+    }
+
+    async fn run(&self, url: &str, role: SessionRole, test: &str) -> Run {
+        let proxy = self.proxy(url).await;
+        let opened = open(&proxy.url(url), "mysql", role, test).await;
+        let log = proxy.queries();
+        let (outcome, facts) = match &opened {
+            Ok((_, before)) => {
+                let words = before.iter().filter(|e| !matches!(e, DbEvent::Server(_))).map(|e| format!("{e:?}"));
+                (Ok(words.collect()), Some(facts(before)))
+            }
+            Err(e) => (Err(format!("{e:?}")), None),
+        };
+        Run { outcome, facts, log }
+    }
+
+    async fn ping(&self, url: &str) -> (Result<PingInfo, PingError>, Vec<String>) {
+        let proxy = self.proxy(url).await;
+        let pinged = ping(&proxy.url(url)).await;
+        (pinged, proxy.queries())
+    }
+}
+
+/// `log` without what the session sends before its settings, and with the session's marker (a
+/// random token of each session) left out.
+fn legacy(log: &[String]) -> Vec<String> {
+    let unmarked = |s: &str| match s.split_once("ATTR_VALUE = '") {
+        Some((head, tail)) => format!("{head}ATTR_VALUE = '{}", tail.split_once('\'').map_or("", |(_, rest)| rest)),
+        None => s.to_string(),
+    };
+    log.iter().filter(|s| !OPENING.contains(&s.as_str())).map(|s| unmarked(s)).collect()
+}
+
+/// `run` ends as `reference` does (connected with the same words, or failed with the same
+/// error) and sends the same statements past the version read: all of them on a query session or
+/// one that failed, the settings on the others (which go on reading once connected).
+fn as_reference(run: &Run, reference: &Run, what: &str) {
+    assert_eq!(run.outcome, reference.outcome, "{what}");
+    let (got, want) = (legacy(&run.log), legacy(&reference.log));
+    if what.contains("Query") || run.outcome.is_err() {
+        assert_eq!(got, want, "{what}");
+    } else {
+        assert_eq!(got.first(), want.first(), "{what}: the settings");
+    }
+}
+
+/// Facts of a session whose greeting names another engine than its version line `line`.
+fn assert_engines_disagree(f: &ServerFacts, engine: EngineId, line: &str, what: &str) {
+    assert_eq!(f.engine(), engine, "{what}: {f:?}");
+    assert_eq!(format!("{:?}", f.topology), "Unknown(EnginesDisagree)", "{what}: {f:?}");
+    assert_eq!(format!("{:?}", f.version), "Unknown(EnginesDisagree)", "{what}: {f:?}");
+    assert_eq!(f.version_text.as_deref(), Some(line), "{what}: {f:?}");
+}
+
 /// The plan format, edits and dollar quotes a greeting of MySQL `v` implies (none on MariaDB).
 fn words_of(engine: EngineId, v: Version) -> (Option<ExplainFormat>, Option<EditFormat>, bool) {
     match engine {
@@ -200,23 +305,6 @@ fn words(before: &[DbEvent]) -> (Option<ExplainFormat>, Option<EditFormat>, bool
     (explain.expect("a plan format"), edit.expect("edits"), dollar.expect("a language"))
 }
 
-/// The failing-first case: a MySQL server behind a greeting naming MariaDB (and a MariaDB
-/// server behind one naming MySQL) runs none of a query session's settings: the session is
-/// refused after its version read, the only statement it sent.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_greeting_naming_the_other_engine_is_refused_before_any_setting() {
-    let test = "a_greeting_naming_the_other_engine_is_refused_before_any_setting";
-    let Some(url) = my_url(test) else { return };
-    let server = Server::of(&url).await;
-    let proxy = Proxy::start(&upstream(&url)).await;
-    let (greeting, label) = server.other_greeting();
-    proxy.greet_as(greeting);
-    let opened = open(&proxy.url(&url), "mysql", SessionRole::Query, test).await;
-    let outcome = format!("{:?}", opened.as_ref().map(|(_, before)| before));
-    assert_eq!(proxy.queries(), [VERSION_SQL], "{outcome}");
-    assert_eq!(refused(opened, "query"), disagree(label, &server.line));
-}
-
 /// Every session reads the server's version first, before the settings it starts with (and a
 /// query session before its start-up statements); a test connection reads only the version.
 #[tokio::test(flavor = "multi_thread")]
@@ -229,8 +317,8 @@ async fn every_session_reads_the_version_before_its_settings() {
         let opened = open(&proxy.url(&url), "mysql", role, test).await;
         let (_session, _) = opened.unwrap_or_else(|e| panic!("{role:?}: {e:?}"));
         let log = proxy.queries();
-        assert_eq!(log.first().map(String::as_str), Some(VERSION_SQL), "{role:?}: {log:?}");
-        assert!(log.get(1).is_some_and(|s| s.starts_with("SET ")), "{role:?}: the settings second: {log:?}");
+        assert_eq!(log.get(..1), Some(&OPENING.map(String::from)[..]), "{role:?}: {log:?}");
+        assert!(log.get(1).is_some_and(|s| s.starts_with("SET NAMES ")), "{role:?}: the settings second: {log:?}");
         if role == SessionRole::Query {
             assert!(log.iter().skip(2).any(|s| s == STARTUP), "{role:?}: {log:?}");
         }
@@ -277,12 +365,12 @@ async fn a_failed_version_read_keeps_its_own_error() {
         proxy.fault_start(VERSION_START, syntax());
         let error = open(&proxy.url(&url), "mysql", role, test).await.err();
         assert!(error.as_ref().is_some_and(is_syntax), "{role:?}: {error:?}");
-        assert_eq!(proxy.queries(), [VERSION_SQL], "{role:?}");
+        assert_eq!(proxy.queries(), OPENING, "{role:?}");
         let proxy = Proxy::start(&upstream(&url)).await;
         proxy.fault_start(VERSION_START, Fault::Close);
         let error = open(&proxy.url(&url), "mysql", role, test).await.err();
         assert!(error.as_ref().is_some_and(is_closed), "{role:?}: {error:?}");
-        assert_eq!(proxy.queries(), [VERSION_SQL], "{role:?}");
+        assert_eq!(proxy.queries(), OPENING, "{role:?}");
     }
     let proxy = Proxy::start(&upstream(&url)).await;
     proxy.fault_start(VERSION_START, syntax());
@@ -311,7 +399,7 @@ async fn an_empty_or_null_version_answer_is_unconfirmed() {
             proxy.fault_start(VERSION_START, Fault::Instead(answer.into()));
             let error = refused(open(&proxy.url(&url), "mysql", role, test).await, answer);
             assert_eq!(error, unconfirmed(&server.label()), "{answer} {role:?}");
-            assert_eq!(proxy.queries(), [VERSION_SQL], "{answer} {role:?}");
+            assert_eq!(proxy.queries(), OPENING, "{answer} {role:?}");
         }
         let proxy = Proxy::start(&upstream(&url)).await;
         proxy.fault_start(VERSION_START, Fault::Instead(answer.into()));
@@ -320,10 +408,154 @@ async fn an_empty_or_null_version_answer_is_unconfirmed() {
     }
 }
 
+/// A session that a proxy (or the server's `init_connect`) leaves sending its results in a
+/// character set that is not ASCII-compatible (`utf16`, `utf32`) gets even the column
+/// definitions of an answer converted, which the client cannot read: the version read fails
+/// with its own connection error and nothing else is sent, on every session and in a test
+/// connection. Such a session never read an answer before the version read either (see
+/// [`a_non_utf8_results_charset_leaves_no_answer_readable`]).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_non_utf8_results_charset_fails_the_version_read_with_its_own_error() {
+    let test = "a_non_utf8_results_charset_fails_the_version_read_with_its_own_error";
+    let Some(url) = my_url(test) else { return };
+    let server = Server::of(&url).await;
+    let (other, _) = server.other_greeting();
+    for charset in ["utf16", "utf32"] {
+        for greeting in [None, Some(other)] {
+            let setup = Setup { charset: Some(charset), greeting, ..Setup::default() };
+            for role in ROLES {
+                let what = format!("{charset} {greeting:?} {role:?}");
+                let run = setup.run(&url, role, test).await;
+                let error = run.outcome.err().unwrap_or_else(|| panic!("{what}: connected"));
+                assert!(error.starts_with("Connection(") && error.contains("InvalidData"), "{what}: {error}");
+                assert_eq!(run.log, [VERSION_SQL], "{what}");
+            }
+            let (pinged, log) = setup.ping(&url).await;
+            let error = ping_refused(pinged, charset);
+            assert!(error.starts_with("Connection(") && error.contains("InvalidData"), "{charset}: ping: {error}");
+            assert_eq!(log, [VERSION_SQL], "{charset}: ping");
+        }
+    }
+}
+
+/// What the session's settings statement keeps of the results character set it starts with
+/// (each value is set back to itself): under `utf16` or `utf32` no answer can be read on that
+/// connection at all, with this client, whatever is asked; so sessions there never worked, and
+/// the version read only fails first.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_non_utf8_results_charset_leaves_no_answer_readable() {
+    let test = "a_non_utf8_results_charset_leaves_no_answer_readable";
+    let Some(url) = my_url(test) else { return };
+    Server::of(&url).await;
+    for charset in ["utf16", "utf32"] {
+        let proxy = Setup { charset: Some(charset), ..Setup::default() }.proxy(&url).await;
+        let opts = mysql_async::Opts::from_url(&proxy.url(&url)).expect("a mysql:// URL");
+        // Known settings, so the client reads no answer of its own while it connects (as the
+        // driver's sessions do not).
+        let opts = mysql_async::OptsBuilder::from_opts(opts)
+            .prefer_socket(false)
+            .max_allowed_packet(Some(64 * 1024 * 1024))
+            .wait_timeout(Some(28800));
+        let mut c = mysql_async::Conn::new(opts).await.expect("the connection opens");
+        let settings = "SET NAMES utf8mb4, SESSION character_set_results = @@SESSION.character_set_results";
+        c.query_drop(settings).await.expect("the settings statement");
+        let read: Result<Option<String>, _> = c.query_first("SELECT 1").await;
+        let error = format!("{:?}", read.expect_err("no answer is readable"));
+        assert!(error.contains("InvalidData") || error.contains("catalog"), "{charset}: {error}");
+        let _ = c.disconnect().await;
+    }
+}
+
+/// What the proxy sets, the values charset the session says, its `character_set_results` and
+/// `character_set_connection`, and the text of `t` and `h`.
+type Case = (&'static str, &'static str, [Option<&'static str>; 2], [&'static str; 2]);
+
+/// A results or connection character set a proxy (or `init_connect`) leaves on the session is
+/// kept by its settings, as it always was: the session reads its answers in it. The values and
+/// bytes are the ones the session read before the version read was added (the same on MySQL 8.4
+/// and MariaDB 11.4).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_latin1_or_null_results_charset_stays_as_it_was() {
+    let test = "a_latin1_or_null_results_charset_stays_as_it_was";
+    let Some(url) = my_url(test) else { return };
+    Server::of(&url).await;
+    let cafe = "SELECT 'caf\u{e9}' AS t, HEX('caf\u{e9}') AS h";
+    let vars = "SELECT @@SESSION.character_set_results, @@SESSION.character_set_connection";
+    let cases: [Case; 3] = [
+        ("latin1", "latin1", [Some("latin1"), Some("utf8mb4")], ["0x636166E9", "636166C3A9"]),
+        ("NULL", "binary", [None, Some("utf8mb4")], ["caf\u{e9}", "636166C3A9"]),
+        (
+            "latin1, character_set_connection = latin1",
+            "latin1",
+            [Some("latin1"), Some("latin1")],
+            ["0x636166E9", "636166E9"],
+        ),
+    ];
+    for (setting, values, variables, bytes) in cases {
+        let proxy = Setup { charset: Some(setting), ..Setup::default() }.proxy(&url).await;
+        let mut c = Query::open(&proxy.url(&url), test).await;
+        let said = c.values.clone().unwrap_or_else(|| panic!("{setting}: no values said"));
+        assert!(said.contains(&format!("charset: {values:?}")), "{setting}: {said}");
+        assert_eq!(c.rows(1, vars).await, [variables.map(|v| v.map(String::from))], "{setting}");
+        assert_eq!(c.rows(2, cafe).await, [bytes.map(|b| Some(b.to_string()))], "{setting}");
+    }
+}
+
+/// A query session to run statements on, and what it said of its values first.
+struct Query {
+    session: Session,
+    rx: tokio::sync::mpsc::UnboundedReceiver<DbEvent>,
+    values: Option<String>,
+}
+
+impl Query {
+    async fn open(url: &str, test: &str) -> Query {
+        let (tx, mut rx) = unbounded_channel();
+        let role = SessionRole::Query;
+        let session = MyDriver.connect(&profile(url, "mysql"), role, ConnectOptions::new(PAGE, role, test), tx);
+        loop {
+            match tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.expect("an answer") {
+                Some(DbEvent::Connected) => break,
+                Some(DbEvent::ConnectFailed { error, .. }) => panic!("connect failed: {error:?}"),
+                Some(_) => {}
+                None => panic!("event channel closed"),
+            }
+        }
+        let mut q = Query { session, rx, values: None };
+        if let Some(DbEvent::SessionValues(v)) = q.next().await {
+            q.values = Some(format!("{v:?}"));
+        }
+        q
+    }
+
+    async fn next(&mut self) -> Option<DbEvent> {
+        tokio::time::timeout(Duration::from_secs(15), self.rx.recv()).await.expect("an event")
+    }
+
+    /// The rows of `sql`, run as run `id`.
+    async fn rows(&mut self, id: u64, sql: &str) -> Vec<Vec<Option<String>>> {
+        self.session.send(DbCommand::Execute {
+            max_rows: None,
+            id,
+            statements: vec![sql.to_string()],
+            paging: PagingMode::NoHold,
+            tx: TxRule::Auto,
+        });
+        loop {
+            match self.next().await {
+                Some(DbEvent::Page { id: i, columns: Some(_), rows, .. }) if i == id => return rows,
+                Some(ev @ (DbEvent::Failed { .. } | DbEvent::Lost { .. })) => panic!("{sql}: {ev:?}"),
+                Some(_) => {}
+                None => panic!("{sql}: event channel closed"),
+            }
+        }
+    }
+}
+
 /// A version line with no number in it leaves the version unknown and the session connects:
 /// `1` (what the text protocol sends for `SELECT 1`) under a MySQL greeting, a line that names
 /// MariaDB and no number under MariaDB's. Its words are the greeting's. Under MariaDB's greeting
-/// `1` names MySQL, so the reports disagree.
+/// `1` names MySQL: the session connects with the engines disagreeing.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_version_answer_without_a_number_connects_with_the_version_unknown() {
     let test = "a_version_answer_without_a_number_connects_with_the_version_unknown";
@@ -343,16 +575,15 @@ async fn a_version_answer_without_a_number_connects_with_the_version_unknown() {
         assert_eq!(words(&before), words_of(server.engine(), server.version), "{role:?}");
     }
     if server.mariadb {
-        let proxy = Proxy::start(&upstream(&url)).await;
-        proxy.fault_start(VERSION_START, Fault::Instead("SELECT 1".into()));
-        let error = refused(open(&proxy.url(&url), "mysql", SessionRole::Query, test).await, "1 on MariaDB");
-        assert_eq!(error, disagree(&server.label(), "1"));
+        let run = Setup { answer: Some("SELECT 1"), ..Setup::default() }.run(&url, SessionRole::Query, test).await;
+        let f = run.facts.unwrap_or_else(|| panic!("1 on MariaDB: {:?}", run.outcome));
+        assert_engines_disagree(&f, EngineId::MySql, "1", "1 on MariaDB");
     }
 }
 
 /// A blank version line (empty or only spaces) confirms no engine, whatever the greeting names:
 /// every session is refused after the read and runs nothing else, a test connection fails, and
-/// none of them says the engines disagree.
+/// none of them goes on.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_blank_version_answer_is_unconfirmed_whatever_the_greeting() {
     let test = "a_blank_version_answer_is_unconfirmed_whatever_the_greeting";
@@ -374,7 +605,7 @@ async fn a_blank_version_answer_is_unconfirmed_whatever_the_greeting() {
                 let proxy = start().await;
                 let error = refused(open(&proxy.url(&url), "mysql", role, test).await, answer);
                 assert_eq!(error, unconfirmed(label), "{answer} {greeting:?} {role:?}");
-                assert_eq!(proxy.queries(), [VERSION_SQL], "{answer} {greeting:?} {role:?}");
+                assert_eq!(proxy.queries(), OPENING, "{answer} {greeting:?} {role:?}");
             }
             let proxy = start().await;
             let error = ping_refused(ping(&proxy.url(&url)).await, answer);
@@ -383,48 +614,73 @@ async fn a_blank_version_answer_is_unconfirmed_whatever_the_greeting() {
     }
 }
 
-/// A greeting naming the other engine is refused on every session, which then runs nothing
-/// after its version read, and fails a test connection.
+/// A greeting naming the other engine (a proxy's: MySQL's format in front of MariaDB, MariaDB's
+/// in front of MySQL) is not refused: every session ends as the same proxy with a version line
+/// that agrees with the greeting makes it end (connected with the same words, or failed on the
+/// greeting's settings with the same error) and sends the same statements past the version read.
+/// Its facts name the line's engine, with the version and how it reaches the server unknown. A
+/// test connection succeeds and names the line's engine. A MariaDB greeting without `5.5.5-`
+/// still names MariaDB.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_rewritten_greeting_is_refused_on_every_session_and_runs_nothing() {
-    let test = "a_rewritten_greeting_is_refused_on_every_session_and_runs_nothing";
+async fn a_greeting_naming_the_other_engine_connects_as_today() {
+    let test = "a_greeting_naming_the_other_engine_connects_as_today";
     let Some(url) = my_url(test) else { return };
     let server = Server::of(&url).await;
-    let (greeting, label) = server.other_greeting();
-    for role in ROLES {
-        let proxy = Proxy::start(&upstream(&url)).await;
-        proxy.greet_as(greeting);
-        let error = refused(open(&proxy.url(&url), "mysql", role, test).await, "greeting");
-        assert_eq!(error, disagree(label, &server.line), "{role:?}");
-        assert_eq!(proxy.queries(), [VERSION_SQL], "{role:?}");
+    for &(greeting, agreeing) in server.other_greetings() {
+        let answer = format!("SELECT '{agreeing}'");
+        let subject = Setup { greeting: Some(greeting), ..Setup::default() };
+        let reference = Setup { greeting: Some(greeting), answer: Some(&answer), ..Setup::default() };
+        for role in ROLES {
+            let what = format!("{greeting} {role:?}");
+            let run = subject.run(&url, role, test).await;
+            as_reference(&run, &reference.run(&url, role, test).await, &what);
+            assert_eq!(run.log.get(..1), Some(&OPENING.map(String::from)[..]), "{what}");
+            if let Some(f) = &run.facts {
+                assert_engines_disagree(f, server.engine(), &server.line, &what);
+            }
+        }
+        let (pinged, log) = subject.ping(&url).await;
+        let info = pinged.unwrap_or_else(|e| panic!("{greeting}: ping: {e:?}"));
+        assert_eq!(info.server_version, server.line, "{greeting}: ping");
+        assert_eq!(info.identity.engine, Fact::Known(server.engine()), "{greeting}: ping");
+        assert_eq!(format!("{:?}", info.identity.version), "Unknown(EnginesDisagree)", "{greeting}: ping");
+        assert_eq!(log, [VERSION_SQL], "{greeting}: ping");
     }
-    let proxy = Proxy::start(&upstream(&url)).await;
-    proxy.greet_as(greeting);
-    let error = ping_refused(ping(&proxy.url(&url)).await, "greeting");
-    assert_eq!(error, disagree(label, &server.line), "ping");
-    assert_eq!(proxy.queries(), [VERSION_SQL], "ping");
+    if server.mariadb {
+        let run = Setup { greeting: Some("11.4.13-MariaDB"), ..Setup::default() };
+        let run = run.run(&url, SessionRole::Query, test).await;
+        let f = run.facts.unwrap_or_else(|| panic!("no 5.5.5-: {:?}", run.outcome));
+        assert_eq!(f.engine(), EngineId::MariaDb, "{f:?}");
+        assert_eq!(f.topology, Fact::Known(Topology::Direct), "{f:?}");
+    }
 }
 
-/// A version answer naming the other engine under the server's own greeting is refused the same
-/// way.
+/// A version line naming the other engine under the server's own greeting (a proxy that answers
+/// `VERSION()` itself) is followed: every session ends and sends what it does without the proxy
+/// changing the answer, its facts name the line's engine with the version and how it reaches
+/// the server unknown, and a test connection names the line's engine.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_rewritten_version_answer_is_refused() {
-    let test = "a_rewritten_version_answer_is_refused";
+async fn a_rewritten_version_answer_follows_the_line() {
+    let test = "a_rewritten_version_answer_follows_the_line";
     let Some(url) = my_url(test) else { return };
     let server = Server::of(&url).await;
-    let line = server.other_line();
-    let answer = format!("SELECT '{line}'");
-    for role in ROLES {
-        let proxy = Proxy::start(&upstream(&url)).await;
-        proxy.fault_start(VERSION_START, Fault::Instead(answer.clone()));
-        let error = refused(open(&proxy.url(&url), "mysql", role, test).await, "answer");
-        assert_eq!(error, disagree(&server.label(), line), "{role:?}");
-        assert_eq!(proxy.queries(), [VERSION_SQL], "{role:?}");
+    for &line in server.other_lines() {
+        let answer = format!("SELECT '{line}'");
+        let subject = Setup { answer: Some(&answer), ..Setup::default() };
+        for role in ROLES {
+            let what = format!("{line} {role:?}");
+            let run = subject.run(&url, role, test).await;
+            as_reference(&run, &Setup::default().run(&url, role, test).await, &what);
+            let f = run.facts.as_ref().unwrap_or_else(|| panic!("{what}: {:?}", run.outcome));
+            assert_engines_disagree(f, server.other_engine(), line, &what);
+        }
+        let (pinged, log) = subject.ping(&url).await;
+        let info = pinged.unwrap_or_else(|e| panic!("{line}: ping: {e:?}"));
+        assert_eq!(info.server_version, line, "{line}: ping");
+        assert_eq!(info.identity.engine, Fact::Known(server.other_engine()), "{line}: ping");
+        assert_eq!(format!("{:?}", info.identity.version), "Unknown(EnginesDisagree)", "{line}: ping");
+        assert_eq!(log, [VERSION_SQL], "{line}: ping");
     }
-    let proxy = Proxy::start(&upstream(&url)).await;
-    proxy.fault_start(VERSION_START, Fault::Instead(answer.clone()));
-    let error = ping_refused(ping(&proxy.url(&url)).await, "answer");
-    assert_eq!(error, disagree(&server.label(), line), "ping");
 }
 
 /// The profile's key never decides the engine: a profile naming the sibling engine (`mariadb`
@@ -467,21 +723,24 @@ async fn a_version_number_the_reports_disagree_on_is_unknown_and_changes_no_word
     }
 }
 
-/// A new session of a profile (as the app opens on a reconnect) reads the version again: one
-/// that connected before is refused once the greeting names the other engine.
+/// A new session of a profile (as the app opens on a reconnect) reads the version again: once
+/// the greeting names the other engine, the next session's facts say the engines disagree.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_reconnect_reads_the_version_again() {
     let test = "a_reconnect_reads_the_version_again";
     let Some(url) = my_url(test) else { return };
     let server = Server::of(&url).await;
     let proxy = Proxy::start(&upstream(&url)).await;
-    let (session, _) = open(&proxy.url(&url), "mysql", SessionRole::Query, test).await.expect("first session");
-    assert_eq!(proxy.queries().first().map(String::as_str), Some(VERSION_SQL));
+    let (session, before) = open(&proxy.url(&url), "mysql", SessionRole::Query, test).await.expect("first session");
+    assert_eq!(proxy.queries().get(..1), Some(&OPENING.map(String::from)[..]));
+    assert_eq!(facts(&before).topology, Fact::Known(Topology::Direct));
     drop(session);
-    let (greeting, label) = server.other_greeting();
+    let (greeting, _) = server.other_greeting();
     proxy.greet_as(greeting);
     let sent = proxy.queries().len();
-    let error = refused(open(&proxy.url(&url), "mysql", SessionRole::Query, test).await, "reconnect");
-    assert_eq!(error, disagree(label, &server.line));
-    assert_eq!(proxy.queries()[sent..], [VERSION_SQL]);
+    let opened = open(&proxy.url(&url), "mysql", SessionRole::Query, test).await;
+    assert_eq!(proxy.queries().get(sent..sent + 1), Some(&OPENING.map(String::from)[..]));
+    if let Ok((_, before)) = &opened {
+        assert_engines_disagree(&facts(before), server.engine(), &server.line, "reconnect");
+    }
 }

@@ -1006,11 +1006,11 @@ async fn a_session_is_set_up_in_one_statement() {
             c.wait(|e| matches!(e, DbEvent::Keys(_)), 15).await;
         }
         let id = only_session(&mut admin, role, "a_session_is_set_up_in_one_statement").await;
-        // The server's own version line first, checked against its greeting before anything
-        // else runs, then the settings in one `SET`. The server's answer to it said the
-        // session's values: none is asked after it (the metadata session goes on to its own
-        // reads: the databases, the catalog, the keys, which read the server's own
-        // `@@lower_case_table_names` and `@@system_time_zone`).
+        // The server's own version line read first, before anything that depends on the engine
+        // runs, then the settings in one `SET`. The
+        // server's answer to it said the session's values: none is asked after it (the metadata
+        // session goes on to its own reads: the databases, the catalog, the keys, which read the
+        // server's own `@@lower_case_table_names` and `@@system_time_zone`).
         let ran = statements_of(&mut admin, id).await;
         assert_eq!(ran[0], "SELECT VERSION() LIMIT 1", "{ran:?}");
         assert!(ran[1].starts_with("SET NAMES utf8mb4, SESSION session_track_system_variables"), "{ran:?}");
