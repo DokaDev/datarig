@@ -43,6 +43,31 @@ fn names_are_unique_and_stable() {
     assert_eq!(for_driver("oracle"), UNKNOWN_DRIVER);
 }
 
+/// An engine's name in any case shows its engine's icon, for a profile too; any other name
+/// keeps the icon of its exact name, else the unknown one.
+#[test]
+fn a_driver_name_in_mixed_case_shows_its_engines_icon() {
+    let (pg, my) = ("\u{e76e}", "\u{e704}");
+    for (driver, icon) in [
+        ("PostgreSQL", pg),
+        ("Postgres", pg),
+        ("PG", pg),
+        ("Pg", pg),
+        ("MySQL", my),
+        ("MYSQL", my),
+        ("MariaDB", my),
+        ("MARIADB", my),
+    ] {
+        assert_eq!(for_driver(driver), icon, "{driver:?}");
+        let p = ConnectionConfig { driver: driver.into(), ..ConnectionConfig::default() };
+        assert_eq!(glyph(&p), icon, "{driver:?}: a profile without an icon of its own");
+    }
+    assert_eq!(for_driver("redis"), "\u{e76d}");
+    for driver in ["Redis", "Elasticsearch", "ORACLE", "oracle", "sqlite", "", " mysql", "mysql ", "my sql", "pg9"] {
+        assert_eq!(for_driver(driver), UNKNOWN_DRIVER, "{driver:?}");
+    }
+}
+
 #[test]
 fn profile_icon_falls_back_to_the_driver_and_off_keeps_alignment() {
     let mut p = ConnectionConfig { name: "a".into(), ..ConnectionConfig::default() };

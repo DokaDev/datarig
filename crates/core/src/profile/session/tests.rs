@@ -258,8 +258,8 @@ fn session_values_as_written() {
     assert_eq!(SessionRef::of("x"), SessionRef::Named("x".into()));
     assert_eq!(SessionRef::Off.as_value(), Some("none"));
     assert_eq!(SessionRef::Inherit.as_value(), None);
-    assert_eq!(Dbms::of_driver("PG"), Some(Dbms::Postgres));
-    assert_eq!(Dbms::of_driver("redis"), None);
+    assert_eq!(crate::engine::expected("PG").preset(), Some(Dbms::Postgres));
+    assert_eq!(crate::engine::expected("redis").preset(), None);
 }
 
 /// Who the session is: `SET ROLE` is on the read-only allowlist (every transaction stays
@@ -284,7 +284,7 @@ fn a_statement_that_sets_the_lock_wait_overrides_the_intent() {
         let mut c = profile(driver);
         c.policy = Some("prod".into());
         c.session_sql = own.iter().map(|s| s.to_string()).collect();
-        let dbms = Dbms::of_driver(driver).unwrap();
+        let dbms = crate::engine::expected(driver).preset().unwrap();
         let fast = SessionPreset::new("fast", dbms, preset.iter().map(|s| s.to_string()).collect());
         if !preset.is_empty() {
             c.session = SessionRef::Named("fast".into());
@@ -377,7 +377,7 @@ fn the_servers_idle_limit_overrides_the_idle_disconnect() {
     let secs = Duration::from_secs;
     let rules = Policy { idle_disconnect: Some(Some(secs(300))), ..Policy::default() };
     let idle = |driver: &str, preset: Option<&str>, own: &[&str]| {
-        let dbms = Dbms::of_driver(driver).unwrap();
+        let dbms = crate::engine::expected(driver).preset().unwrap();
         let mut c = profile(driver);
         c.policy = Some("prod".into());
         c.session = preset.map_or(SessionRef::Inherit, |_| SessionRef::Named("p".into()));

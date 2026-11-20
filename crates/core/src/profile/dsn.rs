@@ -19,13 +19,6 @@ pub enum Scheme {
 }
 
 impl Scheme {
-    /// The scheme of a profile's `driver` name ([`Expected::form_scheme`]).
-    ///
-    /// [`Expected::form_scheme`]: crate::engine::Expected::form_scheme
-    pub fn of_driver(driver: &str) -> Self {
-        crate::engine::expected(driver).form_scheme()
-    }
-
     /// The scheme and `://` a URL is written with.
     pub fn prefix(self) -> &'static str {
         match self {

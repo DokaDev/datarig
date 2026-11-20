@@ -1436,7 +1436,7 @@ fn lock_config(driver: &str, fast: &[&str], sql: &[&str]) -> Config {
         p.session = SessionRef::Named("fast".into());
         p.session_sql = sql.iter().map(|s| s.to_string()).collect();
     });
-    let dbms = Dbms::of_driver(driver).unwrap();
+    let dbms = datarig_core::engine::expected(driver).preset().unwrap();
     cfg.sessions.push(SessionPreset::new("fast", dbms, fast.iter().map(|s| s.to_string()).collect()));
     let mut rules = cfg.policies.get(Some("prod")).unwrap();
     rules.lock_wait = Some(Some(Duration::from_secs(5)));

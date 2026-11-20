@@ -113,14 +113,6 @@ impl Dbms {
         }
     }
 
-    /// The database of a profile's `driver` (`None`: a driver no preset is for;
-    /// [`Expected::preset`]).
-    ///
-    /// [`Expected::preset`]: crate::engine::Expected::preset
-    pub fn of_driver(driver: &str) -> Option<Self> {
-        crate::engine::expected(driver).preset()
-    }
-
     /// The language its statements are checked in (MySQL: the default sql mode; the check
     /// also reads them with `ANSI_QUOTES`).
     pub fn language(self) -> Language {
