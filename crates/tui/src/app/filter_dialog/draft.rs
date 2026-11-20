@@ -329,7 +329,7 @@ pub(crate) fn kind_of_type(d: Dialect, type_name: &str) -> ColumnKind {
             "bytea" => ColumnKind::Bytes,
             _ => ColumnKind::Other,
         },
-        Dialect::MySql(_) => match base.as_str() {
+        Dialect::MySql(_) | Dialect::MariaDb(_) => match base.as_str() {
             "float" => ColumnKind::Real,
             "tinyint" | "smallint" | "mediumint" | "int" | "integer" | "bigint" | "year" | "decimal" | "numeric"
             | "dec" | "fixed" | "double" | "double precision" | "real" => ColumnKind::Number,
@@ -556,7 +556,9 @@ pub(crate) fn value_text(v: &Value, d: Dialect) -> String {
         Value::Number(s) | Value::Text(s) => s.clone(),
         Value::Bytes(b) => match d {
             Dialect::Postgres => format!("\\x{}", b.iter().map(|b| format!("{b:02x}")).collect::<String>()),
-            Dialect::MySql(_) => format!("0x{}", b.iter().map(|b| format!("{b:02X}")).collect::<String>()),
+            Dialect::MySql(_) | Dialect::MariaDb(_) => {
+                format!("0x{}", b.iter().map(|b| format!("{b:02X}")).collect::<String>())
+            }
         },
     }
 }

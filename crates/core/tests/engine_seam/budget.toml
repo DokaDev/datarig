@@ -10,10 +10,10 @@
 "crates/bench/src/export" = 1
 "crates/bench/src/monitor" = 1
 "crates/core/src/edit" = 3
-"crates/core/src/export" = 14
+"crates/core/src/export" = 16
 "crates/core/src/monitor" = 14
 "crates/core/src/profile" = 2
-"crates/core/src/query" = 63
+"crates/core/src/query" = 78
 "crates/drivers/mysql/src/connect" = 0
 "crates/drivers/mysql/src/meta" = 9
 "crates/drivers/mysql/src/monitor" = 2
@@ -22,7 +22,7 @@
 "crates/drivers/postgres/src/connect" = 0
 "crates/drivers/postgres/src/monitor" = 2
 "crates/drivers/postgres/src/query" = 1
-"crates/tui/src/app" = 36
+"crates/tui/src/app" = 41
 "crates/tui/src/widgets" = 4
 
 # Legacy markers of engine identity outside the seam modules: the `mariadb` flag, `is_mysql`,
@@ -43,7 +43,7 @@
 "crates/core/src/edit" = 1
 "crates/core/src/monitor" = 1
 "crates/core/src/query" = 5
-"crates/core/src/sql" = 4
+"crates/core/src/sql" = 2
 "crates/tui/src/app" = 3
 
 # `matches!`, `==`, `!=`, `if let` and `let .. else` on an engine variant (seam modules included).
@@ -52,7 +52,7 @@
 "crates/core/src/export" = 6
 "crates/core/src/monitor" = 4
 "crates/core/src/query" = 25
-"crates/core/src/sql" = 11
+"crates/core/src/sql" = 3
 "crates/tui/src/app" = 22
 "crates/tui/src/widgets" = 2
 

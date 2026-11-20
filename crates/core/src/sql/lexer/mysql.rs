@@ -48,7 +48,7 @@
 //! fails there.
 
 use super::{Cursor, Delimiter, LexState, Tok, Token, is_space};
-use crate::sql::dialect::{Dialect, MySqlMode};
+use crate::sql::dialect::MySqlMode;
 
 /// MySQL's keywords the highlighter shows and completion offers ([`Dialect::keywords`]): the
 /// common ones of MySQL 8.0, 8.4 and 9.x, reserved or not, without the non-reserved words that
@@ -484,7 +484,9 @@ pub(super) fn lex(src: &str, mode: MySqlMode, mut state: LexState) -> Vec<Token>
                 Tok::Directive
             } else {
                 lx.eat_ident();
-                if Dialect::MySql(mode).is_keyword(&src[start..lx.cur.pos]) { Tok::Keyword } else { Tok::Ident }
+                // MySQL's keywords, on a MySQL and a MariaDB server alike.
+                let upper = src[start..lx.cur.pos].to_ascii_uppercase();
+                if KEYWORDS.binary_search(&upper.as_str()).is_ok() { Tok::Keyword } else { Tok::Ident }
             }
         } else {
             lx.cur.bump();

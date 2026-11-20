@@ -250,7 +250,7 @@ const MYSQL_CONDITION_KEYWORDS: &[&str] = &[
 pub(crate) fn condition_keywords_of(d: Dialect) -> &'static [&'static str] {
     match d {
         Dialect::Postgres => PG_CONDITION_KEYWORDS,
-        Dialect::MySql(_) => MYSQL_CONDITION_KEYWORDS,
+        Dialect::MySql(_) | Dialect::MariaDb(_) => MYSQL_CONDITION_KEYWORDS,
     }
 }
 

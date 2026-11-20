@@ -93,7 +93,7 @@ pub fn format_in(src: &str, opts: Options, indent: &str, d: Dialect) -> Result<(
         }
         // A client command line changes what the text after it means to the client, and
         // `sqlformat` lays it out as SQL.
-        Dialect::MySql(_) => {
+        Dialect::MySql(_) | Dialect::MariaDb(_) => {
             if let Some(t) = input.iter().find(|t| t.kind == Tok::Directive) {
                 return Err(Refused::Changed { at: t.start });
             }
@@ -129,7 +129,7 @@ pub fn format_in(src: &str, opts: Options, indent: &str, d: Dialect) -> Result<(
             && match d {
                 Dialect::Postgres => true,
                 // A keyword is a plain word: it needs quotes when it is reserved.
-                Dialect::MySql(_) => ident::mysql::needs_quotes(text),
+                Dialect::MySql(_) | Dialect::MariaDb(_) => ident::mysql::needs_quotes(text),
             };
         match (recase, opts.case) {
             (true, KeywordCase::Upper) => out.push_str(&text.to_ascii_uppercase()),
@@ -188,7 +188,7 @@ fn layout_only(d: Dialect, toks: &[Token], i: usize, src: &str, after: &str) -> 
         || match d {
             // A built-in function the server parses itself and its `(`: with a blank between
             // (and `IGNORE_SPACE` off, the default) the server reads `count (*)` otherwise.
-            Dialect::MySql(mode) => {
+            Dialect::MySql(mode) | Dialect::MariaDb(mode) => {
                 b.kind == Tok::LParen
                     && a.is_word()
                     && super::risk::mysql::tight_calls(mode).contains(&ta.to_ascii_uppercase().as_str())

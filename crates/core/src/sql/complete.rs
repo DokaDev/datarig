@@ -218,7 +218,7 @@ fn find_rel<'a>(
     };
     match d {
         Dialect::Postgres => found(false, false),
-        Dialect::MySql(_) => found(true, true)
+        Dialect::MySql(_) | Dialect::MariaDb(_) => found(true, true)
             .or_else(|| found(false, true))
             .or_else(|| found(true, false))
             .or_else(|| found(false, false)),
@@ -633,7 +633,11 @@ fn literal_values<'c>(
     let open_here = !is_closed || far;
     let mut before: Vec<&Token> = toks.iter().filter(|t| t.end <= lit.start && !t.is_trivia()).collect();
     // A MySQL charset introducer (`_utf8mb4'…'`) is the literal's.
-    if matches!(d, Dialect::MySql(_))
+    let introducers = match d {
+        Dialect::Postgres => false,
+        Dialect::MySql(_) | Dialect::MariaDb(_) => true,
+    };
+    if introducers
         && before.last().is_some_and(|t| t.kind == Tok::Ident && t.end == lit.start && t.text(seg).starts_with('_'))
     {
         before.pop();
@@ -987,8 +991,11 @@ fn closed(d: Dialect, t: &Token, src: &str) -> bool {
     // A string's last quote may be one half of a doubled quote or escaped by a backslash
     // (MySQL's, PostgreSQL's `E'…'`), and in MySQL a string's quote may be `"`: closed when a
     // blank after it is not taken in.
-    if t.kind == Tok::Str || (matches!(d, Dialect::MySql(_)) && matches!(t.kind, Tok::QuotedIdent | Tok::BlockComment))
-    {
+    let mysql = match d {
+        Dialect::Postgres => false,
+        Dialect::MySql(_) | Dialect::MariaDb(_) => true,
+    };
+    if t.kind == Tok::Str || (mysql && matches!(t.kind, Tok::QuotedIdent | Tok::BlockComment)) {
         return lex_from(&format!("{s} "), d, LexState::default()).first().is_some_and(|u| u.end == s.len());
     }
     match t.kind {

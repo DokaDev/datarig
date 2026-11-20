@@ -1012,20 +1012,21 @@ fn lexical(d: Dialect, text: &str) -> Option<(LexProblem, String)> {
     }
 }
 
-/// MySQL's and MariaDB's sql modes the filter is read in.
+/// MySQL's and MariaDB's sql modes the filter is read in, MariaDB's also as a MariaDB session
+/// says them.
 fn mysql_family() -> Vec<Dialect> {
     let d = MySqlMode::default();
-    [
+    let modes = [
         d,
-        MySqlMode { mariadb: true, ..d },
         MySqlMode { ansi_quotes: true, ..d },
         MySqlMode { no_backslash_escapes: true, ..d },
         MySqlMode { dollar_quotes: true, ..d },
         MySqlMode { ignore_space: true, ..d },
-    ]
-    .into_iter()
-    .map(Dialect::MySql)
-    .collect()
+    ];
+    let mut out: Vec<Dialect> = modes.into_iter().map(Dialect::MySql).collect();
+    out.push(Dialect::MySql(MySqlMode { mariadb: true, ..d }));
+    out.extend(modes.into_iter().map(|m| Dialect::MariaDb(MySqlMode { mariadb: true, ..m })));
+    out
 }
 
 #[test]

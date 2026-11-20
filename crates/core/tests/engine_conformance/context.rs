@@ -6,7 +6,7 @@
 use crate::Engine::{MariaDb, MySql, Pg};
 use crate::{Case, Engine, verdict};
 use datarig_core::query::{ColumnFacts, ColumnKind, TableName, Target, check_filter};
-use datarig_core::sql::dialect::Language;
+use datarig_core::sql::dialect::{Dialect, Language};
 use datarig_core::sql::risk::{AllowedFunction, Classifier, ReadOnlyContext};
 
 /// The verdicts on expression `expr` in each context, on `e`: `SELECT <expr> FROM t` in the
@@ -15,6 +15,13 @@ use datarig_core::sql::risk::{AllowedFunction, Classifier, ReadOnlyContext};
 /// again, and `<expr> IS NOT NULL` as the filter of table `t`.
 pub fn verdicts(e: Engine, expr: &&'static str) -> String {
     let d = e.dialect();
+    let filter = filter_verdicts(d, expr);
+    format!("{} | {filter}", editor_verdicts(d, expr))
+}
+
+/// The verdicts of [`verdicts`] before the filter's, in dialect `d`: run, read-only (both
+/// contexts), hint and re-run.
+pub fn editor_verdicts(d: Dialect, expr: &str) -> String {
     let mut classifier = Classifier::new(Language::Sql(d));
     let sql = format!("SELECT {expr} FROM t");
     let risk = classifier.classify(&sql);
@@ -24,23 +31,29 @@ pub fn verdicts(e: Engine, expr: &&'static str) -> String {
         ..ReadOnlyContext::default()
     };
     let hint = risk.refused_call_name(&default).map(|name| default.hint(name));
+    format!(
+        "run {:?} | read-only {} | read-only allowing my_function {} | hint {:?} | re-run {}",
+        risk.confirm(false),
+        verdict(&risk.read_only_in(&default)),
+        verdict(&risk.read_only_in(&allowing)),
+        hint,
+        verdict(&classifier.repeatable(&sql)),
+    )
+}
+
+/// The filter verdicts of [`verdicts`], in dialect `d`: on a read-write and on a read-only
+/// profile.
+fn filter_verdicts(d: Dialect, expr: &str) -> String {
+    // The classifier as the editor left it, having classified the statement.
+    let mut classifier = Classifier::new(Language::Sql(d));
+    classifier.classify(&format!("SELECT {expr} FROM t"));
     let table = TableName { database: None, schema: "s".to_string(), name: "t".to_string() };
     let target =
         Target::new(d, vec![ColumnFacts::new("id", ColumnKind::Number), ColumnFacts::new("a", ColumnKind::Text)]);
     let filter = format!("{expr} IS NOT NULL");
     let filter_rw = check_filter(&filter, &table, &target, &classifier, false);
     let filter_ro = check_filter(&filter, &table, &target, &classifier, true);
-    format!(
-        "run {:?} | read-only {} | read-only allowing my_function {} | hint {:?} | re-run {} | filter {} \
-         | read-only filter {}",
-        risk.confirm(false),
-        verdict(&risk.read_only_in(&default)),
-        verdict(&risk.read_only_in(&allowing)),
-        hint,
-        verdict(&classifier.repeatable(&sql)),
-        filter_verdict(&filter_rw),
-        filter_verdict(&filter_ro),
-    )
+    format!("filter {} | read-only filter {}", filter_verdict(&filter_rw), filter_verdict(&filter_ro))
 }
 
 fn filter_verdict<T: std::fmt::Debug, E: std::fmt::Debug>(r: &Result<T, E>) -> String {

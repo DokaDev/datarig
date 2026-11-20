@@ -341,7 +341,7 @@ impl TableQuery {
                     let at = datarig_core::driver::ServerMessage::byte_offset(&s.sql, m.position?)?;
                     (at, None)
                 }
-                (ServerError::Message(m), Dialect::MySql(_)) => {
+                (ServerError::Message(m), Dialect::MySql(_) | Dialect::MariaDb(_)) => {
                     let near = mysql_near(&m.text)?;
                     let at = s.sql.find(near)?;
                     // Found again from the next character on (an overlapping match counts):

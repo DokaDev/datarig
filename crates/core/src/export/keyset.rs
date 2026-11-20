@@ -197,7 +197,7 @@ impl Keyset {
             // A row comparison: the btree of the key reads from it on.
             Dialect::Postgres => format!("({}) OPERATOR(pg_catalog.>) ({})", names.join(", "), values.join(", ")),
             // MySQL does not read an index range for a row comparison: the same written out.
-            Dialect::MySql(_) => expanded(&names, &values),
+            Dialect::MySql(_) | Dialect::MariaDb(_) => expanded(&names, &values),
         };
         Some(format!("{} WHERE {cond}{}", self.select(), self.order()))
     }

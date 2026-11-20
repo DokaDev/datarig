@@ -872,7 +872,9 @@ impl App {
         let d = self.tab_dialect(id);
         let text_ok = match d {
             Dialect::Postgres => true,
-            Dialect::MySql(_) => t.exec.values.as_ref().is_some_and(|v| v.charset.eq_ignore_ascii_case("utf8mb4")),
+            Dialect::MySql(_) | Dialect::MariaDb(_) => {
+                t.exec.values.as_ref().is_some_and(|v| v.charset.eq_ignore_ascii_case("utf8mb4"))
+            }
         };
         let Results::Rows(rs) = &t.results else { return None };
         let metas: Vec<ColumnMeta> = rs.columns.iter().map(|c| c.meta.clone()).collect();

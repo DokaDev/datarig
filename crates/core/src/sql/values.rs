@@ -44,7 +44,7 @@ pub fn check_values(d: Dialect, checks: &[CheckConstraint]) -> Vec<CheckValues> 
 fn same_name(d: Dialect, name: &str, written: &str) -> bool {
     match d {
         Dialect::Postgres => name == written,
-        Dialect::MySql(_) => name.eq_ignore_ascii_case(written),
+        Dialect::MySql(_) | Dialect::MariaDb(_) => name.eq_ignore_ascii_case(written),
     }
 }
 
@@ -135,6 +135,10 @@ fn list<'t, 'a>(toks: &'t [&'a Token], src: &str, open: Tok) -> Option<Vec<&'t [
 /// What literal `item` holds: `Some(value)` for a string (a MySQL charset introducer before
 /// it, `_utf8mb4'a'`), `None` for `NULL`; anything else is not a literal (`None` outside).
 fn literal(d: Dialect, item: &[&Token], src: &str) -> Option<Option<String>> {
+    let introducers = match d {
+        Dialect::Postgres => false,
+        Dialect::MySql(_) | Dialect::MariaDb(_) => true,
+    };
     match bare(item, src)? {
         [t] if is_word(t, src, "NULL") => Some(None),
         [t] if t.kind == Tok::Str => d.unquote_literal(t.text(src)).map(Some),
@@ -143,7 +147,7 @@ fn literal(d: Dialect, item: &[&Token], src: &str) -> Option<Option<String>> {
                 && cs.kind == Tok::Ident
                 && cs.end == t.start
                 && cs.text(src).starts_with('_')
-                && matches!(d, Dialect::MySql(_)) =>
+                && introducers =>
         {
             d.unquote_literal(t.text(src)).map(Some)
         }

@@ -3,13 +3,18 @@
 
 use crate::Engine::{MariaDb, MySql, Pg};
 use crate::{Case, Engine};
-use datarig_core::sql::dialect::Language;
+use datarig_core::sql::dialect::{Dialect, Language};
 use datarig_core::sql::risk::Classifier;
 
 /// The step of `sql` on `e`, and whether it commits the open transaction, may not run in one or
 /// adds a value to an enum.
 pub fn step(e: Engine, sql: &&'static str) -> String {
-    let lang = Language::Sql(e.dialect());
+    step_in(e.dialect(), sql)
+}
+
+/// [`step`] on a session of dialect `d`.
+pub fn step_in(d: Dialect, sql: &str) -> String {
+    let lang = Language::Sql(d);
     let step = Classifier::new(lang).tx_step(sql);
     let risk = Classifier::classify_once(lang, sql);
     format!(

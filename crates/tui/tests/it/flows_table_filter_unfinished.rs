@@ -37,12 +37,20 @@ fn answer(h: &mut Harness) {
     h.tab_db(index, DbEvent::Page { id, columns, rows, more: false, elapsed: Duration::from_millis(2) });
 }
 
-/// A MySQL-family profile with `shop.users` open in mode `mode` and answered, nothing sent since.
-fn users(mode: MySqlMode) -> Harness {
+/// A MySQL-family profile with `shop.users` open in dialect `d` and answered, nothing sent since.
+fn users(d: Dialect) -> Harness {
     let driver = FakeDriver::default();
     driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
     let mut p = ConnectionConfig::test_db();
-    (p.name, p.driver) = ("local-my".into(), if mode.mariadb { "mariadb" } else { "mysql" }.into());
+    (p.name, p.driver) = (
+        "local-my".into(),
+        match d {
+            Dialect::MariaDb(_) => "mariadb",
+            Dialect::MySql(m) if m.mariadb => "mariadb",
+            Dialect::MySql(_) | Dialect::Postgres => "mysql",
+        }
+        .into(),
+    );
     let cfg = Config { connections: vec![p], ..Default::default() };
     let mut h = Harness::with_driver(&cfg, Lang::En, driver);
     h.db(DbEvent::Connected);
@@ -56,7 +64,7 @@ fn users(mode: MySqlMode) -> Harness {
     h.key(KeyCode::Enter);
     assert!(h.app.tab().is_table());
     let index = h.app.tabs.active_index();
-    h.tab_db(index, DbEvent::Language(Language::Sql(Dialect::MySql(mode))));
+    h.tab_db(index, DbEvent::Language(Language::Sql(d)));
     h.tab_db(index, DbEvent::Connected);
     answer(&mut h);
     h.sent();
@@ -67,20 +75,23 @@ fn status(h: &Harness) -> String {
     h.app.tab().status.as_ref().map(|n| n.render(&h.app.i18n).to_string()).unwrap_or_default()
 }
 
-fn modes() -> Vec<MySqlMode> {
+/// MySQL's sql modes the filter is read in, and MariaDB's, also as a MariaDB session says them.
+fn dialects() -> Vec<Dialect> {
     let d = MySqlMode::default();
+    let maria = MySqlMode { mariadb: true, ..d };
     vec![
-        d,
-        MySqlMode { mariadb: true, ..d },
-        MySqlMode { ansi_quotes: true, ..d },
-        MySqlMode { no_backslash_escapes: true, ..d },
+        Dialect::MySql(d),
+        Dialect::MySql(maria),
+        Dialect::MariaDb(maria),
+        Dialect::MySql(MySqlMode { ansi_quotes: true, ..d }),
+        Dialect::MySql(MySqlMode { no_backslash_escapes: true, ..d }),
     ]
 }
 
 #[test]
 fn a_filter_ending_in_a_backslash_is_refused_and_the_tab_goes_on() {
-    for mode in modes() {
-        let mut h = users(mode);
+    for d in dialects() {
+        let mut h = users(d);
         // Completion of the text on the command line first, then the filter itself.
         h.ctrl('k');
         h.type_text("where id = 1 \\");
@@ -90,19 +101,19 @@ fn a_filter_ending_in_a_backslash_is_refused_and_the_tab_goes_on() {
                 h.key(KeyCode::Esc);
             }
         }
-        assert!(h.cmdline().is_none(), "{mode:?}");
-        assert!(runs(&mut h).is_empty(), "{mode:?}");
+        assert!(h.cmdline().is_none(), "{d:?}");
+        assert!(runs(&mut h).is_empty(), "{d:?}");
         h.command("where id = 1 \\");
-        assert!(runs(&mut h).is_empty(), "{mode:?}");
-        assert!(status(&h).starts_with("Filter refused: "), "{mode:?}: {}", status(&h));
+        assert!(runs(&mut h).is_empty(), "{d:?}");
+        assert!(status(&h).starts_with("Filter refused: "), "{d:?}: {}", status(&h));
         let refusal = h.app.tab().doc.table_query.as_ref().and_then(|q| q.refusal.clone()).expect("refusal");
-        assert_eq!((refusal.field, refusal.at), (Field::Where, Some(7..8)), "{mode:?}");
+        assert_eq!((refusal.field, refusal.at), (Field::Where, Some(7..8)), "{d:?}");
         // A quoted variable name left open.
         h.command("where id = @'x");
-        assert!(runs(&mut h).is_empty(), "{mode:?}");
-        assert!(status(&h).starts_with("Filter refused: "), "{mode:?}: {}", status(&h));
+        assert!(runs(&mut h).is_empty(), "{d:?}");
+        assert!(status(&h).starts_with("Filter refused: "), "{d:?}: {}", status(&h));
         // The tab still runs a filter.
         h.command("where id > 0");
-        assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id > 0)")]], "{mode:?}");
+        assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id > 0)")]], "{d:?}");
     }
 }

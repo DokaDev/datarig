@@ -71,7 +71,7 @@ fn cap_clause(q: &Query, d: Dialect) -> String {
         (Some(n), None, _) => format!(" LIMIT {n}"),
         (None, Some(m), Dialect::Postgres) => format!(" OFFSET {m}"),
         // MySQL has no `OFFSET` without a `LIMIT`: the largest one stands for none.
-        (None, Some(m), Dialect::MySql(_)) => format!(" LIMIT {} OFFSET {m}", u64::MAX),
+        (None, Some(m), Dialect::MySql(_) | Dialect::MariaDb(_)) => format!(" LIMIT {} OFFSET {m}", u64::MAX),
         (None, None, _) => String::new(),
     }
 }
@@ -115,7 +115,7 @@ fn key_sql(d: Dialect, k: &OrderKey) -> String {
         (_, None) => format!("{col} {dir}"),
         (Dialect::Postgres, Some(Nulls::First)) => format!("{col} {dir} NULLS FIRST"),
         (Dialect::Postgres, Some(Nulls::Last)) => format!("{col} {dir} NULLS LAST"),
-        (Dialect::MySql(_), Some(Nulls::First)) => format!("{col} IS NULL DESC, {col} {dir}"),
-        (Dialect::MySql(_), Some(Nulls::Last)) => format!("{col} IS NULL ASC, {col} {dir}"),
+        (Dialect::MySql(_) | Dialect::MariaDb(_), Some(Nulls::First)) => format!("{col} IS NULL DESC, {col} {dir}"),
+        (Dialect::MySql(_) | Dialect::MariaDb(_), Some(Nulls::Last)) => format!("{col} IS NULL ASC, {col} {dir}"),
     }
 }

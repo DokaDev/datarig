@@ -22,6 +22,9 @@ pub enum Dialect {
     Postgres,
     /// MySQL, read as a session in that sql mode reads it.
     MySql(MySqlMode),
+    /// MariaDB, read as a session in that sql mode reads it. Its text is read with MySQL's
+    /// rules (the same quotes, strings, keywords and comments).
+    MariaDb(MySqlMode),
 }
 
 /// What of a MySQL session changes how its text is read and how strings are written: parts of
@@ -64,7 +67,7 @@ impl Dialect {
     pub fn ident_quote(self) -> char {
         match self {
             Self::Postgres => '"',
-            Self::MySql(_) => '`',
+            Self::MySql(_) | Self::MariaDb(_) => '`',
         }
     }
 
@@ -74,8 +77,8 @@ impl Dialect {
     pub fn ident_quotes(self) -> &'static [char] {
         match self {
             Self::Postgres => &['"'],
-            Self::MySql(m) if m.ansi_quotes => &['`', '"'],
-            Self::MySql(_) => &['`'],
+            Self::MySql(m) | Self::MariaDb(m) if m.ansi_quotes => &['`', '"'],
+            Self::MySql(_) | Self::MariaDb(_) => &['`'],
         }
     }
 
@@ -91,7 +94,7 @@ impl Dialect {
     pub fn needs_quotes(self, name: &str) -> bool {
         match self {
             Self::Postgres => ident::needs_quotes(name),
-            Self::MySql(_) => ident::mysql::needs_quotes(name),
+            Self::MySql(_) | Self::MariaDb(_) => ident::mysql::needs_quotes(name),
         }
     }
 
@@ -106,7 +109,7 @@ impl Dialect {
     pub fn force_quote_ident(self, name: &str) -> String {
         match self {
             Self::Postgres => format!("\"{}\"", name.replace('"', "\"\"")),
-            Self::MySql(_) => format!("`{}`", name.replace('`', "``")),
+            Self::MySql(_) | Self::MariaDb(_) => format!("`{}`", name.replace('`', "``")),
         }
     }
 
@@ -116,8 +119,11 @@ impl Dialect {
     /// off). MySQL: `'` doubled, and (unless `NO_BACKSLASH_ESCAPES`, see [`MySqlMode`]) a
     /// backslash doubled and a NUL written `\0`, as the server reads a backslash as an escape.
     pub fn quote_literal(self, s: &str) -> String {
-        if self == Self::Postgres && s.contains('\\') {
-            return format!("E'{}'", s.replace('\\', "\\\\").replace('\'', "''"));
+        match self {
+            Self::Postgres if s.contains('\\') => {
+                return format!("E'{}'", s.replace('\\', "\\\\").replace('\'', "''"));
+            }
+            Self::Postgres | Self::MySql(_) | Self::MariaDb(_) => {}
         }
         let open = LiteralOpen { prefix: 0, quote: '\'', backslash: self.backslash_strings() };
         format!("'{}'", self.literal_body(s, open))
@@ -129,7 +135,7 @@ impl Dialect {
     fn backslash_strings(self) -> bool {
         match self {
             Self::Postgres => false,
-            Self::MySql(m) => !m.no_backslash_escapes,
+            Self::MySql(m) | Self::MariaDb(m) => !m.no_backslash_escapes,
         }
     }
 
@@ -138,8 +144,8 @@ impl Dialect {
     pub fn string_quotes(self) -> &'static [char] {
         match self {
             Self::Postgres => &['\''],
-            Self::MySql(m) if m.ansi_quotes => &['\''],
-            Self::MySql(_) => &['\'', '"'],
+            Self::MySql(m) | Self::MariaDb(m) if m.ansi_quotes => &['\''],
+            Self::MySql(_) | Self::MariaDb(_) => &['\'', '"'],
         }
     }
 
@@ -158,13 +164,20 @@ impl Dialect {
         } else {
             (first.len_utf8(), chars.next().filter(|&q| q == '\'')?)
         };
-        let backslash = match (self, prefix, first.to_ascii_uppercase()) {
-            (_, 0, _) | (_, _, 'N') => self.backslash_strings(),
-            (Self::Postgres, _, 'E') => true,
+        let backslash = match (prefix, first.to_ascii_uppercase()) {
+            (0, _) | (_, 'N') => self.backslash_strings(),
+            (_, 'E') => match self {
+                Self::Postgres => true,
+                Self::MySql(_) | Self::MariaDb(_) => return None,
+            },
             _ => return None,
         };
         // PostgreSQL's `U&'…'` is `U`, `&` and a string to the lexer.
-        if self == Self::Postgres
+        let postgres = match self {
+            Self::Postgres => true,
+            Self::MySql(_) | Self::MariaDb(_) => false,
+        };
+        if postgres
             && prefix == 0
             && let Some(rest) = before.strip_suffix('&')
             && rest.ends_with(['U', 'u'])
@@ -215,7 +228,7 @@ impl Dialect {
                 };
                 match self {
                     Self::Postgres => unescape_pg(e, &mut chars, &mut out),
-                    Self::MySql(_) => match e {
+                    Self::MySql(_) | Self::MariaDb(_) => match e {
                         '0' => out.push('\0'),
                         'b' => out.push('\x08'),
                         'n' => out.push('\n'),
@@ -254,6 +267,16 @@ impl Dialect {
         match self {
             Self::Postgres => Self::Postgres,
             Self::MySql(_) => Self::MySql(MySqlMode::default()),
+            Self::MariaDb(_) => Self::MariaDb(MySqlMode::default()),
+        }
+    }
+
+    /// The same engine's dialect read in sql mode `mode` (PostgreSQL has no such mode: itself).
+    pub fn with_mode(self, mode: MySqlMode) -> Self {
+        match self {
+            Self::Postgres => Self::Postgres,
+            Self::MySql(_) => Self::MySql(mode),
+            Self::MariaDb(_) => Self::MariaDb(mode),
         }
     }
 
@@ -264,7 +287,7 @@ impl Dialect {
     pub fn fold(self, name: &str) -> String {
         match self {
             Self::Postgres => name.to_ascii_lowercase(),
-            Self::MySql(_) => name.to_string(),
+            Self::MySql(_) | Self::MariaDb(_) => name.to_string(),
         }
     }
 
@@ -299,7 +322,7 @@ impl Dialect {
     pub fn keywords(self) -> &'static [&'static str] {
         match self {
             Self::Postgres => lexer::KEYWORDS,
-            Self::MySql(_) => lexer::mysql::KEYWORDS,
+            Self::MySql(_) | Self::MariaDb(_) => lexer::mysql::KEYWORDS,
         }
     }
 
@@ -323,7 +346,7 @@ impl Dialect {
                 }
                 path
             }
-            Self::MySql(_) => schema.into_iter().map(str::to_string).collect(),
+            Self::MySql(_) | Self::MariaDb(_) => schema.into_iter().map(str::to_string).collect(),
         }
     }
 
@@ -331,7 +354,7 @@ impl Dialect {
     /// the line, which MySQL needs).
     pub fn comment_marker(self) -> &'static str {
         match self {
-            Self::Postgres | Self::MySql(_) => "--",
+            Self::Postgres | Self::MySql(_) | Self::MariaDb(_) => "--",
         }
     }
 
@@ -341,8 +364,8 @@ impl Dialect {
     pub fn line_comment_at(self, text: &str) -> Option<&'static str> {
         match self {
             Self::Postgres => text.starts_with("--").then_some("--"),
-            Self::MySql(_) if text.starts_with('#') => Some("#"),
-            Self::MySql(_) => text
+            Self::MySql(_) | Self::MariaDb(_) if text.starts_with('#') => Some("#"),
+            Self::MySql(_) | Self::MariaDb(_) => text
                 .strip_prefix("--")
                 .is_some_and(|rest| rest.chars().next().is_none_or(|c| c <= ' ' || c == '\x7f'))
                 .then_some("--"),
@@ -354,7 +377,7 @@ impl Dialect {
     pub fn sqlformat_dialect(self) -> sqlformat::Dialect {
         match self {
             Self::Postgres => sqlformat::Dialect::PostgreSql,
-            Self::MySql(_) => sqlformat::Dialect::Generic,
+            Self::MySql(_) | Self::MariaDb(_) => sqlformat::Dialect::Generic,
         }
     }
 }
@@ -470,8 +493,12 @@ impl Dialect {
         let word =
             |t: &lexer::Token, w: &str| matches!(t.kind, Tok::Keyword | Tok::Ident) && text(t).eq_ignore_ascii_case(w);
         // MySQL: a string's character set introducer (`_utf8mb4'x'`) goes.
+        let introducers = match self {
+            Self::Postgres => false,
+            Self::MySql(_) | Self::MariaDb(_) => true,
+        };
         let introducer = |i: &lexer::Token, s: &lexer::Token| {
-            matches!(self, Self::MySql(_)) && i.kind == Tok::Ident && text(i).starts_with('_') && i.end == s.start
+            introducers && i.kind == Tok::Ident && text(i).starts_with('_') && i.end == s.start
         };
         let (value, rest) = match toks.as_slice() {
             // A constant in parentheses with a cast after them (PostgreSQL prints `0::numeric`
@@ -495,8 +522,8 @@ impl Dialect {
                 let t = text(s);
                 // An introducer the lexer took into the string's token.
                 let t = match self {
-                    Self::MySql(_) if t.starts_with('_') => &t[t.find(self.string_quotes())?..],
-                    _ => t,
+                    Self::MySql(_) | Self::MariaDb(_) if t.starts_with('_') => &t[t.find(self.string_quotes())?..],
+                    Self::Postgres | Self::MySql(_) | Self::MariaDb(_) => t,
                 };
                 (Constant::Value(self.unquote_literal(t)?), rest)
             }
@@ -525,7 +552,7 @@ impl Dialect {
         };
         let whole = match self {
             Self::Postgres => rest.is_empty() || cast(rest),
-            Self::MySql(_) => rest.is_empty(),
+            Self::MySql(_) | Self::MariaDb(_) => rest.is_empty(),
         };
         // `'now'::date` is the time of the insert: no constant (fail-safe: any type but text).
         let special = |v: &str| {
@@ -538,7 +565,11 @@ impl Dialect {
             matches!(t.kind, Tok::Ident | Tok::Keyword | Tok::QuotedIdent)
                 && !text_types.contains(&t.text(sql).to_ascii_lowercase().as_str())
         });
-        if self == Self::Postgres && to_other && matches!(&value, Constant::Value(v) if special(v)) {
+        let postgres = match self {
+            Self::Postgres => true,
+            Self::MySql(_) | Self::MariaDb(_) => false,
+        };
+        if postgres && to_other && matches!(&value, Constant::Value(v) if special(v)) {
             return None;
         }
         whole.then_some(value)
@@ -553,7 +584,7 @@ impl Dialect {
                     lexer::lex_in(default, self).into_iter().filter(|t| !t.is_trivia()).collect();
                 matches!(toks.as_slice(), [f, p, ..] if f.text(default).eq_ignore_ascii_case("nextval") && p.kind == lexer::Tok::LParen)
             }
-            Self::MySql(_) => false,
+            Self::MySql(_) | Self::MariaDb(_) => false,
         }
     }
 
@@ -562,7 +593,7 @@ impl Dialect {
     pub fn insert_default(self, default: &str) -> &str {
         match self {
             Self::Postgres => default,
-            Self::MySql(_) => {
+            Self::MySql(_) | Self::MariaDb(_) => {
                 // `ON UPDATE` as words, not inside a string.
                 let toks: Vec<lexer::Token> =
                     lexer::lex_in(default, self).into_iter().filter(|t| !t.is_trivia()).collect();

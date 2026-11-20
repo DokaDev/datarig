@@ -152,7 +152,7 @@ impl LexState {
     pub fn after(self, t: &Token, src: &str, d: Dialect) -> Self {
         match d {
             Dialect::Postgres => self,
-            Dialect::MySql(_) => mysql::after(self, t, src),
+            Dialect::MySql(_) | Dialect::MariaDb(_) => mysql::after(self, t, src),
         }
     }
 }
@@ -375,7 +375,7 @@ pub fn lex_in(src: &str, d: Dialect) -> Vec<Token> {
 pub fn lex_from(src: &str, d: Dialect, state: LexState) -> Vec<Token> {
     match d {
         Dialect::Postgres => lex_with(src, d, false),
-        Dialect::MySql(mode) => mysql::lex(src, mode, state),
+        Dialect::MySql(mode) | Dialect::MariaDb(mode) => mysql::lex(src, mode, state),
     }
 }
 
@@ -512,7 +512,7 @@ pub fn changes_schema(sql: &str) -> bool {
 pub fn changes_schema_in(sql: &str, d: Dialect) -> bool {
     let words: &[&str] = match d {
         Dialect::Postgres => &["CREATE", "ALTER", "DROP", "DO", "CALL"],
-        Dialect::MySql(_) => &["CREATE", "ALTER", "DROP", "RENAME", "TRUNCATE", "CALL"],
+        Dialect::MySql(_) | Dialect::MariaDb(_) => &["CREATE", "ALTER", "DROP", "RENAME", "TRUNCATE", "CALL"],
     };
     lex_in(sql, d)
         .iter()

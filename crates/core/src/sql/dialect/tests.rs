@@ -191,3 +191,138 @@ fn literal_bodies_unescape() {
     assert_eq!(pg.unquote_literal("E'a\\'"), None, "the last quote is escaped");
     assert_eq!(pg.unquote_literal("'a'"), Some("a".into()));
 }
+
+/// Every sql mode, the `mariadb` flag set or not.
+fn every_mode() -> Vec<MySqlMode> {
+    (0..32u8)
+        .map(|b| MySqlMode {
+            ansi_quotes: b & 1 != 0,
+            no_backslash_escapes: b & 2 != 0,
+            dollar_quotes: b & 4 != 0,
+            mariadb: b & 8 != 0,
+            ignore_space: b & 16 != 0,
+        })
+        .collect()
+}
+
+/// The MariaDB dialect reads and writes text as the MySQL one of the same mode, in every
+/// method; the methods that give a dialect back keep the engine.
+#[test]
+fn every_method_answers_mariadb_as_the_flagged_mysql_dialect() {
+    let names = ["users", "Mixed Col", "select", "user", "a`b", "say \"hi\"", "", "1st", "caf\u{e9}", "`", "\""];
+    let values = ["", "it's", "a\\b", "a\0b", "say \"hi\"", "\\%_", "line\nbreak", "caf\u{e9}"];
+    let tokens = [
+        "'a'",
+        "'it''s'",
+        "'a\\'b'",
+        "'a\\nb\\Z\\%'",
+        "\"a\"",
+        "\"a\"\"b\"",
+        "N'a'",
+        "n'a'",
+        "E'a\\nb'",
+        "X'41'",
+        "B'01'",
+        "_utf8mb4'x'",
+        "$$a$$",
+        "'open",
+        "`a`",
+        "`a``b`",
+        "\"a\"",
+        "`open",
+        "x",
+        "",
+    ];
+    let befores = ["", "U&", "u&", "xU&", " "];
+    let texts = [
+        "-- c",
+        "--c",
+        "--\tc",
+        "# c",
+        "#c",
+        "/* c */",
+        "x",
+        "",
+        "--",
+        "'x'",
+        "(('x'))",
+        "_utf8mb4'x'",
+        "_utf8mb4 'x'",
+        "-1",
+        "+2.5",
+        "TRUE",
+        "null",
+        "NULL::text",
+        "'now'::date",
+        "(0)::numeric",
+        "now()",
+        "CURRENT_TIMESTAMP",
+        "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+        "'on update' ON UPDATE x",
+        "nextval('s'::regclass)",
+        "(a) + (b)",
+        "\"x\"",
+        "'a\\'b'",
+    ];
+    let words = ["select", "SELECT", "Lateral", "returning", "users", "", "sql_mode"];
+    let schemas = [None, Some("public"), Some("shop")];
+    for mode in every_mode() {
+        let (my, ma) = (Dialect::MySql(mode), Dialect::MariaDb(mode));
+        let at = format!("{mode:?}");
+        assert_eq!(ma.ident_quote(), my.ident_quote(), "{at}");
+        assert_eq!(ma.ident_quotes(), my.ident_quotes(), "{at}");
+        assert_eq!(ma.string_quotes(), my.string_quotes(), "{at}");
+        assert_eq!(ma.keywords(), my.keywords(), "{at}");
+        assert_eq!(ma.comment_marker(), my.comment_marker(), "{at}");
+        assert_eq!(ma.sqlformat_dialect(), my.sqlformat_dialect(), "{at}");
+        // Kept engines: the printed dialect and another mode of the same engine.
+        assert_eq!(ma.printed(), Dialect::MariaDb(MySqlMode::default()), "{at}");
+        assert_eq!(my.printed(), Dialect::MySql(MySqlMode::default()), "{at}");
+        for other in every_mode() {
+            assert_eq!(ma.with_mode(other), Dialect::MariaDb(other), "{at}");
+            assert_eq!(my.with_mode(other), Dialect::MySql(other), "{at}");
+        }
+        for s in names.iter().chain(&values) {
+            let at = format!("{s:?} in {mode:?}");
+            assert_eq!(ma.needs_quotes(s), my.needs_quotes(s), "{at}");
+            assert_eq!(ma.quote_ident(s), my.quote_ident(s), "{at}");
+            assert_eq!(ma.force_quote_ident(s), my.force_quote_ident(s), "{at}");
+            assert_eq!(ma.quote_literal(s), my.quote_literal(s), "{at}");
+            assert_eq!(ma.fold(s), my.fold(s), "{at}");
+            for q in ['`', '"', '\''] {
+                assert_eq!(ma.unescape_ident(q, s), my.unescape_ident(q, s), "{at}");
+            }
+            for open in [
+                LiteralOpen { prefix: 0, quote: '\'', backslash: true },
+                LiteralOpen { prefix: 0, quote: '"', backslash: false },
+                LiteralOpen { prefix: 1, quote: '\'', backslash: true },
+            ] {
+                assert_eq!(ma.literal_body(s, open), my.literal_body(s, open), "{at}");
+                assert_eq!(ma.unescape_literal_body(s, open), my.unescape_literal_body(s, open), "{at}");
+            }
+        }
+        for t in tokens.iter().chain(&texts) {
+            let at = format!("{t:?} in {mode:?}");
+            assert_eq!(ma.opening_quote(t), my.opening_quote(t), "{at}");
+            assert_eq!(ma.unquote(t), my.unquote(t), "{at}");
+            assert_eq!(ma.unquote_lenient(t), my.unquote_lenient(t), "{at}");
+            assert_eq!(ma.unquote_literal(t), my.unquote_literal(t), "{at}");
+            for before in befores {
+                assert_eq!(ma.literal_open(before, t), my.literal_open(before, t), "{before:?} {at}");
+            }
+            assert_eq!(ma.line_comment_at(t), my.line_comment_at(t), "{at}");
+            assert_eq!(ma.unparenthesized(t), my.unparenthesized(t), "{at}");
+            assert_eq!(ma.constant(t), my.constant(t), "{at}");
+            assert_eq!(ma.draws_number(t), my.draws_number(t), "{at}");
+            assert_eq!(ma.insert_default(t), my.insert_default(t), "{at}");
+        }
+        for w in words {
+            assert_eq!(ma.is_keyword(w), my.is_keyword(w), "{w:?} in {mode:?}");
+        }
+        for s in schemas {
+            assert_eq!(ma.default_path(s), my.default_path(s), "{s:?} in {mode:?}");
+        }
+        assert_eq!(Language::Sql(ma).dialect(), ma, "{at}");
+    }
+    assert_eq!(Dialect::Postgres.with_mode(MySqlMode::default()), Dialect::Postgres);
+}

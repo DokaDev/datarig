@@ -430,7 +430,7 @@ impl ExplainFormat {
     pub fn again(self, sql: &str, d: Dialect) -> Result<explain::JsonExplain, explain::NotJson> {
         match (self, d) {
             (ExplainFormat::PostgresJson, Dialect::Postgres) => explain::json(sql),
-            (ExplainFormat::MySqlTree, Dialect::MySql(mode)) => explain::tree(sql, mode),
+            (ExplainFormat::MySqlTree, Dialect::MySql(mode) | Dialect::MariaDb(mode)) => explain::tree(sql, mode),
             _ => Err(explain::NotJson::Unreadable),
         }
     }
@@ -439,7 +439,7 @@ impl ExplainFormat {
     pub fn again_text(self, sql: &str, d: Dialect) -> Result<explain::JsonExplain, explain::NotJson> {
         match (self, d) {
             (ExplainFormat::PostgresJson, Dialect::Postgres) => explain::json_text(sql),
-            (ExplainFormat::MySqlTree, Dialect::MySql(mode)) => explain::tree_text(sql, mode),
+            (ExplainFormat::MySqlTree, Dialect::MySql(mode) | Dialect::MariaDb(mode)) => explain::tree_text(sql, mode),
             _ => Err(explain::NotJson::Unreadable),
         }
     }
@@ -464,7 +464,7 @@ pub fn is_explain(sql: &str) -> bool {
 pub fn is_explain_in(sql: &str, d: Dialect) -> bool {
     let words: &[&str] = match d {
         Dialect::Postgres => &["EXPLAIN"],
-        Dialect::MySql(_) => &["EXPLAIN", "DESCRIBE", "DESC"],
+        Dialect::MySql(_) | Dialect::MariaDb(_) => &["EXPLAIN", "DESCRIBE", "DESC"],
     };
     crate::sql::lexer::lex_in(sql, d)
         .into_iter()
