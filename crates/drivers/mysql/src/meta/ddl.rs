@@ -68,7 +68,9 @@ type Found = (ObjectKind, String, String, Option<String>);
 
 /// What the DDL reads need of the metadata session.
 pub(crate) struct Session<'a> {
-    /// The mode its text is read in.
+    /// The dialect its text is read in.
+    pub(crate) dialect: Dialect,
+    /// The sql mode of `dialect`.
     pub(crate) mode: MySqlMode,
     /// Its `sql_mode` (`None`: not known): the connection's default.
     pub(crate) sql_mode: Option<&'a str>,
@@ -91,11 +93,11 @@ pub(crate) async fn load_ddl(conn: &mut Conn, s: Session<'_>, object: &DdlObject
         DdlObject::Trigger { schema, table, name } => {
             (ObjectKind::Trigger, schema.clone(), name.clone(), Some(table.clone()))
         }
-        DdlObject::Named { name, schema } => find(conn, s.mode, name, schema.as_deref().or(s.home)).await?,
+        DdlObject::Named { name, schema } => find(conn, s.dialect, name, schema.as_deref().or(s.home)).await?,
         DdlObject::Index { .. } | DdlObject::TriggerFunction { .. } => return Err(DbError::NotSupported),
     };
     if s.current.as_deref() != Some(schema.as_str()) {
-        enter(conn, s.current, &schema).await?;
+        enter(conn, s.current, s.dialect, &schema).await?;
     }
     show(conn, &s, kind, &schema, &name, table.as_deref()).await
 }
@@ -103,9 +105,9 @@ pub(crate) async fn load_ddl(conn: &mut Conn, s: Session<'_>, object: &DdlObject
 /// Make `schema` the session's current database (`USE`), as `current` then says; `current` is
 /// not known while it changes. A database that is not there (or not to the user, which the
 /// server says alike) is [`DbError::NotFound`].
-async fn enter(conn: &mut Conn, current: &mut Option<String>, schema: &str) -> Result<(), DbError> {
+async fn enter(conn: &mut Conn, current: &mut Option<String>, d: Dialect, schema: &str) -> Result<(), DbError> {
     *current = None;
-    let d = Dialect::MySql(MySqlMode::default());
+    let d = d.printed();
     conn.query_drop(format!("USE {}", d.force_quote_ident(schema))).await.map_err(|e| match &e {
         mysql_async::Error::Server(s) if NOT_THERE.contains(&s.code) => DbError::NotFound,
         e => super::read_error(e),
@@ -160,8 +162,7 @@ pub(crate) fn find_named_sql(d: Dialect, database: &str, name: &str) -> String {
 
 /// The one object `typed` ([`typed_name`]) names in its database, `schema` without one (none:
 /// [`DbError::NoDatabase`]).
-async fn find(conn: &mut Conn, mode: MySqlMode, typed: &str, schema: Option<&str>) -> Result<Found, DbError> {
-    let d = Dialect::MySql(mode);
+async fn find(conn: &mut Conn, d: Dialect, typed: &str, schema: Option<&str>) -> Result<Found, DbError> {
     let (wanted, database, name) = typed_name(typed, d)?;
     let database = database.as_deref().or(schema).ok_or(DbError::NoDatabase)?;
     let sql = find_named_sql(d, database, &name);
@@ -272,7 +273,7 @@ async fn show(
         ObjectKind::Trigger => "TRIGGER",
         ObjectKind::Event => "EVENT",
     };
-    let d = Dialect::MySql(MySqlMode::default());
+    let d = s.dialect.printed();
     let sql = format!("SHOW CREATE {what} {}.{}", d.force_quote_ident(schema), d.force_quote_ident(name));
     let rows: Vec<Row> = conn.query(sql).await.map_err(|e| match &e {
         mysql_async::Error::Server(s) if NOT_THERE.contains(&s.code) => DbError::NotFound,
@@ -317,7 +318,7 @@ async fn show(
         name: label(kind, schema, &own, table),
         text: runnable(kind, &text, note.as_deref()),
         database: Some(schema.to_string()),
-        written_in: written_in.map(Dialect::MySql),
+        written_in: written_in.map(|m| s.dialect.with_mode(m)),
     })
 }
 

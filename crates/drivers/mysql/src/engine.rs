@@ -2,13 +2,14 @@
 //! server answered ([`CAPABILITIES`]), the one reader of a server's greeting ([`greeting`]), the
 //! read of the server's own version line, which names the engine ([`confirm`]), the facts a
 //! session's connection found ([`facts`]) and the one place that turns them into what a session
-//! says of its server ([`derive`]).
+//! says of its server ([`derive`]), with the dialect its text is read in ([`dialect`]).
 
 use crate::session::{Server, Tracked, my_error};
 use datarig_core::driver::{Capabilities, DbError, EditFormat, ExplainFormat, Hierarchy, MySqlEdit};
 use datarig_core::engine::mysql_family::line_names_mariadb;
 use datarig_core::engine::{EngineFacts, EngineId, Fact, MyFacts, PingIdentity, ServerFacts, Topology, Version, Why};
-use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+use datarig_core::sql::dialect::{Dialect, DollarQuotes, Language, MySqlMode};
+use datarig_core::sql::risk::mysql::Judge;
 use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, Row, Value};
 use std::sync::Arc;
@@ -28,8 +29,7 @@ pub(crate) const CAPABILITIES: Capabilities = Capabilities {
     language: Language::Sql(Dialect::MySql(MySqlMode {
         ansi_quotes: false,
         no_backslash_escapes: false,
-        dollar_quotes: false,
-        mariadb: false,
+        dollar_quotes: DollarQuotes::NotRead,
         ignore_space: false,
     })),
     hierarchy: Hierarchy::SchemaOnly,
@@ -210,7 +210,7 @@ pub(crate) struct Derived {
 pub(crate) fn derive(facts: &ServerFacts, tracked: &Tracked) -> Derived {
     // The greeting's engine and number, whichever engine the version line names.
     let server = Server::of(facts);
-    let language = Language::Sql(Dialect::MySql(tracked.mode(&server)));
+    let language = Language::Sql(dialect(&server, tracked.mode(&server)));
     let (major, minor, patch) = server.version;
     let version = Version::new(major, minor, patch);
     let (explain, edit) = match server.mariadb {
@@ -221,6 +221,36 @@ pub(crate) fn derive(facts: &ServerFacts, tracked: &Tracked) -> Derived {
         true => (None, None),
     };
     Derived { language, explain, edit, capabilities: Capabilities { language, explain, edit, ..CAPABILITIES } }
+}
+
+/// The dialect a session on `server` (as its greeting says) reads its text in, in sql mode
+/// `mode`: MariaDB's when the greeting names MariaDB, else MySQL's.
+pub(crate) fn dialect(server: &Server, mode: MySqlMode) -> Dialect {
+    match engine_of(server.mariadb) {
+        EngineId::MariaDb => Dialect::MariaDb(mode),
+        EngineId::MySql | EngineId::Postgres => Dialect::MySql(mode),
+    }
+}
+
+/// How the classifier judges text of a session's dialect `d`: on the lists of its engine, in
+/// its sql mode.
+pub(crate) fn risk_judge(d: Dialect) -> Judge {
+    match d {
+        Dialect::MariaDb(mode) => Judge::mariadb(mode),
+        Dialect::MySql(mode) => Judge::mysql(mode),
+        // Never a dialect of this driver's sessions: MySQL's default reading.
+        Dialect::Postgres => Judge::mysql(MySqlMode::default()),
+    }
+}
+
+/// Whether a session of dialect `d` reads an executable comment with a MySQL 5.7-or-later
+/// version (`/*!80000 … */`) as a plain comment: MariaDB's. Such a text alone sets nothing
+/// there.
+pub(crate) fn skips_mysql_version_comments(d: Dialect) -> bool {
+    match d {
+        Dialect::MariaDb(_) => true,
+        Dialect::MySql(_) | Dialect::Postgres => false,
+    }
 }
 
 #[cfg(test)]

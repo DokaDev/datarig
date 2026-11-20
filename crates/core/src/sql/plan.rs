@@ -17,6 +17,7 @@
 use crate::driver::ExplainFormat;
 use crate::sql::dialect::Dialect;
 use crate::sql::lexer::Tok;
+use crate::sql::risk::mysql::Judge;
 
 pub mod explain;
 pub mod json;
@@ -430,7 +431,8 @@ impl ExplainFormat {
     pub fn again(self, sql: &str, d: Dialect) -> Result<explain::JsonExplain, explain::NotJson> {
         match (self, d) {
             (ExplainFormat::PostgresJson, Dialect::Postgres) => explain::json(sql),
-            (ExplainFormat::MySqlTree, Dialect::MySql(mode) | Dialect::MariaDb(mode)) => explain::tree(sql, mode),
+            (ExplainFormat::MySqlTree, Dialect::MySql(mode)) => explain::tree(sql, Judge::mysql(mode)),
+            (ExplainFormat::MySqlTree, Dialect::MariaDb(mode)) => explain::tree(sql, Judge::mariadb(mode)),
             _ => Err(explain::NotJson::Unreadable),
         }
     }

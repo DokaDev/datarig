@@ -86,8 +86,7 @@ fn literals_open_by_dialect() {
         Dialect::MySql(MySqlMode {
             ansi_quotes,
             no_backslash_escapes,
-            dollar_quotes: true,
-            mariadb: false,
+            dollar_quotes: DollarQuotes::Read,
             ignore_space: false,
         })
     };
@@ -132,8 +131,7 @@ fn literal_bodies_round_trip() {
         let m = MySqlMode {
             ansi_quotes: bits & 1 != 0,
             no_backslash_escapes: bits & 2 != 0,
-            dollar_quotes: bits & 4 != 0,
-            mariadb: false,
+            dollar_quotes: if bits & 4 != 0 { DollarQuotes::Read } else { DollarQuotes::NotRead },
             ignore_space: false,
         };
         dialects.push(Dialect::MySql(m));
@@ -192,15 +190,14 @@ fn literal_bodies_unescape() {
     assert_eq!(pg.unquote_literal("'a'"), Some("a".into()));
 }
 
-/// Every sql mode, the `mariadb` flag set or not.
+/// Every sql mode.
 fn every_mode() -> Vec<MySqlMode> {
-    (0..32u8)
+    (0..16u8)
         .map(|b| MySqlMode {
             ansi_quotes: b & 1 != 0,
             no_backslash_escapes: b & 2 != 0,
-            dollar_quotes: b & 4 != 0,
-            mariadb: b & 8 != 0,
-            ignore_space: b & 16 != 0,
+            dollar_quotes: if b & 4 != 0 { DollarQuotes::Read } else { DollarQuotes::NotRead },
+            ignore_space: b & 8 != 0,
         })
         .collect()
 }
@@ -208,7 +205,7 @@ fn every_mode() -> Vec<MySqlMode> {
 /// The MariaDB dialect reads and writes text as the MySQL one of the same mode, in every
 /// method; the methods that give a dialect back keep the engine.
 #[test]
-fn every_method_answers_mariadb_as_the_flagged_mysql_dialect() {
+fn every_method_answers_mariadb_as_the_mysql_dialect() {
     let names = ["users", "Mixed Col", "select", "user", "a`b", "say \"hi\"", "", "1st", "caf\u{e9}", "`", "\""];
     let values = ["", "it's", "a\\b", "a\0b", "say \"hi\"", "\\%_", "line\nbreak", "caf\u{e9}"];
     let tokens = [

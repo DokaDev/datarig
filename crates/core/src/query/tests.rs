@@ -1,13 +1,12 @@
 use super::*;
 use crate::sql::dialect::Language;
-use crate::sql::dialect::MySqlMode;
+use crate::sql::dialect::{DollarQuotes, MySqlMode};
 use crate::sql::risk::{Class, Classifier, Danger};
 
 const MY: Dialect = Dialect::MySql(MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: false,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 });
 
@@ -705,8 +704,7 @@ fn render_like_patterns_read_the_same_in_every_mysql_mode() {
         Dialect::MySql(MySqlMode {
             ansi_quotes: false,
             no_backslash_escapes: true,
-            dollar_quotes: false,
-            mariadb: false,
+            dollar_quotes: DollarQuotes::NotRead,
             ignore_space: false,
         }),
     ];
@@ -1187,11 +1185,11 @@ fn calls_are_confirmed_refused_or_clear() {
         assert!(matches!(check(MY, text, false), Ok(FilterVerdict::NeedsConfirm(_))), "{text}");
     }
     // A `$` reads as a dollar quote or not, whichever the server does: not clear either way.
-    for dollar_quotes in [false, true] {
+    for dollar_quotes in [DollarQuotes::NotRead, DollarQuotes::Read] {
         let Dialect::MySql(mode) = MY else { unreachable!() };
         let my = Dialect::MySql(MySqlMode { dollar_quotes, ..mode });
         let r = check(my, "id > 1 $a$ OR my_fn(id) > 0 OR 2 $a$ > 0", false);
-        assert!(!matches!(r, Ok(FilterVerdict::Clear)), "{dollar_quotes}: {r:?}");
+        assert!(!matches!(r, Ok(FilterVerdict::Clear)), "{dollar_quotes:?}: {r:?}");
     }
     // A comment is refused before that.
     assert!(check(MY, "now/* c */() > id", true).is_err());
@@ -1200,14 +1198,12 @@ fn calls_are_confirmed_refused_or_clear() {
     }
 }
 
-/// On the MariaDB variant the filter bar checks every call as it does on today's MariaDB (the
-/// flagged MySQL dialect): a stored function asks, or is refused on a read-only profile, a
-/// refused built-in is refused, and a built-in it knows is clear. None of them lets a call
-/// through unchecked.
+/// On a MariaDB session the filter bar checks every call as it always did: a stored function
+/// asks, or is refused on a read-only profile, a refused built-in is refused, and a built-in it
+/// knows is clear. None of them lets a call through unchecked.
 #[test]
 fn the_filter_bar_checks_calls_on_the_mariadb_variant() {
-    let mode = MySqlMode { mariadb: true, ..MySqlMode::default() };
-    let (variant, today) = (Dialect::MariaDb(mode), Dialect::MySql(mode));
+    let variant = Dialect::MariaDb(MySqlMode::default());
     let confirm = |calls: &[&str]| {
         Ok(FilterVerdict::NeedsConfirm(vec![Confirm::Calls(calls.iter().map(|c| c.to_string()).collect())]))
     };
@@ -1216,26 +1212,51 @@ fn the_filter_bar_checks_calls_on_the_mariadb_variant() {
     assert_eq!(check(variant, "SLEEP(1) = 0", false), Err(BarRefusal::RefusedCalls(vec!["SLEEP".into()])));
     assert_eq!(check(variant, "id < NEXTVAL(s)", true), Err(BarRefusal::RefusedCalls(vec!["NEXTVAL".into()])));
     assert_eq!(check(variant, "NOW() > id", true), Ok(FilterVerdict::Clear));
-    for text in [
-        "my_fn(id) > 0",
-        "shop.lower(name) = 'a'",
-        "SLEEP(1) = 0",
-        "BENCHMARK(1000, md5('a')) = 0",
-        "GET_LOCK('a', 1) = 1",
-        "FOUND_ROWS() >= 0",
-        "LOAD_FILE('/etc/passwd') IS NULL",
-        "`NOW`() > id",
-        "NOW () > id",
-        "BIN_TO_UUID(data) = 'a'",
-        "id > 1 $a$ OR my_fn(id) > 0 OR 2 $a$ > 0",
-        "/*M! my_fn(id) > 0 AND */ id > 0",
-        "id IN (SELECT my_fn(id))",
-        "NOW() > id",
-        "ABS(id) > 0",
+    // Each filter's verdict on a read-write and on a read-only profile, as a MariaDB session's
+    // always was.
+    for (text, read_write, read_only) in [
+        (r#"my_fn(id) > 0"#, r#"Ok(NeedsConfirm([Calls(["MY_FN"])]))"#, r#"Err(UncheckedCalls(["MY_FN"]))"#),
+        (r#"shop.lower(name) = 'a'"#, r#"Ok(NeedsConfirm([Calls(["LOWER"])]))"#, r#"Err(UncheckedCalls(["LOWER"]))"#),
+        (r#"SLEEP(1) = 0"#, r#"Err(RefusedCalls(["SLEEP"]))"#, r#"Err(RefusedCalls(["SLEEP"]))"#),
+        (
+            r#"BENCHMARK(1000, md5('a')) = 0"#,
+            r#"Err(RefusedCalls(["BENCHMARK"]))"#,
+            r#"Err(RefusedCalls(["BENCHMARK"]))"#,
+        ),
+        (
+            r#"GET_LOCK('a', 1) = 1"#,
+            r#"Err(NotRead { class: Read, danger: Some(ServerAction) })"#,
+            r#"Err(NotRead { class: Read, danger: Some(ServerAction) })"#,
+        ),
+        (r#"FOUND_ROWS() >= 0"#, r#"Err(RefusedCalls(["FOUND_ROWS"]))"#, r#"Err(RefusedCalls(["FOUND_ROWS"]))"#),
+        (
+            r#"LOAD_FILE('/etc/passwd') IS NULL"#,
+            r#"Err(NotRead { class: Read, danger: Some(ServerFile) })"#,
+            r#"Err(NotRead { class: Read, danger: Some(ServerFile) })"#,
+        ),
+        (r#"`NOW`() > id"#, r#"Ok(NeedsConfirm([Calls(["NOW"])]))"#, r#"Err(UncheckedCalls(["NOW"]))"#),
+        (r#"NOW () > id"#, r#"Ok(NeedsConfirm([Calls(["NOW"])]))"#, r#"Err(UncheckedCalls(["NOW"]))"#),
+        (
+            r#"BIN_TO_UUID(data) = 'a'"#,
+            r#"Ok(NeedsConfirm([Calls(["BIN_TO_UUID"])]))"#,
+            r#"Err(UncheckedCalls(["BIN_TO_UUID"]))"#,
+        ),
+        (
+            r#"id > 1 $a$ OR my_fn(id) > 0 OR 2 $a$ > 0"#,
+            r#"Err(Lexical { problem: Ambiguous, at: 7..10 })"#,
+            r#"Err(Lexical { problem: Ambiguous, at: 7..10 })"#,
+        ),
+        (
+            r#"/*M! my_fn(id) > 0 AND */ id > 0"#,
+            r#"Err(Lexical { problem: ExecutableComment, at: 0..25 })"#,
+            r#"Err(Lexical { problem: ExecutableComment, at: 0..25 })"#,
+        ),
+        (r#"id IN (SELECT my_fn(id))"#, r#"Ok(NeedsConfirm([Calls(["MY_FN"])]))"#, r#"Err(UncheckedCalls(["MY_FN"]))"#),
+        (r#"NOW() > id"#, r#"Ok(Clear)"#, r#"Ok(Clear)"#),
+        (r#"ABS(id) > 0"#, r#"Ok(Clear)"#, r#"Ok(Clear)"#),
     ] {
-        for read_only in [false, true] {
-            assert_eq!(check(variant, text, read_only), check(today, text, read_only), "{text} read-only {read_only}");
-        }
+        assert_eq!(format!("{:?}", check(variant, text, false)), read_write, "{text}");
+        assert_eq!(format!("{:?}", check(variant, text, true)), read_only, "{text} read-only");
     }
 }
 
@@ -1398,7 +1419,7 @@ fn the_call_lists_are_sorted_disjoint_built_ins() {
         assert!(crate::sql::risk::builtin(f), "{f}");
         assert!(!PG_REFUSED_CALLS.contains(f), "{f}");
     }
-    let mariadb = MySqlMode { mariadb: true, ..MySqlMode::default() };
+    let mariadb = crate::sql::risk::mysql::Judge::mariadb(MySqlMode::default());
     for f in MYSQL_FILTER_CALLS {
         assert!(crate::sql::risk::mysql::builtin(f), "{f}");
         // A filter's call taken without asking is one MariaDB provides too.

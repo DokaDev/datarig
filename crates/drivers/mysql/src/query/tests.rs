@@ -1,17 +1,17 @@
 use super::*;
+use datarig_core::sql::dialect::{DollarQuotes, MySqlMode};
 
 const MODE: MySqlMode = MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: false,
-    dollar_quotes: true,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::Read,
     ignore_space: false,
 };
 const MYSQL: Server = Server { version: (8, 4, 0), mariadb: false };
 
 #[test]
 fn outcomes_name_the_command_or_count_rows() {
-    let tag = |sql| command_tag(sql, MODE);
+    let tag = |sql| command_tag(sql, Dialect::MySql(MODE));
     assert_eq!(tag("insert into t values (1)"), ("INSERT".into(), true));
     assert_eq!(tag("REPLACE INTO t VALUES (1)"), ("REPLACE".into(), true));
     assert_eq!(tag("WITH x AS (SELECT 1) DELETE FROM t WHERE id IN (SELECT * FROM x)"), ("DELETE".into(), true));
@@ -43,7 +43,7 @@ fn the_limit_is_set_only_before_queries() {
         "DESCRIBE t",
         "desc `t`",
     ] {
-        assert!(limit_applies(sql, MODE), "{sql}");
+        assert!(limit_applies(sql, Dialect::MySql(MODE)), "{sql}");
     }
     for sql in [
         "SHOW WARNINGS",
@@ -59,30 +59,40 @@ fn the_limit_is_set_only_before_queries() {
         "GET DIAGNOSTICS @n = NUMBER",
         "HELP 'select'",
     ] {
-        assert!(!limit_applies(sql, MODE), "{sql}");
+        assert!(!limit_applies(sql, Dialect::MySql(MODE)), "{sql}");
     }
-    assert!(lists("SHOW FULL PROCESSLIST", MODE) && lists("DESCRIBE shop.users", MODE));
-    assert!(!lists("SELECT 1", MODE) && !lists("SHOW WARNINGS", MODE) && !lists("DESC SELECT 1", MODE));
-    assert!(reads_outcome("SELECT ROW_COUNT()", MODE) && reads_outcome("select found_rows()", MODE));
-    assert!(!reads_outcome("SELECT 'ROW_COUNT'", MODE));
-    assert!(reads_outcome("SELECT ROW_COUNT ()", MODE));
-    assert!(!reads_outcome("SELECT id AS row_count FROM t", MODE) && !reads_outcome("SELECT found_rows FROM t", MODE));
+    assert!(lists("SHOW FULL PROCESSLIST", Dialect::MySql(MODE)) && lists("DESCRIBE shop.users", Dialect::MySql(MODE)));
+    assert!(
+        !lists("SELECT 1", Dialect::MySql(MODE))
+            && !lists("SHOW WARNINGS", Dialect::MySql(MODE))
+            && !lists("DESC SELECT 1", Dialect::MySql(MODE))
+    );
+    assert!(
+        reads_outcome("SELECT ROW_COUNT()", Dialect::MySql(MODE))
+            && reads_outcome("select found_rows()", Dialect::MySql(MODE))
+    );
+    assert!(!reads_outcome("SELECT 'ROW_COUNT'", Dialect::MySql(MODE)));
+    assert!(reads_outcome("SELECT ROW_COUNT ()", Dialect::MySql(MODE)));
+    assert!(
+        !reads_outcome("SELECT id AS row_count FROM t", Dialect::MySql(MODE))
+            && !reads_outcome("SELECT found_rows FROM t", Dialect::MySql(MODE))
+    );
     for sql in ["SELECT * FROM t FOR UPDATE", "select * from t for share nowait", "SELECT * FROM t LOCK IN SHARE MODE"]
     {
-        assert!(locking(sql, MODE), "{sql}");
+        assert!(locking(sql, Dialect::MySql(MODE)), "{sql}");
     }
-    assert!(!locking("SELECT * FROM t", MODE) && !locking("SELECT 'FOR UPDATE'", MODE));
+    assert!(!locking("SELECT * FROM t", Dialect::MySql(MODE)) && !locking("SELECT 'FOR UPDATE'", Dialect::MySql(MODE)));
 }
 
 #[test]
 fn explains_and_chains_are_read_from_the_text() {
-    assert!(explains("EXPLAIN ANALYZE DELETE FROM t", MODE));
-    assert!(explains("describe analyze select 1", MODE));
-    assert!(!explains("SELECT 'EXPLAIN'", MODE));
-    assert!(chains("COMMIT AND CHAIN", MODE));
-    assert!(chains("rollback work and chain", MODE));
-    assert!(!chains("COMMIT AND NO CHAIN", MODE));
-    assert!(!chains("COMMIT", MODE));
+    assert!(explains("EXPLAIN ANALYZE DELETE FROM t", Dialect::MySql(MODE)));
+    assert!(explains("describe analyze select 1", Dialect::MySql(MODE)));
+    assert!(!explains("SELECT 'EXPLAIN'", Dialect::MySql(MODE)));
+    assert!(chains("COMMIT AND CHAIN", Dialect::MySql(MODE)));
+    assert!(chains("rollback work and chain", Dialect::MySql(MODE)));
+    assert!(!chains("COMMIT AND NO CHAIN", Dialect::MySql(MODE)));
+    assert!(!chains("COMMIT", Dialect::MySql(MODE)));
 }
 
 /// What sets the next transaction's level alone is read as setting its own settings; the
@@ -98,7 +108,7 @@ fn a_level_for_the_next_transaction_only_is_read_from_the_text() {
         "SET @@tx_isolation = 'SERIALIZABLE'",
         "SET time_zone = '+00:00', @@transaction_isolation = 'READ-COMMITTED'",
     ] {
-        assert_eq!(sets_next_transaction(sql, MODE), SetsNext::Yes, "{sql}");
+        assert_eq!(sets_next_transaction(sql, Dialect::MySql(MODE)), SetsNext::Yes, "{sql}");
     }
     for sql in [
         "SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE",
@@ -112,7 +122,7 @@ fn a_level_for_the_next_transaction_only_is_read_from_the_text() {
         "SELECT @@transaction_isolation",
         "SELECT 'SET TRANSACTION ISOLATION LEVEL SERIALIZABLE'",
     ] {
-        assert_eq!(sets_next_transaction(sql, MODE), SetsNext::No, "{sql}");
+        assert_eq!(sets_next_transaction(sql, Dialect::MySql(MODE)), SetsNext::No, "{sql}");
     }
 }
 
@@ -190,7 +200,7 @@ fn the_not_undone_question_of_mariadb_reads_no_partial_revokes() {
 /// and 99997 runs on a Galera node.
 #[test]
 fn mariadb_does_not_count_a_mysql8_set_transaction_comment() {
-    let maria = MySqlMode { mariadb: true, ..MODE };
+    let maria = Dialect::MariaDb(MODE);
     for sql in [
         "/*!80000 SET TRANSACTION ISOLATION LEVEL SERIALIZABLE */",
         " /*!50700 SET TRANSACTION READ ONLY */\n",
@@ -227,7 +237,7 @@ fn a_version_comment_may_set_the_next_transaction() {
         "/*! SET TRANSACTION READ ONLY */",
         "SELECT 1 /*!80000 , 2 */",
     ] {
-        assert_eq!(sets_next_transaction(sql, MODE), SetsNext::Maybe, "{sql}");
+        assert_eq!(sets_next_transaction(sql, Dialect::MySql(MODE)), SetsNext::Maybe, "{sql}");
     }
 }
 
@@ -235,7 +245,7 @@ fn a_version_comment_may_set_the_next_transaction() {
 fn settings_of_the_next_transaction_only_are_seen_in_every_spelling() {
     let ansi = MySqlMode { ansi_quotes: true, ..MODE };
     for mode in [MODE, ansi] {
-        let sets = |sql| sets_next_transaction(sql, mode) != SetsNext::No;
+        let sets = |sql| sets_next_transaction(sql, Dialect::MySql(mode)) != SetsNext::No;
         for sql in [
             "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
             "set transaction read write",
@@ -248,11 +258,11 @@ fn settings_of_the_next_transaction_only_are_seen_in_every_spelling() {
             "SET @a = 1, @@transaction_isolation = 'SERIALIZABLE'",
             "SET @a = (SELECT 1), @@tx_read_only := 1",
         ] {
-            assert_eq!(sets_next_transaction(sql, mode), SetsNext::Yes, "{sql}");
+            assert_eq!(sets_next_transaction(sql, Dialect::MySql(mode)), SetsNext::Yes, "{sql}");
         }
         // Not read: may set them.
         for sql in ["CALL p()", "EXECUTE s", "/*!80000 SET TRANSACTION ISOLATION LEVEL SERIALIZABLE */"] {
-            assert_eq!(sets_next_transaction(sql, mode), SetsNext::Maybe, "{sql}");
+            assert_eq!(sets_next_transaction(sql, Dialect::MySql(mode)), SetsNext::Maybe, "{sql}");
         }
         for sql in [
             "SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE",
@@ -277,8 +287,8 @@ fn settings_of_the_next_transaction_only_are_seen_in_every_spelling() {
     }
     // Under `ANSI_QUOTES` a double-quoted name is an identifier too.
     let ansi = MySqlMode { ansi_quotes: true, ..MODE };
-    assert!(sets_next_isolation("SET @@\"transaction_isolation\" = 'SERIALIZABLE'", ansi));
-    assert!(sets_next_access("SET @@\"tx_read_only\" = 1", ansi));
+    assert!(sets_next_isolation("SET @@\"transaction_isolation\" = 'SERIALIZABLE'", Dialect::MySql(ansi)));
+    assert!(sets_next_access("SET @@\"tx_read_only\" = 1", Dialect::MySql(ansi)));
     // Each characteristic on its own.
     for (sql, isolation, access) in [
         ("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE", true, false),
@@ -292,8 +302,8 @@ fn settings_of_the_next_transaction_only_are_seen_in_every_spelling() {
         ("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED", true, false),
         ("SET TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY", true, true),
     ] {
-        assert_eq!(sets_next_isolation(sql, MODE), isolation, "{sql}");
-        assert_eq!(sets_next_access(sql, MODE), access, "{sql}");
+        assert_eq!(sets_next_isolation(sql, Dialect::MySql(MODE)), isolation, "{sql}");
+        assert_eq!(sets_next_access(sql, Dialect::MySql(MODE)), access, "{sql}");
     }
     for (sql, yes) in [
         ("START TRANSACTION READ ONLY", true),
@@ -302,7 +312,7 @@ fn settings_of_the_next_transaction_only_are_seen_in_every_spelling() {
         ("rollback", true),
         ("SELECT 1", false),
     ] {
-        assert_eq!(begins_or_ends(sql, MODE), yes, "{sql}");
+        assert_eq!(begins_or_ends(sql, Dialect::MySql(MODE)), yes, "{sql}");
     }
 }
 
@@ -400,7 +410,7 @@ fn mariadbs_bounded_read_fits_its_version_and_the_sessions_own_limits() {
 
 #[test]
 fn only_plain_reads_get_the_paging_limit() {
-    for mode in [MODE, MySqlMode { mariadb: true, ..MODE }] {
+    for mode in [Dialect::MySql(MODE), Dialect::MariaDb(MODE)] {
         for sql in [
             "SELECT * FROM t",
             "select id, upper(name) from t where id > 3 order by id",
@@ -409,7 +419,7 @@ fn only_plain_reads_get_the_paging_limit() {
             "VALUES ROW(1), ROW(2)",
             "(SELECT 1) UNION (SELECT 2)",
         ] {
-            assert!(pages_plainly(&risk::classify(sql, mode), sql, mode), "{sql}");
+            assert!(pages_plainly(&risk::classify(sql, crate::engine::risk_judge(mode)), sql, mode), "{sql}");
         }
         for sql in [
             // The limit would cut the file the server writes.
@@ -425,7 +435,7 @@ fn only_plain_reads_get_the_paging_limit() {
             // Code the classifier does not read.
             "/*!80000 SELECT zz_f(id) FROM t */",
         ] {
-            assert!(!pages_plainly(&risk::classify(sql, mode), sql, mode), "{sql}");
+            assert!(!pages_plainly(&risk::classify(sql, crate::engine::risk_judge(mode)), sql, mode), "{sql}");
         }
     }
 }

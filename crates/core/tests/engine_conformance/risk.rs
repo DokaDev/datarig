@@ -224,5 +224,14 @@ pub fn classifier_cases() -> Vec<Case<&'static str>> {
                 (MariaDb, "Unknown Some(Unrecognized) read-only Unrecognized"),
             ],
         },
+        Case {
+            name: "insert returning",
+            input: "INSERT INTO t VALUES (1) RETURNING id",
+            expect: &[
+                (Pg, "Write None read-only Class(Write)"),
+                (MySql, "Write None read-only Class(Write)"),
+                (MariaDb, "Write None read-only Class(Write)"),
+            ],
+        },
     ]
 }

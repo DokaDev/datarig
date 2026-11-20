@@ -1,4 +1,5 @@
 use super::*;
+use crate::sql::dialect::DollarQuotes;
 
 /// shop.users (id PK, email UQ), shop.orders (id PK, user_id FK), shop.order_items (order_id,
 /// product_id: composite PK; order_id FK, product_id FK), shop.pairs (a, b: composite UQ).
@@ -343,8 +344,7 @@ fn named(schema: &str, table: &str, column: &str) -> Option<ColumnOrigin> {
 const MY: Dialect = Dialect::MySql(crate::sql::dialect::MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: false,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 });
 

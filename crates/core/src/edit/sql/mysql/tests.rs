@@ -2,6 +2,7 @@ use super::*;
 use crate::driver::structure::{Collation, ColumnFill, StructureColumn};
 use crate::driver::{Cell, ValueKind};
 use crate::edit::{Choice, Duplicates, EditBatch, EditTarget, Facts, Identity, plan};
+use crate::sql::risk::mysql::Judge;
 use std::collections::{BTreeMap, BTreeSet};
 
 const MY: MySql = MySql(MySqlEdit { nowait: true });
@@ -202,6 +203,6 @@ fn the_counts_of_rows_found_by_values_are_on_the_allowlist_of_a_count() {
     let counts = crate::edit::count_statements(&t, &b, &MY, &whole).unwrap();
     assert_eq!(counts.len(), 2);
     for (_, sql) in counts {
-        assert_eq!(crate::sql::risk::mysql::repeatable(&sql, MySqlMode::default()), Ok(()), "{sql}");
+        assert_eq!(crate::sql::risk::mysql::repeatable(&sql, Judge::mysql(MySqlMode::default())), Ok(()), "{sql}");
     }
 }

@@ -1,25 +1,22 @@
 use super::*;
-use crate::sql::dialect::MySqlMode;
+use crate::sql::dialect::{DollarQuotes, MySqlMode};
 
 const ESC: Dialect = Dialect::MySql(MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: false,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 });
 const NBE: Dialect = Dialect::MySql(MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: true,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 });
 const ANSI: Dialect = Dialect::MySql(MySqlMode {
     ansi_quotes: true,
     no_backslash_escapes: true,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 });
 

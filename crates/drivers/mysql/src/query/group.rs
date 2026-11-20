@@ -42,7 +42,7 @@ pub(super) async fn group_count(
     sql: &str,
     limit: Option<Duration>,
 ) -> Result<(Result<GroupCounts, DbError>, bool), Stop> {
-    if let Err(why) = risk::repeatable(sql, s.mode) {
+    if let Err(why) = risk::repeatable(sql, s.judge()) {
         return Ok((Err(DbError::NotRepeatable(why)), false));
     }
     let was_open = open_before(conn, link, s).await?;

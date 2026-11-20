@@ -103,9 +103,9 @@ use datarig_core::driver::{
     OwnSession, PagingMode, ServerEnd, SessionValues, StatementInfo, TxOutcome, TxRule, TxStep,
 };
 use datarig_core::engine::ServerFacts;
-use datarig_core::sql::dialect::{Dialect, MySqlMode};
+use datarig_core::sql::dialect::Dialect;
 use datarig_core::sql::lexer::{Tok, Token, lex_in};
-use datarig_core::sql::risk::mysql as risk;
+use datarig_core::sql::risk::mysql::{self as risk, Judge};
 use datarig_core::sql::risk::repeat::NotRepeatable;
 use datarig_core::sql::risk::{Class, Danger, Risk};
 use futures::future::BoxFuture;
@@ -206,8 +206,8 @@ struct Env<'a> {
 /// What statements change in the session, as the server confirmed it.
 struct State {
     tracked: Tracked,
-    /// The mode last reported to the app (`DbEvent::Language`).
-    mode: MySqlMode,
+    /// The dialect and sql mode last reported to the app (`DbEvent::Language`).
+    dialect: Dialect,
     /// What the values are read in, as last reported to the app (`DbEvent::SessionValues`).
     values: Option<SessionValues>,
     /// The isolation level as last reported to the app (`DbEvent::Isolation`).
@@ -224,6 +224,13 @@ struct State {
     /// The request being served (a run, an `EndTx`, a count), whose id a server's end of the
     /// transaction is said with ([`DbEvent::TxClosedBy`]).
     request: u64,
+}
+
+impl State {
+    /// How the classifier judges the session's text: its engine's lists, in its sql mode.
+    fn judge(&self) -> Judge {
+        crate::engine::risk_judge(self.dialect)
+    }
 }
 
 /// `sql_select_limit`: what the session has now (`None`: none), and what the user set
@@ -474,7 +481,7 @@ pub(crate) async fn query_loop(
         server,
         facts: &facts,
     };
-    let mode = tracked.mode(&server);
+    let dialect = crate::engine::dialect(&server, tracked.mode(&server));
     let values = tracked.values();
     let isolation = tracked.isolation();
     let autocommit = tracked.autocommit != Some(false);
@@ -482,7 +489,7 @@ pub(crate) async fn query_loop(
     let tracked = Tracked { select_limit: None, ..tracked };
     let mut s = State {
         tracked,
-        mode,
+        dialect,
         values,
         isolation,
         routine: false,
@@ -810,8 +817,8 @@ async fn not_undone(
     s: &State,
     sql: &str,
 ) -> Result<Option<Vec<String>>, Closed> {
-    let Some(names) = risk::named(sql, s.mode) else { return Ok(None) };
-    let ask = not_undone_sql(&names, Dialect::MySql(s.mode), env.server.mariadb);
+    let Some(names) = risk::named(sql, s.judge()) else { return Ok(None) };
+    let ask = not_undone_sql(&names, s.dialect, env.server.mariadb);
     env.busy.store(true, Ordering::SeqCst);
     let answer = link.guard(Some(env.killer), conn.query::<String, _>(ask)).await?;
     idle(env, link).await;
@@ -897,8 +904,8 @@ async fn statement<'a>(
     sql: &str,
     step: Step,
 ) -> Result<Option<(Reply<'a>, Outcome)>, Halted<'a>> {
-    let risk = risk::classify(sql, s.mode);
-    s.routine = runs_server_code(sql, s.mode, risk.runs_code);
+    let risk = risk::classify(sql, s.judge());
+    s.routine = runs_server_code(sql, s.dialect, risk.runs_code);
     // A read-only session runs only what the app's read-only policy lets through (the app
     // refuses the rest first): the server's read-only stops writes, not a procedure or an
     // executable comment that turns it off, writes, and turns it on again.
@@ -937,7 +944,7 @@ async fn statement<'a>(
     // too long) is undone and checked as one that runs: its names cannot be read either, so it is
     // not sent.
     let unread = matches!(risk.danger, Some(Danger::ExecutableComment | Danger::TooComplex));
-    let undo = (explains(sql, s.mode) && (risk.rolls_back() || unread)).then(|| Undo::of(s.tx.open));
+    let undo = (explains(sql, s.dialect) && (risk.rolls_back() || unread)).then(|| Undo::of(s.tx.open));
     // A write measured by `EXPLAIN ANALYZE` is undone by the rollback only on transactional
     // tables: the others are asked about first.
     let mut not_undone_on = Vec::new();
@@ -967,9 +974,9 @@ async fn statement<'a>(
     let held = step.last
         && (step.hold
             || s.tx.open
-            || lists(sql, s.mode)
-            || locking(sql, s.mode)
-            || (limit_applies(sql, s.mode) && !pages_plainly(&risk, sql, s.mode)));
+            || lists(sql, s.dialect)
+            || locking(sql, s.dialect)
+            || (limit_applies(sql, s.dialect) && !pages_plainly(&risk, sql, s.dialect)));
     // The limit: a page and one row more (within the result's cap: [`page_want`]), and the rows
     // a `Resume` skips, for a last statement not held; the cap (and the rows skipped) for a held
     // one that has one, so the server reads no row past it either; else the user's own. Never
@@ -993,14 +1000,14 @@ async fn statement<'a>(
         (Some(now), Some(want)) => now >= want,
         (Some(_), None) => false,
     };
-    let skip = keeps && reads_outcome(sql, s.mode);
+    let skip = keeps && reads_outcome(sql, s.dialect);
     // A result with a cap is never read past it: one whose statement keeps a limit that does
     // not stop it there (or none) is not sent.
-    if step.cap.is_some() && skip && wanted != s.limit.current && limit_applies(sql, s.mode) {
+    if step.cap.is_some() && skip && wanted != s.limit.current && limit_applies(sql, s.dialect) {
         reply.fail(DbError::CappedOutcome, false);
         return Ok(None);
     }
-    if limit_applies(sql, s.mode) && wanted != s.limit.current && !skip {
+    if limit_applies(sql, s.dialect) && wanted != s.limit.current && !skip {
         let set = format!("SET SESSION sql_select_limit = {}", wanted.map_or("DEFAULT".to_string(), |n| n.to_string()));
         if let Err(e) = halt!(link.guard(None, conn.query_drop(set)).await, Some(reply)) {
             return failed(conn, link, env, s, reply, &e, false, false).await;
@@ -1013,8 +1020,8 @@ async fn statement<'a>(
     // of it is its end, read rather than stopped.
     let bounded = match step.cap {
         Some(cap) => {
-            limit_applies(sql, s.mode)
-                && !own_limit(sql, s.mode)
+            limit_applies(sql, s.dialect)
+                && !own_limit(sql, s.dialect)
                 && s.limit.current.is_some_and(|now| now <= cap.saturating_add(step.skip))
         }
         None => false,
@@ -1042,7 +1049,7 @@ async fn statement<'a>(
     }
     // Only what is sent may set the next transaction's own settings: a statement refused before
     // it was sent sets nothing.
-    s.sets_next = sets_next_transaction(sql, s.mode);
+    s.sets_next = sets_next_transaction(sql, s.dialect);
     let sent = halt!(link.guard(Some(env.killer), conn.query_iter(sql)).await, Some(reply));
     let mut qr = match sent {
         Ok(qr) => qr,
@@ -1056,7 +1063,7 @@ async fn statement<'a>(
     };
     let got = match qr.columns().filter(|c| !c.is_empty()) {
         None => {
-            let outcome = outcome_of(sql, s.mode, qr.affected_rows());
+            let outcome = outcome_of(sql, s.dialect, qr.affected_rows());
             let mut info = info_of(&qr);
             // A procedure's further result sets (none have rows here, or they would be first).
             match halt!(link.guard(Some(env.killer), rest(&mut qr)).await, Some(reply)) {
@@ -1112,7 +1119,7 @@ async fn statement<'a>(
                     return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
                 }
             }
-            Got::Done { outcome: Outcome::Command(command_tag(sql, s.mode).0), info }
+            Got::Done { outcome: Outcome::Command(command_tag(sql, s.dialect).0), info }
         }
         Some(columns) => {
             // The rows a `Resume` has already, read and dropped.
@@ -1346,9 +1353,9 @@ async fn after(
         let limit = limit_value(&v);
         s.limit = Limit { current: limit, user: limit };
     }
-    let mode = s.tracked.mode(&env.server);
-    if mode != s.mode {
-        s.mode = mode;
+    let dialect = crate::engine::dialect(&env.server, s.tracked.mode(&env.server));
+    if dialect != s.dialect {
+        s.dialect = dialect;
         let _ = env.events.send(DbEvent::Language(crate::engine::derive(env.facts, &s.tracked).language));
     }
     let values = s.tracked.values();
@@ -1361,7 +1368,7 @@ async fn after(
     if let Some(st) = status {
         let open = st.contains(StatusFlags::SERVER_STATUS_IN_TRANS);
         let was_open = s.tx.open;
-        let switches = ok && (implicit_commit || chains(sql, s.mode));
+        let switches = ok && (implicit_commit || chains(sql, s.dialect));
         let chained = was_open && open && switches;
         // The transaction the run opened is not the one open any more, or may not be (a
         // procedure that commits and starts another): the run's end never rolls back what is
@@ -1391,7 +1398,7 @@ async fn after(
         // is set to meanwhile; the next one starts in the session's (or the one `SET
         // TRANSACTION` without `SESSION` set for it). `COMMIT AND CHAIN` starts the next one in
         // the level of the one it ended.
-        if !(chained && chains(sql, s.mode)) {
+        if !(chained && chains(sql, s.dialect)) {
             if was_open && (!open || chained) {
                 s.tracked.transaction_ended();
             }
@@ -1402,7 +1409,7 @@ async fn after(
         s.tx.open = open;
         // A transaction started or ended (a `COMMIT` or `ROLLBACK` with none open too): the
         // settings the next one had of its own were used up or cleared.
-        if open != was_open || switches || (ok && begins_or_ends(sql, s.mode)) {
+        if open != was_open || switches || (ok && begins_or_ends(sql, s.dialect)) {
             s.tracked.next_once = false;
         }
         let autocommit = st.contains(StatusFlags::SERVER_STATUS_AUTOCOMMIT);
@@ -1859,28 +1866,20 @@ fn send_info(env: &Env<'_>, id: u64, index: usize, info: &StatementInfo) {
     }
 }
 
-/// The words of `sql` (keywords and names, upper case), in MySQL mode `mode`.
-fn words(sql: &str, mode: MySqlMode) -> Vec<String> {
-    lex_in(sql, Dialect::MySql(mode))
-        .into_iter()
-        .filter(Token::is_word)
-        .map(|t| t.text(sql).to_ascii_uppercase())
-        .collect()
+/// The words of `sql` (keywords and names, upper case), in dialect `d`.
+fn words(sql: &str, d: Dialect) -> Vec<String> {
+    lex_in(sql, d).into_iter().filter(Token::is_word).map(|t| t.text(sql).to_ascii_uppercase()).collect()
 }
 
-/// The first word of `sql` (upper case), in MySQL mode `mode`: `None` when it does not start with
+/// The first word of `sql` (upper case), in dialect `d`: `None` when it does not start with
 /// one (an executable comment, a parenthesis).
-fn first_word(sql: &str, mode: MySqlMode) -> Option<String> {
-    lex_in(sql, Dialect::MySql(mode))
-        .into_iter()
-        .find(|t| !t.is_trivia())
-        .filter(Token::is_word)
-        .map(|t| t.text(sql).to_ascii_uppercase())
+fn first_word(sql: &str, d: Dialect) -> Option<String> {
+    lex_in(sql, d).into_iter().find(|t| !t.is_trivia()).filter(Token::is_word).map(|t| t.text(sql).to_ascii_uppercase())
 }
 
 /// Whether `sql` is an `EXPLAIN` (or `DESCRIBE`/`DESC`, its other names).
-fn explains(sql: &str, mode: MySqlMode) -> bool {
-    matches!(first_word(sql, mode).as_deref(), Some("EXPLAIN" | "DESCRIBE" | "DESC"))
+fn explains(sql: &str, d: Dialect) -> bool {
+    matches!(first_word(sql, d).as_deref(), Some("EXPLAIN" | "DESCRIBE" | "DESC"))
 }
 
 /// Whether the session's `sql_select_limit` applies to `sql`, from its first word: a query
@@ -1889,18 +1888,18 @@ fn explains(sql: &str, mode: MySqlMode) -> bool {
 /// set: any other statement keeps the diagnostics of the one before (`SHOW WARNINGS` lists the
 /// warnings of the last statement that is not a diagnostic one, and a `SET` of the session's
 /// would be).
-fn limit_applies(sql: &str, mode: MySqlMode) -> bool {
-    match first_word(sql, mode) {
+fn limit_applies(sql: &str, d: Dialect) -> bool {
+    match first_word(sql, d) {
         None => true,
-        Some(w) => matches!(w.as_str(), "SELECT" | "WITH" | "TABLE" | "VALUES") || lists(sql, mode),
+        Some(w) => matches!(w.as_str(), "SELECT" | "WITH" | "TABLE" | "VALUES") || lists(sql, d),
     }
 }
 
 /// Whether `sql` has a `LIMIT` of its own outside parentheses: it wins over `sql_select_limit`,
 /// so the session's limit does not stop its result.
-fn own_limit(sql: &str, mode: MySqlMode) -> bool {
+fn own_limit(sql: &str, d: Dialect) -> bool {
     let mut depth = 0usize;
-    lex_in(sql, Dialect::MySql(mode)).iter().any(|t| {
+    lex_in(sql, d).iter().any(|t| {
         match t.kind {
             Tok::LParen => depth += 1,
             Tok::RParen => depth = depth.saturating_sub(1),
@@ -1913,8 +1912,8 @@ fn own_limit(sql: &str, mode: MySqlMode) -> bool {
 /// Whether `sql` is a listing the server cuts at `sql_select_limit` (`SHOW` but its diagnostics,
 /// `DESCRIBE`/`DESC` of a table, not of a statement: that is an `EXPLAIN`): it is read without
 /// the page limit, to its end.
-fn lists(sql: &str, mode: MySqlMode) -> bool {
-    let w = words(sql, mode);
+fn lists(sql: &str, d: Dialect) -> bool {
+    let w = words(sql, d);
     match w.first().map(String::as_str) {
         Some("DESCRIBE" | "DESC") => !matches!(
             w.get(1).map(String::as_str),
@@ -1939,8 +1938,8 @@ fn lists(sql: &str, mode: MySqlMode) -> bool {
 
 /// Whether `sql` reads what the statement before it did (`ROW_COUNT()`, `FOUND_ROWS()`).
 /// A call of the function, not a name spelled so (a column `row_count`).
-fn reads_outcome(sql: &str, mode: MySqlMode) -> bool {
-    let toks: Vec<Token> = lex_in(sql, Dialect::MySql(mode)).into_iter().filter(|t| !t.is_trivia()).collect();
+fn reads_outcome(sql: &str, d: Dialect) -> bool {
+    let toks: Vec<Token> = lex_in(sql, d).into_iter().filter(|t| !t.is_trivia()).collect();
     toks.windows(2).any(|w| {
         w[0].is_word()
             && matches!(w[0].text(sql).to_ascii_uppercase().as_str(), "ROW_COUNT" | "FOUND_ROWS")
@@ -1955,17 +1954,17 @@ fn reads_outcome(sql: &str, mode: MySqlMode) -> bool {
 /// function, which would run for the rows up to the limit only, an `EXECUTE`, an executable
 /// comment), or that the classifier cannot read: such a statement runs without the app's limit
 /// and its result is read to its end.
-fn pages_plainly(r: &Risk, sql: &str, mode: MySqlMode) -> bool {
+fn pages_plainly(r: &Risk, sql: &str, d: Dialect) -> bool {
     r.class == Class::Read
         && !r.writes
         && !r.read_write
         && r.read_only().is_ok()
-        && !runs_server_code(sql, mode, r.runs_code)
+        && !runs_server_code(sql, d, r.runs_code)
 }
 
 /// Whether `sql` reads with a locking clause (`FOR UPDATE`, `FOR SHARE`, `LOCK IN SHARE MODE`).
-fn locking(sql: &str, mode: MySqlMode) -> bool {
-    let w = words(sql, mode);
+fn locking(sql: &str, d: Dialect) -> bool {
+    let w = words(sql, d);
     w.windows(2).any(|p| p[0] == "FOR" && (p[1] == "UPDATE" || p[1] == "SHARE"))
         || w.windows(4).any(|p| p == ["LOCK", "IN", "SHARE", "MODE"])
 }
@@ -1982,16 +1981,16 @@ fn report_isolation(env: &Env<'_>, s: &mut State) {
 
 /// Whether `sql` ends the transaction and opens another at once: `COMMIT`/`ROLLBACK … AND CHAIN`
 /// (not `AND NO CHAIN`).
-fn chains(sql: &str, mode: MySqlMode) -> bool {
-    let w = words(sql, mode);
+fn chains(sql: &str, d: Dialect) -> bool {
+    let w = words(sql, d);
     matches!(w.first().map(String::as_str), Some("COMMIT" | "ROLLBACK"))
         && w.windows(2).any(|p| p[0] == "AND" && p[1] == "CHAIN")
 }
 
 /// The command a statement without rows ran, as its outcome names it (`CREATE TABLE`, `SET`), and
 /// whether its count is of rows it changed (`INSERT`, `UPDATE`, `DELETE`, `REPLACE`, `LOAD`).
-pub(crate) fn command_tag(sql: &str, mode: MySqlMode) -> (String, bool) {
-    let words = words(sql, mode);
+pub(crate) fn command_tag(sql: &str, d: Dialect) -> (String, bool) {
+    let words = words(sql, d);
     let Some(first) = words.first() else { return (String::new(), false) };
     let dml = |w: &str| matches!(w, "INSERT" | "UPDATE" | "DELETE" | "REPLACE" | "LOAD");
     if dml(first) {
@@ -2033,8 +2032,8 @@ pub(crate) fn command_tag(sql: &str, mode: MySqlMode) -> (String, bool) {
 }
 
 /// The outcome of a statement without rows that changed `affected` rows.
-fn outcome_of(sql: &str, mode: MySqlMode, affected: u64) -> Outcome {
-    let (tag, dml) = command_tag(sql, mode);
+fn outcome_of(sql: &str, d: Dialect, affected: u64) -> Outcome {
+    let (tag, dml) = command_tag(sql, d);
     if dml { Outcome::Affected(affected) } else { Outcome::Command(tag) }
 }
 
@@ -2078,11 +2077,11 @@ async fn asked_server(
     s: &mut State,
     sql: &str,
 ) -> Result<Result<Asked, DbError>, Closed> {
-    let names = match risk::names(sql, s.mode) {
+    let names = match risk::names(sql, s.judge()) {
         Ok(names) => names,
         Err(why) => return Ok(Err(DbError::NotRepeatable(why))),
     };
-    let ask = check_sql(&names, Dialect::MySql(s.mode), &env.server);
+    let ask = check_sql(&names, s.dialect, &env.server);
     env.busy.store(true, Ordering::SeqCst);
     type Answer = (Option<String>, Option<String>, Option<String>, Option<String>, Option<String>);
     let answer = match ask.as_slice() {
@@ -2331,18 +2330,18 @@ pub(crate) enum SetsNext {
 /// ([`sets_next_isolation`], [`sets_next_access`]), or whether it may ([`SetsNext::Maybe`]: a
 /// `CALL`, an `EXECUTE` of a prepared text, an executable comment `/*! … */`, whose text is not
 /// read). A stored function cannot: the statement that calls it is a transaction already.
-pub(crate) fn sets_next_transaction(sql: &str, mode: MySqlMode) -> SetsNext {
-    if mode.mariadb && mariadb_skips_all(sql) {
+pub(crate) fn sets_next_transaction(sql: &str, d: Dialect) -> SetsNext {
+    if crate::engine::skips_mysql_version_comments(d) && mariadb_skips_all(sql) {
         return SetsNext::No;
     }
-    let toks = set_tokens(sql, mode);
+    let toks = set_tokens(sql, d);
     if toks.iter().any(|t| t.kind == Tok::ExecComment) {
         return SetsNext::Maybe;
     }
-    if matches!(first_word(sql, mode).as_deref(), Some("CALL" | "EXECUTE")) {
+    if matches!(first_word(sql, d).as_deref(), Some("CALL" | "EXECUTE")) {
         return SetsNext::Maybe;
     }
-    if sets_next_isolation(sql, mode) || sets_next_access(sql, mode) { SetsNext::Yes } else { SetsNext::No }
+    if sets_next_isolation(sql, d) || sets_next_access(sql, d) { SetsNext::Yes } else { SetsNext::No }
 }
 
 /// Whether MariaDB runs none of `sql`: the whole text (blanks around it aside) is one
@@ -2364,28 +2363,28 @@ fn mariadb_skips_all(sql: &str) -> bool {
 /// `TRANSACTION`), or an assignment to the variable by its `@@` name without a scope
 /// (`SET @@transaction_isolation = …`, `@@tx_isolation`, `` @@`transaction_isolation` ``).
 /// Reading it (`SET @a = @@transaction_isolation`) sets nothing.
-pub(crate) fn sets_next_isolation(sql: &str, mode: MySqlMode) -> bool {
-    sets_next(sql, mode, &[&["ISOLATION"]], &["@@transaction_isolation", "@@tx_isolation"])
+pub(crate) fn sets_next_isolation(sql: &str, d: Dialect) -> bool {
+    sets_next(sql, d, &[&["ISOLATION"]], &["@@transaction_isolation", "@@tx_isolation"])
 }
 
 /// Whether `sql` sets the access mode of the next transaction only: `SET TRANSACTION READ ONLY`
 /// or `READ WRITE` (no `SESSION` nor `GLOBAL`), or an assignment to `@@transaction_read_only`
 /// (`@@tx_read_only`) without a scope.
-pub(crate) fn sets_next_access(sql: &str, mode: MySqlMode) -> bool {
+pub(crate) fn sets_next_access(sql: &str, d: Dialect) -> bool {
     // `READ COMMITTED` and `READ UNCOMMITTED` are isolation levels.
-    sets_next(sql, mode, &[&["READ", "ONLY"], &["READ", "WRITE"]], &["@@transaction_read_only", "@@tx_read_only"])
+    sets_next(sql, d, &[&["READ", "ONLY"], &["READ", "WRITE"]], &["@@transaction_read_only", "@@tx_read_only"])
 }
 
 /// The tokens of `sql`, without trivia.
-fn set_tokens(sql: &str, mode: MySqlMode) -> Vec<Token> {
-    lex_in(sql, Dialect::MySql(mode)).into_iter().filter(|t| !t.is_trivia()).collect()
+fn set_tokens(sql: &str, d: Dialect) -> Vec<Token> {
+    lex_in(sql, d).into_iter().filter(|t| !t.is_trivia()).collect()
 }
 
 /// Whether `sql` is `SET TRANSACTION …` naming a characteristic by one of the word sequences
 /// `words` (`ISOLATION`; `READ ONLY`, `READ WRITE`), or a `SET` whose assignments' targets
 /// include one of `names` (lower case, `@@` without a scope).
-fn sets_next(sql: &str, mode: MySqlMode, words: &[&[&str]], names: &[&str]) -> bool {
-    let toks = set_tokens(sql, mode);
+fn sets_next(sql: &str, d: Dialect, words: &[&[&str]], names: &[&str]) -> bool {
+    let toks = set_tokens(sql, d);
     let upper = |i: usize| toks.get(i).filter(|t| t.is_word()).map(|t| t.text(sql).to_ascii_uppercase());
     if upper(0).as_deref() != Some("SET") {
         return false;
@@ -2437,8 +2436,8 @@ fn sets_next(sql: &str, mode: MySqlMode, words: &[&[&str]], names: &[&str]) -> b
 /// Whether `sql` starts or ends a transaction by its first word (`START TRANSACTION`, `BEGIN`,
 /// `COMMIT`, `ROLLBACK`): with none open, a `COMMIT` or `ROLLBACK` still clears the settings the
 /// next transaction had of its own.
-fn begins_or_ends(sql: &str, mode: MySqlMode) -> bool {
-    matches!(first_word(sql, mode).as_deref(), Some("START" | "BEGIN" | "COMMIT" | "ROLLBACK"))
+fn begins_or_ends(sql: &str, d: Dialect) -> bool {
+    matches!(first_word(sql, d).as_deref(), Some("START" | "BEGIN" | "COMMIT" | "ROLLBACK"))
 }
 
 /// A read of the app's own outside a transaction (`open`: one was open before it) while the next
@@ -2542,7 +2541,7 @@ async fn count(
     sql: &str,
     limit: Option<Duration>,
 ) -> Result<(Result<u64, DbError>, bool), Stop> {
-    if let Err(why) = risk::repeatable(sql, s.mode) {
+    if let Err(why) = risk::repeatable(sql, s.judge()) {
         return Ok((Err(DbError::NotRepeatable(why)), false));
     }
     let was_open = open_before(conn, link, s).await?;
@@ -2714,7 +2713,7 @@ async fn estimate(
     let Some(format) = crate::engine::derive(env.facts, &s.tracked).explain else {
         return Ok(Err(DbError::NotSupported));
     };
-    if let Err(why) = risk::repeatable(sql, s.mode) {
+    if let Err(why) = risk::repeatable(sql, s.judge()) {
         return Ok(Err(DbError::NotRepeatable(why)));
     }
     if open_before(conn, link, s).await? {
@@ -2769,10 +2768,10 @@ mod tests;
 /// so (see [`State::routine`]): `runs_code` (a `CALL`, a stored function), an `EXECUTE` (the
 /// prepared text is not read), or an executable comment (`/*! CALL p() */`, whose text the
 /// classifier reads as a comment).
-fn runs_server_code(sql: &str, mode: MySqlMode, runs_code: bool) -> bool {
+fn runs_server_code(sql: &str, d: Dialect, runs_code: bool) -> bool {
     runs_code
-        || words(sql, mode).first().is_some_and(|w| w == "EXECUTE")
-        || lex_in(sql, Dialect::MySql(mode)).iter().any(|t| t.kind == Tok::ExecComment)
+        || words(sql, d).first().is_some_and(|w| w == "EXECUTE")
+        || lex_in(sql, d).iter().any(|t| t.kind == Tok::ExecComment)
 }
 
 /// A statement that may have run code of the server's was stopped before the session could ask

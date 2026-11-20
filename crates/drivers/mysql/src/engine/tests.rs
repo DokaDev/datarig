@@ -36,16 +36,18 @@ fn derived_answers_per_engine_and_version() {
             let d = derive(&facts(&g, &VersionReport::agreeing(&g), own), &Tracked::default());
             assert_eq!(d.explain, explain, "{g:?}");
             assert_eq!(d.edit, edit, "{g:?}");
-            let mode = MySqlMode { dollar_quotes, mariadb, ..MySqlMode::default() };
-            assert_eq!(d.language, Language::Sql(Dialect::MySql(mode)), "{g:?}");
+            let dollar_quotes = if dollar_quotes { DollarQuotes::Read } else { DollarQuotes::NotRead };
+            let mode = MySqlMode { dollar_quotes, ..MySqlMode::default() };
+            let dialect = if mariadb { Dialect::MariaDb(mode) } else { Dialect::MySql(mode) };
+            assert_eq!(d.language, Language::Sql(dialect), "{g:?}");
         }
     }
     // The session's sql mode is the session's: the server's answers stay.
     let tracked = Tracked { sql_mode: Some("ANSI_QUOTES,NO_BACKSLASH_ESCAPES".into()), ..Tracked::default() };
     let g = maria(11, 4, 13);
     let d = derive(&facts(&g, &VersionReport::agreeing(&g), Some(true)), &tracked);
-    let mode = MySqlMode { ansi_quotes: true, no_backslash_escapes: true, mariadb: true, ..MySqlMode::default() };
-    assert_eq!(d.language, Language::Sql(Dialect::MySql(mode)));
+    let mode = MySqlMode { ansi_quotes: true, no_backslash_escapes: true, ..MySqlMode::default() };
+    assert_eq!(d.language, Language::Sql(Dialect::MariaDb(mode)));
     assert_eq!((d.explain, d.edit), (None, None));
 }
 

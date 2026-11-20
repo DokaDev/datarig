@@ -1,4 +1,5 @@
 use super::*;
+use crate::sql::dialect::DollarQuotes;
 use crate::sql::risk::classify;
 
 const PG: Language = Language::Sql(Dialect::Postgres);
@@ -193,8 +194,7 @@ fn where_statements_run_on_mysql() {
     let mode = MySqlMode {
         ansi_quotes: false,
         no_backslash_escapes: false,
-        dollar_quotes: false,
-        mariadb: false,
+        dollar_quotes: DollarQuotes::NotRead,
         ignore_space: false,
     };
     let c = Classifier::new(Language::Sql(Dialect::MySql(mode)));
@@ -260,23 +260,22 @@ fn where_statements_run_on_mysql() {
     }
 }
 
-/// Every sql mode, the `mariadb` flag set or not.
+/// Every sql mode.
 fn every_mode() -> Vec<MySqlMode> {
-    (0..32u8)
+    (0..16u8)
         .map(|b| MySqlMode {
             ansi_quotes: b & 1 != 0,
             no_backslash_escapes: b & 2 != 0,
-            dollar_quotes: b & 4 != 0,
-            mariadb: b & 8 != 0,
-            ignore_space: b & 16 != 0,
+            dollar_quotes: if b & 4 != 0 { DollarQuotes::Read } else { DollarQuotes::NotRead },
+            ignore_space: b & 8 != 0,
         })
         .collect()
 }
 
-/// A MariaDB classifier answers every question as the MySQL one of the same mode: the mode's
-/// `mariadb` flag picks the calls MariaDB has.
+/// A MariaDB classifier answers every question as MySQL's classifier on MariaDB's lists, and a
+/// MySQL one on MySQL's, in the same mode: each forwards to the judge of its engine.
 #[test]
-fn a_mariadb_classifier_is_the_flagged_mysql_one() {
+fn each_family_classifier_judges_on_its_engines_lists() {
     let texts = [
         "SELECT 1",
         "SELECT * FROM t ORDER BY a",
@@ -313,31 +312,24 @@ fn a_mariadb_classifier_is_the_flagged_mysql_one() {
     for mode in every_mode() {
         let mysql = Classifier::new(Language::Sql(Dialect::MySql(mode)));
         let mariadb = Classifier::new(Language::Sql(Dialect::MariaDb(mode)));
-        assert_eq!(mariadb, Classifier::MariaDb(mode));
+        assert_eq!(mysql, Classifier::MySql(mode, Judged::Own));
+        assert_eq!(mariadb, Classifier::MariaDb(mode, Judged::Own));
         assert_eq!(mariadb.language(), Language::Sql(Dialect::MariaDb(mode)));
-        for sql in texts {
-            let at = format!("{sql:?} in {mode:?}");
-            assert_eq!(mariadb.clone().classify(sql), mysql.clone().classify(sql), "{at}");
-            assert_eq!(
-                Classifier::classify_once(mariadb.language(), sql),
-                Classifier::classify_once(mysql.language(), sql),
-                "{at}"
-            );
-            assert_eq!(mariadb.repeatable(sql), mysql.repeatable(sql), "{at}");
-            assert_eq!(mariadb.reads_zone(sql), mysql.reads_zone(sql), "{at}");
-            assert_eq!(mariadb.ordered(sql), mysql.ordered(sql), "{at}");
-            assert_eq!(mariadb.tx_step(sql), mysql.tx_step(sql), "{at}");
-            assert_eq!(mariadb.count_query(sql), mysql.count_query(sql), "{at}");
-            assert_eq!(mariadb.knows(sql), mysql.knows(sql), "{at}");
-            assert_eq!(
-                Classifier::session_set(mariadb.language(), sql),
-                Classifier::session_set(mysql.language(), sql),
-                "{at}"
-            );
-            let (mut a, mut b) = (mariadb.clone(), mysql.clone());
-            a.forget(sql);
-            b.forget(sql);
-            assert_eq!((a, b), (mariadb.clone(), mysql.clone()), "{at}");
+        for (c, judge) in [(&mysql, Judge::mysql(mode)), (&mariadb, Judge::mariadb(mode))] {
+            for sql in texts {
+                let at = format!("{sql:?} in {:?}", c.language());
+                assert_eq!(c.clone().classify(sql), mysql::classify(sql, judge), "{at}");
+                assert_eq!(Classifier::classify_once(c.language(), sql), mysql::classify(sql, judge), "{at}");
+                assert_eq!(c.repeatable(sql), mysql::repeatable(sql, judge), "{at}");
+                assert_eq!(c.reads_zone(sql), mysql::reads_zone(sql, judge), "{at}");
+                assert_eq!(c.ordered(sql), mysql::ordered(sql, judge), "{at}");
+                assert_eq!(c.count_query(sql), mysql::count_query(sql, judge), "{at}");
+                assert!(!c.knows(sql), "{at}");
+                assert_eq!(Classifier::session_set(c.language(), sql), mysql::session_set(sql), "{at}");
+                let mut forgot = c.clone();
+                forgot.forget(sql);
+                assert_eq!(&forgot, c, "{at}");
+            }
         }
     }
 }

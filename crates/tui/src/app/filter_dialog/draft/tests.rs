@@ -1,13 +1,12 @@
 use super::*;
 use datarig_core::query::{ColumnFacts, TableName};
-use datarig_core::sql::dialect::MySqlMode;
+use datarig_core::sql::dialect::{DollarQuotes, MySqlMode};
 
 const PG: Dialect = Dialect::Postgres;
 const MY: Dialect = Dialect::MySql(MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: false,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 });
 

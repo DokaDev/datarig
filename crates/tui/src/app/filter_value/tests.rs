@@ -1,11 +1,11 @@
 use super::*;
 use datarig_core::driver::SessionValues;
+use datarig_core::sql::dialect::DollarQuotes;
 
 const MY: Dialect = Dialect::MySql(datarig_core::sql::dialect::MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: false,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 });
 

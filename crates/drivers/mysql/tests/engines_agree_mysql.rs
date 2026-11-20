@@ -22,7 +22,7 @@ use datarig_core::driver::{
 use datarig_core::driver::{EditFormat, ExplainFormat, MySqlEdit, SessionStatement};
 use datarig_core::engine::{EngineId, Fact, ServerFacts, Topology, Version, Why};
 use datarig_core::profile::ConnectionConfig;
-use datarig_core::sql::dialect::{Dialect, Language};
+use datarig_core::sql::dialect::{Dialect, DollarQuotes, Language};
 use datarig_driver_mysql::MyDriver;
 use my_proxy::{Fault, Proxy, upstream};
 use mysql_async::prelude::Queryable;
@@ -299,7 +299,9 @@ fn words(before: &[DbEvent]) -> (Option<ExplainFormat>, Option<EditFormat>, bool
     let explain = before.iter().find_map(|e| if let DbEvent::Explain(f) = e { Some(*f) } else { None });
     let edit = before.iter().find_map(|e| if let DbEvent::Edit(f) = e { Some(*f) } else { None });
     let dollar = before.iter().find_map(|e| match e {
-        DbEvent::Language(Language::Sql(Dialect::MySql(m))) => Some(m.dollar_quotes),
+        DbEvent::Language(Language::Sql(Dialect::MySql(m) | Dialect::MariaDb(m))) => {
+            Some(m.dollar_quotes == DollarQuotes::Read)
+        }
         _ => None,
     });
     (explain.expect("a plan format"), edit.expect("edits"), dollar.expect("a language"))

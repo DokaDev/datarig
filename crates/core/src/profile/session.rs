@@ -113,8 +113,9 @@ impl Dbms {
         }
     }
 
-    /// The language its statements are checked in (MySQL: the default sql mode; the check
-    /// also reads them with `ANSI_QUOTES`).
+    /// The language its statements are checked in (MySQL: MySQL's, in the default sql mode; a
+    /// preset is the family's, and the check also reads it with `ANSI_QUOTES` and on MariaDB's
+    /// lists).
     pub fn language(self) -> Language {
         match self {
             Dbms::Postgres => Language::Sql(Dialect::Postgres),

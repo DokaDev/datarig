@@ -64,7 +64,7 @@ pub(super) async fn export(
     batch: usize,
 ) -> Result<Answer, Stop> {
     env.killer.clear();
-    let r = risk::classify(sql, s.mode);
+    let r = risk::classify(sql, s.judge());
     if env.read_only && (r.read_write || r.read_only().is_err()) {
         return Ok((Err(DbError::ReadWriteRefused), false));
     }
@@ -91,7 +91,7 @@ pub(super) async fn export(
         return Ok((Err(why), false));
     }
     if guard == ExportGuard::Repeatable {
-        if let Err(why) = risk::repeatable(sql, s.mode) {
+        if let Err(why) = risk::repeatable(sql, s.judge()) {
             return Ok((Err(DbError::NotRepeatable(why)), false));
         }
         if let Err(why) = asked_server(conn, link, env, s, sql).await? {
@@ -101,7 +101,7 @@ pub(super) async fn export(
     }
     // No limit of the app's: the user's own, if they set one.
     let wanted = s.limit.user;
-    if limit_applies(sql, s.mode) && wanted != s.limit.current {
+    if limit_applies(sql, s.dialect) && wanted != s.limit.current {
         let set = format!("SET SESSION sql_select_limit = {}", wanted.map_or("DEFAULT".to_string(), |n| n.to_string()));
         if let Err(e) = link.guard(None, conn.query_drop(set)).await? {
             return Ok((Err(my_error(&e)), false));
@@ -110,7 +110,7 @@ pub(super) async fn export(
         s.tracked.select_limit = None;
         s.limit.current = wanted;
     }
-    s.routine = runs_server_code(sql, s.mode, r.runs_code);
+    s.routine = runs_server_code(sql, s.dialect, r.runs_code);
     // Outside the user's transaction it reads in a read-only one of its own: nothing it calls
     // writes, and every row comes from one snapshot, read without locking rows.
     let own = !was_open;

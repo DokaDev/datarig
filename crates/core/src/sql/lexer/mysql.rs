@@ -48,7 +48,7 @@
 //! fails there.
 
 use super::{Cursor, Delimiter, LexState, Tok, Token, is_space};
-use crate::sql::dialect::MySqlMode;
+use crate::sql::dialect::{DollarQuotes, MySqlMode};
 
 /// MySQL's keywords the highlighter shows and completion offers ([`Dialect::keywords`]): the
 /// common ones of MySQL 8.0, 8.4 and 9.x, reserved or not, without the non-reserved words that
@@ -460,7 +460,11 @@ pub(super) fn lex(src: &str, mode: MySqlMode, mut state: LexState) -> Vec<Token>
             lx.cur.bump();
             lx.cur.quoted(c, false);
             Tok::QuotedIdent
-        } else if c == '$' && mode.dollar_quotes && !glued_after_ident(src, start) && lx.dollar_quote(backslash) {
+        } else if c == '$'
+            && mode.dollar_quotes == DollarQuotes::Read
+            && !glued_after_ident(src, start)
+            && lx.dollar_quote(backslash)
+        {
             Tok::Str
         } else if c == '@' {
             lx.variable(mode)

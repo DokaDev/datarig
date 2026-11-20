@@ -6,14 +6,16 @@ include!("corpus.rs");
 const MODE: MySqlMode = MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: false,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 };
-const MARIADB: MySqlMode = MySqlMode { mariadb: true, ..MODE };
+/// MySQL's judge in the default mode.
+const MYSQL: Judge = Judge::mysql(MODE);
+/// MariaDB's judge in the default mode.
+const MARIADB: Judge = Judge::mariadb(MODE);
 
 fn risk(sql: &str) -> Risk {
-    classify(sql, MODE)
+    classify(sql, MYSQL)
 }
 
 /// A risk in the words of the corpus (see `corpus.rs`).
@@ -108,7 +110,7 @@ fn the_corpus_holds_no_statement_twice() {
 fn the_classifier_is_the_one_of_mysql_sessions() {
     let lang = crate::sql::dialect::Language::Sql(Dialect::MySql(MODE));
     let mut c = Classifier::new(lang);
-    assert_eq!(c, Classifier::MySql(MODE));
+    assert_eq!(c, Classifier::MySql(MODE, Judged::Own));
     assert_eq!(c.language(), lang);
     for (sql, _) in CORPUS.iter().take(50) {
         assert_eq!(c.classify(sql), risk(sql), "{sql}");
@@ -119,7 +121,7 @@ fn the_classifier_is_the_one_of_mysql_sessions() {
     assert!(!c.knows("s"));
     assert_eq!(c.classify("EXECUTE s").danger, Some(Danger::UnknownPrepared));
     c.forget("PREPARE s FROM 'SELECT 1'");
-    assert_eq!(c, Classifier::MySql(MODE));
+    assert_eq!(c, Classifier::MySql(MODE, Judged::Own));
 }
 
 #[test]
@@ -197,37 +199,40 @@ fn the_sql_mode_changes_what_is_a_string() {
     let ansi = MySqlMode { ansi_quotes: true, ..MODE };
     let raw = MySqlMode { no_backslash_escapes: true, ..MODE };
     // A quoted name under ANSI_QUOTES, a string otherwise: both reads.
-    assert_eq!(render(&classify("SELECT \"a\" FROM t", ansi)), "read ro");
-    assert_eq!(render(&classify("SELECT \"a\" FROM t", MODE)), "read ro");
+    assert_eq!(render(&classify("SELECT \"a\" FROM t", Judge::mysql(ansi))), "read ro");
+    assert_eq!(render(&classify("SELECT \"a\" FROM t", MYSQL)), "read ro");
     // The server reads no escape in a quoted name: `"a\"` ends there.
-    assert_eq!(render(&classify("SELECT \"a\\\" FROM t; DELETE FROM t\"", ansi)), "unknown unrecognized");
+    assert_eq!(render(&classify("SELECT \"a\\\" FROM t; DELETE FROM t\"", Judge::mysql(ansi))), "unknown unrecognized");
     // Without backslash escapes, `'\'` is a whole string and what follows is code. Whatever
     // mode the app was told, the text is also read in the other: the worse reading counts.
     let text = "SELECT '\\'; DELETE FROM t; -- '";
-    assert_eq!(render(&classify(text, raw)), "write delete-all:missing writes");
-    assert_eq!(render(&classify(text, MODE)), "write delete-all:missing writes");
+    assert_eq!(render(&classify(text, Judge::mysql(raw))), "write delete-all:missing writes");
+    assert_eq!(render(&classify(text, MYSQL)), "write delete-all:missing writes");
     let text = "SELECT * FROM t WHERE b = 'x\\' OR 1 = 1; DELETE FROM t -- '";
-    assert_eq!(classify(text, raw).danger, Some(Danger::DeleteAll));
-    assert_eq!(classify(text, MODE).danger, Some(Danger::DeleteAll));
+    assert_eq!(classify(text, Judge::mysql(raw)).danger, Some(Danger::DeleteAll));
+    assert_eq!(classify(text, MYSQL).danger, Some(Danger::DeleteAll));
     // Another reading the classifier does not know counts: only a syntax error does not.
-    assert_eq!(render(&classify("SELECT 'a\\' , (DELETE FROM t) #'", MODE)), "unknown unrecognized");
-    assert_eq!(render(&classify("SELECT 'a\\' , ? #'", MODE)), "unknown unrecognized");
-    assert_eq!(repeatable("SELECT 'a\\' , (DELETE FROM t) #'", MODE), Err(NotRepeatable::Unreadable));
+    assert_eq!(render(&classify("SELECT 'a\\' , (DELETE FROM t) #'", MYSQL)), "unknown unrecognized");
+    assert_eq!(render(&classify("SELECT 'a\\' , ? #'", MYSQL)), "unknown unrecognized");
+    assert_eq!(repeatable("SELECT 'a\\' , (DELETE FROM t) #'", MYSQL), Err(NotRepeatable::Unreadable));
     // A quoted name with a backslash under ANSI_QUOTES: the lexer would end it elsewhere than
     // the server, so the reading is not known (and is not taken for a syntax error).
-    assert_eq!(render(&classify("SELECT \"a\\\"", ansi)), "unknown unrecognized");
-    assert_eq!(classify_as("SELECT \"a\\\"", ansi).map(|r| r.danger), Some(Some(Danger::Unrecognized)));
-    let r = classify("SELECT 1 FROM t WHERE \"x\\\" = 1; DELETE FROM t", ansi);
+    assert_eq!(render(&classify("SELECT \"a\\\"", Judge::mysql(ansi))), "unknown unrecognized");
+    assert_eq!(classify_as("SELECT \"a\\\"", Judge::mysql(ansi)).map(|r| r.danger), Some(Some(Danger::Unrecognized)));
+    let r = classify("SELECT 1 FROM t WHERE \"x\\\" = 1; DELETE FROM t", Judge::mysql(ansi));
     assert!(r.danger == Some(Danger::Unrecognized) && r.writes && r.read_only().is_err());
     // A reading the server would refuse (an unterminated string) does not count.
-    assert_eq!(render(&classify("SELECT 'it\\'s'", MODE)), "read ro");
-    assert_eq!(render(&classify("SELECT \"it\"\"s\" FROM t", ansi)), "read ro");
+    assert_eq!(render(&classify("SELECT 'it\\'s'", MYSQL)), "read ro");
+    assert_eq!(render(&classify("SELECT \"it\"\"s\" FROM t", Judge::mysql(ansi))), "read ro");
     // Dollar quotes only where the server reads them, and where the driver may be wrong about
     // that, both readings count (a server that reads them refuses such a `SELECT` anyway).
-    let dollar = MySqlMode { dollar_quotes: true, ..MODE };
-    assert_eq!(classify_as("SELECT $$a; DROP TABLE t$$", dollar).map(|r| render(&r)), Some("read ro".into()));
-    assert_eq!(render(&classify("SELECT $$a; DROP TABLE t$$", dollar)), "ddl drop commit");
-    assert_eq!(render(&classify("SELECT $$a; DROP TABLE t$$", MODE)), "ddl drop commit");
+    let dollar = MySqlMode { dollar_quotes: DollarQuotes::Read, ..MODE };
+    assert_eq!(
+        classify_as("SELECT $$a; DROP TABLE t$$", Judge::mysql(dollar)).map(|r| render(&r)),
+        Some("read ro".into())
+    );
+    assert_eq!(render(&classify("SELECT $$a; DROP TABLE t$$", Judge::mysql(dollar))), "ddl drop commit");
+    assert_eq!(render(&classify("SELECT $$a; DROP TABLE t$$", MYSQL)), "ddl drop commit");
 }
 
 #[test]
@@ -371,9 +376,9 @@ fn deep_nesting_is_read_in_linear_time() {
         "WITH {} SELECT 1",
         (0..5000).map(|i| format!("c{i} (x) AS (SELECT 1)")).collect::<Vec<_>>().join(", ")
     );
-    for (text, mode) in [(&calls, MODE), (&cond, MODE), (&ctes, MODE), (&points, MARIADB)] {
+    for (text, judge) in [(&calls, MYSQL), (&cond, MYSQL), (&ctes, MYSQL), (&points, MARIADB)] {
         let start = std::time::Instant::now();
-        let r = classify(text, mode);
+        let r = classify(text, judge);
         assert!(r.danger.is_none() || r.danger == Some(Danger::DeleteAll), "{:?}", r.danger);
         assert!(start.elapsed() < std::time::Duration::from_secs(2), "{:?}", start.elapsed());
     }
@@ -388,8 +393,7 @@ fn no_text_makes_the_classifier_panic() {
         MySqlMode {
             ansi_quotes: true,
             no_backslash_escapes: true,
-            dollar_quotes: true,
-            mariadb: false,
+            dollar_quotes: DollarQuotes::Read,
             ignore_space: false,
         },
     ];
@@ -408,9 +412,9 @@ fn no_text_makes_the_classifier_panic() {
         for &i in &cuts {
             for part in [&text[..i], &text[i..]] {
                 for mode in modes {
-                    let _ = classify_as(part, mode);
-                    let _ = names_as(part, mode);
-                    let _ = without_semicolons(part, mode);
+                    let _ = classify_as(part, Judge::mysql(mode));
+                    let _ = names_as(part, Judge::mysql(mode));
+                    let _ = without_semicolons(part, Judge::mysql(mode));
                 }
             }
         }
@@ -461,7 +465,7 @@ fn functions_mariadb_does_not_provide_are_unchecked_calls_there() {
         if NEWER_THAN_OLDEST.contains(&name) {
             continue;
         }
-        let mysql = classify(&sql, MODE);
+        let mysql = classify(&sql, MYSQL);
         assert!(mysql.unchecked_call.is_none() && !mysql.runs_code && mysql.read_only().is_ok(), "{sql}");
         let maria = classify(&sql, MARIADB);
         assert!(maria.unchecked_call.is_some() && maria.runs_code, "{sql}");
@@ -471,14 +475,14 @@ fn functions_mariadb_does_not_provide_are_unchecked_calls_there() {
     assert!(quoted.unchecked_call.is_some() && quoted.read_only().is_err());
     let r = classify("DO REGEXP_LIKE('a', 'b')", MARIADB);
     assert_eq!((r.class, r.danger), (Class::Procedural, Some(Danger::Procedural)));
-    assert_eq!(render(&classify("DO REGEXP_LIKE('a', 'b')", MODE)), "read ro");
+    assert_eq!(render(&classify("DO REGEXP_LIKE('a', 'b')", MYSQL)), "read ro");
     let r = classify("EXPLAIN ANALYZE SELECT ANY_VALUE(a) FROM t", MARIADB);
     assert_eq!(r.danger, Some(Danger::AnalyzeRunsCode));
     assert_eq!(repeatable("SELECT BIN_TO_UUID(a) FROM t", MARIADB), Err(NotRepeatable::UserFunction));
-    assert_eq!(repeatable("SELECT BIN_TO_UUID(a) FROM t", MODE), Ok(()));
+    assert_eq!(repeatable("SELECT BIN_TO_UUID(a) FROM t", MYSQL), Ok(()));
     // An event's body counts as on the server it is created on.
     let event = "CREATE EVENT e ON SCHEDULE AT CURRENT_TIMESTAMP DO SELECT ANY_VALUE(a) FROM t";
-    assert_eq!(classify(event, MARIADB).danger, classify(event, MODE).danger);
+    assert_eq!(classify(event, MARIADB).danger, classify(event, MYSQL).danger);
     // MariaDB's own functions stay built-ins there.
     for sql in ["SELECT ABS(a), JSON_EXTRACT(j, '$.a'), REGEXP_SUBSTR(b, 'x') FROM t", "SELECT GROUP_CONCAT(b) FROM t"]
     {
@@ -494,16 +498,16 @@ fn functions_mariadb_does_not_provide_are_unchecked_calls_there() {
 /// database. Other built-ins are found by their name, however they are written.
 #[test]
 fn built_ins_count_only_as_the_server_reads_them() {
-    let unchecked = |sql: &str, mode: MySqlMode, name: &str| {
-        let r = classify(sql, mode);
+    let unchecked = |sql: &str, judge: Judge, name: &str| {
+        let r = classify(sql, judge);
         assert!(r.runs_code, "{sql}");
         assert_eq!(r.read_only(), Err(ReadOnlyBlock::UnknownFunction(name.to_string())), "{sql}");
     };
-    let built_in = |sql: &str, mode: MySqlMode| {
-        let r = classify(sql, mode);
+    let built_in = |sql: &str, judge: Judge| {
+        let r = classify(sql, judge);
         assert!(r.unchecked_call.is_none() && !r.runs_code && r.read_only().is_ok(), "{sql}");
     };
-    for mode in [MODE, MARIADB] {
+    for mode in [MYSQL, MARIADB] {
         unchecked("SELECT now ()", mode, "now");
         unchecked("SELECT NOW\n()", mode, "NOW");
         unchecked("SELECT now\t()", mode, "now");
@@ -521,14 +525,14 @@ fn built_ins_count_only_as_the_server_reads_them() {
         built_in("SELECT sum(a) FROM t", mode);
     }
     // Each server's own lists.
-    unchecked("SELECT `coalesce`(a, 1) FROM t", MODE, "`coalesce`");
-    unchecked("SELECT `DATABASE`()", MODE, "`DATABASE`");
+    unchecked("SELECT `coalesce`(a, 1) FROM t", MYSQL, "`coalesce`");
+    unchecked("SELECT `DATABASE`()", MYSQL, "`DATABASE`");
     built_in("SELECT `DATABASE`()", MARIADB);
     built_in("SELECT `coalesce`(a, 1) FROM t", MARIADB);
     unchecked("SELECT rank () OVER (ORDER BY a) FROM t", MARIADB, "rank");
-    built_in("SELECT rank () OVER (ORDER BY a), row_number () OVER (ORDER BY a) FROM t", MODE);
+    built_in("SELECT rank () OVER (ORDER BY a), row_number () OVER (ORDER BY a) FROM t", MYSQL);
     unchecked("SELECT `sysdate`()", MARIADB, "`sysdate`");
-    unchecked("SELECT sysdate ()", MODE, "sysdate");
+    unchecked("SELECT sysdate ()", MYSQL, "sysdate");
     built_in("SELECT sysdate ()", MARIADB);
     // MariaDB reserves neither `LATERAL` nor `OF`: before `(` they name a stored function.
     unchecked("SELECT lateral()", MARIADB, "lateral");
@@ -536,7 +540,7 @@ fn built_ins_count_only_as_the_server_reads_them() {
     // MariaDB's grammar reads `JSON_TABLE` only as the table function with its columns.
     let table = "SELECT * FROM JSON_TABLE('[1]', '$[*]' COLUMNS (a INT PATH '$')) AS jt";
     built_in(table, MARIADB);
-    built_in(table, MODE);
+    built_in(table, MYSQL);
     unchecked("SELECT JSON_TABLE(1)", MARIADB, "JSON_TABLE");
     unchecked("SELECT `JSON_TABLE`('[1]', '$[*]' COLUMNS (a INT PATH '$'))", MARIADB, "`JSON_TABLE`");
     // Only the real clause counts: the path, then `COLUMNS (`. A column or a call named
@@ -552,24 +556,24 @@ fn built_ins_count_only_as_the_server_reads_them() {
     // A column's type with its precision in `JSON_TABLE`'s columns is no call.
     let typed = "SELECT * FROM JSON_TABLE('[1]', '$[*]' COLUMNS (d DATETIME(6) PATH '$', n NCHAR(10) PATH '$', \
                  NESTED PATH '$' COLUMNS (x DECIMAL(10, 2) PATH '$'))) AS jt";
-    built_in(typed, MODE);
+    built_in(typed, MYSQL);
     built_in(typed, MARIADB);
     // MariaDB's geometry constructors are its own quoted too, given their arguments.
     built_in("SELECT `POINT`(1, 2), `LINESTRING`(POINT(0, 0), POINT(1, 1))", MARIADB);
     // Quoted under `ANSI_QUOTES` too.
     let ansi = MySqlMode { ansi_quotes: true, ..MODE };
-    unchecked("SELECT \"now\"()", ansi, "\"now\"");
+    unchecked("SELECT \"now\"()", Judge::mysql(ansi), "\"now\"");
     // With `IGNORE_SPACE` blanks are fine, comments and quotes are not.
-    for mariadb in [false, true] {
-        let ignore = MySqlMode { ignore_space: true, mariadb, ..MODE };
+    let ignore = MySqlMode { ignore_space: true, ..MODE };
+    for ignore in [Judge::mysql(ignore), Judge::mariadb(ignore)] {
         built_in("SELECT now (), NOW\n(), COUNT (*) FROM t", ignore);
         unchecked("SELECT now/**/()", ignore, "now");
         unchecked("SELECT now -- c\n()", ignore, "now");
         unchecked("SELECT `now`()", ignore, "`now`");
     }
     // A call of a looked-up name is code the read check cannot see.
-    assert_eq!(classify("EXPLAIN ANALYZE SELECT now ()", MODE).danger, Some(Danger::AnalyzeRunsCode));
-    assert_eq!(repeatable("SELECT now () FROM t", MODE), Err(NotRepeatable::UserFunction));
+    assert_eq!(classify("EXPLAIN ANALYZE SELECT now ()", MYSQL).danger, Some(Danger::AnalyzeRunsCode));
+    assert_eq!(repeatable("SELECT now () FROM t", MYSQL), Err(NotRepeatable::UserFunction));
 }
 
 /// Whether the server reads dollar quotes is told from its version, which a proxy may report
@@ -577,16 +581,16 @@ fn built_ins_count_only_as_the_server_reads_them() {
 #[test]
 fn a_dollar_is_read_with_and_without_dollar_quotes() {
     let sql = "SELECT 1 $a$, GET_LOCK('x', 10), 2 $a$";
-    for dollar_quotes in [false, true] {
+    for dollar_quotes in [DollarQuotes::NotRead, DollarQuotes::Read] {
         let mode = MySqlMode { dollar_quotes, ..MODE };
-        assert_eq!(classify(sql, mode).danger, Some(Danger::ServerAction), "{dollar_quotes}");
-        let r = classify("SELECT 1 $a$, my_fn(), 2 $a$", mode);
-        assert!(r.unchecked_call.is_some() && r.read_only().is_err(), "{dollar_quotes}");
+        assert_eq!(classify(sql, Judge::mysql(mode)).danger, Some(Danger::ServerAction), "{dollar_quotes:?}");
+        let r = classify("SELECT 1 $a$, my_fn(), 2 $a$", Judge::mysql(mode));
+        assert!(r.unchecked_call.is_some() && r.read_only().is_err(), "{dollar_quotes:?}");
     }
     // A plain `$` in a name or a string reads the same both ways.
-    for dollar_quotes in [false, true] {
+    for dollar_quotes in [DollarQuotes::NotRead, DollarQuotes::Read] {
         let mode = MySqlMode { dollar_quotes, ..MODE };
-        assert_eq!(render(&classify("SELECT a$b, 'x$y$' FROM t", mode)), "read ro");
+        assert_eq!(render(&classify("SELECT a$b, 'x$y$' FROM t", Judge::mysql(mode))), "read ro");
     }
 }
 
@@ -596,7 +600,7 @@ fn a_dollar_is_read_with_and_without_dollar_quotes() {
 fn built_ins_newer_than_the_oldest_server_are_unchecked_calls() {
     for name in NEWER_THAN_OLDEST {
         assert!(builtin(name), "{name}");
-        for mode in [MODE, MARIADB] {
+        for mode in [MYSQL, MARIADB] {
             let sql = format!("SELECT {name}(a) FROM t");
             assert_eq!(classify(&sql, mode).read_only(), Err(ReadOnlyBlock::UnknownFunction(name.to_string())));
         }
@@ -639,7 +643,7 @@ fn mariadb_geometry_constructors_are_built_ins_by_their_arguments() {
     ] {
         let r = classify(sql, MARIADB);
         assert!(r.unchecked_call.is_some() && r.read_only().is_err(), "{sql}");
-        assert!(classify(sql, MODE).unchecked_call.is_none(), "{sql}");
+        assert!(classify(sql, MYSQL).unchecked_call.is_none(), "{sql}");
     }
     for (name, _, _) in MARIADB_CONSTRUCTORS {
         assert!(NOT_ON_MARIADB.lines().any(|n| n == *name), "{name}");
@@ -661,7 +665,7 @@ fn repeatable_is_the_plain_query_allowlist() {
         "SELECT zz_classify.f() FROM t",
     ];
     for sql in &ok[..ok.len() - 1] {
-        assert_eq!(repeatable(sql, MODE), Ok(()), "{sql}");
+        assert_eq!(repeatable(sql, MYSQL), Ok(()), "{sql}");
     }
     let no = [
         ("SELECT 1; SELECT 2", NotRepeatable::NotOne),
@@ -701,10 +705,10 @@ fn repeatable_is_the_plain_query_allowlist() {
         ("SELECT (1", NotRepeatable::Unreadable),
     ];
     for (sql, why) in no {
-        assert_eq!(repeatable(sql, MODE), Err(why), "{sql}");
+        assert_eq!(repeatable(sql, MYSQL), Err(why), "{sql}");
     }
     assert_eq!(
-        names("SELECT a, t.b FROM `shop`.`t` AS t JOIN u ON NOW() = u.c", MODE).unwrap(),
+        names("SELECT a, t.b FROM `shop`.`t` AS t JOIN u ON NOW() = u.c", MYSQL).unwrap(),
         ["a", "t.b", "`shop`.`t`", "t", "u", "u.c"]
     );
 }
@@ -725,9 +729,9 @@ fn repeatable_takes_the_session_zone_only_as_a_timestamp_filter_writes_it() {
          CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)\n) AS datarig_count",
     ];
     for sql in ok {
-        assert_eq!(repeatable(sql, MODE), Ok(()), "{sql}");
-        assert!(reads_zone(sql, MODE), "{sql}");
-        assert!(count_query(sql, MODE).is_ok(), "{sql}");
+        assert_eq!(repeatable(sql, MYSQL), Ok(()), "{sql}");
+        assert!(reads_zone(sql, MYSQL), "{sql}");
+        assert!(count_query(sql, MYSQL).is_ok(), "{sql}");
     }
     let var = |v: &str| Err(NotRepeatable::Variable(v.into()));
     let no = [
@@ -778,16 +782,16 @@ fn repeatable_takes_the_session_zone_only_as_a_timestamp_filter_writes_it() {
         ("SELECT @@session.time_zone := '+00:00'", var("@@session.time_zone")),
     ];
     for (sql, want) in no {
-        assert_eq!(repeatable(sql, MODE), want, "{sql}");
+        assert_eq!(repeatable(sql, MYSQL), want, "{sql}");
     }
     // A string under ANSI_QUOTES is a column there: not a literal.
     let ansi = MySqlMode { ansi_quotes: true, ..MODE };
     let quoted = "SELECT * FROM t WHERE a = CONVERT_TZ(\"2026-11-10 09:30:00\", '+00:00', @@session.time_zone)";
-    assert_eq!(repeatable(quoted, ansi), var("@@session.time_zone"));
+    assert_eq!(repeatable(quoted, Judge::mysql(ansi)), var("@@session.time_zone"));
     // Only a variable counts: a string or a comment that says it does not.
-    assert!(!reads_zone("SELECT '@@session.time_zone' FROM t # @@time_zone", MODE));
-    assert!(!reads_zone("SELECT * FROM t WHERE a = @x", MODE));
-    let c = Classifier::MySql(MODE);
+    assert!(!reads_zone("SELECT '@@session.time_zone' FROM t # @@time_zone", MYSQL));
+    assert!(!reads_zone("SELECT * FROM t WHERE a = @x", MYSQL));
+    let c = Classifier::MySql(MODE, Judged::Own);
     assert!(c.reads_zone(ok[0]));
     assert!(!Classifier::Pg(Default::default()).reads_zone(ok[0]));
 }
@@ -806,25 +810,25 @@ fn ordered_reads_the_top_level_order_by() {
         ("WITH c AS (SELECT 1 AS n ORDER BY n) SELECT * FROM c", false),
         ("SELECT 'ORDER BY'", false),
     ] {
-        assert_eq!(ordered(sql, MODE), want, "{sql}");
+        assert_eq!(ordered(sql, MYSQL), want, "{sql}");
     }
 }
 
 #[test]
 fn count_query_wraps_a_repeatable_query() {
     assert_eq!(
-        count_query("SELECT * FROM t ORDER BY a;", MODE).as_deref(),
+        count_query("SELECT * FROM t ORDER BY a;", MYSQL).as_deref(),
         Ok("SELECT COUNT(*) FROM (\nSELECT * FROM t ORDER BY a\n) AS datarig_count")
     );
     assert_eq!(
-        count_query("SELECT * FROM t # note", MODE).as_deref(),
+        count_query("SELECT * FROM t # note", MYSQL).as_deref(),
         Ok("SELECT COUNT(*) FROM (\nSELECT * FROM t # note\n) AS datarig_count")
     );
-    assert_eq!(count_query("TABLE t", MODE).as_deref(), Ok("SELECT COUNT(*) FROM (\nTABLE t\n) AS datarig_count"));
-    assert_eq!(count_query("SELECT RAND()", MODE), Err(NotRepeatable::Volatile("rand".into())));
-    assert_eq!(count_query("DELETE FROM t", MODE), Err(NotRepeatable::NotSelect));
+    assert_eq!(count_query("TABLE t", MYSQL).as_deref(), Ok("SELECT COUNT(*) FROM (\nTABLE t\n) AS datarig_count"));
+    assert_eq!(count_query("SELECT RAND()", MYSQL), Err(NotRepeatable::Volatile("rand".into())));
+    assert_eq!(count_query("DELETE FROM t", MYSQL), Err(NotRepeatable::NotSelect));
     // A trailing comment that would swallow the closing parenthesis on one line.
-    assert!(count_query("SELECT 1 -- x", MODE).unwrap().contains("-- x\n)"));
+    assert!(count_query("SELECT 1 -- x", MYSQL).unwrap().contains("-- x\n)"));
 }
 
 /// Statements a read-only policy must refuse, whatever is written around their words.
@@ -969,7 +973,7 @@ fn rewritten_writes_are_never_reads() {
         for _ in 0..150 {
             let text = mutate(sql, &mut rng);
             for mode in modes {
-                let r = classify(&text, mode);
+                let r = classify(&text, Judge::mysql(mode));
                 assert!(r.read_only().is_err(), "let through: {text:?} in {mode:?}: {}", render(&r));
                 if asks {
                     assert!(r.confirm(false).is_some(), "stopped asking: {text:?} in {mode:?}: {}", render(&r));
@@ -993,7 +997,7 @@ fn mysql_never_sets_the_postgres_transaction_flags() {
         let r = risk(sql);
         assert!(!r.no_tx_block && !r.adds_enum_value, "{sql}");
         let step = c.tx_step(sql);
-        if form(sql, MODE).is_none() {
+        if form(sql, MYSQL).is_none() {
             assert_eq!(step, TxStep::Opens, "{sql}");
         } else if r.implicit_commit {
             assert_eq!(step, TxStep::Outside, "{sql}");
@@ -1007,20 +1011,23 @@ fn mysql_never_sets_the_postgres_transaction_flags() {
 /// `EXPLAIN ANALYZE` touches: a superset (columns and aliases too), in any statement.
 #[test]
 fn named_gives_every_name_of_every_statement() {
-    let names = named("EXPLAIN ANALYZE DELETE x FROM `shop`.`t` x JOIN u ON u.id = x.id", MODE).unwrap();
+    let names = named("EXPLAIN ANALYZE DELETE x FROM `shop`.`t` x JOIN u ON u.id = x.id", MYSQL).unwrap();
     for n in ["`shop`.`t`", "x", "u", "u.id", "x.id"] {
         assert!(names.iter().any(|m| m == n), "{n}: {names:?}");
     }
-    assert!(named("UPDATE a SET v = 1; DELETE FROM b", MODE).unwrap().iter().any(|n| n == "b"));
+    assert!(named("UPDATE a SET v = 1; DELETE FROM b", MYSQL).unwrap().iter().any(|n| n == "b"));
     // Every word counts (a keyword may be a table's name).
-    assert_eq!(named("SELECT 1", MODE), Some(vec!["SELECT".to_string()]));
+    assert_eq!(named("SELECT 1", MYSQL), Some(vec!["SELECT".to_string()]));
     // Text the session's mode cannot read gives no names: the driver counts it as not undone.
-    assert_eq!(named("EXPLAIN /*!80000 ANALYZE */ DELETE FROM t", MODE), None);
+    assert_eq!(named("EXPLAIN /*!80000 ANALYZE */ DELETE FROM t", MYSQL), None);
     // A keyword is a table name unquoted.
     assert!(
-        named("EXPLAIN ANALYZE DELETE FROM transaction WHERE id = 1", MODE).unwrap().iter().any(|n| n == "transaction")
+        named("EXPLAIN ANALYZE DELETE FROM transaction WHERE id = 1", MYSQL)
+            .unwrap()
+            .iter()
+            .any(|n| n == "transaction")
     );
-    assert!(named("UPDATE view SET a = 1", MODE).unwrap().iter().any(|n| n.eq_ignore_ascii_case("view")));
+    assert!(named("UPDATE view SET a = 1", MYSQL).unwrap().iter().any(|n| n.eq_ignore_ascii_case("view")));
 }
 
 /// `EXPLAIN ANALYZE` that calls a function that is not a built-in asks (it runs the function,
@@ -1037,4 +1044,46 @@ fn analyze_of_a_users_function_asks_and_read_only_refuses_it() {
     assert!(r.confirm(false).is_none() && r.read_only().is_ok());
     // Without ANALYZE nothing runs: no question.
     assert_eq!(risk("EXPLAIN SELECT f(1)").danger, None);
+}
+
+/// Each engine's judge reads its own lists, the ones each engine always had: MySQL's has every
+/// built-in, its own tight and word calls and reserves `LATERAL` and `OF`; MariaDB's lacks the
+/// built-ins it does not provide, reads its constructors by their arguments, has its own tight
+/// and word calls, reserves neither word and needs `JSON_TABLE`'s columns.
+#[test]
+fn each_engine_reads_its_own_tables() {
+    let mysql = FamilyTables {
+        not_builtin: "",
+        constructors: &[],
+        tight_calls: MYSQL_TIGHT_CALLS,
+        word_calls: MYSQL_WORD_CALLS,
+        unreserved_not_calls: &[],
+        json_table_needs_columns: false,
+    };
+    let mariadb = FamilyTables {
+        not_builtin: NOT_ON_MARIADB,
+        constructors: MARIADB_CONSTRUCTORS,
+        tight_calls: MARIADB_TIGHT_CALLS,
+        word_calls: MARIADB_WORD_CALLS,
+        unreserved_not_calls: MARIADB_NOT_RESERVED,
+        json_table_needs_columns: true,
+    };
+    assert_eq!(MYSQL_TABLES, mysql);
+    assert_eq!(MARIADB_TABLES, mariadb);
+    assert_eq!(MYSQL.tables().collect::<Vec<_>>(), [&MYSQL_TABLES]);
+    assert_eq!(MARIADB.tables().collect::<Vec<_>>(), [&MARIADB_TABLES]);
+    let ansi = MySqlMode { ansi_quotes: true, ..MODE };
+    assert_eq!(Judge::of(Dialect::MySql(ansi)), Some(Judge::mysql(ansi)));
+    assert_eq!(Judge::of(Dialect::MariaDb(ansi)), Some(Judge::mariadb(ansi)));
+    assert_eq!(Judge::of(Dialect::Postgres), None);
+    // What each read gives on each engine.
+    assert!(builtin_in("BIN_TO_UUID", MYSQL) && !builtin_in("BIN_TO_UUID", MARIADB));
+    assert!(builtin_in("NOW", MYSQL) && builtin_in("NOW", MARIADB));
+    assert!(tight_call("SYSDATE", MYSQL) && !tight_call("SYSDATE", MARIADB));
+    assert!(!tight_call("RANK", MYSQL) && tight_call("RANK", MARIADB));
+    assert!(word_call("DATABASE", MYSQL) && !word_call("DATABASE", MARIADB));
+    assert_eq!(render(&classify("SELECT POINT(1, 2)", MARIADB)), "read ro");
+    assert_eq!(render(&classify("SELECT POINT()", MARIADB)), render(&classify("SELECT my_fn()", MARIADB)));
+    assert_eq!(render(&classify("SELECT LATERAL(1)", MARIADB)), render(&classify("SELECT my_fn(1)", MARIADB)));
+    assert_eq!(render(&classify("SELECT JSON_TABLE(1)", MARIADB)), render(&classify("SELECT my_fn(1)", MARIADB)));
 }

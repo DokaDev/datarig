@@ -1,18 +1,17 @@
 use super::*;
+use datarig_core::sql::dialect::DollarQuotes;
 use datarig_core::sql::split::split_in;
 
 const MY: Dialect = Dialect::MySql(MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: false,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 });
 const ANSI: Dialect = Dialect::MySql(MySqlMode {
     ansi_quotes: true,
     no_backslash_escapes: false,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 });
 

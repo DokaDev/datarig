@@ -22,7 +22,7 @@ use datarig_core::driver::structure::RelationStats;
 use datarig_core::driver::{ApplyError, ApplyFailure, DbCommand, DbError, DbEvent, SchemaObjects};
 use datarig_core::fault::Fault;
 use datarig_core::sql::complete::{Catalog, ColumnInfo, Relation};
-use datarig_core::sql::dialect::{Dialect, MySqlMode};
+use datarig_core::sql::dialect::Dialect;
 use datarig_core::sql::lexer::{Tok, lex_in};
 use mysql_async::prelude::{FromRow, Queryable};
 use mysql_async::{Conn, Row};
@@ -102,12 +102,13 @@ pub(crate) async fn meta_loop(
     server: Server,
 ) {
     let mode = tracked.mode(&server);
+    let dialect = crate::engine::dialect(&server, mode);
     // The database the session opened in; its current one moves for the DDL reads ([`ddl`]).
     let home: Option<String> = conn.opts().db_name().filter(|d| !d.is_empty()).map(str::to_string);
     let mut current = home.clone();
     let Ok(schemas) = link.guard(None, load_schemas(&mut conn)).await else { return };
     let _ = events.send(DbEvent::Schemas(schemas));
-    let Ok(catalog) = link.guard(None, load_catalog(&mut conn)).await else { return };
+    let Ok(catalog) = link.guard(None, load_catalog(&mut conn, dialect)).await else { return };
     let _ = events.send(DbEvent::Catalog(catalog));
     let Ok(keys) = link.guard(None, keys::load_keys(&mut conn)).await else { return };
     let _ = events.send(DbEvent::Keys(keys));
@@ -129,10 +130,10 @@ pub(crate) async fn meta_loop(
             match cmd {
                 DbCommand::LoadSchemas => DbEvent::Schemas(load_schemas(&mut conn).await),
                 DbCommand::LoadObjects { schema } => {
-                    let result = load_objects(&mut conn, &schema, mode).await;
+                    let result = load_objects(&mut conn, &schema, dialect).await;
                     DbEvent::Objects { schema, result }
                 }
-                DbCommand::LoadCatalog => DbEvent::Catalog(load_catalog(&mut conn).await),
+                DbCommand::LoadCatalog => DbEvent::Catalog(load_catalog(&mut conn, dialect).await),
                 // A database is the schema: the server's databases are its schemas.
                 DbCommand::LoadDatabases => DbEvent::Databases(load_schemas(&mut conn).await),
                 // MySQL's columns say no kinds to look up (`Dated::Lookup` is PostgreSQL's), and its
@@ -142,15 +143,16 @@ pub(crate) async fn meta_loop(
                 }
                 DbCommand::LoadKeys => DbEvent::Keys(keys::load_keys(&mut conn).await),
                 DbCommand::LoadStructure { schema, table } => {
-                    let result = structure::load_structure(&mut conn, server, mode, &schema, &table).await;
+                    let result = structure::load_structure(&mut conn, server, dialect, &schema, &table).await;
                     DbEvent::Structure { schema, table, result: result.map(Box::new) }
                 }
                 DbCommand::LoadTableKeys { id, schema, table } => {
-                    let result = order_keys::load_order_keys(&mut conn, mode, &schema, &table).await;
+                    let result = order_keys::load_order_keys(&mut conn, dialect, &schema, &table).await;
                     DbEvent::TableKeys { id, result }
                 }
                 DbCommand::LoadDdl { id, object } => {
                     let s = ddl::Session {
+                        dialect,
                         mode,
                         sql_mode: tracked.sql_mode.as_deref(),
                         home: home.as_deref(),
@@ -221,8 +223,8 @@ pub(crate) fn is_table(kind: &str) -> bool {
     matches!(kind, "BASE TABLE" | "SYSTEM VERSIONED" | "SEQUENCE")
 }
 
-async fn load_objects(conn: &mut Conn, schema: &str, mode: MySqlMode) -> Result<SchemaObjects, DbError> {
-    let sql = SCHEMA_OBJECTS.replace("{schema}", &Dialect::MySql(mode).quote_literal(schema));
+async fn load_objects(conn: &mut Conn, schema: &str, d: Dialect) -> Result<SchemaObjects, DbError> {
+    let sql = SCHEMA_OBJECTS.replace("{schema}", &d.quote_literal(schema));
     let rows: Vec<(String, String, Option<u64>, Option<u64>)> = rows_of(conn, sql).await?;
     let mut out = SchemaObjects::default();
     for (name, kind, rows, bytes) in rows {
@@ -238,7 +240,7 @@ async fn load_objects(conn: &mut Conn, schema: &str, mode: MySqlMode) -> Result<
 
 /// The tables and views of every database but the server's own, with their columns in order:
 /// one statement.
-async fn load_catalog(conn: &mut Conn) -> Result<Catalog, DbError> {
+async fn load_catalog(conn: &mut Conn, d: Dialect) -> Result<Catalog, DbError> {
     let schemas = load_schemas(conn).await?;
     let sql = format!(
         "SELECT c.TABLE_SCHEMA, c.TABLE_NAME, t.TABLE_TYPE, c.COLUMN_NAME, c.COLUMN_TYPE \
@@ -253,7 +255,7 @@ async fn load_catalog(conn: &mut Conn) -> Result<Catalog, DbError> {
             relations.push(Relation { schema, name, is_view: !is_table(&kind), columns: Vec::new() });
         }
         if let Some(rel) = relations.last_mut() {
-            let values = enum_values(&ty).map(Into::into);
+            let values = enum_values(&ty, d).map(Into::into);
             rel.columns.push(ColumnInfo { values, ..ColumnInfo::new(column, ty) });
         }
     }
@@ -261,11 +263,11 @@ async fn load_catalog(conn: &mut Conn) -> Result<Catalog, DbError> {
 }
 
 /// The values of an `ENUM` column from its `COLUMN_TYPE` (`enum('a','it''s','b\\c')`: each
-/// value a string literal as the server writes it, in its default mode), in their order;
-/// `None` for another type, or one that does not read so.
-fn enum_values(column_type: &str) -> Option<Vec<String>> {
+/// value a string literal as the server of a session in dialect `d` writes it, in its default
+/// mode), in their order; `None` for another type, or one that does not read so.
+fn enum_values(column_type: &str, d: Dialect) -> Option<Vec<String>> {
     let list = column_type.get(..5).filter(|p| p.eq_ignore_ascii_case("enum("))?;
-    let d = Dialect::MySql(MySqlMode::default());
+    let d = d.printed();
     let body = column_type[list.len()..].strip_suffix(')')?;
     let mut values = Vec::new();
     let mut comma = true;

@@ -1,25 +1,22 @@
 use super::super::{LexState, Tok, lex_from, lex_in};
-use crate::sql::dialect::{Dialect, MySqlMode};
+use crate::sql::dialect::{Dialect, DollarQuotes, MySqlMode};
 
 const MY: Dialect = Dialect::MySql(MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: false,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 });
 const ANSI: Dialect = Dialect::MySql(MySqlMode {
     ansi_quotes: true,
     no_backslash_escapes: false,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 });
 const NBE: Dialect = Dialect::MySql(MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: true,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 });
 
@@ -356,7 +353,7 @@ fn the_client_reads_backslashes_in_every_string() {
 /// character goes on the name. Without them, `$` is a name character.
 #[test]
 fn dollar_quotes_where_the_server_reads_them() {
-    let dq = Dialect::MySql(MySqlMode { dollar_quotes: true, ..MySqlMode::default() });
+    let dq = Dialect::MySql(MySqlMode { dollar_quotes: DollarQuotes::Read, ..MySqlMode::default() });
     assert_eq!(
         kinds_in("select $$a;b$$, $t$ $$ ; $t$", dq)[..4],
         [(Tok::Keyword, "select"), (Tok::Str, "$$a;b$$"), (Tok::Comma, ","), (Tok::Str, "$t$ $$ ; $t$")]

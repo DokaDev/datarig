@@ -7,7 +7,7 @@
 //! `DATARIG_TEST_MYSQL_CLIENT="docker exec -i datarig-mysql mysql -udatarig -pdatarig shop"`
 //! (split on blanks, no shell). Skipped without it, unless `DATARIG_REQUIRE_MYSQL=1`.
 
-use datarig_core::sql::dialect::{Dialect, MySqlMode};
+use datarig_core::sql::dialect::{Dialect, DollarQuotes, MySqlMode};
 use datarig_core::sql::lexer::lex_in;
 use datarig_core::sql::split::split_in;
 use std::io::Write;
@@ -19,8 +19,7 @@ static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
 const MY: Dialect = Dialect::MySql(MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: false,
-    dollar_quotes: false,
-    mariadb: false,
+    dollar_quotes: DollarQuotes::NotRead,
     ignore_space: false,
 });
 
@@ -162,7 +161,8 @@ const COMMANDS: &str = "SELECT 1\\G SELECT 2\\g SELECT 3 \\'; SELECT 4;\nSELECT 
 /// syntax error there, as the client asks.
 fn server_mode(client: &[String]) -> MySqlMode {
     let (_, err) = run(client, &[], "select $$;");
-    MySqlMode { dollar_quotes: err.contains("ERROR 1064"), ..MySqlMode::default() }
+    let dollar_quotes = if err.contains("ERROR 1064") { DollarQuotes::Read } else { DollarQuotes::NotRead };
+    MySqlMode { dollar_quotes, ..MySqlMode::default() }
 }
 
 #[test]
@@ -237,8 +237,7 @@ fn mysql_literals_and_names_read_back_as_written() {
     let nbe = Dialect::MySql(MySqlMode {
         ansi_quotes: false,
         no_backslash_escapes: true,
-        dollar_quotes: false,
-        mariadb: false,
+        dollar_quotes: DollarQuotes::NotRead,
         ignore_space: false,
     });
     let texts = ["it's", "C:\\new", "\\", "\\'", "\\%_", "\u{1F418}"];
