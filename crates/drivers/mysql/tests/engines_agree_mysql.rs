@@ -1018,3 +1018,152 @@ async fn a_command_on_an_agreeing_session_is_sent_as_before() {
     let got = s.ask(2, TwoEngines::count(2, "SELECT 1 AS a")).await;
     assert!(!judged_on_fewer(&got), "{got:?}");
 }
+
+// ── The names of the session's transaction settings ────────────────────────────────────────
+
+/// The older names of the transaction settings, which MariaDB has on every version the driver
+/// serves.
+const TX_NAMES: [&str; 2] = ["tx_read_only", "tx_isolation"];
+
+/// The names MySQL has on every version and MariaDB from 11.1 on.
+const TRANSACTION_NAMES: [&str; 2] = ["transaction_read_only", "transaction_isolation"];
+
+/// Which names of the transaction settings `log` sends: the older ones (`tx_*`) or the newer
+/// ones (`transaction_*`). A log that sends both, or neither, fails the test.
+fn names_sent(log: &[String], what: &str) -> [&'static str; 2] {
+    let sends = |names: [&str; 2]| log.iter().any(|q| names.iter().any(|n| q.contains(n)));
+    match (sends(TX_NAMES), sends(TRANSACTION_NAMES)) {
+        (true, false) => TX_NAMES,
+        (false, true) => TRANSACTION_NAMES,
+        (tx, transaction) => panic!("{what}: tx_* sent {tx}, transaction_* sent {transaction}: {log:?}"),
+    }
+}
+
+/// A session that connected without a word on its read-only: the server reported it, so it
+/// was never asked ([`ask_read_only`] and the question for what was not reported are not in the
+/// log), and nothing said it was not kept.
+fn read_only_reported(run: &Run, what: &str) {
+    let words = run.outcome.as_ref().unwrap_or_else(|e| panic!("{what}: {e}"));
+    assert!(!words.iter().any(|w| w.contains("ReadOnlyUnconfirmed")), "{what}: {words:?}");
+    let asked = run
+        .log
+        .iter()
+        .filter(|q| q.starts_with("SELECT CAST(@@SESSION.") || q.starts_with("SELECT @@SESSION.sql_mode"));
+    assert_eq!(asked.collect::<Vec<_>>(), Vec::<&String>::new(), "{what}: asked");
+}
+
+/// MariaDB 11.4 still takes the older names of the transaction settings and reports them in its
+/// session state: `tx_read_only` makes the session read-only, and both come back tracked.
+#[tokio::test(flavor = "multi_thread")]
+async fn mariadb_keeps_the_tx_names_and_reports_them() {
+    let test = "mariadb_keeps_the_tx_names_and_reports_them";
+    let Some(url) = my_url(test) else { return };
+    let server = Server::of(&url).await;
+    if !server.mariadb {
+        // MySQL has only the newer names (the older ones were removed in 8.0.3).
+        return;
+    }
+    let opts = mysql_async::Opts::from_url(&url).expect("a mysql:// URL");
+    let opts = mysql_async::OptsBuilder::from_opts(opts).prefer_socket(false);
+    let mut c = mysql_async::Conn::new(opts).await.expect("the side connection opens");
+    c.query_drop("SET SESSION session_track_system_variables = 'tx_read_only,tx_isolation'").await.unwrap();
+    c.query_drop("SET SESSION tx_isolation = @@SESSION.tx_isolation, SESSION tx_read_only = ON").await.unwrap();
+    let mut reported = Vec::new();
+    let ok = c.last_ok_packet().expect("an OK packet");
+    for change in ok.session_state_info().expect("session state") {
+        if let Ok(mysql_async::SessionStateChange::SystemVariables(vars)) = change.decode() {
+            for v in vars {
+                reported.push((v.name_str().to_ascii_lowercase(), v.value_str().into_owned()));
+            }
+        }
+    }
+    reported.sort();
+    assert_eq!(
+        reported,
+        [("tx_isolation".to_string(), "REPEATABLE-READ".to_string()), ("tx_read_only".to_string(), "ON".to_string())]
+    );
+    let ro: Option<String> = c.query_first("SELECT CAST(@@SESSION.tx_read_only AS CHAR)").await.unwrap();
+    assert_eq!(ro.as_deref(), Some("ON"));
+    let write = c.query_drop("CREATE TEMPORARY TABLE zz_x14_probe (a INT)").await;
+    assert!(format!("{write:?}").contains("1792"), "a read-only session refuses a write: {write:?}");
+    let _ = c.disconnect().await;
+}
+
+/// A session whose reports name one engine but no version it can be sure of (the greeting's
+/// number is not the line's, or the line has none) names the transaction settings as every
+/// version of that engine has them: MariaDB's older names (`tx_*`), MySQL's one name. Every
+/// role connects, and the server reports the read-only it was given.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_mariadb_of_unknown_version_takes_the_tx_names() {
+    let test = "a_mariadb_of_unknown_version_takes_the_tx_names";
+    let Some(url) = my_url(test) else { return };
+    let server = Server::of(&url).await;
+    let (greeting, line, want) = if server.mariadb {
+        ("5.5.5-11.8.0-MariaDB", "SELECT 'x-MariaDB'", TX_NAMES)
+    } else {
+        ("8.4.99", "SELECT 'x'", TRANSACTION_NAMES)
+    };
+    let cases = [
+        (Setup { greeting: Some(greeting), ..Setup::default() }, "Unknown(VersionsDisagree)"),
+        (Setup { answer: Some(line), ..Setup::default() }, "Unknown(VersionUnknown)"),
+    ];
+    for (setup, version) in cases {
+        for role in ROLES {
+            let what = format!("{:?} {:?} {role:?}", setup.greeting, setup.answer);
+            let run = setup.run(&url, role, test).await;
+            let f = run.facts.as_ref().unwrap_or_else(|| panic!("{what}: {:?}", run.outcome));
+            assert_eq!(f.engine(), server.engine(), "{what}: {f:?}");
+            assert_eq!(format!("{:?}", f.version), version, "{what}: {f:?}");
+            assert_eq!(names_sent(&run.log, &what), want, "{what}");
+            read_only_reported(&run, &what);
+        }
+    }
+}
+
+/// A session whose reports name two engines keeps the names its greeting implies, and ends as
+/// before: behind MySQL's own greeting with a MariaDB version line, MySQL's names, and every
+/// role connects; behind a MySQL greeting in front of MariaDB, the same names (MariaDB 11.4
+/// has them too), the query session connects, and the metadata and monitor sessions fail on
+/// MySQL's statement time limit, which MariaDB does not have.
+#[tokio::test(flavor = "multi_thread")]
+async fn disagreeing_reports_keep_the_greetings_session_names() {
+    let test = "disagreeing_reports_keep_the_greetings_session_names";
+    let Some(url) = my_url(test) else { return };
+    let server = Server::of(&url).await;
+    let setup = if server.mariadb {
+        Setup { greeting: Some("8.4.6"), ..Setup::default() }
+    } else {
+        Setup { answer: Some("SELECT '11.4.13-MariaDB'"), ..Setup::default() }
+    };
+    for role in ROLES {
+        let what = format!("{:?} {:?} {role:?}", setup.greeting, setup.answer);
+        let run = setup.run(&url, role, test).await;
+        assert_eq!(names_sent(&run.log, &what), TRANSACTION_NAMES, "{what}");
+        if server.mariadb && role != SessionRole::Query {
+            let unknown = "Server(\"ERROR 1193 (HY000): Unknown system variable 'max_execution_time'\")";
+            assert_eq!(run.outcome, Err(unknown.to_string()), "{what}");
+            continue;
+        }
+        let f = run.facts.as_ref().unwrap_or_else(|| panic!("{what}: {:?}", run.outcome));
+        assert_eq!(format!("{:?}", f.version), "Unknown(EnginesDisagree)", "{what}: {f:?}");
+        read_only_reported(&run, &what);
+    }
+}
+
+/// A session straight to the server (its reports agree on a version it knows) names the
+/// transaction settings as before: MySQL 8.4 and MariaDB 11.4 by the newer names.
+#[tokio::test(flavor = "multi_thread")]
+async fn agreeing_reports_of_a_known_version_keep_todays_names() {
+    let test = "agreeing_reports_of_a_known_version_keep_todays_names";
+    let Some(url) = my_url(test) else { return };
+    let server = Server::of(&url).await;
+    for role in ROLES {
+        let what = format!("{role:?}");
+        let run = Setup::default().run(&url, role, test).await;
+        let f = run.facts.as_ref().unwrap_or_else(|| panic!("{what}: {:?}", run.outcome));
+        assert_eq!(f.version, Fact::Known(server.version), "{what}: {f:?}");
+        let want = if server.mariadb && server.version < Version::new(11, 1, 0) { TX_NAMES } else { TRANSACTION_NAMES };
+        assert_eq!(names_sent(&run.log, &what), want, "{what}");
+        read_only_reported(&run, &what);
+    }
+}
