@@ -104,7 +104,7 @@ use datarig_core::driver::{
 };
 use datarig_core::engine::ServerFacts;
 use datarig_core::sql::dialect::{Dialect, DollarQuotes};
-use datarig_core::sql::lexer::mysql::has_dollar_opener;
+use datarig_core::sql::lexer::mysql::{has_dollar_opener, has_m_bang};
 use datarig_core::sql::lexer::{Tok, Token, lex_in};
 use datarig_core::sql::risk::mysql::{self as risk, Judge, Judged};
 use datarig_core::sql::risk::repeat::NotRepeatable;
@@ -528,6 +528,17 @@ pub(crate) async fn query_loop(
             && user_text(cmd).into_iter().any(has_dollar_opener)
         {
             if let Some(answer) = cmd.unsent(DbError::DollarQuotesUnknown, false) {
+                let _ = events.send(answer);
+            }
+            continue;
+        }
+        // MariaDB's own executable comments are not read: a session whose server is MariaDB, or
+        // may be, sends no text that holds one, and the command fails at once.
+        if let Next::Command(cmd) = &next
+            && risk::mariadb_may_run(s.dialect, s.judged)
+            && user_text(cmd).into_iter().any(has_m_bang)
+        {
+            if let Some(answer) = cmd.unsent(DbError::CommentUnsupported, false) {
                 let _ = events.send(answer);
             }
             continue;

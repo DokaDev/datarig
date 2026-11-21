@@ -382,3 +382,23 @@ fn with_sibling_a_step_the_engines_disagree_on_opens() {
         assert_eq!(c.tx_step("SELECT `DATABASE`()"), TxStep::Opens, "{greeting:?}");
     }
 }
+
+/// Startup SQL takes no executable comment, MySQL's or MariaDB's, versioned or not, on either
+/// engine's reading: it is not a session setting the check can read.
+#[test]
+fn startup_sql_takes_no_executable_comment() {
+    use crate::sql::dialect::MySqlMode;
+    let mode = MySqlMode::default();
+    for lang in [Language::Sql(Dialect::MySql(mode)), Language::Sql(Dialect::MariaDb(mode))] {
+        for sql in [
+            "/*M! SET SESSION max_statement_time = 10 */",
+            "/*M!100500 SET SESSION max_statement_time = 10 */",
+            "SET SESSION sql_mode = 'ANSI' /*M! , max_statement_time = 10 */",
+            "/*! SET SESSION sql_mode = 'ANSI' */",
+            "/*!80000 SET SESSION sql_mode = 'ANSI' */",
+        ] {
+            assert!(Classifier::session_set(lang, sql).is_err(), "{lang:?}: {sql}");
+        }
+        assert!(Classifier::session_set(lang, "SET SESSION sql_mode = 'ANSI'").is_ok(), "{lang:?}");
+    }
+}

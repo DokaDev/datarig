@@ -274,10 +274,23 @@ impl App {
     /// STDIN` and `COPY … TO STDOUT` need the COPY protocol, which the app does not carry yet
     /// (sent, the first broke the tab's connection).
     pub(super) fn unsupported(&self, tab: TabId, statements: &[String]) -> Option<Notice> {
+        if let Some(refused) = self.m_bang_refusal(tab, statements) {
+            return Some(refused);
+        }
         let classifier = self.classifier(tab).fresh();
         let sql = statements.iter().find(|sql| classifier.clone().classify(sql).stdio)?;
         let sql = super::runlog::excerpt(sql, 60);
         Some(Notice::new(Msg::SafetyCopyStdio { sql }, Level::Error))
+    }
+
+    /// MariaDB's own executable comments are not read: `statements` holding one
+    /// ([`datarig_core::sql::lexer::mysql::has_m_bang`]) are refused where MariaDB may run them,
+    /// under the tab's rules as they are now (a run that waited for its connection too).
+    pub(super) fn m_bang_refusal(&self, tab: TabId, statements: &[String]) -> Option<Notice> {
+        if !statements.iter().any(|s| datarig_core::sql::lexer::mysql::has_m_bang(s)) {
+            return None;
+        }
+        self.classifier(tab).mariadb_may_run().then(|| Notice::new(Label::EngineCommentUnsupported, Level::Error))
     }
 
     /// The classifier of tab `tab`, with the statements its session has prepared (none without

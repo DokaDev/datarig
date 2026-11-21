@@ -490,6 +490,17 @@ impl Judge {
     }
 }
 
+/// Whether MariaDB may be the server that runs text of a session read in dialect `d` and judged
+/// on `judged`: a MariaDB session, or one whose server's reports name both engines. Such a
+/// session sends no text holding MariaDB's own executable comments
+/// ([`crate::sql::lexer::mysql::has_m_bang`]).
+pub fn mariadb_may_run(d: Dialect, judged: Judged) -> bool {
+    match (d, judged) {
+        (Dialect::MariaDb(_), _) | (Dialect::MySql(_), Judged::WithSibling) => true,
+        (Dialect::MySql(_), Judged::Own) | (Dialect::Postgres, _) => false,
+    }
+}
+
 /// Which engines' lists judge a session's text.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Judged {

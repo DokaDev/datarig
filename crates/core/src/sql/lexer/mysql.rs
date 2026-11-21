@@ -253,6 +253,33 @@ pub fn has_dollar_opener(text: &str) -> bool {
     false
 }
 
+/// Whether `text` holds MariaDB's own executable comment (`/*M! … */`, `/*M!100500 … */`, also
+/// left open): a comment that opens with `/*M!` in some reading of the text a MySQL-family
+/// session may use, in any sql mode (`ANSI_QUOTES`, `NO_BACKSLASH_ESCAPES`) and with or without
+/// dollar quotes: where readings disagree on where a string or a name ends, one that opens such a
+/// comment counts. `/*M!` inside a string, a quoted name or a plain comment in every reading does
+/// not. MariaDB runs what such a comment holds; MySQL reads it as a plain comment.
+pub fn has_m_bang(text: &str) -> bool {
+    if !text.contains("/*M!") {
+        return false;
+    }
+    let readings = [false, true].into_iter().flat_map(|ansi_quotes| {
+        [false, true].into_iter().flat_map(move |no_backslash_escapes| {
+            [DollarQuotes::NotRead, DollarQuotes::Read].map(move |dollar_quotes| MySqlMode {
+                ansi_quotes,
+                no_backslash_escapes,
+                dollar_quotes,
+                ignore_space: false,
+            })
+        })
+    });
+    readings.into_iter().any(|mode| {
+        lex(text, mode, LexState::default())
+            .iter()
+            .any(|t| t.kind == Tok::BlockComment && t.text(text).starts_with("/*M!"))
+    })
+}
+
 /// What follows `--` makes it a comment, to the client: a blank, or the end of the line.
 fn dash_comment(next: Option<char>) -> bool {
     next.is_none_or(is_space)

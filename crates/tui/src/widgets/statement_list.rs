@@ -262,12 +262,18 @@ impl StatementList {
         let dialect = self.dbms.unwrap_or(Dbms::Postgres).language().dialect();
         let mut cuts = vec![0];
         let mut line_start = false;
+        // Inside an executable comment (`/*! … */`): its lines are one piece of the statement.
+        let mut exec = false;
         for t in lex_in(text, dialect) {
             match t.kind {
                 Tok::Whitespace => line_start |= t.text(text).contains(['\n', '\r']),
                 Tok::LineComment | Tok::BlockComment => {}
+                Tok::ExecComment => {
+                    exec = t.text(text).starts_with("/*");
+                    line_start = false;
+                }
                 _ => {
-                    if line_start && t.start > 0 && t.is_word() && t.text(text).eq_ignore_ascii_case("SET") {
+                    if line_start && !exec && t.start > 0 && t.is_word() && t.text(text).eq_ignore_ascii_case("SET") {
                         cuts.push(t.start);
                     }
                     line_start = false;
@@ -438,6 +444,40 @@ mod tests {
         l.paste("\nSET @x1 = 1");
         assert_eq!(l.statements(), ["SET autocommit = 0", "SET @x1 = 1"]);
         assert_eq!(l.row, 1);
+    }
+
+    /// A pasted statement keeps the executable comments it starts or ends with (`/*! … */`,
+    /// `/*M! … */`, versioned too), and one that is only such a comment is a row: the server
+    /// may run what they hold. Also before the form knows its database.
+    #[test]
+    fn a_paste_keeps_executable_comments() {
+        for dbms in [Some(Dbms::MySql), None] {
+            let mut l = StatementList::new(dbms, &[]);
+            l.paste(
+                "SET @a = 1 /*M! , @b = 2 */;\n/*M!100500 SET @c = 3 */;\n/*! SET @d = 4 */ ;\n\
+                 /*M! SET @e = 5 */ SET @f = 6;\nSET @g = 7 /*!80000 , @h = 8 */",
+            );
+            assert_eq!(
+                l.statements(),
+                [
+                    "SET @a = 1 /*M! , @b = 2 */",
+                    "/*M!100500 SET @c = 3 */",
+                    "/*! SET @d = 4 */",
+                    "/*M! SET @e = 5 */ SET @f = 6",
+                    "SET @g = 7 /*!80000 , @h = 8 */",
+                ],
+                "{dbms:?}"
+            );
+        }
+    }
+
+    /// A line inside an executable comment that starts with `SET` starts no row: the comment is
+    /// one piece of its statement.
+    #[test]
+    fn a_paste_keeps_an_executable_comment_of_several_lines_in_one_row() {
+        let mut l = StatementList::new(Some(Dbms::MySql), &[]);
+        l.paste("/*!40101\nSET @a = 1 */;\nSET @b = 2 /*!50000\nSET @c = 3 */\nSET @d = 4");
+        assert_eq!(l.statements(), ["/*!40101 SET @a = 1 */", "SET @b = 2 /*!50000 SET @c = 3 */", "SET @d = 4"]);
     }
 
     #[test]
