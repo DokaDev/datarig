@@ -6,13 +6,14 @@
 # dependencies that breaks those steps fails here, not on a user's machine.
 #
 # Not part of CI (ci.yml) and not one of the checks of the release gate: it runs on pushes to
-# main, on pull requests that touch the install page, the Cargo files, build scripts or this
-# workflow, and every week (a new distribution release can break it with no change here).
+# main and to release branches (`release/X.Y`), on pull requests that touch the install page,
+# the Cargo files, build scripts or this workflow, and every week (a new distribution release
+# can break it with no change here).
 name: Source build
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'release/[0-9]+.[0-9]+']
   pull_request:
     paths:
       - docs/site/src/install.md
