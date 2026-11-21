@@ -9,7 +9,8 @@
 //! ([`every_case_names_every_engine`]): adding an engine means answering every case for it. A
 //! case of the classifier or split table whose text has a `$` must also answer for a MySQL
 //! session that does not know whether its server reads dollar quotes
-//! ([`Engine::MySqlDollarNotKnown`]).
+//! ([`Engine::MySqlDollarNotKnown`]). A case of a table of rules asked of a session's facts
+//! must also answer for sessions whose server's version is not known ([`UNKNOWN_VERSION`]).
 //!
 //! Every expectation is today's output, as it is, right or wrong: the table pins it, and a
 //! change that moves it updates the table in the same change. No server is needed.
@@ -22,6 +23,8 @@ mod export;
 mod filter;
 #[path = "engine_conformance/risk.rs"]
 mod risk;
+#[path = "engine_conformance/session.rs"]
+mod session;
 #[path = "engine_conformance/text.rs"]
 mod text;
 #[path = "engine_conformance/tx.rs"]
@@ -46,18 +49,42 @@ pub enum Engine {
     MySqlNoBackslashEscapes,
     /// MySQL whose server's own reports disagree on whether it reads dollar quotes.
     MySqlDollarNotKnown,
+    /// PostgreSQL whose version did not parse.
+    PgVersionUnknown,
+    /// MySQL whose version did not parse.
+    MySqlVersionUnknown,
+    /// MariaDB whose version did not parse.
+    MariaDbVersionUnknown,
+    /// MySQL whose own reports name different versions.
+    MySqlVersionsDisagree,
+    /// MariaDB whose own reports name different versions.
+    MariaDbVersionsDisagree,
 }
 
 /// The engines every case must have an expectation for.
 pub const ENGINES: [Engine; 3] = [Engine::Pg, Engine::MySql, Engine::MariaDb];
 
+/// The sessions whose server's version is not known that every case of a table of rules asked
+/// of a session's facts must also have an expectation for.
+pub const UNKNOWN_VERSION: [Engine; 5] = [
+    Engine::PgVersionUnknown,
+    Engine::MySqlVersionUnknown,
+    Engine::MariaDbVersionUnknown,
+    Engine::MySqlVersionsDisagree,
+    Engine::MariaDbVersionsDisagree,
+];
+
 impl Engine {
     /// The dialect the core reads and writes this engine's SQL in today.
     pub fn dialect(self) -> Dialect {
         match self {
-            Engine::Pg => Dialect::Postgres,
-            Engine::MySql => Dialect::MySql(MySqlMode::default()),
-            Engine::MariaDb => Dialect::MariaDb(MySqlMode::default()),
+            Engine::Pg | Engine::PgVersionUnknown => Dialect::Postgres,
+            Engine::MySql | Engine::MySqlVersionUnknown | Engine::MySqlVersionsDisagree => {
+                Dialect::MySql(MySqlMode::default())
+            }
+            Engine::MariaDb | Engine::MariaDbVersionUnknown | Engine::MariaDbVersionsDisagree => {
+                Dialect::MariaDb(MySqlMode::default())
+            }
             Engine::MySqlAnsiQuotes => Dialect::MySql(MySqlMode { ansi_quotes: true, ..MySqlMode::default() }),
             Engine::MySqlNoBackslashEscapes => {
                 Dialect::MySql(MySqlMode { no_backslash_escapes: true, ..MySqlMode::default() })
@@ -110,6 +137,16 @@ pub fn named_text(table: &'static str, cases: &[Case<&'static str>]) -> Vec<Name
     out
 }
 
+/// [`named`] for a table of rules asked of a session's facts: every case must also answer for
+/// the sessions of [`UNKNOWN_VERSION`].
+pub fn named_versioned<I>(table: &'static str, cases: &[Case<I>]) -> Vec<Named> {
+    let mut out = named(table, cases);
+    for n in &mut out {
+        n.required.extend(UNKNOWN_VERSION);
+    }
+    out
+}
+
 /// What is wrong with the expectations of `cases`: a case that misses an engine it must answer
 /// for, names an engine twice, or shares its name with another case of its table.
 pub fn gaps(cases: &[Named]) -> Vec<String> {
@@ -144,6 +181,11 @@ pub fn run<I>(table: &'static str, cases: &[Case<I>], f: impl Fn(Engine, &I) -> 
 /// [`run`] for a table of texts whose expectations [`named_text`] reads.
 pub fn run_text(table: &'static str, cases: &[Case<&'static str>], f: impl Fn(Engine, &&'static str) -> String) {
     check(table, cases, &named_text(table, cases), f);
+}
+
+/// [`run`] for a table of rules whose expectations [`named_versioned`] reads.
+pub fn run_versioned<I>(table: &'static str, cases: &[Case<I>], f: impl Fn(Engine, &I) -> String) {
+    check(table, cases, &named_versioned(table, cases), f);
 }
 
 /// Every difference of `cases` from what `f` gives, and every gap of `named`, or nothing.
@@ -226,6 +268,16 @@ fn tx_step_cases_on_every_engine() {
 }
 
 #[test]
+fn tx_statement_cases_on_every_engine() {
+    run("tx statement", &tx::statement_cases(), tx::verdict);
+}
+
+#[test]
+fn session_rules_on_every_engine() {
+    run_versioned("session rules", &session::cases(), session::answer);
+}
+
+#[test]
 fn every_case_names_every_engine() {
     let all: Vec<Named> = [
         named_text("classifier", &risk::classifier_cases()),
@@ -238,6 +290,8 @@ fn every_case_names_every_engine() {
         named("sql cells", &values::cells_cases()),
         named("keyset chunk", &export::keyset_cases()),
         named("tx step", &tx::cases()),
+        named("tx statement", &tx::statement_cases()),
+        named_versioned("session rules", &session::cases()),
     ]
     .into_iter()
     .flatten()
@@ -275,6 +329,22 @@ fn every_case_names_every_engine() {
         ["dollar: case `dollar` has no expectation for MySqlDollarNotKnown"]
     );
     assert!(gaps(&named("dollar", &dollar)).is_empty(), "only the text tables ask for it");
+    // A case of rules asked of a session's facts answers for an unknown version too.
+    let versioned = [Case {
+        name: "known only",
+        input: (),
+        expect: &[(Engine::Pg, ""), (Engine::MySql, ""), (Engine::MariaDb, ""), (Engine::PgVersionUnknown, "")],
+    }];
+    assert_eq!(
+        gaps(&named_versioned("versioned", &versioned)),
+        [
+            "versioned: case `known only` has no expectation for MySqlVersionUnknown",
+            "versioned: case `known only` has no expectation for MariaDbVersionUnknown",
+            "versioned: case `known only` has no expectation for MySqlVersionsDisagree",
+            "versioned: case `known only` has no expectation for MariaDbVersionsDisagree",
+        ]
+    );
+    assert!(gaps(&named("versioned", &versioned)).is_empty(), "only the tables of rules ask for it");
     let twice = [
         Case { name: "same", input: (), expect: &[(Engine::Pg, ""), (Engine::MySql, ""), (Engine::MariaDb, "")] },
         Case { name: "same", input: (), expect: &[(Engine::Pg, ""), (Engine::MySql, ""), (Engine::MariaDb, "")] },

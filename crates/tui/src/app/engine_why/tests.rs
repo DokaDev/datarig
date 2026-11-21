@@ -5,11 +5,12 @@ use std::collections::BTreeSet;
 /// Every reason has words of its own in each language.
 #[test]
 fn every_why_has_a_text_in_en_and_ko() {
-    let all = [Why::NotChecked, Why::VersionUnknown, Why::VersionsDisagree, Why::EnginesDisagree];
+    let all = [Why::NotChecked, Why::VersionUnknown, Why::VersionsDisagree, Why::EnginesDisagree, Why::NotOnEngine];
     // A new reason fails to compile here until it is listed above.
     for why in &all {
         match why {
-            Why::NotChecked | Why::VersionUnknown | Why::VersionsDisagree | Why::EnginesDisagree => {}
+            Why::NotChecked | Why::VersionUnknown | Why::VersionsDisagree | Why::EnginesDisagree | Why::NotOnEngine => {
+            }
         }
     }
     for lang in [Lang::En, Lang::Ko] {

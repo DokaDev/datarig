@@ -1,11 +1,12 @@
 //! What is fixed per engine, known without a connection: one [`EngineSpec`] per engine.
 
-use super::{EngineId, ServerFacts};
+use super::{CountInTx, EngineId, ServerFacts, Support, TxStatement, TxVerdict};
 use crate::driver::Hierarchy;
 use crate::profile::dsn::Scheme;
 use crate::sql::dialect::{Dialect, DollarQuotes};
 use crate::sql::risk::Classifier;
 use crate::sql::risk::mysql::Judged;
+use std::time::Duration;
 
 /// How datarig reaches an engine's server.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,6 +40,10 @@ pub struct EngineSpec {
     pub text: &'static dyn TextRules,
     /// How its statements are judged.
     pub risk: &'static dyn RiskRules,
+    /// How its statements stand to the transaction open on a session.
+    pub tx: &'static dyn TxRules,
+    /// What its sessions may be given.
+    pub session: &'static dyn SessionRules,
 }
 
 /// How an engine's text is read on a server.
@@ -52,4 +57,28 @@ pub trait RiskRules: Sync {
     /// A fresh classifier of text in dialect `d`, its calls judged on the engines `j` says, for
     /// a session that prepared nothing.
     fn new_classifier(&self, d: Dialect, j: Judged) -> Classifier;
+}
+
+/// How an engine's statements stand to the transaction open on a session.
+pub trait TxRules: Sync {
+    /// What statement `s` of a run does to the transaction: refused, asked about, noted, and
+    /// whether it ends the transaction open before it.
+    fn statement(&self, s: &TxStatement) -> TxVerdict;
+
+    /// How long a session may take to answer the rollback the app sends for an idle
+    /// transaction before the app closes it instead.
+    fn rollback_wait(&self) -> Duration;
+
+    /// Whether a count of rows takes its time limit while a transaction is open.
+    fn count_in_tx(&self) -> CountInTx;
+
+    /// Whether a session's reads may lock rows (by its isolation level and autocommit).
+    fn reads_lock_rows(&self) -> bool;
+}
+
+/// What an engine's sessions may be given.
+pub trait SessionRules: Sync {
+    /// Whether the server may be given an idle limit for a transaction opened for manual
+    /// commit, so that it ends a session the app could not roll back itself.
+    fn server_idle_limit(&self) -> Support;
 }

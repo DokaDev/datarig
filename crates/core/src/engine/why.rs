@@ -14,4 +14,6 @@ pub enum Why {
     /// MariaDB): a proxy in between may have written the greeting itself, so neither the version
     /// nor how the session reaches the server is known.
     EnginesDisagree,
+    /// The engine has no such thing, on any version.
+    NotOnEngine,
 }
