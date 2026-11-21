@@ -40,7 +40,7 @@ pub(super) type Answer = (Result<ExportRead, DbError>, bool);
 /// metadata lock, MySQL through its optimizer hint after the `SELECT`, MariaDB (which reads the
 /// hint as a comment) through [`mariadb_bound`] before it. `None` for a text that does not start
 /// with `SELECT `: it is not sent unbounded.
-pub(super) fn keyset_text(sql: &str, mariadb: bool) -> Option<String> {
+pub(crate) fn keyset_text(sql: &str, mariadb: bool) -> Option<String> {
     let rest = sql.strip_prefix("SELECT ")?;
     Some(if mariadb {
         format!("{}{sql}", mariadb_bound(None, LOCK_WAIT_SECS))

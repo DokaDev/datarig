@@ -369,3 +369,146 @@ fn the_family_names_session_variables_by_version() {
         assert_eq!(server.isolation_var(), server.family().isolation_var(&known));
     }
 }
+
+/// The servers the reads of the app's own are recorded for: those of the session's set-up, and
+/// MySQL around each version a structure read depends on.
+const OWN_READ_SERVERS: [(bool, (u16, u16, u16)); 11] = [
+    (false, (8, 0, 0)),
+    (false, (8, 0, 12)),
+    (false, (8, 0, 13)),
+    (false, (8, 0, 15)),
+    (false, (8, 0, 16)),
+    (false, (8, 0, 40)),
+    (false, (8, 4, 6)),
+    (true, (10, 6, 0)),
+    (true, (11, 0, 6)),
+    (true, (11, 1, 0)),
+    (true, (11, 4, 13)),
+];
+
+/// Every statement of the app's own a session reads its catalogue with, on each of
+/// [`OWN_READ_SERVERS`], one per line: the question whether a statement's tables undo, the
+/// allowlist's question, a bounded count's text with the time limit it applies, the session's
+/// time limit as read from the server's words, a keyset chunk's text, a table's structure
+/// statement and how a column's default is written from the server's words.
+fn own_read_texts() -> String {
+    use crate::meta::structure::{default_text, statement};
+    use crate::query::{
+        ALL_ROWS, Asked, bounded_select, check_sql, export::keyset_text, not_undone_sql, session_limit,
+    };
+    use std::time::Duration;
+    let mut out = String::new();
+    let mut line = |what: String, text: String| {
+        out.push_str(&what);
+        out.push_str(": ");
+        out.push_str(&text);
+        out.push('\n');
+    };
+    let modes = [
+        ("default", MySqlMode::default()),
+        ("ansi_quotes", MySqlMode { ansi_quotes: true, ..MySqlMode::default() }),
+        ("no_backslash_escapes", MySqlMode { no_backslash_escapes: true, ..MySqlMode::default() }),
+    ];
+    let name_sets: [&[&str]; 3] = [&[], &["shop.t", "u"], &["o'k", "a\\b", "`my t`.c", "\"x.y\".z"]];
+    for (mariadb, version) in OWN_READ_SERVERS {
+        let server = Server { version, mariadb };
+        let name = server.label();
+        for (mode_name, mode) in modes {
+            let d = dialect(&server, mode);
+            // How the names are written depends on the sql mode alone: plain names are recorded in
+            // the default mode only.
+            let plain = mode_name == "default";
+            for names in name_sets.iter().filter(|n| plain || n.len() > 2) {
+                let names: Vec<String> = names.iter().map(|n| n.to_string()).collect();
+                let text = not_undone_sql(&names, d, server.mariadb);
+                line(format!("not_undone {name} {mode_name} {names:?}"), format!("{text:?}"));
+                line(format!("check {name} {mode_name} {names:?}"), format!("{:?}", check_sql(&names, d, &server)));
+            }
+            for (schema, table) in
+                [("shop", "items"), ("o'k", "a\\b`c")].into_iter().filter(|(s, _)| plain || *s != "shop")
+            {
+                let text = statement(server, d, schema, table);
+                line(format!("structure {name} {mode_name} {schema:?}.{table:?}"), format!("{text:?}"));
+            }
+        }
+    }
+    // What depends on the engine alone.
+    for (mariadb, version) in [(false, (8, 4, 6)), (true, (11, 4, 13))] {
+        let server = Server { version, mariadb };
+        let name = server.label();
+        let sqls = [
+            "SELECT COUNT(*) FROM (\nSELECT * FROM `t` WHERE (a > 1) LIMIT 10\n) AS datarig_count",
+            "SELECT\n`a`, COUNT(*) FROM `t` GROUP BY `a`",
+            " SELECT 1",
+            "select 1",
+            "WITH x AS (SELECT 1) SELECT * FROM x",
+        ];
+        let limits = [Duration::from_micros(500), Duration::from_millis(1500), Duration::from_secs(30)];
+        let session = [None, Some(Duration::from_secs(5)), Some(Duration::from_secs(60))];
+        for sql in sqls {
+            for limit in limits {
+                for statement in session {
+                    for lock in [None, Some(0), Some(1), Some(50)] {
+                        for hints in ["", ALL_ROWS] {
+                            let asked = Asked { isolation: String::new(), statement, lock, sort_length: None };
+                            line(
+                                format!(
+                                    "bounded {name} {sql:?} limit={limit:?} session={statement:?} lock={lock:?} \
+                                     hints={hints:?}"
+                                ),
+                                format!("{:?}", bounded_select(sql, limit, &asked, server.mariadb, hints)),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        for v in ["0", "2500", " 2500 ", "0.000000", "1.500000", "0.0005", "x", "", "-1", "1e10", "NaN", "inf"] {
+            line(format!("session_limit {name} {v:?}"), format!("{:?}", session_limit(v, server.mariadb)));
+        }
+        for sql in [
+            "SELECT * FROM `s`.`t` WHERE `id` > 7 ORDER BY `id` LIMIT 10000",
+            "SELECT\n* FROM `s`.`t`",
+            "select * from t",
+            " SELECT 1",
+            "WITH x AS (SELECT 1) SELECT * FROM x",
+        ] {
+            line(format!("keyset {name} {sql:?}"), format!("{:?}", keyset_text(sql, server.mariadb)));
+        }
+        let d = dialect(&server, MySqlMode::default());
+        for value in [
+            None,
+            Some("NULL"),
+            Some("0"),
+            Some("it's"),
+            Some("'it''s'"),
+            Some("CURRENT_TIMESTAMP"),
+            Some("current_timestamp()"),
+            Some("now()"),
+            Some("b'101'"),
+            Some("0x0A"),
+            Some("a\\b"),
+        ] {
+            for data_type in ["int", "varchar", "timestamp", "bit", "varbinary"] {
+                for extra in ["", "DEFAULT_GENERATED", "DEFAULT_GENERATED on update CURRENT_TIMESTAMP"] {
+                    line(
+                        format!("default {name} {value:?} {data_type} {extra:?}"),
+                        format!("{:?}", default_text(value.map(str::to_string), data_type, extra, server.mariadb, d)),
+                    );
+                }
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn own_read_texts_are_todays_on_both_engines() {
+    let got = own_read_texts();
+    let want = include_str!("golden/own_reads.txt");
+    let (got, want): (Vec<&str>, Vec<&str>) = (got.lines().collect(), want.lines().collect());
+    for (n, (got, want)) in got.iter().zip(&want).enumerate() {
+        assert_eq!(got, want, "line {}", n + 1);
+    }
+    assert_eq!(got.len(), want.len());
+}
