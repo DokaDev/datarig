@@ -58,6 +58,11 @@ impl Classifier {
         }
     }
 
+    /// Whether MariaDB may run its session's text ([`mysql::mariadb_may_run`]).
+    pub fn mariadb_may_run(&self) -> bool {
+        mysql::mariadb_may_run(self.language().dialect(), self.judged())
+    }
+
     /// The language it classifies.
     pub fn language(&self) -> Language {
         match self {

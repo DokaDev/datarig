@@ -11,4 +11,5 @@
 "engine.why.marker_unconfirmed" = "this tab's own session could not be confirmed on the server"
 "engine.unconfirmed" = "the server's engine could not be confirmed: VERSION() gave no answer ({greeting} by its greeting), so the session was closed before anything else ran on it"
 "engine.reports_changed" = "The server's greeting and VERSION() turned out to name two engines after this was checked: nothing was sent. Run it again to have it checked by both engines' rules"
+"engine.comment_unsupported" = "MariaDB-only executable comments (`/*M! … */`) are not supported here: write `/*! … */` instead. Nothing was sent"
 "engine.dollar_quotes_unknown" = "This text has a `$$` quote, and the server's greeting and VERSION() disagree on whether it reads them: nothing was sent"

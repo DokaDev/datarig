@@ -549,7 +549,8 @@ async fn mariadb_only_comments_are_refused_on_mariadb_and_comments_on_mysql() {
     let t = numbers(&admin, "mcomment", 10).await;
     let maria = mariadb(&admin).await;
     let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
-    let refused = |evs: &[DbEvent]| matches!(evs.last(), Some(DbEvent::Failed { error, .. }) if !matches!(error, DbError::Server(_)));
+    let refused =
+        |evs: &[DbEvent]| matches!(evs.last(), Some(DbEvent::Failed { error: DbError::CommentUnsupported, .. }));
     // Nothing of a refused command runs: the variable it would set stays unset.
     let evs = c.run(1, &["SET @zz_mc_a = 1 /*M! , @zz_mc_b = 2 */"]).await;
     assert_eq!(refused(&evs), maria, "{evs:?}");
@@ -581,7 +582,7 @@ async fn mariadb_only_comments_are_refused_on_mariadb_and_comments_on_mysql() {
     let counted = format!("SELECT COUNT(*) FROM (SELECT id FROM {} /*M! LIMIT 3 */) AS datarig_count", t.q());
     let got = count(&mut c, 7, counted).await.0;
     if maria {
-        assert!(got.as_ref().is_err_and(|e| !matches!(e, DbError::Server(_))), "{got:?}");
+        assert_eq!(got, Err(DbError::CommentUnsupported));
     } else {
         // The count's own check reads the text as not repeatable, as before.
         assert!(matches!(got, Err(DbError::NotRepeatable(_))), "{got:?}");

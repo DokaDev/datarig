@@ -32,6 +32,15 @@ read-only profile, a statement either engine finds dangerous asks before it runs
 run again for its next page or counted only when both engines allow it, and the filter bar
 lets a call run only when both do.
 
+**MariaDB's own executable comments.** MariaDB runs what a `/*M! … */` comment holds (also with
+a version, `/*M!100500 … */`); MySQL reads it as a plain comment. datarig does not read what is
+inside one, so on a MariaDB server, and on a session whose greeting and `VERSION()` name different
+engines, a run, a count or an export whose text holds `/*M!` anywhere (in a string or a comment
+too) is refused before anything of it is sent, with a message that says why: write the comment
+as `/*! … */` instead, which datarig reads and asks about as an executable comment. A run
+waiting for its connection is checked again once the server has said which engine it is. On a
+MySQL server the text runs as before. Startup SQL takes no executable comment of either form.
+
 A MySQL profile has `driver = "mysql"`, and a URL starts with `mysql://` (or `mariadb://`).
 
 ## What works
