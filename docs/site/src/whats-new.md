@@ -3,6 +3,15 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.41.5 (2026-11-21)
+
+A patch release with one fix to how statements are split before they are sent.
+
+### Fixed
+
+- Executable comments at the start or end of a statement are now kept in the statement text
+  that is sent.
+
 ## 0.41.4 (2026-11-18)
 
 A patch release that reads MySQL and MariaDB function calls the way the server does on read-only profiles and in the table filter, and fixes how datarig lists and reads tables on MariaDB.
