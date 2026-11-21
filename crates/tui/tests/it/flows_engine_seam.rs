@@ -1291,7 +1291,7 @@ fn disagreeing_facts(greeting: Engine) -> DbEvent {
 fn refused_m_comment(h: &mut Harness, what: &str) {
     assert!(h.app.overlays.run_confirm().is_none(), "{what}: not asked about");
     assert!(executes(h).is_empty(), "{what}: nothing sent");
-    assert!(tab_status(h).is_some(), "{what}: said why");
+    assert_eq!(tab_status(h), Some(Msg::Label(Label::EngineCommentUnsupported)), "{what}: said why");
 }
 
 /// On a MariaDB session, and on one whose reports name both engines (either greeting), text
@@ -1299,7 +1299,8 @@ fn refused_m_comment(h: &mut Harness, what: &str) {
 /// from the statement under the cursor, a whole script with it.
 #[test]
 fn a_mariadb_only_comment_is_refused_where_mariadb_may_run_it() {
-    let sessions: [(&str, fn() -> DbEvent, Language); 3] = [
+    type Session = (&'static str, fn() -> DbEvent, Language);
+    let sessions: [Session; 3] = [
         ("MariaDB", || facts_of(Engine::MariaDb), mariadb()),
         ("MySQL greeting, MariaDB line", || disagreeing_facts(Engine::MySql), mysql(MySqlMode::default())),
         ("MariaDB greeting, MySQL line", || disagreeing_facts(Engine::MariaDb), mariadb()),
@@ -1310,11 +1311,18 @@ fn a_mariadb_only_comment_is_refused_where_mariadb_may_run_it() {
             run_all(&mut h, sql);
             refused_m_comment(&mut h, &format!("{what}: selection: {sql}"));
             let mut h = two_engines(false, facts(), lang);
+            // The cursor on the statement with the comment (the last one).
             edit(&mut h, sql);
-            h.keys("gg");
+            h.keys("gg$");
             h.ctrl('e');
             refused_m_comment(&mut h, &format!("{what}: cursor: {sql}"));
         }
+        // The statement under the cursor without one runs: the other is not part of the run.
+        let mut h = two_engines(false, facts(), lang);
+        edit(&mut h, "SELECT 1; SELECT 2 /*M! , 3 */");
+        h.keys("gg");
+        h.ctrl('e');
+        assert_eq!(executes(&mut h), [["SELECT 1"]], "{what}");
     }
 }
 

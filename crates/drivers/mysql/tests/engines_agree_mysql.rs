@@ -908,7 +908,7 @@ async fn a_disagreeing_session_sends_no_mariadb_only_comment() {
         let from = s.proxy.queries().len();
         let got = s.ask_both(id, cmd).await;
         let sent = s.proxy.queries()[from..].to_vec();
-        assert!(got.as_ref().is_err_and(|e| !matches!(e, DbError::Server(_))), "{what}: {got:?}, sent {sent:?}");
+        assert_eq!(got, Err(DbError::CommentUnsupported), "{what}: sent {sent:?}");
         assert!(sent.is_empty(), "{what}: nothing sent: {sent:?}");
     }
     let got = s.ask_both(3, TwoEngines::execute(3, "SELECT 1 /*! , 2 */")).await;

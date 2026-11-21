@@ -275,6 +275,11 @@ impl App {
     /// (sent, the first broke the tab's connection).
     pub(super) fn unsupported(&self, tab: TabId, statements: &[String]) -> Option<Notice> {
         let classifier = self.classifier(tab).fresh();
+        // MariaDB's own executable comments are not read: refused where MariaDB may run them,
+        // under the tab's rules as they are now (a run that waited for its connection too).
+        if classifier.mariadb_may_run() && statements.iter().any(|s| datarig_core::sql::lexer::mysql::has_m_bang(s)) {
+            return Some(Notice::new(Label::EngineCommentUnsupported, Level::Error));
+        }
         let sql = statements.iter().find(|sql| classifier.clone().classify(sql).stdio)?;
         let sql = super::runlog::excerpt(sql, 60);
         Some(Notice::new(Msg::SafetyCopyStdio { sql }, Level::Error))
