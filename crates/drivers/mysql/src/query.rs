@@ -103,7 +103,7 @@ use datarig_core::driver::{
     CancelFailure, CancelMark, Cell, ColumnMeta, DbCommand, DbError, DbEvent, ESTIMATE_LIMIT, Isolation, Outcome,
     OwnSession, PagingMode, ServerEnd, SessionValues, StatementInfo, TxOutcome, TxRule, TxStep,
 };
-use datarig_core::engine::ServerFacts;
+use datarig_core::engine::{Fact, ServerFacts, Version};
 use datarig_core::sql::dialect::{Dialect, DollarQuotes};
 use datarig_core::sql::lexer::mysql::has_dollar_opener;
 use datarig_core::sql::lexer::{Tok, Token, lex_in};
@@ -2147,7 +2147,7 @@ async fn asked_server(
         Ok(names) => names,
         Err(why) => return Ok(Err(DbError::NotRepeatable(why))),
     };
-    let ask = check_sql(&names, s.dialect, &env.greeting);
+    let ask = check_sql(&names, s.dialect, &env.greeting, &crate::engine::session_version(env.facts));
     env.busy.store(true, Ordering::SeqCst);
     type Answer = (Option<String>, Option<String>, Option<String>, Option<String>, Option<String>);
     let answer = match ask.as_slice() {
@@ -2277,21 +2277,21 @@ fn name_parts(name: &str) -> Vec<String> {
 
 /// The question [`asked_server`] asks for `names` (every name a statement writes, as
 /// `risk::mysql::names` gives them) on the server of greeting `g`: the session's transaction
-/// isolation and the time limit of a `SELECT`, and the first of them that is a view or a table of
+/// isolation (its variable named by version `v`, [`crate::engine::session_version`]) and the time limit of a `SELECT`, and the first of them that is a view or a table of
 /// the server's own (`information_schema.TABLES` rows other than `BASE TABLE` and MariaDB's
 /// `SYSTEM VERSIONED`), compared without case; on MariaDB the session's lock wait too
 /// ([`Asked::lock`]). A name may be a table of the current database, a database's table
 /// (`db.t`), a column of a table (`t.c`, `db.t.c`) or an alias: every reading that can name a
 /// table is asked about. In one statement or more, as the family writes it
 /// ([`Family::check_sql`]).
-pub(crate) fn check_sql(names: &[String], d: Dialect, g: &Greeting) -> Vec<String> {
+pub(crate) fn check_sql(names: &[String], d: Dialect, g: &Greeting, v: &Fact<Version>) -> Vec<String> {
     let cond = name_condition(names, d);
     let lookup = format!(
         "(SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME) \
          FROM information_schema.TABLES t WHERE t.TABLE_TYPE NOT IN ('BASE TABLE', 'SYSTEM VERSIONED') \
          AND ({cond}) LIMIT 1)"
     );
-    g.family().check_sql(g.isolation_var(), &lookup)
+    g.family().check_sql(g.isolation_var(v), &lookup)
 }
 
 /// The rows of `information_schema.TABLES t` that `names` may name, without case: a bare name a

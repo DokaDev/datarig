@@ -152,16 +152,18 @@ impl Greeting {
         family::check(self.family(), self.handshake)
     }
 
-    /// The session variable that makes its server's transactions read-only (`tx_read_only`
-    /// before MariaDB 11.1), by its version.
-    pub(crate) fn read_only_var(&self) -> &'static str {
-        self.family().read_only_var(&Fact::Known(self.handshake))
+    /// The session variable that makes its server's transactions read-only, on its engine at
+    /// version `v` ([`session_version`]): `tx_read_only` on MariaDB before 11.1 or of a version
+    /// not known.
+    pub(crate) fn read_only_var(&self, v: &Fact<Version>) -> &'static str {
+        self.family().read_only_var(v)
     }
 
-    /// The session variable of its server's transactions' isolation level (`tx_isolation`
-    /// before MariaDB 11.1), by its version.
-    pub(crate) fn isolation_var(&self) -> &'static str {
-        self.family().isolation_var(&Fact::Known(self.handshake))
+    /// The session variable of its server's transactions' isolation level, on its engine at
+    /// version `v` ([`session_version`]): `tx_isolation` on MariaDB before 11.1 or of a
+    /// version not known.
+    pub(crate) fn isolation_var(&self, v: &Fact<Version>) -> &'static str {
+        self.family().isolation_var(v)
     }
 
     /// The greeting the facts of a session keep (its engine too, when the version line names
@@ -219,6 +221,18 @@ pub(crate) fn facts(g: &Greeting, report: &VersionReport, own: Option<bool>) -> 
             EngineId::MySql | EngineId::Postgres => EngineFacts::MySql(my),
         },
     })
+}
+
+/// The version a session on the server of `facts` names its settings by, on its greeting's
+/// engine ([`Greeting::of`]). When the greeting and the version line name one engine, the
+/// version the facts know, which may be none (the two numbers differ, or the line has none):
+/// then the names are those every version of the engine has. When they name two engines, the
+/// greeting's number, so the names are the ones the greeting implies.
+pub(crate) fn session_version(facts: &ServerFacts) -> Fact<Version> {
+    match facts.reports_disagree() {
+        true => Fact::Known(Greeting::of(facts).handshake),
+        false => facts.version.clone(),
+    }
 }
 
 /// What a test connection to the server of greeting `g` and version line `report` says of it.
