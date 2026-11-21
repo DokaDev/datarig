@@ -1284,6 +1284,74 @@ fn disagreeing_facts(greeting: Engine) -> DbEvent {
     }))
 }
 
+// ── MariaDB's own executable comments (`/*M! … */`) ─────────────────────────────────────────
+
+/// A run holding `/*M! … */` was refused before anything was sent: no question, a reason on the
+/// tab.
+fn refused_m_comment(h: &mut Harness, what: &str) {
+    assert!(h.app.overlays.run_confirm().is_none(), "{what}: not asked about");
+    assert!(executes(h).is_empty(), "{what}: nothing sent");
+    assert!(tab_status(h).is_some(), "{what}: said why");
+}
+
+/// On a MariaDB session, and on one whose reports name both engines (either greeting), text
+/// holding MariaDB's own executable comment is refused before it is sent, from the selection and
+/// from the statement under the cursor, a whole script with it.
+#[test]
+fn a_mariadb_only_comment_is_refused_where_mariadb_may_run_it() {
+    let sessions: [(&str, fn() -> DbEvent, Language); 3] = [
+        ("MariaDB", || facts_of(Engine::MariaDb), mariadb()),
+        ("MySQL greeting, MariaDB line", || disagreeing_facts(Engine::MySql), mysql(MySqlMode::default())),
+        ("MariaDB greeting, MySQL line", || disagreeing_facts(Engine::MariaDb), mariadb()),
+    ];
+    for (what, facts, lang) in sessions {
+        for sql in ["SELECT 1 /*M! , 2 */", "/*M!100500 SET @a = 1 */", "SELECT 1; SELECT 2 /*M! , 3 */"] {
+            let mut h = two_engines(false, facts(), lang);
+            run_all(&mut h, sql);
+            refused_m_comment(&mut h, &format!("{what}: selection: {sql}"));
+            let mut h = two_engines(false, facts(), lang);
+            edit(&mut h, sql);
+            h.keys("gg");
+            h.ctrl('e');
+            refused_m_comment(&mut h, &format!("{what}: cursor: {sql}"));
+        }
+    }
+}
+
+/// A run queued before its profile connects, on a profile with the MySQL driver key whose server
+/// turns out to be MariaDB, is refused once the session says so, after the user's yes to its
+/// executable comment before connect: nothing of it is sent.
+#[test]
+fn a_queued_run_with_a_mariadb_only_comment_is_refused_once_the_server_is_mariadb() {
+    let sql = "SELECT 1 /*M! , 2 */";
+    let mut h = connecting_two();
+    run_all(&mut h, sql);
+    assert!(h.app.overlays.run_confirm().is_some(), "asked about before connect");
+    h.keys("y");
+    assert!(h.app.is_queued(h.app.tab().id), "queued until the profile connects");
+    h.meta_db("two", facts_of(Engine::MariaDb));
+    h.meta_db("two", DbEvent::Language(mariadb()));
+    h.meta_db("two", DbEvent::Connected);
+    refused_m_comment(&mut h, "queued");
+}
+
+/// Where only MySQL runs the text (reports that agree on MySQL), `/*M! … */` is a plain comment
+/// and the text is asked about and runs as before; MySQL's own `/*! … */` is asked about and runs
+/// on MariaDB as before.
+#[test]
+fn mariadb_only_comments_on_mysql_and_mysql_comments_on_mariadb_are_unchanged() {
+    for (what, facts, lang, sql) in [
+        ("MySQL", facts_of(Engine::MySql), mysql(MySqlMode::default()), "SELECT 1 /*M! , 2 */"),
+        ("MariaDB", facts_of(Engine::MariaDb), mariadb(), "SELECT 1 /*! , 2 */"),
+    ] {
+        let mut h = two_engines(false, facts, lang);
+        run_all(&mut h, sql);
+        assert!(h.app.overlays.run_confirm().is_some(), "{what}: asked about, as before");
+        h.keys("y");
+        assert_eq!(executes(&mut h), [[sql]], "{what}: it runs");
+    }
+}
+
 /// A connected MySQL-driver profile `two` (read-only when `read_only`) whose metadata session
 /// said `lang`, and whose first tab's session said `facts`, then `lang`.
 fn two_engines(read_only: bool, facts: DbEvent, lang: Language) -> Harness {
