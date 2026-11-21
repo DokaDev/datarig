@@ -2,7 +2,14 @@
 //! server answered ([`CAPABILITIES`]), the one reader of a server's greeting ([`greeting`]), the
 //! read of the server's own version line, which names the engine ([`confirm`]), the facts a
 //! session's connection found ([`facts`]) and the one place that turns them into what a session
-//! says of its server ([`derive`]), with the dialect its text is read in ([`dialect`]).
+//! says of its server ([`derive`]), with the dialect its text is read in ([`dialect`]); and,
+//! per engine of the family ([`family::Family`]), how a session is set up on it.
+
+mod family;
+mod mariadb;
+mod mysql;
+
+pub(crate) use family::{Family, family};
 
 use crate::session::{Server, Tracked, my_error};
 use datarig_core::driver::{Capabilities, DbError, EditFormat, ExplainFormat, Hierarchy, MySqlEdit};
@@ -128,6 +135,39 @@ impl Server {
     /// A server of no version the driver reads: refused when checked, with no plan format and
     /// no edits.
     pub(crate) const UNREAD: Server = Server { version: (0, 0, 0), mariadb: false };
+
+    /// The rules of the engine its greeting names.
+    pub(crate) fn family(&self) -> &'static dyn Family {
+        family(engine_of(self.mariadb))
+    }
+
+    /// Its version, as its greeting says.
+    fn handshake(&self) -> Version {
+        let (major, minor, patch) = self.version;
+        Version::new(major, minor, patch)
+    }
+
+    /// `MySQL 8.4.6`, `MariaDB 11.4.2`.
+    pub(crate) fn label(&self) -> String {
+        family::label(self.family(), self.handshake())
+    }
+
+    /// Refused when it is older than the driver supports (or says no version it can read).
+    pub(crate) fn check(&self) -> Result<(), DbError> {
+        family::check(self.family(), self.handshake())
+    }
+
+    /// The session variable that makes its transactions read-only (`tx_read_only` before
+    /// MariaDB 11.1), by the greeting's version.
+    pub(crate) fn read_only_var(&self) -> &'static str {
+        self.family().read_only_var(&Fact::Known(self.handshake()))
+    }
+
+    /// The session variable of its transactions' isolation level (`tx_isolation` before
+    /// MariaDB 11.1), by the greeting's version.
+    pub(crate) fn isolation_var(&self) -> &'static str {
+        self.family().isolation_var(&Fact::Known(self.handshake()))
+    }
 
     /// The server as its greeting says.
     pub(crate) fn of_greeting(g: &Greeting) -> Server {

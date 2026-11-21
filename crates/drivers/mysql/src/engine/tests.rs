@@ -318,3 +318,54 @@ fn init_sql_is_todays_for_every_role_engine_and_version() {
     }
     assert_eq!(got.len(), want.len());
 }
+
+#[test]
+fn the_family_names_session_variables_by_version() {
+    let (tx, transaction) = (("tx_read_only", "tx_isolation"), ("transaction_read_only", "transaction_isolation"));
+    let v = |a, b, c| Fact::Known(Version::new(a, b, c));
+    // What each engine names on a version it was told, and on one it was not: MariaDB takes its
+    // older names, which every version it serves has; MySQL has one name on every version.
+    let rows = [
+        (EngineId::MariaDb, v(10, 6, 0), tx),
+        (EngineId::MariaDb, v(11, 0, 6), tx),
+        (EngineId::MariaDb, v(11, 1, 0), transaction),
+        (EngineId::MariaDb, v(11, 4, 13), transaction),
+        (EngineId::MariaDb, Fact::Unknown(Why::VersionUnknown), tx),
+        (EngineId::MariaDb, Fact::Unknown(Why::VersionsDisagree), tx),
+        (EngineId::MariaDb, Fact::Unknown(Why::EnginesDisagree), tx),
+        (EngineId::MariaDb, Fact::Unknown(Why::NotChecked), tx),
+        (EngineId::MariaDb, Fact::No(Why::NotOnEngine), tx),
+        (EngineId::MySql, v(8, 0, 0), transaction),
+        (EngineId::MySql, v(8, 0, 40), transaction),
+        (EngineId::MySql, v(8, 4, 6), transaction),
+        (EngineId::MySql, Fact::Unknown(Why::VersionUnknown), transaction),
+        (EngineId::MySql, Fact::Unknown(Why::VersionsDisagree), transaction),
+        (EngineId::MySql, Fact::Unknown(Why::EnginesDisagree), transaction),
+        (EngineId::MySql, Fact::Unknown(Why::NotChecked), transaction),
+        (EngineId::MySql, Fact::No(Why::NotOnEngine), transaction),
+    ];
+    for (engine, version, (read_only, isolation)) in rows {
+        let f = family(engine);
+        assert_eq!(f.engine(), engine);
+        assert_eq!(f.read_only_var(&version), read_only, "{engine:?} {version:?}");
+        assert_eq!(f.isolation_var(&version), isolation, "{engine:?} {version:?}");
+    }
+    // The rest of a session's set-up does not depend on the version.
+    assert_eq!(family(EngineId::MySql).statement_timeout(5_000), "SESSION max_execution_time = 5000");
+    assert_eq!(family(EngineId::MariaDb).statement_timeout(5_000), "SESSION max_statement_time = 5");
+    assert_eq!(family(EngineId::MySql).super_read_only(), Some("super_read_only"));
+    assert_eq!(family(EngineId::MariaDb).super_read_only(), None);
+    assert_eq!(family(EngineId::MySql).min_version(), Version::new(8, 0, 0));
+    assert_eq!(family(EngineId::MariaDb).min_version(), Version::new(10, 6, 0));
+    // Never this driver's engine: MySQL's rules.
+    assert_eq!(family(EngineId::Postgres).engine(), EngineId::MySql);
+    // A greeting's server asks the family of its engine, by the greeting's version.
+    for (mariadb, version) in SET_UP_SERVERS {
+        let server = Server { version, mariadb };
+        let (major, minor, patch) = version;
+        let known = Fact::Known(Version::new(major, minor, patch));
+        assert_eq!(server.family().engine(), engine_of(mariadb));
+        assert_eq!(server.read_only_var(), server.family().read_only_var(&known));
+        assert_eq!(server.isolation_var(), server.family().isolation_var(&known));
+    }
+}

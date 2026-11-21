@@ -257,51 +257,6 @@ pub(crate) struct Server {
     pub(crate) mariadb: bool,
 }
 
-/// The oldest MySQL the driver works with.
-const MYSQL_MIN: (u16, u16, u16) = (8, 0, 0);
-
-/// The oldest MariaDB the driver tries (a best effort).
-const MARIADB_MIN: (u16, u16, u16) = (10, 6, 0);
-
-impl Server {
-    /// `MySQL 8.4.6`, `MariaDB 11.4.2`.
-    pub(crate) fn label(&self) -> String {
-        let (a, b, c) = self.version;
-        format!("{} {a}.{b}.{c}", if self.mariadb { "MariaDB" } else { "MySQL" })
-    }
-
-    /// Refused when it is older than the driver supports (or says no version it can read).
-    pub(crate) fn check(&self) -> Result<(), DbError> {
-        let (min, name) = if self.mariadb { (MARIADB_MIN, "MariaDB") } else { (MYSQL_MIN, "MySQL") };
-        if self.version >= min {
-            return Ok(());
-        }
-        let server = if self.version == (0, 0, 0) { format!("{name} (unknown version)") } else { self.label() };
-        Err(DbError::VersionUnsupported { server, needed: format!("{name} {}.{}", min.0, min.1) })
-    }
-
-    /// The session variable that makes its transactions read-only (`tx_read_only` before
-    /// MariaDB 11.1).
-    pub(crate) fn read_only_var(&self) -> &'static str {
-        if self.mariadb && self.version < (11, 1, 0) { "tx_read_only" } else { "transaction_read_only" }
-    }
-
-    /// The session variable of its transactions' isolation level (`tx_isolation` before
-    /// MariaDB 11.1).
-    pub(crate) fn isolation_var(&self) -> &'static str {
-        if self.mariadb && self.version < (11, 1, 0) { "tx_isolation" } else { "transaction_isolation" }
-    }
-
-    /// The `SET` assignment that stops a `SELECT` after `ms` milliseconds.
-    fn timeout(&self, ms: u64) -> String {
-        if self.mariadb {
-            format!("SESSION max_statement_time = {}", ms as f64 / 1000.0)
-        } else {
-            format!("SESSION max_execution_time = {ms}")
-        }
-    }
-}
-
 /// How the session is set up.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Settings {
@@ -390,13 +345,13 @@ pub(crate) fn init_sql(server: &Server, s: &Settings) -> String {
     }
     if s.role == SessionRole::Meta {
         parts.push(format!("SESSION lock_wait_timeout = {META_LOCK_WAIT}"));
-        parts.push(server.timeout(META_TIMEOUT_MS));
+        parts.push(server.family().statement_timeout(META_TIMEOUT_MS));
         // `SHOW CREATE …` quotes every name, whatever the server's default.
         parts.push("SESSION sql_quote_show_create = 1".to_string());
     }
     if s.role == SessionRole::Monitor {
         parts.push("SESSION lock_wait_timeout = 1".to_string());
-        parts.push(server.timeout(MONITOR_TIMEOUT_MS));
+        parts.push(server.family().statement_timeout(MONITOR_TIMEOUT_MS));
         parts.push("SESSION sql_select_limit = 18446744073709551615".to_string());
         parts.push("SESSION time_zone = 'SYSTEM'".to_string());
     }
@@ -587,7 +542,10 @@ pub(crate) type ReadOnlyAsked = (Option<String>, Option<String>, Option<String>)
 /// writes may still pass them on to another (a reader that forwards writes to its writer).
 pub(crate) fn ask_read_only(server: &Server) -> String {
     let ro = server.read_only_var();
-    let super_ro = if server.mariadb { "NULL" } else { "CAST(@@GLOBAL.super_read_only AS CHAR)" };
+    let super_ro = match server.family().super_read_only() {
+        Some(var) => format!("CAST(@@GLOBAL.{var} AS CHAR)"),
+        None => "NULL".to_string(),
+    };
     format!("SELECT CAST(@@SESSION.{ro} AS CHAR), {super_ro}, CAST(@@GLOBAL.innodb_read_only AS CHAR)")
 }
 
@@ -611,8 +569,8 @@ pub(crate) fn not_read_only(
     let ro = server.read_only_var();
     let v = |v: Option<&str>| v.unwrap_or("NULL").to_string();
     let mut asked = vec![format!("{ro} {}", v(session.as_deref()))];
-    if !server.mariadb {
-        asked.push(format!("super_read_only {}", v(super_ro.as_deref())));
+    if let Some(var) = server.family().super_read_only() {
+        asked.push(format!("{var} {}", v(super_ro.as_deref())));
     }
     asked.push(format!("innodb_read_only {}", v(innodb_ro.as_deref())));
     format!(
