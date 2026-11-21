@@ -3,7 +3,8 @@
 //! read of the server's own version line, which names the engine ([`confirm`]), the facts a
 //! session's connection found ([`facts`]) and the one place that turns them into what a session
 //! says of its server ([`derive`]), with the dialect its text is read in ([`dialect`]); and,
-//! per engine of the family ([`family::Family`]), how a session is set up on it.
+//! per engine of the family ([`family::Family`]), how a session is set up on it and how the
+//! app's own reads are written.
 
 mod family;
 mod mariadb;
@@ -11,7 +12,7 @@ mod mysql;
 
 pub(crate) use family::{Family, family};
 
-use crate::session::{Server, Tracked, my_error};
+use crate::session::{Tracked, my_error};
 use datarig_core::driver::{Capabilities, DbError, EditFormat, ExplainFormat, Hierarchy, MySqlEdit};
 use datarig_core::engine::mysql_family::line_names_mariadb;
 use datarig_core::engine::{EngineFacts, EngineId, Fact, MyFacts, PingIdentity, ServerFacts, Topology, Version, Why};
@@ -97,7 +98,7 @@ pub(crate) async fn confirm(conn: &mut Conn, g: &Greeting) -> Result<VersionRepo
 /// names; the version is the greeting's number when the line names the greeting's engine and
 /// starts with that number, and unknown otherwise.
 pub(crate) fn judge(g: &Greeting, answer: Option<Value>) -> Result<VersionReport, DbError> {
-    let greeting = || Server::of_greeting(g).label();
+    let greeting = || g.label();
     let line = match answer {
         Some(Value::Bytes(bytes)) => String::from_utf8(bytes).ok(),
         _ => None,
@@ -131,59 +132,59 @@ fn engine_of(mariadb: bool) -> EngineId {
     if mariadb { EngineId::MariaDb } else { EngineId::MySql }
 }
 
-impl Server {
+impl Greeting {
     /// A server of no version the driver reads: refused when checked, with no plan format and
     /// no edits.
-    pub(crate) const UNREAD: Server = Server { version: (0, 0, 0), mariadb: false };
+    pub(crate) const UNREAD: Greeting = Greeting { mariadb: false, handshake: Version::new(0, 0, 0) };
 
-    /// The rules of the engine its greeting names.
+    /// The rules of the engine it names.
     pub(crate) fn family(&self) -> &'static dyn Family {
         family(engine_of(self.mariadb))
     }
 
-    /// Its version, as its greeting says.
-    fn handshake(&self) -> Version {
-        let (major, minor, patch) = self.version;
-        Version::new(major, minor, patch)
-    }
-
     /// `MySQL 8.4.6`, `MariaDB 11.4.2`.
     pub(crate) fn label(&self) -> String {
-        family::label(self.family(), self.handshake())
+        family::label(self.family(), self.handshake)
     }
 
     /// Refused when it is older than the driver supports (or says no version it can read).
     pub(crate) fn check(&self) -> Result<(), DbError> {
-        family::check(self.family(), self.handshake())
+        family::check(self.family(), self.handshake)
     }
 
-    /// The session variable that makes its transactions read-only (`tx_read_only` before
-    /// MariaDB 11.1), by the greeting's version.
+    /// The session variable that makes its server's transactions read-only (`tx_read_only`
+    /// before MariaDB 11.1), by its version.
     pub(crate) fn read_only_var(&self) -> &'static str {
-        self.family().read_only_var(&Fact::Known(self.handshake()))
+        self.family().read_only_var(&Fact::Known(self.handshake))
     }
 
-    /// The session variable of its transactions' isolation level (`tx_isolation` before
-    /// MariaDB 11.1), by the greeting's version.
+    /// The session variable of its server's transactions' isolation level (`tx_isolation`
+    /// before MariaDB 11.1), by its version.
     pub(crate) fn isolation_var(&self) -> &'static str {
-        self.family().isolation_var(&Fact::Known(self.handshake()))
+        self.family().isolation_var(&Fact::Known(self.handshake))
     }
 
-    /// The server as its greeting says.
-    pub(crate) fn of_greeting(g: &Greeting) -> Server {
-        let v = g.handshake;
-        Server { version: (v.major, v.minor, v.patch), mariadb: g.mariadb }
-    }
-
-    /// The server the facts of a session found, as the greeting said it (its engine too, when
-    /// the version line names the other one).
-    pub(crate) fn of(facts: &ServerFacts) -> Server {
+    /// The greeting the facts of a session keep (its engine too, when the version line names
+    /// the other one).
+    pub(crate) fn of(facts: &ServerFacts) -> Greeting {
         match &facts.detail {
-            EngineFacts::MySql(my) | EngineFacts::MariaDb(my) => Server::of_greeting(&greeting_of(my)),
+            EngineFacts::MySql(my) | EngineFacts::MariaDb(my) => greeting_of(my),
             // Never what this driver's sessions find.
-            EngineFacts::Postgres(_) => Server::UNREAD,
+            EngineFacts::Postgres(_) => Greeting::UNREAD,
         }
     }
+}
+
+/// MySQL's rules of the family, for what only MySQL's plans are asked with (an estimate reads
+/// MySQL's tree plan).
+pub(crate) fn mysql_family() -> &'static dyn Family {
+    family(EngineId::MySql)
+}
+
+/// The rules of MariaDB (`true`) or MySQL, for tests that name an engine by the greeting's flag.
+#[cfg(test)]
+pub(crate) fn family_of(mariadb: bool) -> &'static dyn Family {
+    family(engine_of(mariadb))
 }
 
 /// The greeting the facts `my` keep.
@@ -249,11 +250,10 @@ pub(crate) struct Derived {
 /// did before the version line was read, whichever engine the line names.
 pub(crate) fn derive(facts: &ServerFacts, tracked: &Tracked) -> Derived {
     // The greeting's engine and number, whichever engine the version line names.
-    let server = Server::of(facts);
-    let language = Language::Sql(dialect(&server, tracked.mode(dollar_quotes(facts))));
-    let (major, minor, patch) = server.version;
-    let version = Version::new(major, minor, patch);
-    let (explain, edit) = match server.mariadb {
+    let greeting = Greeting::of(facts);
+    let language = Language::Sql(dialect(&greeting, tracked.mode(dollar_quotes(facts))));
+    let version = greeting.handshake;
+    let (explain, edit) = match greeting.mariadb {
         false => (
             (version >= Version::new(8, 0, 16)).then_some(ExplainFormat::MySqlTree),
             (version >= Version::new(8, 0, 17)).then_some(EditFormat::MySql(MySqlEdit { nowait: true })),
@@ -269,10 +269,10 @@ pub(crate) fn dollar_quotes(facts: &ServerFacts) -> DollarQuotes {
     facts.engine().spec().text.dollar_quotes(facts)
 }
 
-/// The dialect a session on `server` (as its greeting says) reads its text in, in sql mode
-/// `mode`: MariaDB's when the greeting names MariaDB, else MySQL's.
-pub(crate) fn dialect(server: &Server, mode: MySqlMode) -> Dialect {
-    match engine_of(server.mariadb) {
+/// The dialect a session of greeting `g` reads its text in, in sql mode `mode`: MariaDB's when
+/// the greeting names MariaDB, else MySQL's.
+pub(crate) fn dialect(g: &Greeting, mode: MySqlMode) -> Dialect {
+    match engine_of(g.mariadb) {
         EngineId::MariaDb => Dialect::MariaDb(mode),
         EngineId::MySql | EngineId::Postgres => Dialect::MySql(mode),
     }

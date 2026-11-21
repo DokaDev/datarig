@@ -1,4 +1,6 @@
 use super::*;
+use crate::engine::family_of;
+use datarig_core::engine::Version;
 use datarig_core::sql::dialect::{DollarQuotes, MySqlMode};
 
 const MODE: MySqlMode = MySqlMode {
@@ -7,7 +9,7 @@ const MODE: MySqlMode = MySqlMode {
     dollar_quotes: DollarQuotes::Read,
     ignore_space: false,
 };
-const MYSQL: Server = Server { version: (8, 4, 0), mariadb: false };
+const MYSQL: Greeting = Greeting { mariadb: false, handshake: Version::new(8, 4, 0) };
 
 #[test]
 fn outcomes_name_the_command_or_count_rows() {
@@ -170,7 +172,7 @@ fn limits_the_server_reports() {
 /// the table's schema, which the privilege tables do not show).
 #[test]
 fn the_not_undone_question_asks_for_every_kind() {
-    let sql = not_undone_sql(&["shop.t".into(), "u".into()], Dialect::MySql(MODE), false);
+    let sql = not_undone_sql(&["shop.t".into(), "u".into()], Dialect::MySql(MODE), family_of(false));
     for part in ["'INNODB', 'NDBCLUSTER', 'NDB'", "TABLE_TYPE = 'VIEW'", "' (trigger)'", "' (triggers not visible)'"] {
         assert!(sql.contains(part), "{part}: {sql}");
     }
@@ -187,7 +189,7 @@ fn the_not_undone_question_asks_for_every_kind() {
 /// never reads it (the server would refuse the whole question), and a global grant counts.
 #[test]
 fn the_not_undone_question_of_mariadb_reads_no_partial_revokes() {
-    let sql = not_undone_sql(&["shop.t".into()], Dialect::MySql(MODE), true);
+    let sql = not_undone_sql(&["shop.t".into()], Dialect::MySql(MODE), family_of(true));
     assert!(!sql.contains("partial_revokes"), "{sql}");
     assert!(sql.contains("FROM information_schema.USER_PRIVILEGES p WHERE p.GRANTEE = "), "{sql}");
     assert!(sql.contains("' (triggers not visible)'") && sql.ends_with("ORDER BY 1 LIMIT 20"), "{sql}");
@@ -320,7 +322,7 @@ fn settings_of_the_next_transaction_only_are_seen_in_every_spelling() {
 fn a_bounded_read_is_limited_for_its_statement_and_never_longer_than_the_session() {
     let count = "SELECT COUNT(*) FROM (\nSELECT * FROM `t` WHERE (a > 1) LIMIT 10\n) AS datarig_count";
     let none = Asked { isolation: String::new(), statement: None, lock: None, sort_length: None };
-    let (mysql, applied) = bounded_select(count, Duration::from_secs(30), &none, false, "").unwrap();
+    let (mysql, applied) = bounded_select(count, Duration::from_secs(30), &none, family_of(false), "").unwrap();
     assert_eq!(
         mysql,
         "SELECT /*+ MAX_EXECUTION_TIME(30000) SET_VAR(lock_wait_timeout=1) */ COUNT(*) FROM (\nSELECT * FROM `t` WHERE \
@@ -328,25 +330,28 @@ fn a_bounded_read_is_limited_for_its_statement_and_never_longer_than_the_session
     );
     assert_eq!(applied, Duration::from_secs(30));
     let waits = Asked { isolation: String::new(), statement: None, lock: Some(50), sort_length: None };
-    let (maria, _) = bounded_select(count, Duration::from_millis(1500), &waits, true, "").unwrap();
+    let (maria, _) = bounded_select(count, Duration::from_millis(1500), &waits, family_of(true), "").unwrap();
     assert_eq!(maria, format!("SET STATEMENT max_statement_time = 1.5, lock_wait_timeout = 1 FOR {count}"));
     // A shorter time limit of the session's stays; a longer one is not taken. The lock wait is
     // the shortest the server takes whatever the session's.
     let short =
         Asked { isolation: String::new(), statement: Some(Duration::from_secs(5)), lock: None, sort_length: None };
-    let (text, applied) = bounded_select(count, Duration::from_secs(30), &short, false, "").unwrap();
+    let (text, applied) = bounded_select(count, Duration::from_secs(30), &short, family_of(false), "").unwrap();
     assert!(text.starts_with("SELECT /*+ MAX_EXECUTION_TIME(5000) SET_VAR(lock_wait_timeout=1) */ COUNT(*)"), "{text}");
     assert_eq!(applied, Duration::from_secs(5));
     let long =
         Asked { isolation: String::new(), statement: Some(Duration::from_secs(60)), lock: None, sort_length: None };
-    let (text, applied) = bounded_select(count, Duration::from_secs(30), &long, false, "").unwrap();
+    let (text, applied) = bounded_select(count, Duration::from_secs(30), &long, family_of(false), "").unwrap();
     assert!(text.starts_with("SELECT /*+ MAX_EXECUTION_TIME(30000) SET_VAR(lock_wait_timeout=1) */"), "{text}");
     assert_eq!(applied, Duration::from_secs(30));
     // Only the app's own form, a text starting with `SELECT`.
-    assert!(bounded_select(" SELECT 1", Duration::from_secs(1), &none, false, "").is_none());
-    assert!(bounded_select("WITH x AS (SELECT 1) SELECT * FROM x", Duration::from_secs(1), &none, false, "").is_none());
+    assert!(bounded_select(" SELECT 1", Duration::from_secs(1), &none, family_of(false), "").is_none());
+    assert!(
+        bounded_select("WITH x AS (SELECT 1) SELECT * FROM x", Duration::from_secs(1), &none, family_of(false), "")
+            .is_none()
+    );
     // An estimate's own hints go with the others.
-    let (text, _) = bounded_select(count, Duration::from_secs(5), &none, false, ALL_ROWS).unwrap();
+    let (text, _) = bounded_select(count, Duration::from_secs(5), &none, family_of(false), ALL_ROWS).unwrap();
     assert!(
         text.starts_with(
             "SELECT /*+ MAX_EXECUTION_TIME(5000) SET_VAR(lock_wait_timeout=1) \
@@ -355,11 +360,11 @@ fn a_bounded_read_is_limited_for_its_statement_and_never_longer_than_the_session
         "{text}"
     );
     // The session's limits as the server writes them.
-    assert_eq!(session_limit("0", false), None);
-    assert_eq!(session_limit("2500", false), Some(Duration::from_millis(2500)));
-    assert_eq!(session_limit("0.000000", true), None);
-    assert_eq!(session_limit("1.500000", true), Some(Duration::from_millis(1500)));
-    assert_eq!(session_limit("x", false), None);
+    assert_eq!(family_of(false).session_limit("0"), None);
+    assert_eq!(family_of(false).session_limit("2500"), Some(Duration::from_millis(2500)));
+    assert_eq!(family_of(true).session_limit("0.000000"), None);
+    assert_eq!(family_of(true).session_limit("1.500000"), Some(Duration::from_millis(1500)));
+    assert_eq!(family_of(false).session_limit("x"), None);
 }
 
 #[test]
@@ -384,13 +389,13 @@ fn a_bounded_read_stopped_by_the_server_is_told_apart_from_a_cancel_and_a_lock_w
 #[test]
 fn mariadbs_bounded_read_fits_its_version_and_the_sessions_own_limits() {
     let d = Dialect::MySql(MODE);
-    let older = check_sql(&[], d, &Server { version: (10, 6, 0), mariadb: true }).remove(0);
+    let older = check_sql(&[], d, &Greeting { mariadb: true, handshake: Version::new(10, 6, 0) }).remove(0);
     assert!(older.contains("@@SESSION.tx_isolation,"), "{older}");
     assert!(
         older.ends_with("@@SESSION.max_statement_time, @@SESSION.lock_wait_timeout, @@SESSION.max_sort_length"),
         "{older}"
     );
-    let newer = check_sql(&[], d, &Server { version: (11, 4, 0), mariadb: true }).remove(0);
+    let newer = check_sql(&[], d, &Greeting { mariadb: true, handshake: Version::new(11, 4, 0) }).remove(0);
     assert!(newer.contains("@@SESSION.transaction_isolation,"), "{newer}");
     assert!(
         check_sql(&[], d, &MYSQL).concat().ends_with("@@SESSION.max_execution_time, NULL, @@SESSION.max_sort_length")
@@ -398,12 +403,12 @@ fn mariadbs_bounded_read_fits_its_version_and_the_sessions_own_limits() {
     let sql = "SELECT 1";
     let asked = |statement, lock| Asked { isolation: String::new(), statement, lock, sort_length: None };
     let limit = Duration::from_secs(30);
-    let (text, _) = bounded_select(sql, limit, &asked(None, Some(0)), true, "").unwrap();
+    let (text, _) = bounded_select(sql, limit, &asked(None, Some(0)), family_of(true), "").unwrap();
     assert_eq!(text, "SET STATEMENT max_statement_time = 30, lock_wait_timeout = 0 FOR SELECT 1");
-    let (text, _) = bounded_select(sql, limit, &asked(None, None), true, "").unwrap();
+    let (text, _) = bounded_select(sql, limit, &asked(None, None), family_of(true), "").unwrap();
     assert!(text.contains("lock_wait_timeout = 0 "), "not known: never a longer wait: {text}");
     let tiny = Duration::from_micros(500);
-    let (text, applied) = bounded_select(sql, limit, &asked(Some(tiny), Some(1)), true, "").unwrap();
+    let (text, applied) = bounded_select(sql, limit, &asked(Some(tiny), Some(1)), family_of(true), "").unwrap();
     assert_eq!(text, "SET STATEMENT max_statement_time = 0.0005, lock_wait_timeout = 1 FOR SELECT 1");
     assert_eq!(applied, tiny);
 }
@@ -451,12 +456,12 @@ fn only_plain_reads_get_the_paging_limit() {
 fn mysql_own_read_text_is_unchanged() {
     let d = Dialect::MySql(MODE);
     let names: Vec<String> = vec!["shop.t".into(), "u".into()];
-    assert_eq!(not_undone_sql(&names, d, false), NOT_UNDONE_MYSQL);
+    assert_eq!(not_undone_sql(&names, d, family_of(false)), NOT_UNDONE_MYSQL);
     assert_eq!(check_sql(&names, d, &MYSQL), [CHECK_MYSQL]);
     // A keyset chunk: the hint after its `SELECT`, as the chunk was written before.
     let chunk = "SELECT * FROM `s`.`t` WHERE `id` > 7 ORDER BY `id` LIMIT 10000";
     assert_eq!(
-        export::keyset_text(chunk, false).as_deref(),
+        family_of(false).keyset_text(chunk).as_deref(),
         Some("SELECT /*+ SET_VAR(lock_wait_timeout=5) */ * FROM `s`.`t` WHERE `id` > 7 ORDER BY `id` LIMIT 10000")
     );
 }
@@ -475,11 +480,11 @@ fn mariadb_own_reads_are_bounded_by_set_statement() {
     let names: Vec<String> = vec!["shop.t".into(), "u".into()];
     let bound = "SET STATEMENT max_statement_time = IF(@@SESSION.max_statement_time = 0, 10, \
                  LEAST(@@SESSION.max_statement_time, 10)), lock_wait_timeout = LEAST(@@SESSION.lock_wait_timeout, 2) FOR ";
-    assert_eq!(mariadb_bound(Some(10), 2), bound);
-    let sql = not_undone_sql(&names, d, true);
+    assert_eq!(family_of(true).own_read_bounds().0, bound);
+    let sql = not_undone_sql(&names, d, family_of(true));
     assert!(sql.starts_with(&format!("{bound}SELECT CONCAT(t.TABLE_SCHEMA")), "{sql}");
     assert!(!sql.contains("/*+"), "{sql}");
-    let ask = check_sql(&names, d, &Server { version: (11, 4, 0), mariadb: true });
+    let ask = check_sql(&names, d, &Greeting { mariadb: true, handshake: Version::new(11, 4, 0) });
     assert_eq!(
         ask[0],
         "SELECT @@SESSION.transaction_isolation, @@SESSION.max_statement_time, @@SESSION.lock_wait_timeout, \
@@ -495,14 +500,14 @@ fn mariadb_own_reads_are_bounded_by_set_statement() {
     assert_eq!(ask.len(), 2);
     let chunk = "SELECT * FROM `s`.`t` ORDER BY `id` LIMIT 10000";
     assert_eq!(
-        export::keyset_text(chunk, true).as_deref(),
+        family_of(true).keyset_text(chunk).as_deref(),
         Some(
             "SET STATEMENT lock_wait_timeout = LEAST(@@SESSION.lock_wait_timeout, 5) FOR SELECT * FROM `s`.`t` ORDER BY `id` LIMIT 10000"
         )
     );
     for mariadb in [false, true] {
-        assert_eq!(export::keyset_text("WITH x AS (SELECT 1) SELECT * FROM x", mariadb), None);
-        assert_eq!(export::keyset_text("select * from t", mariadb), None);
+        assert_eq!(family_of(mariadb).keyset_text("WITH x AS (SELECT 1) SELECT * FROM x"), None);
+        assert_eq!(family_of(mariadb).keyset_text("select * from t"), None);
     }
 }
 

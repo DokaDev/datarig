@@ -16,8 +16,9 @@
 //! An object's DDL is the server's own `SHOW CREATE …` (after a lookup, for a name the user
 //! typed): a read like the others, one statement each ([`ddl`]).
 
+use crate::engine::Greeting;
 use crate::link::{Link, Next};
-use crate::session::{Server, Tracked, quit};
+use crate::session::{Tracked, quit};
 use datarig_core::driver::structure::RelationStats;
 use datarig_core::driver::{ApplyError, ApplyFailure, DbCommand, DbError, DbEvent, SchemaObjects};
 use datarig_core::fault::Fault;
@@ -32,7 +33,7 @@ mod ddl;
 mod keys;
 pub(crate) mod monitor;
 mod order_keys;
-mod structure;
+pub(crate) mod structure;
 
 /// The databases of the server's own, never listed.
 const HIDDEN: &str = "('information_schema', 'mysql', 'performance_schema', 'sys')";
@@ -99,11 +100,11 @@ pub(crate) async fn meta_loop(
     mut link: Link,
     events: UnboundedSender<DbEvent>,
     tracked: Tracked,
-    server: Server,
+    greeting: Greeting,
     dollar_quotes: DollarQuotes,
 ) {
     let mode = tracked.mode(dollar_quotes);
-    let dialect = crate::engine::dialect(&server, mode);
+    let dialect = crate::engine::dialect(&greeting, mode);
     // The database the session opened in; its current one moves for the DDL reads ([`ddl`]).
     let home: Option<String> = conn.opts().db_name().filter(|d| !d.is_empty()).map(str::to_string);
     let mut current = home.clone();
@@ -144,7 +145,7 @@ pub(crate) async fn meta_loop(
                 }
                 DbCommand::LoadKeys => DbEvent::Keys(keys::load_keys(&mut conn).await),
                 DbCommand::LoadStructure { schema, table } => {
-                    let result = structure::load_structure(&mut conn, server, dialect, &schema, &table).await;
+                    let result = structure::load_structure(&mut conn, greeting, dialect, &schema, &table).await;
                     DbEvent::Structure { schema, table, result: result.map(Box::new) }
                 }
                 DbCommand::LoadTableKeys { id, schema, table } => {
