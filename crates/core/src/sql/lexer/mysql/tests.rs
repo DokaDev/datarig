@@ -480,3 +480,18 @@ fn a_mariadb_comment_counts_where_a_reading_opens_one() {
         assert!(!has_m_bang(text), "{text}");
     }
 }
+
+/// `/*M!` counts only in the readings a session where MariaDB may run the text can be in:
+/// dollar quotes are never read (MariaDB reads none), so `$x$` is a name and what follows is read
+/// as such; a server that skips a versioned comment (`/*!99999 … */`) reads its body as a
+/// comment, so a `/*M!` after it counts; and with `ANSI_QUOTES` a `"…"` name takes no backslash
+/// escape, as the server reads it.
+#[test]
+fn a_mariadb_comment_counts_in_the_readings_a_session_can_be_in() {
+    assert!(!has_m_bang("SELECT $x$ /* ' */, '$x$ /*M! */'"));
+    assert!(has_m_bang("SELECT 1 /*!99999 ' */ /*M! , 2 */"));
+    assert!(has_m_bang("SET @a = 1 /*!100000 ' */ /*M! , @b = 2 */"));
+    assert!(has_m_bang("SELECT 1 AS \"a\\\", 'b\\'c' /*M! , 2 */"));
+    // Text without `"`, `\` or a version comment has one reading.
+    assert!(!has_m_bang("SELECT '/*M!' AS v, `/*M!` FROM t -- /*M!"));
+}

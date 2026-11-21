@@ -1346,6 +1346,31 @@ fn mariadb_only_comment_text_in_a_string_or_a_name_runs_where_mariadb_may_run_it
     }
 }
 
+/// A tab without a connection splits its text before any engine is known; once a profile whose
+/// server is MariaDB is picked for it, the statement goes with the comments around it that hold
+/// an executable comment, and is refused there as any other text holding `/*M! … */`.
+#[test]
+fn a_tab_without_a_connection_keeps_executable_comments_for_the_profile_it_picks() {
+    let mut h = two_engines(false, facts_of(Engine::MariaDb), mariadb());
+    h.ctrl('t');
+    h.app.tab_mut().profile = None;
+    edit(&mut h, "UPDATE t SET v=0 /* outer /* inner */ /*M! x */");
+    h.ctrl('e');
+    assert!(h.overlay_kind().is_some(), "asks for a connection");
+    h.type_text("two");
+    h.key(KeyCode::Enter);
+    refused_m_comment(&mut h, "picked for a tab without a connection");
+}
+
+/// On a read-only profile of a MariaDB server, text holding `/*M! … */` is refused for that
+/// reason, the same before and after it waited for its connection.
+#[test]
+fn a_read_only_mariadb_profile_says_why_it_refuses_a_mariadb_only_comment() {
+    let mut h = two_engines(true, facts_of(Engine::MariaDb), mariadb());
+    run_all(&mut h, "SELECT 1 /*M! , 2 */");
+    refused_m_comment(&mut h, "read-only");
+}
+
 /// A run queued before its profile connects, on a profile with the MySQL driver key whose server
 /// turns out to be MariaDB, is refused once the session says so, after the user's yes to its
 /// executable comment before connect: nothing of it is sent.

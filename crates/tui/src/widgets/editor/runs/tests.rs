@@ -555,3 +555,18 @@ fn a_statement_that_starts_with_an_executable_comment_is_checked_only_up_to_it()
         }
     }
 }
+
+/// An executable comment put before a statement on its line joins the statement: its hint
+/// goes, as for any other text put there.
+#[test]
+fn an_executable_comment_put_before_a_statement_is_an_edit_of_it() {
+    for keys_ in ["jI/*M! x */ \x1b", "o/*M! x */\x1b", "A /*M! x */\x1b", "o/*! x */\x1b", "A /*! x */\x1b"] {
+        let mut e = Editor::new("SELECT 0;\nSELECT 1;");
+        keys(&mut e, "j");
+        run(&mut e, 1);
+        e.finish_run(1, vec![hint("one")]);
+        keys(&mut e, "gg");
+        keys(&mut e, keys_);
+        assert_eq!(e.run_hints().count(), 0, "{keys_:?}: {:?}", e.text());
+    }
+}

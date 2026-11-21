@@ -480,6 +480,20 @@ mod tests {
         assert_eq!(l.statements(), ["/*!40101 SET @a = 1 */", "SET @b = 2 /*!50000 SET @c = 3 */", "SET @d = 4"]);
     }
 
+    /// A line that starts with MariaDB's `/*M! … */` is read as one that starts with `/*! … */`:
+    /// a `SET` after the comment on that line starts no row of its own.
+    #[test]
+    fn a_paste_reads_a_mariadb_comment_as_an_executable_one() {
+        let rows = |text: &str| {
+            let mut l = StatementList::new(Some(Dbms::MySql), &[]);
+            l.paste(text);
+            l.statements().iter().map(|s| s.replace("/*M!", "/*!")).collect::<Vec<_>>()
+        };
+        for text in ["SET @a = 1\n/*M!40101 */ SET @b = 2", "SET @a = 1;\n/*M! SET @c = 3 */\nSET @b = 2"] {
+            assert_eq!(rows(text), rows(&text.replace("/*M!", "/*!")), "{text}");
+        }
+    }
+
     #[test]
     fn rows_are_removed_and_the_focus_stays_near() {
         let mut l = list(&["SET a = 1", "SET b = 2", "SET c = 3"]);

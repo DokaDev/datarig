@@ -615,6 +615,24 @@ async fn mariadb_only_comment_text_in_a_string_or_a_name_runs() {
     }
 }
 
+/// A versioned executable comment the server skips (`/*!99999 … */`, a version above any
+/// server's) is a comment to it, whatever its body holds: a `/*M! … */` after it is MariaDB's
+/// code, and MariaDB refuses the text before anything of it is sent. MySQL runs the text as
+/// before.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_mariadb_only_comment_after_a_skipped_version_comment_is_refused() {
+    let test = "a_mariadb_only_comment_after_a_skipped_version_comment_is_refused";
+    let Some((url, admin)) = urls(test) else { return };
+    let maria = mariadb(&admin).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let evs = c.run(1, &["SET @zz_vs_a = 1 /*!99999 ' */ /*M! , @zz_vs_b = 2 */"]).await;
+    let refused = matches!(evs.last(), Some(DbEvent::Failed { error: DbError::CommentUnsupported, .. }));
+    assert_eq!(refused, maria, "{evs:?}");
+    let evs = c.run(2, &["SELECT @zz_vs_a, @zz_vs_b"]).await;
+    let want = if maria { [None, None] } else { [Some("1".to_string()), None] };
+    assert_eq!(page_of(&evs).1[0], want, "{evs:?}");
+}
+
 /// A level that code of the server's may have changed (`EXECUTE`, here without the server
 /// reporting it) stays not known past the end of a transaction, until the server reports the
 /// session's level again.

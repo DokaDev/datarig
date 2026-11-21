@@ -245,3 +245,19 @@ fn executable_comments_before_a_client_command_keep_the_statements_apart() {
         assert_eq!(bodies_in(&plain, d), ["CREATE PROCEDURE p() BEGIN SELECT 1; END", "CALL p()", "SELECT 4"]);
     }
 }
+
+/// A comment around a statement that holds an executable comment (`/*!`, `/*M!`), whatever
+/// grouped it (PostgreSQL nests comments, so there a `/*M! … */` may sit inside a plain one), is
+/// kept in the statement; other comments around it are trimmed as before.
+#[test]
+fn comments_holding_executable_comments_are_kept() {
+    for (src, want) in [
+        ("UPDATE t SET v=0 /* outer /* inner */ /*M! x */", "UPDATE t SET v=0 /* outer /* inner */ /*M! x */"),
+        ("UPDATE t SET v=0 /* outer /* inner */ /*! x */ */;", "UPDATE t SET v=0 /* outer /* inner */ /*! x */ */"),
+        ("/* a /*M! x */ */ SELECT 1;", "/* a /*M! x */ */ SELECT 1"),
+        ("/* a /* b */ */ SELECT 1 /* c */;", "SELECT 1"),
+    ] {
+        assert_eq!(bodies_in(src, Dialect::Postgres), [want], "{src}");
+        assert_eq!(split(src).iter().map(|s| s.body(src)).collect::<Vec<_>>(), [want], "{src}");
+    }
+}
