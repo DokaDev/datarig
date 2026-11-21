@@ -246,3 +246,75 @@ fn legacy_answers_follow_the_greeting_when_the_line_names_the_other_engine() {
         assert_eq!(i.version, Fact::Unknown(Why::EnginesDisagree), "{g:?}");
     }
 }
+
+/// The servers the session's set-up is recorded for: MySQL and MariaDB around each version its
+/// statements depend on.
+const SET_UP_SERVERS: [(bool, (u16, u16, u16)); 7] = [
+    (false, (8, 0, 0)),
+    (false, (8, 0, 40)),
+    (false, (8, 4, 6)),
+    (true, (10, 6, 0)),
+    (true, (11, 0, 6)),
+    (true, (11, 1, 0)),
+    (true, (11, 4, 13)),
+];
+
+/// Every statement and message of a session's set-up on each of [`SET_UP_SERVERS`], one per
+/// line: whether the version is supported, the settings by role, read-only policy and limit,
+/// the read-only question and its message, and the question for what the server did not report.
+fn session_set_up_texts() -> String {
+    use crate::session::{Settings, ask_read_only, ask_unreported, init_sql, not_read_only};
+    use datarig_core::driver::SessionRole;
+    let mut out = String::new();
+    let mut line = |what: String, text: String| {
+        out.push_str(&what);
+        out.push_str(": ");
+        out.push_str(&text);
+        out.push('\n');
+    };
+    // The floors and an unread version.
+    for (mariadb, version) in [(false, (0, 0, 0)), (false, (5, 7, 44)), (true, (0, 0, 0)), (true, (10, 5, 27))] {
+        let server = Server { version, mariadb };
+        line(format!("check {}", server.label()), format!("{:?}", server.check()));
+    }
+    for (mariadb, version) in SET_UP_SERVERS {
+        let server = Server { version, mariadb };
+        let name = server.label();
+        line(format!("check {name}"), format!("{:?}", server.check()));
+        for role in [SessionRole::Query, SessionRole::Meta, SessionRole::Monitor] {
+            for read_only in [false, true] {
+                for select_limit in [None, Some(501)] {
+                    for lock_wait in [None, Some(7)] {
+                        for wait_timeout in [None, Some(360)] {
+                            let s = Settings { role, read_only, select_limit, lock_wait, wait_timeout };
+                            line(
+                                format!(
+                                    "init_sql {name} {role:?} read_only={read_only} select_limit={select_limit:?} \
+                                     lock_wait={lock_wait:?} wait_timeout={wait_timeout:?}"
+                                ),
+                                init_sql(&server, &s),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        line(format!("ask_read_only {name}"), ask_read_only(&server));
+        let answered = (Some("0".to_string()), Some("1".to_string()), Some("0".to_string()));
+        line(format!("not_read_only {name} reported OFF"), not_read_only(&server, Some("OFF"), &answered));
+        line(format!("not_read_only {name} reported none"), not_read_only(&server, None, &(None, None, None)));
+        line(format!("ask_unreported {name}"), ask_unreported(&server));
+    }
+    out
+}
+
+#[test]
+fn init_sql_is_todays_for_every_role_engine_and_version() {
+    let got = session_set_up_texts();
+    let want = include_str!("golden/session_set_up.txt");
+    let (got, want): (Vec<&str>, Vec<&str>) = (got.lines().collect(), want.lines().collect());
+    for (n, (got, want)) in got.iter().zip(&want).enumerate() {
+        assert_eq!(got, want, "line {}", n + 1);
+    }
+    assert_eq!(got.len(), want.len());
+}

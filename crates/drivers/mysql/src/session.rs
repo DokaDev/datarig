@@ -591,6 +591,17 @@ pub(crate) fn ask_read_only(server: &Server) -> String {
     format!("SELECT CAST(@@SESSION.{ro} AS CHAR), {super_ro}, CAST(@@GLOBAL.innodb_read_only AS CHAR)")
 }
 
+/// The statement a session whose server did not report its sql mode, its values or (when it
+/// is read-only) its read-only asks them with, once it is set up: the sql mode, the session's
+/// read-only, the time zone and the character sets.
+pub(crate) fn ask_unreported(server: &Server) -> String {
+    let ro = server.read_only_var();
+    format!(
+        "SELECT @@SESSION.sql_mode, CAST(@@SESSION.{ro} AS CHAR), @@SESSION.time_zone, \
+         IFNULL(@@SESSION.character_set_results, ''), @@SESSION.character_set_connection"
+    )
+}
+
 /// Why the session is not read-only, with the values the server reported and answered.
 pub(crate) fn not_read_only(
     server: &Server,
@@ -757,13 +768,8 @@ pub(crate) async fn open(
     let read_only = settings.read_only || matches!(settings.role, SessionRole::Meta | SessionRole::Monitor);
     // A server (or a proxy in front of it) that did not report them is asked.
     if tracked.sql_mode.is_none() || tracked.values().is_none() || (read_only && tracked.read_only.is_none()) {
-        let ro = server.read_only_var();
-        let ask = format!(
-            "SELECT @@SESSION.sql_mode, CAST(@@SESSION.{ro} AS CHAR), @@SESSION.time_zone, \
-             IFNULL(@@SESSION.character_set_results, ''), @@SESSION.character_set_connection"
-        );
         let row: Option<(String, String, String, String, String)> =
-            conn.query_first(ask).await.map_err(|e| (my_error(&e), false))?;
+            conn.query_first(ask_unreported(&server)).await.map_err(|e| (my_error(&e), false))?;
         if let Some((mode, ro, zone, results, connection)) = row {
             tracked.sql_mode = Some(mode);
             tracked.read_only = Some(on(&ro));
