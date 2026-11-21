@@ -72,6 +72,13 @@ pub(crate) trait Family: Sync {
         hints: &str,
     ) -> Option<(String, Duration)>;
 
+    /// `sql`, a `SELECT` of the app's own with no time limit of the app's, given at most
+    /// [`BOUNDED_LOCK_WAIT`] to wait for each metadata lock, for this statement alone; `lock` is
+    /// the session's own lock wait in seconds, when it was asked, and the wait is never longer.
+    /// No time limit is added: the session's own stays. `None` for a text that does not start
+    /// with `SELECT`.
+    fn lock_bounded_select(&self, sql: &str, lock: Option<u64>) -> Option<String>;
+
     /// A session's statement time limit as the server writes it, `None` for none (0) or a value
     /// that does not read.
     fn session_limit(&self, v: &str) -> Option<Duration>;

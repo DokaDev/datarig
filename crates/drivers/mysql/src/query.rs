@@ -2217,6 +2217,31 @@ pub(crate) fn bounded_select(
     f.bounded_select(sql, statement, asked.lock, hints)
 }
 
+/// The text a count or a group count of the app's own sends for `sql`, with the time limit it
+/// applies. With `limit`, [`bounded_select`]. Without one (`[results] count_timeout = "off"`),
+/// on a session whose reports name one engine, the lock wait bound alone
+/// ([`Family::lock_bounded_select`]): a lock another session holds ends it with `LockTimeout`,
+/// as with a limit, and no time limit is added. On a session whose reports name two engines
+/// (`disagree`) it is sent as written: the bound in the greeting's form may not read on the
+/// other engine. `sql` as written for a text that does not start with `SELECT`.
+pub(crate) fn count_text<'a>(
+    sql: &'a str,
+    limit: Option<Duration>,
+    asked: &Asked,
+    f: &dyn Family,
+    disagree: bool,
+) -> (std::borrow::Cow<'a, str>, Option<Duration>) {
+    let bounded = match limit {
+        Some(l) => bounded_select(sql, l, asked, f, "").map(|(text, applied)| (text, Some(applied))),
+        None if !disagree => f.lock_bounded_select(sql, asked.lock).map(|text| (text, None)),
+        None => None,
+    };
+    match bounded {
+        Some((text, applied)) => (text.into(), applied),
+        None => (sql.into(), None),
+    }
+}
+
 /// ER_QUERY_TIMEOUT: MySQL stopped a `SELECT` at its `MAX_EXECUTION_TIME`.
 const QUERY_TIMEOUT: u16 = 3024;
 
@@ -2564,7 +2589,8 @@ async fn begin_own(
 /// (locking every row it reads at `SERIALIZABLE`) and leave it open, so when no transaction was
 /// open before ([`open_before`]) it counts in a read-only one of its own ([`begin_own`]) that it
 /// ends. With `limit` the server stops it then ([`bounded_select`], for the statement alone,
-/// also inside the user's transaction): [`DbError::TimedOut`].
+/// also inside the user's transaction): [`DbError::TimedOut`]. With or without it, it gives up
+/// behind a lock another session holds ([`count_text`]).
 async fn count(
     conn: &mut Conn,
     link: &mut Link,
@@ -2588,12 +2614,8 @@ async fn count(
         Err(why) => return Ok((Err(why), false)),
     };
     let snapshot = in_snapshot(s, &asked);
-    let bounded = limit.and_then(|l| bounded_select(sql, l, &asked, env.greeting.family(), ""));
-    let (text, applied) = match &bounded {
-        Some((text, applied)) => (text.as_str(), Some(*applied)),
-        None => (sql, None),
-    };
-    let result = read_own(conn, link, env, s, text, was_open, applied).await?;
+    let (text, applied) = count_text(sql, limit, &asked, env.greeting.family(), env.facts.reports_disagree());
+    let result = read_own(conn, link, env, s, &text, was_open, applied).await?;
     let result = result.and_then(|counted| match counted {
         Some(n) => n.trim().parse::<u64>().map_err(|_| DbError::NoResult),
         None => Err(DbError::NoResult),

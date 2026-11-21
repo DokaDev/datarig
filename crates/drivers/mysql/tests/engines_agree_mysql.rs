@@ -819,6 +819,9 @@ impl TwoEngines {
                     Ok(format!("{ev:?}"))
                 }
                 DbEvent::Counted { id: i, result, .. } if *i == id => result.clone().map(|n| n.to_string()),
+                DbEvent::GroupCounted { id: i, result, .. } if *i == id => {
+                    result.as_ref().map(|g| format!("{} values", g.values.len())).map_err(Clone::clone)
+                }
                 DbEvent::RepeatChecked { id: i, result } if *i == id => result.clone().map(|()| "repeatable".into()),
                 DbEvent::Exported { id: i, result, .. } if *i == id => {
                     result.as_ref().map(|_| "exported".to_string()).map_err(Clone::clone)
@@ -1166,4 +1169,140 @@ async fn agreeing_reports_of_a_known_version_keep_todays_names() {
         assert_eq!(names_sent(&run.log, &what), want, "{what}");
         read_only_reported(&run, &what);
     }
+}
+
+// ── A count without a time limit gives up behind a lock on sessions whose reports agree ───────
+
+/// The app's count of `shop.products` and its group count of `products.id`, as the core writes
+/// them.
+fn counts_of_products() -> (String, String) {
+    use datarig_core::driver::{ColumnMeta, ValueKind};
+    use datarig_core::query::{ColumnFacts, ColumnKind, GroupCount, TableName, Target, group_count};
+    use datarig_core::sql::dialect::MySqlMode;
+    let d = Dialect::MySql(MySqlMode::default());
+    let t = TableName { database: None, schema: "shop".into(), name: "products".into() };
+    let target = Target::new(d, vec![ColumnFacts::new("id", ColumnKind::Other)]);
+    let meta = ColumnMeta::new("id".into(), "bigint unsigned".into(), ValueKind::Integer, None);
+    let classifier = datarig_core::sql::risk::Classifier::new(Language::Sql(d));
+    let g = GroupCount {
+        table: &t,
+        target: &target,
+        column: &meta,
+        enum_known: false,
+        other: None,
+        classifier: &classifier,
+        read_only: false,
+    };
+    let count = "SELECT COUNT(*) FROM (\nSELECT * FROM `shop`.`products` WHERE (id > 1)\n) AS datarig_count";
+    (count.to_string(), group_count(&g).expect("a group count"))
+}
+
+/// What a session sent of the count `sql` (any text ending with what follows its `SELECT`),
+/// asking `cmd` as run `id` (judged on both engines' rules when `both`, as the app asks on a
+/// session whose reports name two engines), and the answer.
+async fn count_sent(
+    s: &mut TwoEngines,
+    id: u64,
+    sql: &str,
+    cmd: DbCommand,
+    both: bool,
+) -> (Vec<String>, Result<String, DbError>) {
+    let rest = sql.strip_prefix("SELECT ").or_else(|| sql.strip_prefix("SELECT\n")).expect("a SELECT");
+    let from = s.proxy.queries().len();
+    let got = if both { s.ask_both(id, cmd).await } else { s.ask(id, cmd).await };
+    let sent = s.proxy.queries()[from..].iter().filter(|q| q.ends_with(rest)).cloned().collect();
+    (sent, got)
+}
+
+/// A count or a group count of `sql`, as run `id`, with time limit `limit`.
+fn count_cmd(group: bool, id: u64, sql: &str, limit: Option<Duration>) -> DbCommand {
+    match group {
+        true => DbCommand::GroupCount { id, sql: sql.into(), limit },
+        false => DbCommand::Count { id, sql: sql.into(), limit },
+    }
+}
+
+/// On a session whose greeting and version line name one engine (here through a proxy that
+/// changes nothing), a count and a group count without a time limit carry the lock wait bound
+/// alone, in the engine's form: MySQL's optimizer hint `SET_VAR(lock_wait_timeout=1)`, MariaDB's
+/// `SET STATEMENT lock_wait_timeout = 1 FOR` (the session's own wait is longer). No time limit
+/// is added. With a time limit the text is as before.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agreeing_sessions_count_without_a_time_limit_carries_the_lock_bound() {
+    let test = "an_agreeing_sessions_count_without_a_time_limit_carries_the_lock_bound";
+    let Some(url) = my_url(test) else { return };
+    let server = Server::of(&url).await;
+    let proxy = Proxy::start(&upstream(&url)).await;
+    let (tx, mut rx) = unbounded_channel();
+    let o = ConnectOptions::new(PAGE, SessionRole::Query, &format!("x17{}-{test}", std::process::id()));
+    let session = MyDriver.connect(&profile(&proxy.url(&url), "mysql"), SessionRole::Query, o, tx);
+    let mut before = Vec::new();
+    loop {
+        match tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.expect("an answer") {
+            Some(DbEvent::Connected) => break,
+            Some(DbEvent::ConnectFailed { error, .. }) => panic!("connect failed: {error:?}"),
+            Some(ev) => before.push(ev),
+            None => panic!("event channel closed"),
+        }
+    }
+    assert!(!facts(&before).reports_disagree(), "{before:?}");
+    let mut s = TwoEngines { proxy, session, rx };
+    let (count, group) = counts_of_products();
+    for (id, (is_group, sql)) in [(false, &count), (true, &group)].into_iter().enumerate() {
+        let id = id as u64 * 10;
+        let rest = sql.strip_prefix("SELECT ").or_else(|| sql.strip_prefix("SELECT\n")).unwrap();
+        let (off, limited) = match server.mariadb {
+            true => (
+                format!("SET STATEMENT lock_wait_timeout = 1 FOR {sql}"),
+                format!("SET STATEMENT max_statement_time = 30, lock_wait_timeout = 1 FOR {sql}"),
+            ),
+            false => (
+                format!("SELECT /*+ SET_VAR(lock_wait_timeout=1) */ {rest}"),
+                format!("SELECT /*+ MAX_EXECUTION_TIME(30000) SET_VAR(lock_wait_timeout=1) */ {rest}"),
+            ),
+        };
+        let (sent, got) = count_sent(&mut s, id + 1, sql, count_cmd(is_group, id + 1, sql, None), false).await;
+        assert_eq!(sent, [off], "without a time limit ({got:?})");
+        assert!(got.is_ok(), "{got:?}");
+        let thirty = Some(Duration::from_secs(30));
+        let (sent, got) = count_sent(&mut s, id + 2, sql, count_cmd(is_group, id + 2, sql, thirty), false).await;
+        assert_eq!(sent, [limited], "with a time limit, as before ({got:?})");
+        assert!(got.is_ok(), "{got:?}");
+    }
+}
+
+/// On a session whose greeting names the other engine, a count and a group count are sent as
+/// before: without a time limit the text as written, with one in the greeting's form (which the
+/// other engine may not read: a MariaDB greeting's `SET STATEMENT` on a MySQL server). The lock
+/// wait bound in the greeting's form could break a count that works today, so it is not added.
+/// The answers are today's too.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_disagreeing_sessions_counts_are_sent_as_today() {
+    let test = "a_disagreeing_sessions_counts_are_sent_as_today";
+    let Some(url) = my_url(test) else { return };
+    let server = Server::of(&url).await;
+    let mut s = TwoEngines::open(&url, test, false, &[]).await;
+    let (count, group) = counts_of_products();
+    // The greeting's engine is the other one.
+    let limited = if server.mariadb {
+        "SELECT /*+ MAX_EXECUTION_TIME(30000) SET_VAR(lock_wait_timeout=1) */ "
+    } else {
+        "SET STATEMENT max_statement_time = 30, lock_wait_timeout = "
+    };
+    let mut answers = Vec::new();
+    for (id, (is_group, sql)) in [(false, &count), (true, &group)].into_iter().enumerate() {
+        let id = id as u64 * 10;
+        let (sent, got) = count_sent(&mut s, id + 1, sql, count_cmd(is_group, id + 1, sql, None), true).await;
+        assert!(sent.iter().all(|q| q == sql), "as written: {sent:?} ({got:?})");
+        answers.push(format!("{got:?}"));
+        let thirty = Some(Duration::from_secs(30));
+        let (sent, got) = count_sent(&mut s, id + 2, sql, count_cmd(is_group, id + 2, sql, thirty), true).await;
+        assert!(sent.iter().all(|q| q.starts_with(limited)), "the greeting's form: {sent:?} ({got:?})");
+        answers.push(format!("{got:?}"));
+    }
+    // Today the allowlist's question, asked in the greeting's form, names a variable the server
+    // does not have, so neither count reaches the server: as before.
+    let unknown = if server.mariadb { "max_execution_time" } else { "max_statement_time" };
+    let refused = format!("Err(Server(\"ERROR 1193 (HY000): Unknown system variable '{unknown}'\"))");
+    assert_eq!(answers, vec![refused; 4], "{test}");
 }

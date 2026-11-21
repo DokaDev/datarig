@@ -88,6 +88,13 @@ impl Family for MariaDb {
         Some((text, statement))
     }
 
+    /// `SET STATEMENT … FOR` with the lock wait alone, as in [`Family::bounded_select`].
+    fn lock_bounded_select(&self, sql: &str, lock: Option<u64>) -> Option<String> {
+        select_rest(sql)?;
+        let lock = lock.unwrap_or(0).min(BOUNDED_LOCK_WAIT);
+        Some(format!("SET STATEMENT lock_wait_timeout = {lock} FOR {sql}"))
+    }
+
     /// `max_statement_time`, in seconds, with decimals.
     fn session_limit(&self, v: &str) -> Option<Duration> {
         let secs: f64 = v.trim().parse().ok()?;

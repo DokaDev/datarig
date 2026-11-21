@@ -467,7 +467,7 @@ const OWN_READ_SERVERS: [(bool, (u16, u16, u16)); 11] = [
 /// statement and how a column's default is written from the server's words.
 fn own_read_texts() -> String {
     use crate::meta::structure::{default_text, statement};
-    use crate::query::{ALL_ROWS, Asked, bounded_select, check_sql, not_undone_sql};
+    use crate::query::{ALL_ROWS, Asked, bounded_select, check_sql, count_text, not_undone_sql};
     use std::time::Duration;
     let mut out = String::new();
     let mut line = |what: String, text: String| {
@@ -533,6 +533,18 @@ fn own_read_texts() -> String {
                             );
                         }
                     }
+                }
+            }
+        }
+        // A count's text without a time limit, on a session whose reports agree or not.
+        for sql in sqls {
+            for lock in [None, Some(0), Some(1), Some(50)] {
+                for disagree in [false, true] {
+                    let asked = Asked { isolation: String::new(), statement: None, lock, sort_length: None };
+                    line(
+                        format!("count_off {name} {sql:?} lock={lock:?} disagree={disagree}"),
+                        format!("{:?}", count_text(sql, None, &asked, server.family(), disagree)),
+                    );
                 }
             }
         }
