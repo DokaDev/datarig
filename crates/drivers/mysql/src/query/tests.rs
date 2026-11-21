@@ -489,3 +489,19 @@ fn mariadb_own_reads_are_bounded_by_set_statement() {
         assert_eq!(export::keyset_text("select * from t", mariadb), None);
     }
 }
+
+/// MariaDB runs `/*M! … */` (`/*M!100500 … */`): what it holds is not read, so it may set the
+/// next transaction. MySQL, and MariaDB for a lower-case `/*m!`, read it as a plain comment.
+#[test]
+fn a_mariadb_executable_comment_may_set_the_next_transaction() {
+    let maria = MySqlMode { mariadb: true, ..MODE };
+    for sql in [
+        "/*M! SET TRANSACTION READ ONLY */",
+        " /*M!100500 SET TRANSACTION ISOLATION LEVEL SERIALIZABLE */\n",
+        "SELECT 1 /*M! , 2 */",
+    ] {
+        assert_eq!(sets_next_transaction(sql, maria), SetsNext::Maybe, "{sql}");
+        assert_eq!(sets_next_transaction(sql, MODE), SetsNext::No, "{sql}");
+    }
+    assert_eq!(sets_next_transaction("/*m! SET TRANSACTION READ ONLY */", maria), SetsNext::No);
+}

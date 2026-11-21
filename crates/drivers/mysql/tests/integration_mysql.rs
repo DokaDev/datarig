@@ -8651,3 +8651,99 @@ async fn mariadb_a_cancel_or_a_lost_connection_between_the_allowlists_statements
     let mut d = Conn::open(&url, SessionRole::Query, false, test).await;
     assert_eq!(count_within(&mut d, 1, &counted, Some(Duration::from_secs(30))).await.0, Ok(40));
 }
+
+// ── executable comments ────────────────────────────────────────────────────
+
+/// A statement with an executable comment at its start or end reaches the server as written
+/// (the splitter's text, in every reading of a MySQL-family tab), and each server reads it as
+/// its own: MariaDB runs `/*M! … */` (versioned too) and `/*! … */`, MySQL runs `/*! … */` and
+/// reads `/*M!` as a plain comment.
+#[tokio::test(flavor = "multi_thread")]
+async fn executable_comments_reach_the_server_as_written() {
+    let test = "executable_comments_reach_the_server";
+    let Some(url) = my_url(test) else { return };
+    let maria = mariadb(&url).await;
+    let t = Table::make(&url, "execcomment", &["CREATE TABLE {t} (id INT PRIMARY KEY, v INT)"]).await;
+    let q = t.q();
+    let all = [(1, 0), (2, 0), (3, 0)];
+    type Rows = [(i32, i32); 3];
+    let cases: Vec<(String, Rows, Rows)> = vec![
+        // (written, rows after on MariaDB, rows after on MySQL)
+        (format!("UPDATE {q} SET v = 0 /*M! WHERE id = 1 */;"), [(1, 0), (2, 1), (3, 1)], all),
+        (format!("UPDATE {q} SET v = 0 WHERE v >= 0 /*M! AND id = 2 */;"), [(1, 1), (2, 0), (3, 1)], all),
+        (format!("UPDATE {q} SET v = 0 /*M!100500 WHERE id = 3 */"), [(1, 1), (2, 1), (3, 0)], all),
+        (format!("/*M! UPDATE {q} SET v = 0 WHERE id = 2 */;"), [(1, 1), (2, 0), (3, 1)], [(1, 1), (2, 1), (3, 1)]),
+        (format!("UPDATE {q} SET v = 0 /*! WHERE id = 1 */;"), [(1, 0), (2, 1), (3, 1)], [(1, 0), (2, 1), (3, 1)]),
+        (format!("UPDATE {q} SET v = 0 /*!50000 WHERE id = 3 */"), [(1, 1), (2, 1), (3, 0)], [(1, 1), (2, 1), (3, 0)]),
+    ];
+    let modes = [MySqlMode::default(), MySqlMode { mariadb: true, ..MySqlMode::default() }];
+    let mut side_c = side(&url).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let mut id = 0;
+    for (written, on_maria, on_mysql) in &cases {
+        for d in modes.map(Dialect::MySql).into_iter().chain([Dialect::Postgres]) {
+            side_c.query_drop(format!("DELETE FROM {q}")).await.unwrap();
+            side_c.query_drop(format!("INSERT INTO {q} VALUES (1, 1), (2, 1), (3, 1)")).await.unwrap();
+            let sent: Vec<&str> =
+                datarig_core::sql::split::split_in(written, d).iter().map(|s| s.body(written)).collect();
+            assert_eq!(sent.len(), 1, "{d:?} {written}: {sent:?}");
+            id += 1;
+            let evs = c.run(id, &sent).await;
+            // MySQL takes a text that is only a comment as one that does nothing.
+            assert!(!matches!(evs.last(), Some(DbEvent::Failed { .. })), "{d:?} {written}: {evs:?}");
+            let rows: Vec<(i32, i32)> = side_c.query(format!("SELECT id, v FROM {q} ORDER BY id")).await.unwrap();
+            let want = if maria { on_maria } else { on_mysql };
+            assert_eq!(rows, want, "{d:?} {written} (MariaDB {maria}): sent {sent:?}");
+        }
+    }
+    side_c.disconnect().await.unwrap();
+}
+
+/// MariaDB runs what `/*M! … */` holds: after `/*M! SET TRANSACTION … */` a count is refused
+/// there (the next transaction may have settings of its own, which the count would use up).
+/// MySQL reads it as a plain comment, so the count runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_mariadb_executable_comment_may_set_the_next_transaction() {
+    let test = "a_mariadb_executable_comment_may_set_the_next_transaction";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "mcomment", 10).await;
+    let maria = mariadb(&url).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let counted = format!("SELECT COUNT(*) FROM (SELECT id FROM {}) AS datarig_count", t.q());
+    let want = if maria { Err(DbError::NextTransactionSet) } else { Ok(10) };
+    for (id, sql) in
+        [(1, "/*M! SET TRANSACTION ISOLATION LEVEL SERIALIZABLE */"), (5, "/*M!100500 SET TRANSACTION READ ONLY */")]
+    {
+        c.ok(id, sql).await;
+        assert_eq!(count(&mut c, id + 1, counted.clone()).await.0, want, "{sql}");
+        // The next transaction takes the setting; then a count runs again.
+        c.ok(id + 2, "START TRANSACTION").await;
+        c.ok(id + 3, "COMMIT").await;
+    }
+    assert_eq!(count(&mut c, 9, counted).await.0, Ok(10));
+}
+
+/// A `DELIMITER` script with executable comments that no `;` ends before its client commands
+/// runs as the editor runs it: each comment alone, and the procedure between the commands as
+/// written; then the procedure runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_delimiter_script_with_executable_comments_runs_as_written() {
+    let test = "a_delimiter_script_with_executable_comments";
+    let Some(url) = my_url(test) else { return };
+    let p = format!("shop.zz_it_mproc_{}", std::process::id());
+    let _p = Cleanup { url: url.clone(), sql: format!("DROP PROCEDURE IF EXISTS {p}") };
+    let maria = mariadb(&url).await;
+    let script = format!(
+        "/*M! SET @zz_m = 1 */\nDELIMITER ;;\nCREATE PROCEDURE {p}() BEGIN SELECT 1 AS one; SELECT 2 AS two; END\n;;\n\
+         /*M!100500 SET @zz_n = 2 */\nDELIMITER ;\nCALL {p}();\n"
+    );
+    let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
+    let mut id = 0;
+    replay(&mut q, &mut id, &script).await;
+    let evs = q.run(100, &["SELECT CONCAT(COALESCE(@zz_m, '-'), COALESCE(@zz_n, '-')) AS s"]).await;
+    let got = evs.iter().find_map(|e| match e {
+        DbEvent::Page { rows, .. } => rows.first().and_then(|r| r[0].clone()),
+        _ => None,
+    });
+    assert_eq!(got.as_deref(), Some(if maria { "12" } else { "--" }), "{evs:?}");
+}
