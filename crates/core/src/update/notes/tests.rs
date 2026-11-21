@@ -30,11 +30,23 @@ fn the_running_version_has_its_notes() {
     let running = Version::running();
     let notes = parse(WHATS_NEW).unwrap();
     if !running.is_rc() {
+        // A newer release's section may sit above it: a release branch forward-ports its notes
+        // to main while main makes the next minor version.
         assert!(notes.get(&running).is_some(), "whats-new.md has no section for {running}");
-        assert_eq!(notes.sections[0].version, running, "the running version is the newest");
     } else {
         assert!(notes.sections[0].version < running);
     }
+}
+
+#[test]
+fn a_newer_release_above_the_running_version_is_not_its_notes() {
+    // A patch release forward-ported to main sits above main's version.
+    let md = "# What's new\n\n## 0.41.5 (2026-11-21)\n\n- Newer.\n\n## 0.41.4 (2026-11-18)\n\n- Running.\n\n## 0.41.3 (2026-11-17)\n\n- Older.\n";
+    let notes = parse(md).unwrap();
+    let running = v("0.41.4");
+    assert_eq!(notes.get(&running).unwrap().version, running);
+    let since: Vec<_> = notes.between(&v("0.41.2"), &running).iter().map(|s| s.version).collect();
+    assert_eq!(since, vec![v("0.41.4"), v("0.41.3")]);
 }
 
 #[test]
