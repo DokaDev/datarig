@@ -897,6 +897,27 @@ async fn a_disagreeing_session_is_judged_on_both_engines() {
     assert!(s.proxy.queries().len() > from, "the server was asked, as before: {got:?}");
 }
 
+/// MariaDB's own executable comments (`/*M! … */`) on a session whose greeting names the other
+/// engine: either engine may be the one that runs the text, so a command holding one is refused
+/// before anything of it is sent, whichever server is behind the greeting. A `/*! … */` comment
+/// goes on as before.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_disagreeing_session_sends_no_mariadb_only_comment() {
+    let test = "a_disagreeing_session_sends_no_mariadb_only_comment";
+    let Some(url) = my_url(test) else { return };
+    let mut s = TwoEngines::open(&url, test, false, &[]).await;
+    let sql = "SELECT 1 /*M! , 2 */";
+    for (what, id, cmd) in [("Execute", 1, TwoEngines::execute(1, sql)), ("Count", 2, TwoEngines::count(2, sql))] {
+        let from = s.proxy.queries().len();
+        let got = s.ask_both(id, cmd).await;
+        let sent = s.proxy.queries()[from..].to_vec();
+        assert!(got.as_ref().is_err_and(|e| !matches!(e, DbError::Server(_))), "{what}: {got:?}, sent {sent:?}");
+        assert!(sent.is_empty(), "{what}: nothing sent: {sent:?}");
+    }
+    let got = s.ask_both(3, TwoEngines::execute(3, "SELECT 1 /*! , 2 */")).await;
+    assert!(got.as_deref().is_ok_and(|ev| ev.starts_with("Page")), "{got:?}");
+}
+
 /// The next transaction's settings on a session whose greeting names the other engine: a
 /// statement counts as setting them when either engine's reading says so, the stronger answer
 /// winning. An executable comment for MySQL 8 (`/*!80000 … */`, which MariaDB reads as a

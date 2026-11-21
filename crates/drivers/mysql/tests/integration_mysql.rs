@@ -538,6 +538,59 @@ async fn mariadb_ignores_a_mysql8_version_comment() {
     assert_eq!(count(&mut c, 2, counted).await.0, want);
 }
 
+/// MariaDB's own executable comments (`/*M! … */`, versioned too) on a session whose reports
+/// agree: on MariaDB, which runs what they hold, a command holding one is refused before anything
+/// of it is sent (a run, a count, a capped read); on MySQL they are plain comments and the text
+/// runs (or is counted) as before. `/*! … */` runs on both, as before.
+#[tokio::test(flavor = "multi_thread")]
+async fn mariadb_only_comments_are_refused_on_mariadb_and_comments_on_mysql() {
+    let test = "mariadb_only_comments_are_refused_on_mariadb_and_comments_on_mysql";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "mcomment", 10).await;
+    let maria = mariadb(&admin).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let refused = |evs: &[DbEvent]| matches!(evs.last(), Some(DbEvent::Failed { error, .. }) if !matches!(error, DbError::Server(_)));
+    // Nothing of a refused command runs: the variable it would set stays unset.
+    let evs = c.run(1, &["SET @zz_mc_a = 1 /*M! , @zz_mc_b = 2 */"]).await;
+    assert_eq!(refused(&evs), maria, "{evs:?}");
+    let evs = c.run(2, &["SELECT @zz_mc_a, @zz_mc_b"]).await;
+    let row = page_of(&evs).1[0].clone();
+    let want = if maria { [None, None] } else { [Some("1".to_string()), None] };
+    assert_eq!(row, want, "{evs:?}");
+    for (id, sql) in
+        [(3, "SELECT 1 /*M! , 2 */"), (4, "/*M!100500 SELECT 1 */ SELECT 1"), (5, "SELECT 1; SELECT 2 /*M! , 3 */")]
+    {
+        let statements: Vec<&str> = sql.split("; ").collect();
+        let evs = c.run(id, &statements).await;
+        assert_eq!(refused(&evs), maria, "{sql}: {evs:?}");
+        if !maria {
+            assert_eq!(page_of(&evs).0.len(), 1, "a plain comment on MySQL: {sql}");
+        }
+    }
+    // A capped read whose limit only the comment holds, and a count.
+    let capped = format!("SELECT id FROM {} /*M! LIMIT 3 */", t.q());
+    c.session.send(DbCommand::Execute {
+        max_rows: Some(5),
+        id: 6,
+        statements: vec![capped.clone()],
+        paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
+    });
+    let evs = c.answer(6).await;
+    assert_eq!(refused(&evs), maria, "{capped}: {evs:?}");
+    let counted = format!("SELECT COUNT(*) FROM (SELECT id FROM {} /*M! LIMIT 3 */) AS datarig_count", t.q());
+    let got = count(&mut c, 7, counted).await.0;
+    if maria {
+        assert!(got.as_ref().is_err_and(|e| !matches!(e, DbError::Server(_))), "{got:?}");
+    } else {
+        // The count's own check reads the text as not repeatable, as before.
+        assert!(matches!(got, Err(DbError::NotRepeatable(_))), "{got:?}");
+    }
+    // MySQL's form runs on both.
+    let evs = c.run(8, &["SELECT 1 /*! , 2 */"]).await;
+    assert_eq!(page_of(&evs).0.len(), 2, "{evs:?}");
+}
+
 /// A level that code of the server's may have changed (`EXECUTE`, here without the server
 /// reporting it) stays not known past the end of a transaction, until the server reports the
 /// session's level again.
