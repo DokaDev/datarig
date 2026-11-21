@@ -1381,10 +1381,10 @@ impl App {
     }
 
     /// The state of table tab `id`'s session that decides whether its reads lock rows
-    /// ([`LockState`]); `None` when they never do (not MySQL).
+    /// ([`LockState`]); `None` when they never do (its engine's reads take no row locks).
     pub(in crate::app) fn lock_state(&self, id: TabId) -> Option<LockState> {
         let t = self.tabs.get(id)?;
-        if !matches!(t.exec.prepared.language().dialect(), Dialect::MySql(_) | Dialect::MariaDb(_)) {
+        if !t.exec.prepared.language().dialect().engine().spec().tx.reads_lock_rows() {
             return None;
         }
         let e = &t.exec;

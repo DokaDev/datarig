@@ -1,6 +1,6 @@
 //! MySQL's row of the registry.
 
-use super::mysql_family::{FamilyRisk, FamilyText};
+use super::mysql_family::{FamilyRisk, FamilySession, FamilyText, FamilyTx};
 use super::{EngineId, EngineSpec, MYSQL_FAMILY, Transport};
 use crate::driver::Hierarchy;
 use crate::profile::dsn::Scheme;
@@ -17,4 +17,6 @@ pub static SPEC: EngineSpec = EngineSpec {
     hierarchy: Hierarchy::SchemaOnly,
     text: &FamilyText,
     risk: &FamilyRisk,
+    tx: &FamilyTx,
+    session: &FamilySession,
 };

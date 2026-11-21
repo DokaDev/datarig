@@ -10,6 +10,7 @@
 use super::menu::Off;
 use super::tabs::ResultView;
 use super::*;
+use datarig_core::engine::CountInTx;
 use datarig_core::sql::risk::repeat::NotRepeatable;
 
 /// Where a result came from: its tab's profile, the tab's binding and its session's generation
@@ -369,12 +370,10 @@ impl App {
     pub(super) fn count_limit(&self, id: TabId) -> (Option<std::time::Duration>, Option<bool>) {
         let Some(t) = self.tabs.get(id) else { return (None, None) };
         let limit = self.prefs.count_timeout;
-        match self.tab_dialect(id) {
-            datarig_core::sql::dialect::Dialect::MySql(_) | datarig_core::sql::dialect::Dialect::MariaDb(_) => {
-                (limit, None)
-            }
-            _ if t.exec.tx_open => (None, limit.map(|_| t.exec.in_block)),
-            _ => (limit, None),
+        match self.tab_dialect(id).engine().spec().tx.count_in_tx() {
+            CountInTx::Limited => (limit, None),
+            CountInTx::LeftOut if t.exec.tx_open => (None, limit.map(|_| t.exec.in_block)),
+            CountInTx::LeftOut => (limit, None),
         }
     }
 
