@@ -592,6 +592,29 @@ async fn mariadb_only_comments_are_refused_on_mariadb_and_comments_on_mysql() {
     assert_eq!(page_of(&evs).0.len(), 2, "{evs:?}");
 }
 
+/// The text `/*M!` where no reading opens a comment with it (in a string, a value written to a
+/// table, a quoted name) runs on MariaDB as on MySQL; where sql modes disagree on where a string
+/// ends and one of them opens a comment with it, MariaDB refuses it.
+#[tokio::test(flavor = "multi_thread")]
+async fn mariadb_only_comment_text_in_a_string_or_a_name_runs() {
+    let test = "mariadb_only_comment_text_in_a_string_or_a_name_runs";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = Table::make(&admin, "mctext", &["CREATE TABLE {t} (id INT PRIMARY KEY, v TEXT)"]).await;
+    let maria = mariadb(&admin).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    c.ok(1, &format!("INSERT INTO {} (id, v) VALUES (1, '/*M! , 2 */')", t.q())).await;
+    c.ok(2, &format!("UPDATE {} SET v = CONCAT(v, '/*M!') WHERE id = 1", t.q())).await;
+    let evs = c.run(3, &[&format!("SELECT v AS `/*M!` FROM {} WHERE id = 1", t.q())]).await;
+    let (cols, rows, _) = page_of(&evs);
+    assert_eq!((cols[0].name.as_str(), rows[0][0].as_deref()), ("/*M!", Some("/*M! , 2 *//*M!")), "{evs:?}");
+    let evs = c.run(4, &["SELECT 'a\\' /*M! , 2 */ ' AS v"]).await;
+    if maria {
+        assert!(matches!(evs.last(), Some(DbEvent::Failed { error: DbError::CommentUnsupported, .. })), "{evs:?}");
+    } else {
+        assert_eq!(page_of(&evs).0.len(), 1, "one string on MySQL: {evs:?}");
+    }
+}
+
 /// A level that code of the server's may have changed (`EXECUTE`, here without the server
 /// reporting it) stays not known past the end of a transaction, until the server reports the
 /// session's level again.

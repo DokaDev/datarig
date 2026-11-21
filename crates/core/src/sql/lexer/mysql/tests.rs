@@ -1,5 +1,5 @@
 use super::super::{LexState, Tok, lex_from, lex_in};
-use super::has_dollar_opener;
+use super::{has_dollar_opener, has_m_bang};
 use crate::sql::dialect::{Dialect, DollarQuotes, MySqlMode};
 
 const MY: Dialect = Dialect::MySql(MySqlMode {
@@ -445,4 +445,38 @@ fn a_backslash_at_a_line_end_is_dropped() {
     assert_eq!(kinds("select 1 \\"), [(Tok::Keyword, "select"), (Tok::Number, "1")]);
     let crlf = "\\\r\ndelimiter $$\r\nselect 6$$";
     assert_eq!(kinds(crlf)[0], (Tok::Directive, "delimiter $$\r"));
+}
+
+/// MariaDB's own executable comment counts where a MySQL-family reading of the text opens a
+/// comment with it, in any sql mode the session may read the text in: not inside a string, a
+/// quoted name or a plain comment (a value `'/*M!'` of an edit, a name), but where the readings
+/// disagree on where a string or a name ends and one of them sees it open a comment.
+#[test]
+fn a_mariadb_comment_counts_where_a_reading_opens_one() {
+    for text in [
+        "SELECT 1 /*M! , 2 */",
+        "/*M!100500 SET @a = 1 */",
+        "SELECT 1 /*M! , 2",
+        "SELECT 1; SELECT 2 /*M! , 3 */",
+        // With backslash escapes the string runs on; without them it ends at `\'`.
+        "SELECT 'a\\' /*M! , 2 */ '",
+        // As a string a backslash escapes the quote; as a name (ANSI_QUOTES) it does not.
+        "SELECT \"a\\\" /*M! , 2 */ \"",
+    ] {
+        assert!(has_m_bang(text), "{text}");
+    }
+    for text in [
+        "SELECT '/*M!'",
+        "SELECT '/*M! , 2 */' AS v",
+        "SELECT \"/*M!\"",
+        "SELECT 1 AS `/*M!`",
+        "SELECT 1 -- /*M! , 2 */",
+        "SELECT 1 # /*M! , 2 */",
+        "SELECT 1 /* plain /*M! , 2 */",
+        "SELECT 1 /*m! , 2 */",
+        "UPDATE `t` SET `v` = '/*M!' WHERE `id` = 1",
+        "INSERT INTO `t` (`v`) VALUES ('it''s /*M! here'), ('a\\\\ /*M!')",
+    ] {
+        assert!(!has_m_bang(text), "{text}");
+    }
 }
