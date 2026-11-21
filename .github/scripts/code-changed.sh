@@ -5,6 +5,11 @@
 # for such a pull request and `code=true` for any other, to $GITHUB_OUTPUT (stdout when unset).
 # Anything it cannot tell (no BASE or HEAD, a diff that fails, no file at all) is `code=true`:
 # the full run is never skipped on a guess. Reads only git objects, never the working tree.
+#
+# The docs files that code or tests outside the pages checked against the code read count as
+# code: docs/site/src/whats-new.md (built into the app, and read by datarig-core's notes tests
+# and datarig-tui's What's new tests) and docs/demo/render.sh (read by datarig-tui's update
+# tests). A new reader of a docs file adds it here.
 set -euo pipefail
 
 out=${GITHUB_OUTPUT:-/dev/stdout}
@@ -32,6 +37,7 @@ if [[ -z $files ]]; then
 fi
 while IFS= read -r f; do
   case $f in
+    docs/site/src/whats-new.md | docs/demo/render.sh) verdict true "Changes $f, which the tests read: everything runs." ;;
     README.md | CONTRIBUTING.md | docs/*) ;;
     changes/*.md) ;;
     *) verdict true "Changes $f: everything runs." ;;

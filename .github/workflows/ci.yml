@@ -40,6 +40,7 @@ jobs:
   # site, the pages checked against the code (the `tests (ubuntu-latest)` job) and the cheap
   # checks still run. Each skipped check reports under its own name, as passed (a job skipped
   # by its condition concludes `skipped`, which counts as passing), so nothing waits for it.
+  # The docs files other tests read (the release notes, the demo's render script) count as code.
   # Pushes to main and to release branches always run everything: the release gate wants every
   # job.
   changes:
