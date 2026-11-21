@@ -228,7 +228,7 @@ pub fn split_cases() -> Vec<Case<&'static str>> {
             name: "executable comment",
             input: "SELECT 1 /*!50000 ; SELECT 2 */; SELECT 3",
             expect: &[
-                (Pg, "SELECT 1 | SELECT 3 / BlockComment \"/*!50000 ; SELECT 2 */\""),
+                (Pg, "SELECT 1 /*!50000 ; SELECT 2 */ | SELECT 3 / BlockComment \"/*!50000 ; SELECT 2 */\""),
                 (MySql, "SELECT 1 /*!50000 | SELECT 2 */ | SELECT 3 / ExecComment \"/*!50000\""),
                 (MariaDb, "SELECT 1 /*!50000 | SELECT 2 */ | SELECT 3 / ExecComment \"/*!50000\""),
             ],
@@ -237,9 +237,9 @@ pub fn split_cases() -> Vec<Case<&'static str>> {
             name: "mariadb executable comment",
             input: "SELECT 1 /*M!100000 ; SELECT 2 */; SELECT 3",
             expect: &[
-                (Pg, "SELECT 1 | SELECT 3 / BlockComment \"/*M!100000 ; SELECT 2 */\""),
-                (MySql, "SELECT 1 | SELECT 3 / BlockComment \"/*M!100000 ; SELECT 2 */\""),
-                (MariaDb, "SELECT 1 | SELECT 3 / BlockComment \"/*M!100000 ; SELECT 2 */\""),
+                (Pg, "SELECT 1 /*M!100000 ; SELECT 2 */ | SELECT 3 / BlockComment \"/*M!100000 ; SELECT 2 */\""),
+                (MySql, "SELECT 1 /*M!100000 ; SELECT 2 */ | SELECT 3 / BlockComment \"/*M!100000 ; SELECT 2 */\""),
+                (MariaDb, "SELECT 1 /*M!100000 ; SELECT 2 */ | SELECT 3 / BlockComment \"/*M!100000 ; SELECT 2 */\""),
             ],
         },
         Case {
