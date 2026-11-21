@@ -7,7 +7,7 @@ use crate::engine::Greeting;
 use crate::route::{Route, io_fault};
 use crate::wire::{TlsFailed, Wire};
 use datarig_core::driver::{CancelFailure, DbError, Isolation, SessionRole, SessionValues};
-use datarig_core::engine::{OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, ServerFacts};
+use datarig_core::engine::{Fact, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, ServerFacts, Version};
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::profile::dsn::{self, Scheme};
@@ -304,9 +304,9 @@ pub(crate) const MONITOR_TIMEOUT_MS: u64 = 5_000;
 ///   one `INNODB_TRX.trx_started` is written in, whatever the session's), and the session is
 ///   read-only;
 /// * a read-only profile's sessions: read-only.
-pub(crate) fn init_sql(server: &Greeting, s: &Settings) -> String {
-    let ro = server.read_only_var();
-    let iso = server.isolation_var();
+pub(crate) fn init_sql(server: &Greeting, v: &Fact<Version>, s: &Settings) -> String {
+    let ro = server.read_only_var(v);
+    let iso = server.isolation_var(v);
     let mut parts = vec![
         "NAMES utf8mb4".to_string(),
         format!(
@@ -534,8 +534,8 @@ pub(crate) type ReadOnlyAsked = (Option<String>, Option<String>, Option<String>)
 /// The statement that asks whether the session is read-only, with the server's own read-only
 /// settings for the message. Only the session's counts: a server whose own settings refuse
 /// writes may still pass them on to another (a reader that forwards writes to its writer).
-pub(crate) fn ask_read_only(server: &Greeting) -> String {
-    let ro = server.read_only_var();
+pub(crate) fn ask_read_only(server: &Greeting, v: &Fact<Version>) -> String {
+    let ro = server.read_only_var(v);
     let super_ro = match server.family().super_read_only() {
         Some(var) => format!("CAST(@@GLOBAL.{var} AS CHAR)"),
         None => "NULL".to_string(),
@@ -546,8 +546,8 @@ pub(crate) fn ask_read_only(server: &Greeting) -> String {
 /// The statement a session whose server did not report its sql mode, its values or (when it
 /// is read-only) its read-only asks them with, once it is set up: the sql mode, the session's
 /// read-only, the time zone and the character sets.
-pub(crate) fn ask_unreported(server: &Greeting) -> String {
-    let ro = server.read_only_var();
+pub(crate) fn ask_unreported(server: &Greeting, v: &Fact<Version>) -> String {
+    let ro = server.read_only_var(v);
     format!(
         "SELECT @@SESSION.sql_mode, CAST(@@SESSION.{ro} AS CHAR), @@SESSION.time_zone, \
          IFNULL(@@SESSION.character_set_results, ''), @@SESSION.character_set_connection"
@@ -557,10 +557,11 @@ pub(crate) fn ask_unreported(server: &Greeting) -> String {
 /// Why the session is not read-only, with the values the server reported and answered.
 pub(crate) fn not_read_only(
     server: &Greeting,
+    v: &Fact<Version>,
     reported: Option<&str>,
     (session, super_ro, innodb_ro): &ReadOnlyAsked,
 ) -> String {
-    let ro = server.read_only_var();
+    let ro = server.read_only_var(v);
     let v = |v: Option<&str>| v.unwrap_or("NULL").to_string();
     let mut asked = vec![format!("{ro} {}", v(session.as_deref()))];
     if let Some(var) = server.family().super_read_only() {
@@ -580,18 +581,19 @@ pub(crate) fn not_read_only(
 async fn confirm_read_only(
     conn: &mut Conn,
     server: &Greeting,
+    v: &Fact<Version>,
     tracked: &mut Tracked,
 ) -> Result<ReadOnlyProof, DbError> {
     if tracked.read_only == Some(true) {
         return Ok(ReadOnlyProof::Confirmed);
     }
-    let asked: Option<ReadOnlyAsked> = conn.query_first(ask_read_only(server)).await.map_err(|e| my_error(&e))?;
+    let asked: Option<ReadOnlyAsked> = conn.query_first(ask_read_only(server, v)).await.map_err(|e| my_error(&e))?;
     let asked = asked.unwrap_or_default();
     tracked.read_only = Some(asked.0.as_deref().is_some_and(on));
     if tracked.read_only == Some(true) {
         return Ok(ReadOnlyProof::Confirmed);
     }
-    Ok(ReadOnlyProof::Unconfirmed(not_read_only(server, tracked.read_only_reported.as_deref(), &asked)))
+    Ok(ReadOnlyProof::Unconfirmed(not_read_only(server, v, tracked.read_only_reported.as_deref(), &asked)))
 }
 
 /// A connection that is ready for the session.
@@ -681,8 +683,10 @@ pub(crate) async fn open(
             DbError::SessionSql { index, statement: sql.clone(), error: Box::new(DbError::DollarQuotesUnknown) };
         return Err((error, false));
     }
+    // The version the session's settings are named by.
+    let version = crate::engine::session_version(&facts);
     let mut tracked = Tracked::default();
-    let set = conn.query_drop(init_sql(&greeting, &settings)).await;
+    let set = conn.query_drop(init_sql(&greeting, &version, &settings)).await;
     set.map_err(|e| (my_error(&e), false))?;
     tracked.update(&conn);
     // A read-only profile's start-up statements run only on a session confirmed read-only: on a
@@ -692,7 +696,7 @@ pub(crate) async fn open(
     // statement that turns it off unreported, which the check below asks again.
     if settings.role == SessionRole::Query && settings.read_only && !session_sql.is_empty() {
         let reported = tracked.read_only;
-        let proof = confirm_read_only(&mut conn, &greeting, &mut tracked).await.map_err(|e| (e, false))?;
+        let proof = confirm_read_only(&mut conn, &greeting, &version, &mut tracked).await.map_err(|e| (e, false))?;
         tracked.read_only = reported;
         // Only a session that opens without a word runs them.
         let refused = match facts.engine().spec().session.read_only_open(settings.role, proof) {
@@ -725,7 +729,7 @@ pub(crate) async fn open(
     // A server (or a proxy in front of it) that did not report them is asked.
     if tracked.sql_mode.is_none() || tracked.values().is_none() || (read_only && tracked.read_only.is_none()) {
         let row: Option<(String, String, String, String, String)> =
-            conn.query_first(ask_unreported(&greeting)).await.map_err(|e| (my_error(&e), false))?;
+            conn.query_first(ask_unreported(&greeting, &version)).await.map_err(|e| (my_error(&e), false))?;
         if let Some((mode, ro, zone, results, connection)) = row {
             tracked.sql_mode = Some(mode);
             tracked.read_only = Some(on(&ro));
@@ -740,7 +744,7 @@ pub(crate) async fn open(
     // metadata or monitor session opens and says what the server answered).
     let mut read_only_unconfirmed = None;
     if read_only {
-        let proof = confirm_read_only(&mut conn, &greeting, &mut tracked).await.map_err(|e| (e, false))?;
+        let proof = confirm_read_only(&mut conn, &greeting, &version, &mut tracked).await.map_err(|e| (e, false))?;
         let refused = match facts.engine().spec().session.read_only_open(settings.role, proof) {
             OpenVerdict::Open => None,
             OpenVerdict::OpenUnconfirmed(detail) => {

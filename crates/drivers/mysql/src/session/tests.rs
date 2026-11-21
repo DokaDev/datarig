@@ -1,6 +1,6 @@
 use super::*;
 use crate::route::Route;
-use datarig_core::engine::Version;
+use datarig_core::engine::{Fact, Version};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::Dialect;
 use datarig_core::transport::{DialerRef, TcpDialer};
@@ -8,6 +8,11 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const MYSQL_84: Greeting = Greeting { mariadb: false, handshake: Version::new(8, 4, 6) };
+
+/// The version a session straight to the server of greeting `g` names its settings by.
+fn known(g: &Greeting) -> Fact<Version> {
+    Fact::Known(g.handshake)
+}
 
 /// The facts of a session on MySQL 8.4.6 (`MYSQL_84`), its own id not read.
 fn facts_84() -> Arc<datarig_core::engine::ServerFacts> {
@@ -50,7 +55,7 @@ fn the_lock_wait_limit_is_the_query_sessions_and_the_idle_limit_every_sessions()
         lock_wait: Some(5),
         wait_timeout: Some(360),
     };
-    let sql = init_sql(&MYSQL_84, &q);
+    let sql = init_sql(&MYSQL_84, &known(&MYSQL_84), &q);
     assert!(
         sql.ends_with(
             ", SESSION lock_wait_timeout = 5, SESSION innodb_lock_wait_timeout = 5, SESSION wait_timeout = 360"
@@ -58,13 +63,13 @@ fn the_lock_wait_limit_is_the_query_sessions_and_the_idle_limit_every_sessions()
         "{sql}"
     );
     let meta = Settings { role: SessionRole::Meta, ..q };
-    let sql = init_sql(&MYSQL_84, &meta);
+    let sql = init_sql(&MYSQL_84, &known(&MYSQL_84), &meta);
     // The metadata session keeps its own, shorter limit.
     assert!(!sql.contains("innodb_lock_wait_timeout"), "{sql}");
     assert!(sql.contains("SESSION lock_wait_timeout = 2"), "{sql}");
     assert!(sql.contains("SESSION wait_timeout = 360"), "{sql}");
     let none = Settings { lock_wait: None, wait_timeout: None, ..q };
-    assert!(!init_sql(&MYSQL_84, &none).contains("wait_timeout"));
+    assert!(!init_sql(&MYSQL_84, &known(&MYSQL_84), &none).contains("wait_timeout"));
     assert_eq!(whole_secs(std::time::Duration::from_millis(1500)), 2);
     assert_eq!(whole_secs(std::time::Duration::from_millis(1)), 1);
     assert_eq!(whole_secs(std::time::Duration::from_secs(300)), 300);
@@ -94,7 +99,7 @@ fn one_set_sets_the_session_up_by_role() {
         wait_timeout: None,
     };
     assert_eq!(
-        init_sql(&MYSQL_84, &q),
+        init_sql(&MYSQL_84, &known(&MYSQL_84), &q),
         "SET NAMES utf8mb4, SESSION session_track_system_variables = \
          'sql_mode,transaction_read_only,sql_select_limit,time_zone,character_set_results,character_set_connection,\
          transaction_isolation', \
@@ -106,23 +111,26 @@ fn one_set_sets_the_session_up_by_role() {
          SESSION sql_select_limit = 501"
     );
     let ro = Settings { read_only: true, ..q };
-    assert!(init_sql(&MYSQL_84, &ro).ends_with(", SESSION sql_select_limit = 501, SESSION transaction_read_only = ON"));
+    assert!(
+        init_sql(&MYSQL_84, &known(&MYSQL_84), &ro)
+            .ends_with(", SESSION sql_select_limit = 501, SESSION transaction_read_only = ON")
+    );
     let meta =
         Settings { role: SessionRole::Meta, read_only: false, select_limit: None, lock_wait: None, wait_timeout: None };
     assert!(
-        init_sql(&MYSQL_84, &meta).ends_with(
+        init_sql(&MYSQL_84, &known(&MYSQL_84), &meta).ends_with(
             ", SESSION lock_wait_timeout = 2, SESSION max_execution_time = 10000, SESSION sql_quote_show_create = 1, \
              SESSION transaction_read_only = ON"
         ),
         "{}",
-        init_sql(&MYSQL_84, &meta)
+        init_sql(&MYSQL_84, &known(&MYSQL_84), &meta)
     );
     let maria = Greeting { mariadb: true, handshake: Version::new(10, 11, 6) };
-    let sql = init_sql(&maria, &meta);
+    let sql = init_sql(&maria, &known(&maria), &meta);
     assert!(sql.contains("'sql_mode,tx_read_only,sql_select_limit,time_zone,"), "{sql}");
     assert!(sql.contains(",tx_isolation', ") && sql.contains("SESSION tx_isolation = @@SESSION.tx_isolation"), "{sql}");
     let maria_11 = Greeting { mariadb: true, handshake: Version::new(11, 4, 2) };
-    let newer = init_sql(&maria_11, &meta);
+    let newer = init_sql(&maria_11, &known(&maria_11), &meta);
     assert!(newer.contains("SESSION transaction_isolation = @@SESSION.transaction_isolation"), "{newer}");
     assert!(
         sql.ends_with(
@@ -131,7 +139,7 @@ fn one_set_sets_the_session_up_by_role() {
         "{sql}"
     );
     let maria = Greeting { mariadb: true, handshake: Version::new(11, 4, 2) };
-    assert!(init_sql(&maria, &ro).ends_with(", SESSION transaction_read_only = ON"));
+    assert!(init_sql(&maria, &known(&maria), &ro).ends_with(", SESSION transaction_read_only = ON"));
 }
 
 #[test]
@@ -624,9 +632,21 @@ fn the_open_transaction_keeps_its_level() {
 /// Both names of the variable are read: MySQL's (and MariaDB's from 11.1) and older MariaDB's.
 #[test]
 fn isolation_names_by_server() {
-    assert_eq!(MYSQL_84.isolation_var(), "transaction_isolation");
-    assert_eq!(Greeting { mariadb: true, handshake: Version::new(10, 11, 6) }.isolation_var(), "tx_isolation");
-    assert_eq!(Greeting { mariadb: true, handshake: Version::new(11, 1, 0) }.isolation_var(), "transaction_isolation");
+    let named = |g: Greeting| g.isolation_var(&known(&g));
+    assert_eq!(named(MYSQL_84), "transaction_isolation");
+    assert_eq!(named(Greeting { mariadb: true, handshake: Version::new(10, 11, 6) }), "tx_isolation");
+    assert_eq!(named(Greeting { mariadb: true, handshake: Version::new(11, 1, 0) }), "transaction_isolation");
+    // A session's facts give the version: the greeting's when its reports name two engines.
+    let facts_of = |g: &Greeting, line: &str| {
+        let report = crate::engine::judge(g, Some(mysql_async::Value::Bytes(line.as_bytes().to_vec()))).unwrap();
+        crate::engine::session_version(&crate::engine::facts(g, &report, None))
+    };
+    let maria_11 = Greeting { mariadb: true, handshake: Version::new(11, 4, 13) };
+    assert_eq!(maria_11.isolation_var(&facts_of(&maria_11, "11.4.13-MariaDB")), "transaction_isolation");
+    assert_eq!(maria_11.isolation_var(&facts_of(&maria_11, "11.0.6-MariaDB")), "tx_isolation");
+    assert_eq!(maria_11.isolation_var(&facts_of(&maria_11, "8.4.6")), "transaction_isolation");
+    assert_eq!(MYSQL_84.isolation_var(&facts_of(&MYSQL_84, "8.0.40")), "transaction_isolation");
+    assert_eq!(MYSQL_84.isolation_var(&facts_of(&MYSQL_84, "11.0.6-MariaDB")), "transaction_isolation");
 }
 
 /// Which levels a server's names stand for.
@@ -2106,7 +2126,7 @@ fn the_monitor_session_only_reads_waits_a_second_and_reads_whole_lists_in_system
         lock_wait: None,
         wait_timeout: None,
     };
-    let sql = init_sql(&MYSQL_84, &monitor);
+    let sql = init_sql(&MYSQL_84, &known(&MYSQL_84), &monitor);
     assert!(
         sql.ends_with(
             ", SESSION lock_wait_timeout = 1, SESSION max_execution_time = 5000, \
@@ -2172,17 +2192,23 @@ async fn a_definer_lookup_stopped_by_a_cancel_ends_as_cancelled() {
 #[test]
 fn the_read_only_question_names_each_servers_variables() {
     assert_eq!(
-        ask_read_only(&MYSQL_84),
+        ask_read_only(&MYSQL_84, &known(&MYSQL_84)),
         "SELECT CAST(@@SESSION.transaction_read_only AS CHAR), CAST(@@GLOBAL.super_read_only AS CHAR), \
          CAST(@@GLOBAL.innodb_read_only AS CHAR)"
     );
     assert_eq!(
-        ask_read_only(&Greeting { mariadb: true, handshake: Version::new(10, 11, 6) }),
+        ask_read_only(
+            &Greeting { mariadb: true, handshake: Version::new(10, 11, 6) },
+            &Fact::Known(Version::new(10, 11, 6))
+        ),
         "SELECT CAST(@@SESSION.tx_read_only AS CHAR), NULL, CAST(@@GLOBAL.innodb_read_only AS CHAR)"
     );
     assert!(
-        ask_read_only(&Greeting { mariadb: true, handshake: Version::new(11, 4, 2) })
-            .contains("@@SESSION.transaction_read_only")
+        ask_read_only(
+            &Greeting { mariadb: true, handshake: Version::new(11, 4, 2) },
+            &Fact::Known(Version::new(11, 4, 2))
+        )
+        .contains("@@SESSION.transaction_read_only")
     );
 }
 
@@ -2191,13 +2217,13 @@ fn the_read_only_question_names_each_servers_variables() {
 fn a_session_not_made_read_only_says_what_the_server_said() {
     let a = (Some("0".to_string()), Some("0".to_string()), Some("0".to_string()));
     assert_eq!(
-        not_read_only(&MYSQL_84, Some("NO"), &a),
+        not_read_only(&MYSQL_84, &known(&MYSQL_84), Some("NO"), &a),
         "the server did not make the session read-only (reported transaction_read_only: NO; \
          asked: transaction_read_only 0, super_read_only 0, innodb_read_only 0)"
     );
     let maria = Greeting { mariadb: true, handshake: Version::new(10, 11, 6) };
     assert_eq!(
-        not_read_only(&maria, None, &(Some("0".to_string()), None, None)),
+        not_read_only(&maria, &known(&maria), None, &(Some("0".to_string()), None, None)),
         "the server did not make the session read-only (reported tx_read_only: none; \
          asked: tx_read_only 0, innodb_read_only NULL)"
     );

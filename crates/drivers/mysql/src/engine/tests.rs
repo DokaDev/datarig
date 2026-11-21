@@ -287,6 +287,8 @@ fn session_set_up_texts() -> String {
     for (mariadb, version) in SET_UP_SERVERS {
         let server = at(mariadb, version);
         let name = server.label();
+        // A session straight to the server: its reports agree on its version.
+        let v = session_version(&facts(&server, &VersionReport::agreeing(&server), None));
         line(format!("check {name}"), format!("{:?}", server.check()));
         for role in [SessionRole::Query, SessionRole::Meta, SessionRole::Monitor] {
             for read_only in [false, true] {
@@ -299,18 +301,18 @@ fn session_set_up_texts() -> String {
                                     "init_sql {name} {role:?} read_only={read_only} select_limit={select_limit:?} \
                                      lock_wait={lock_wait:?} wait_timeout={wait_timeout:?}"
                                 ),
-                                init_sql(&server, &s),
+                                init_sql(&server, &v, &s),
                             );
                         }
                     }
                 }
             }
         }
-        line(format!("ask_read_only {name}"), ask_read_only(&server));
+        line(format!("ask_read_only {name}"), ask_read_only(&server, &v));
         let answered = (Some("0".to_string()), Some("1".to_string()), Some("0".to_string()));
-        line(format!("not_read_only {name} reported OFF"), not_read_only(&server, Some("OFF"), &answered));
-        line(format!("not_read_only {name} reported none"), not_read_only(&server, None, &(None, None, None)));
-        line(format!("ask_unreported {name}"), ask_unreported(&server));
+        line(format!("not_read_only {name} reported OFF"), not_read_only(&server, &v, Some("OFF"), &answered));
+        line(format!("not_read_only {name} reported none"), not_read_only(&server, &v, None, &(None, None, None)));
+        line(format!("ask_unreported {name}"), ask_unreported(&server, &v));
     }
     out
 }
@@ -372,8 +374,73 @@ fn the_family_names_session_variables_by_version() {
         let (major, minor, patch) = version;
         let known = Fact::Known(Version::new(major, minor, patch));
         assert_eq!(server.family().engine(), engine_of(mariadb));
-        assert_eq!(server.read_only_var(), server.family().read_only_var(&known));
-        assert_eq!(server.isolation_var(), server.family().isolation_var(&known));
+        assert_eq!(server.read_only_var(&known), server.family().read_only_var(&known));
+        assert_eq!(server.isolation_var(&known), server.family().isolation_var(&known));
+    }
+}
+
+/// The version a session's settings are named by: when its two reports name one engine, the
+/// version its facts know (none when the numbers differ or the line has none, and then
+/// MariaDB's older names, which every version it serves has); when they name two, the
+/// greeting's number, so every name is the one the greeting implies, as before. MySQL has one
+/// name on every version. Every statement of the set-up and the allowlist's question use them.
+#[test]
+fn session_variables_follow_the_facts() {
+    use crate::session::{Settings, ask_read_only, ask_unreported, init_sql, not_read_only};
+    use datarig_core::driver::SessionRole;
+    let (tx, transaction) = (("tx_read_only", "tx_isolation"), ("transaction_read_only", "transaction_isolation"));
+    let known = |a, b, c| Fact::Known(Version::new(a, b, c));
+    let rows = [
+        // Reports naming one engine: the facts' version.
+        (maria(11, 4, 13), "11.4.13-MariaDB-ubu2404", known(11, 4, 13), transaction),
+        (maria(11, 1, 0), "11.1.0-MariaDB", known(11, 1, 0), transaction),
+        (maria(11, 0, 6), "11.0.6-MariaDB", known(11, 0, 6), tx),
+        (maria(10, 6, 0), "10.6.0-MariaDB", known(10, 6, 0), tx),
+        (maria(11, 8, 0), "11.4.13-MariaDB-ubu2404", Fact::Unknown(Why::VersionsDisagree), tx),
+        (maria(11, 4, 13), "5.5.5-11.4.13-MariaDB", Fact::Unknown(Why::VersionsDisagree), tx),
+        (maria(10, 11, 9), "11.4.13-MariaDB-ubu2404", Fact::Unknown(Why::VersionsDisagree), tx),
+        (maria(11, 4, 13), "x-MariaDB", Fact::Unknown(Why::VersionUnknown), tx),
+        (my(8, 4, 6), "8.4.6", known(8, 4, 6), transaction),
+        (my(8, 0, 0), "8.0.0", known(8, 0, 0), transaction),
+        (my(8, 4, 99), "8.4.6", Fact::Unknown(Why::VersionsDisagree), transaction),
+        (my(8, 4, 6), "x", Fact::Unknown(Why::VersionUnknown), transaction),
+        // An Aurora line has no number the driver reads: unknown, as before.
+        (my(8, 0, 32), "8.0.mysql_aurora.3.04.0", Fact::Unknown(Why::VersionUnknown), transaction),
+        // Reports naming two engines: the greeting's number, the greeting's names.
+        (my(8, 4, 6), "11.4.13-MariaDB-ubu2404", known(8, 4, 6), transaction),
+        (my(8, 0, 40), "5.5.5-10.11.9-MariaDB", known(8, 0, 40), transaction),
+        (maria(11, 4, 13), "8.4.6", known(11, 4, 13), transaction),
+        (maria(10, 11, 9), "8.4.6", known(10, 11, 9), tx),
+        (maria(11, 4, 13), "8.0.mysql_aurora.3.04.0", known(11, 4, 13), transaction),
+        (maria(11, 0, 6), "x", known(11, 0, 6), tx),
+    ];
+    let meta =
+        Settings { role: SessionRole::Meta, read_only: false, select_limit: None, lock_wait: None, wait_timeout: None };
+    let d = Dialect::MySql(MySqlMode::default());
+    for (g, line, version, (ro, iso)) in rows {
+        let what = format!("{g:?} {line}");
+        let report = judge(&g, Some(Value::Bytes(line.as_bytes().to_vec()))).expect("a line");
+        for own in [Some(true), Some(false), None] {
+            let f = facts(&g, &report, own);
+            assert_eq!(session_version(&f), version, "{what} {own:?}");
+        }
+        let v = session_version(&facts(&g, &report, None));
+        assert_eq!((g.read_only_var(&v), g.isolation_var(&v)), (ro, iso), "{what}");
+        let set = init_sql(&g, &v, &meta);
+        assert!(set.contains(&format!("'sql_mode,{ro},sql_select_limit,")), "{what}: {set}");
+        assert!(set.contains(&format!(",{iso}', ")), "{what}: {set}");
+        assert!(set.contains(&format!("SESSION {iso} = @@SESSION.{iso}")), "{what}: {set}");
+        assert!(set.ends_with(&format!("SESSION {ro} = ON")), "{what}: {set}");
+        assert!(ask_read_only(&g, &v).starts_with(&format!("SELECT CAST(@@SESSION.{ro} AS CHAR)")), "{what}");
+        assert!(ask_unreported(&g, &v).contains(&format!("CAST(@@SESSION.{ro} AS CHAR)")), "{what}");
+        let message = not_read_only(&g, &v, None, &(None, None, None));
+        assert!(message.contains(&format!("(reported {ro}: none; asked: {ro} NULL")), "{what}: {message}");
+        let check = crate::query::check_sql(&[], d, &g, &v).concat();
+        assert!(check.contains(&format!("@@SESSION.{iso}")), "{what}: {check}");
+        let other = if iso == "tx_isolation" { "transaction_" } else { "tx_" };
+        for text in [set, ask_read_only(&g, &v), ask_unreported(&g, &v), message, check] {
+            assert!(!text.contains(other), "{what}: {text}");
+        }
     }
 }
 
@@ -418,6 +485,7 @@ fn own_read_texts() -> String {
     for (mariadb, version) in OWN_READ_SERVERS {
         let server = at(mariadb, version);
         let name = server.label();
+        let v = session_version(&facts(&server, &VersionReport::agreeing(&server), None));
         for (mode_name, mode) in modes {
             let d = dialect(&server, mode);
             // How the names are written depends on the sql mode alone: plain names are recorded in
@@ -427,7 +495,7 @@ fn own_read_texts() -> String {
                 let names: Vec<String> = names.iter().map(|n| n.to_string()).collect();
                 let text = not_undone_sql(&names, d, server.family());
                 line(format!("not_undone {name} {mode_name} {names:?}"), format!("{text:?}"));
-                line(format!("check {name} {mode_name} {names:?}"), format!("{:?}", check_sql(&names, d, &server)));
+                line(format!("check {name} {mode_name} {names:?}"), format!("{:?}", check_sql(&names, d, &server, &v)));
             }
             for (schema, table) in
                 [("shop", "items"), ("o'k", "a\\b`c")].into_iter().filter(|(s, _)| plain || *s != "shop")

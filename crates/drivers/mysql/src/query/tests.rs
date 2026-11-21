@@ -1,6 +1,6 @@
 use super::*;
 use crate::engine::family_of;
-use datarig_core::engine::Version;
+use datarig_core::engine::{Fact, Version};
 use datarig_core::sql::dialect::{DollarQuotes, MySqlMode};
 
 const MODE: MySqlMode = MySqlMode {
@@ -140,7 +140,13 @@ fn names_are_split_unquoted_and_lower_case() {
 #[test]
 fn the_servers_question_asks_every_reading_of_a_name() {
     let d = Dialect::MySql(MODE);
-    let sql = check_sql(&["users".into(), "u.email".into(), "shop.orders.id".into(), "o'k".into()], d, &MYSQL).concat();
+    let sql = check_sql(
+        &["users".into(), "u.email".into(), "shop.orders.id".into(), "o'k".into()],
+        d,
+        &MYSQL,
+        &Fact::Known(MYSQL.handshake),
+    )
+    .concat();
     assert!(
         sql.starts_with(
             "SELECT /*+ SET_VAR(lock_wait_timeout=2) MAX_EXECUTION_TIME(10000) */ @@SESSION.transaction_isolation"
@@ -153,11 +159,11 @@ fn the_servers_question_asks_every_reading_of_a_name() {
     // A table is a base table or MariaDB's system-versioned one; anything else is not a table.
     assert!(sql.contains("t.TABLE_TYPE NOT IN ('BASE TABLE', 'SYSTEM VERSIONED')"), "{sql}");
     // Nothing named: nothing can be a view.
-    assert!(check_sql(&[], d, &MYSQL).concat().contains("AND (FALSE)"));
+    assert!(check_sql(&[], d, &MYSQL, &Fact::Known(MYSQL.handshake)).concat().contains("AND (FALSE)"));
     // Backslashes are written as the session reads them.
     let nbe = Dialect::MySql(MySqlMode { no_backslash_escapes: true, ..MODE });
-    assert!(check_sql(&["a\\b".into()], nbe, &MYSQL).concat().contains("('a\\b')"));
-    assert!(check_sql(&["a\\b".into()], d, &MYSQL).concat().contains("('a\\\\b')"));
+    assert!(check_sql(&["a\\b".into()], nbe, &MYSQL, &Fact::Known(MYSQL.handshake)).concat().contains("('a\\b')"));
+    assert!(check_sql(&["a\\b".into()], d, &MYSQL, &Fact::Known(MYSQL.handshake)).concat().contains("('a\\\\b')"));
 }
 
 #[test]
@@ -389,16 +395,30 @@ fn a_bounded_read_stopped_by_the_server_is_told_apart_from_a_cancel_and_a_lock_w
 #[test]
 fn mariadbs_bounded_read_fits_its_version_and_the_sessions_own_limits() {
     let d = Dialect::MySql(MODE);
-    let older = check_sql(&[], d, &Greeting { mariadb: true, handshake: Version::new(10, 6, 0) }).remove(0);
+    let older = check_sql(
+        &[],
+        d,
+        &Greeting { mariadb: true, handshake: Version::new(10, 6, 0) },
+        &Fact::Known(Version::new(10, 6, 0)),
+    )
+    .remove(0);
     assert!(older.contains("@@SESSION.tx_isolation,"), "{older}");
     assert!(
         older.ends_with("@@SESSION.max_statement_time, @@SESSION.lock_wait_timeout, @@SESSION.max_sort_length"),
         "{older}"
     );
-    let newer = check_sql(&[], d, &Greeting { mariadb: true, handshake: Version::new(11, 4, 0) }).remove(0);
+    let newer = check_sql(
+        &[],
+        d,
+        &Greeting { mariadb: true, handshake: Version::new(11, 4, 0) },
+        &Fact::Known(Version::new(11, 4, 0)),
+    )
+    .remove(0);
     assert!(newer.contains("@@SESSION.transaction_isolation,"), "{newer}");
     assert!(
-        check_sql(&[], d, &MYSQL).concat().ends_with("@@SESSION.max_execution_time, NULL, @@SESSION.max_sort_length")
+        check_sql(&[], d, &MYSQL, &Fact::Known(MYSQL.handshake))
+            .concat()
+            .ends_with("@@SESSION.max_execution_time, NULL, @@SESSION.max_sort_length")
     );
     let sql = "SELECT 1";
     let asked = |statement, lock| Asked { isolation: String::new(), statement, lock, sort_length: None };
@@ -457,7 +477,7 @@ fn mysql_own_read_text_is_unchanged() {
     let d = Dialect::MySql(MODE);
     let names: Vec<String> = vec!["shop.t".into(), "u".into()];
     assert_eq!(not_undone_sql(&names, d, family_of(false)), NOT_UNDONE_MYSQL);
-    assert_eq!(check_sql(&names, d, &MYSQL), [CHECK_MYSQL]);
+    assert_eq!(check_sql(&names, d, &MYSQL, &Fact::Known(MYSQL.handshake)), [CHECK_MYSQL]);
     // A keyset chunk: the hint after its `SELECT`, as the chunk was written before.
     let chunk = "SELECT * FROM `s`.`t` WHERE `id` > 7 ORDER BY `id` LIMIT 10000";
     assert_eq!(
@@ -484,7 +504,12 @@ fn mariadb_own_reads_are_bounded_by_set_statement() {
     let sql = not_undone_sql(&names, d, family_of(true));
     assert!(sql.starts_with(&format!("{bound}SELECT CONCAT(t.TABLE_SCHEMA")), "{sql}");
     assert!(!sql.contains("/*+"), "{sql}");
-    let ask = check_sql(&names, d, &Greeting { mariadb: true, handshake: Version::new(11, 4, 0) });
+    let ask = check_sql(
+        &names,
+        d,
+        &Greeting { mariadb: true, handshake: Version::new(11, 4, 0) },
+        &Fact::Known(Version::new(11, 4, 0)),
+    );
     assert_eq!(
         ask[0],
         "SELECT @@SESSION.transaction_isolation, @@SESSION.max_statement_time, @@SESSION.lock_wait_timeout, \
