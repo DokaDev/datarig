@@ -21,6 +21,8 @@ mod context;
 mod export;
 #[path = "engine_conformance/filter.rs"]
 mod filter;
+#[path = "engine_conformance/read_only.rs"]
+mod read_only;
 #[path = "engine_conformance/risk.rs"]
 mod risk;
 #[path = "engine_conformance/session.rs"]
@@ -278,6 +280,11 @@ fn session_rules_on_every_engine() {
 }
 
 #[test]
+fn read_only_open_on_every_engine() {
+    run("read-only open", &read_only::cases(), read_only::verdict);
+}
+
+#[test]
 fn every_case_names_every_engine() {
     let all: Vec<Named> = [
         named_text("classifier", &risk::classifier_cases()),
@@ -292,6 +299,7 @@ fn every_case_names_every_engine() {
         named("tx step", &tx::cases()),
         named("tx statement", &tx::statement_cases()),
         named_versioned("session rules", &session::cases()),
+        named("read-only open", &read_only::cases()),
     ]
     .into_iter()
     .flatten()
