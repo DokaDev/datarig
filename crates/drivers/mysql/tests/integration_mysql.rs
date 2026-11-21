@@ -8664,3 +8664,106 @@ async fn mariadb_a_cancel_or_a_lost_connection_between_the_allowlists_statements
     let mut d = Conn::open(&url, SessionRole::Query, false, test).await;
     assert_eq!(count_within(&mut d, 1, &counted, Some(Duration::from_secs(30))).await.0, Ok(40));
 }
+
+// ── a count without a time limit behind a lock ────────────────────────────
+
+/// A count or a group count (`group`) without a time limit (`[results] count_timeout = "off"`)
+/// behind a metadata lock another session holds (`LOCK TABLES … WRITE`), for test `test`: it
+/// gives up waiting for the lock after 1 s (`LockTimeout`), as one with a time limit does, and
+/// does not wait for the lock to go. No time limit is added: nothing of the bound stays on the
+/// session, and the session's own lock wait and time limit are as they were. One with a time
+/// limit is unchanged. Free, each counts as before.
+async fn off_behind_a_lock(test: &'static str, group: bool) {
+    let Some((url, admin)) = urls(test) else { return };
+    let _end = EndSessions { admin: admin.clone(), test };
+    let t = numbers(&admin, if group { "offgroup" } else { "offcount" }, 50).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    mariadb(&url).await;
+    let sql = match group {
+        true => group_sql(&t.name, "v", ("varchar", ValueKind::Text), None),
+        false => format!("SELECT COUNT(*) FROM (\nSELECT * FROM {} WHERE (id > 10)\n) AS datarig_count", t.q()),
+    };
+    let ask = |id, limit| match group {
+        true => DbCommand::GroupCount { id, sql: sql.clone(), limit },
+        false => DbCommand::Count { id, sql: sql.clone(), limit },
+    };
+    let answered = move |id| {
+        move |e: &DbEvent| match e {
+            DbEvent::Counted { id: i, .. } | DbEvent::GroupCounted { id: i, .. } => *i == id,
+            _ => false,
+        }
+    };
+    // What a count answered: the number of rows or of values, or why not.
+    fn said(e: &DbEvent) -> Result<u64, DbError> {
+        match e {
+            DbEvent::Counted { result, .. } => result.clone(),
+            DbEvent::GroupCounted { result, .. } => {
+                result.as_ref().map(|g| group_pairs(g).len() as u64).map_err(Clone::clone)
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    async fn limits(c: &mut Conn, id: u64) -> Vec<Cell> {
+        let timeout = if mariadb_cached() { "max_statement_time" } else { "max_execution_time" };
+        let evs = c.run(id, &[&format!("SELECT @@SESSION.{timeout}, @@SESSION.lock_wait_timeout")]).await;
+        page_of(&evs).1[0].clone()
+    }
+    let free = if group { 50 } else { 40 };
+    c.ok(1, "SET SESSION lock_wait_timeout = 73").await;
+    let own = limits(&mut c, 2).await;
+    assert_eq!(own[1].as_deref(), Some("73"));
+    // Free: counted as before.
+    c.session.send(ask(3, None));
+    assert_eq!(said(&c.wait(answered(3), 30).await), Ok(free));
+    // Held by another session until the checks below are done.
+    let mut b = side(&url).await;
+    b.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
+    let t0 = Instant::now();
+    c.session.send(ask(4, None));
+    let off = answer_within(&mut c, 10, answered(4)).await;
+    let off_took = t0.elapsed();
+    // With a time limit, as before: the lock wait's 1 s.
+    let t0 = Instant::now();
+    let limited = match off {
+        Some(_) => {
+            c.session.send(ask(5, Some(Duration::from_secs(30))));
+            Some((said(&c.wait(answered(5), 30).await), t0.elapsed()))
+        }
+        None => None,
+    };
+    b.query_drop("UNLOCK TABLES").await.unwrap();
+    b.disconnect().await.unwrap();
+    let Some(off) = off else {
+        // Gone from the table now: the count still waiting answers.
+        let late = said(&c.wait(answered(4), 30).await);
+        panic!("without a time limit it still waited behind the lock after {off_took:?} (then: {late:?})")
+    };
+    let off = said(&off);
+    assert!(matches!(off, Err(DbError::LockTimeout(_))), "{off:?}");
+    assert!(off_took >= Duration::from_secs(1) && off_took < Duration::from_secs(10), "{off_took:?}");
+    let (result, took) = limited.expect("asked");
+    assert!(matches!(result, Err(DbError::LockTimeout(_))), "{result:?}");
+    assert!(took >= Duration::from_secs(1) && took < Duration::from_secs(10), "{took:?}");
+    // Nothing of the bound stays, and no time limit was added.
+    assert_eq!(limits(&mut c, 6).await, own, "the session's own");
+    // Free again: counted as before.
+    c.session.send(ask(7, None));
+    assert_eq!(said(&c.wait(answered(7), 30).await), Ok(free));
+}
+
+/// The answer `pred` picks within `secs`, or `None` when none came by then.
+async fn answer_within(c: &mut Conn, secs: u64, pred: impl Fn(&DbEvent) -> bool) -> Option<DbEvent> {
+    tokio::time::timeout(Duration::from_secs(secs), c.wait(pred, 600)).await.ok()
+}
+
+/// [`off_behind_a_lock`] for a count of a result's rows.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_count_without_a_time_limit_gives_up_behind_a_lock() {
+    off_behind_a_lock("a_count_without_a_time_limit_gives_up_behind_a_lock", false).await;
+}
+
+/// [`off_behind_a_lock`] for a count of a column's values.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_without_a_time_limit_gives_up_behind_a_lock() {
+    off_behind_a_lock("a_group_count_without_a_time_limit_gives_up_behind_a_lock", true).await;
+}
