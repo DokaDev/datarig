@@ -174,6 +174,34 @@ fn own_sql(token: &str) -> String {
     format!("SELECT CONNECTION_ID(), {} LIMIT 1", marked_once(token))
 }
 
+/// The statement a session's connection reads its id alone with when the server refused
+/// [`own_sql`] (its marker lookup reads `performance_schema`, which may be off or not readable).
+pub(crate) const OWN_ID_SQL: &str = "SELECT CONNECTION_ID() LIMIT 1";
+
+/// What a session's connection read of its own id as it opened ([`open`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum OwnRead {
+    /// [`own_sql`]'s answer: the id, and the id the server lists the marker on.
+    Marked(u64, Option<u64>),
+    /// [`OWN_ID_SQL`]'s answer, after the server refused [`own_sql`].
+    IdOnly(u64),
+    /// Nothing read.
+    Unread,
+}
+
+/// The connection's id, its confirmed marker (`token` when [`own_verdict`] confirms it) and
+/// whether the id is the handshake's (`handshake`, lower 32 bits), from what it read (`read`):
+/// with nothing read, the handshake's id and not known. An id read alone is never confirmed.
+pub(crate) fn own_of(handshake: u32, token: String, read: OwnRead) -> (u64, Option<String>, Option<bool>) {
+    match read {
+        OwnRead::Marked(id, marker) => {
+            (id, own_verdict(handshake, id, marker).then_some(token), Some(low32(id) == handshake))
+        }
+        OwnRead::IdOnly(id) => (id, None, Some(low32(id) == handshake)),
+        OwnRead::Unread => (u64::from(handshake), None, None),
+    }
+}
+
 /// A subquery: the id of the one connection the server lists with the marker `token`, `NULL`
 /// when it lists none or more than one.
 pub(crate) fn marked_once(token: &str) -> String {
@@ -638,7 +666,8 @@ pub(crate) struct Opened {
 ///
 /// The connection carries a marker of its own ([`MARKER`]), and reads its id and where the
 /// server lists the marker in one statement last ([`own_sql`]); a failure of that read leaves
-/// the session unconfirmed ([`Opened::token`]), never fails the open.
+/// the session unconfirmed ([`Opened::token`]), never fails the open. When the server refused
+/// it, the id is read alone ([`OWN_ID_SQL`]), so whether it is the handshake's is still known.
 pub(crate) async fn open(
     route: &Route,
     opts: Opts,
@@ -762,11 +791,17 @@ pub(crate) async fn open(
     }
     // The handshake has the id's lower 32 bits: MySQL's ids have no more, MariaDB's may.
     let handshake = conn.id();
-    let answer: Option<(u64, Option<u64>)> = conn.query_first(own_sql(&token)).await.ok().flatten();
-    let (id, token, own) = match answer {
-        Some((id, marker)) => (id, own_verdict(handshake, id, marker).then_some(token), Some(low32(id) == handshake)),
-        None => (u64::from(handshake), None, None),
+    let read = match conn.query_first::<(u64, Option<u64>), _>(own_sql(&token)).await {
+        Ok(Some((id, marker))) => OwnRead::Marked(id, marker),
+        // The server refused the marker lookup: the id alone still says whether it is the
+        // handshake's.
+        Err(mysql_async::Error::Server(_)) => match conn.query_first::<u64, _>(OWN_ID_SQL).await {
+            Ok(Some(id)) => OwnRead::IdOnly(id),
+            Ok(None) | Err(_) => OwnRead::Unread,
+        },
+        Ok(None) | Err(_) => OwnRead::Unread,
     };
+    let (id, token, own) = own_of(handshake, token, read);
     let facts = crate::engine::facts(&greeting, &report, own);
     Ok(Opened { conn, wire, encryption, greeting, facts, tracked, id, read_only_unconfirmed, token, own })
 }
