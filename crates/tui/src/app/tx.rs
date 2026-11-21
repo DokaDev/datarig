@@ -23,9 +23,10 @@ use super::idle::TX_ROLLBACK_SERVER_MARGIN;
 use super::*;
 use crate::keymap::Ctx;
 use datarig_core::driver::{TxRule, TxStep as Step};
+use datarig_core::engine::{DdlLock, Fact, TxAsk, TxNote, TxRefusal, TxStatement};
 use datarig_core::policy::format_timeout;
 use datarig_core::sql::dialect::Dialect;
-use datarig_core::sql::risk::{Danger, TxStep};
+use datarig_core::sql::risk::TxStep;
 use std::collections::VecDeque;
 use std::time::SystemTime;
 
@@ -306,11 +307,15 @@ impl App {
 
     /// The idle limit the server gets for a transaction tab `t` opens for manual commit.
     /// `tx_idle_rollback`: the app rolls the idle transaction back itself (`App::idle_tick`);
-    /// PostgreSQL's server also gets the limit, [`TX_ROLLBACK_SERVER_MARGIN`] later, for the
-    /// transaction only: it ends the session when the app could not (stalled, gone).
+    /// a server that may be given one (PostgreSQL's) also gets the limit,
+    /// [`TX_ROLLBACK_SERVER_MARGIN`] later, for the transaction only: it ends the session when
+    /// the app could not (stalled, gone).
     pub(super) fn manual_idle_timeout(&self, t: &Tab) -> Option<Duration> {
-        let pg = t.exec.prepared.language().dialect() == Dialect::Postgres;
-        self.tab_rules(t).tx_idle_rollback.filter(|_| pg).map(|d| d + TX_ROLLBACK_SERVER_MARGIN)
+        let offered = match t.exec.prepared.language().dialect().engine().spec().session.server_idle_limit() {
+            Fact::Known(()) => true,
+            Fact::No(_) | Fact::Unknown(_) => false,
+        };
+        self.tab_rules(t).tx_idle_rollback.filter(|_| offered).map(|d| d + TX_ROLLBACK_SERVER_MARGIN)
     }
 
     /// What `statements` do to the transaction of tab `id`, statement by statement, as the tab
@@ -324,7 +329,7 @@ impl App {
         let Some(t) = self.tabs.get(id) else { return out };
         let manual = self.manual_commit(id);
         let dialect = t.exec.prepared.language().dialect();
-        let mysql = matches!(dialect, Dialect::MySql(_) | Dialect::MariaDb(_));
+        let rules = dialect.engine().spec().tx;
         let mut open = t.exec.user_tx();
         // What the open transaction did before the run; once a statement of the run ends it, none.
         let (mut changes, mut rows) = t.exec.tx.as_ref().map_or((0, 0), |x| (x.changes, x.rows));
@@ -335,50 +340,43 @@ impl App {
         for (i, sql) in statements.iter().enumerate() {
             let step = c.tx_step(sql);
             let r = c.classify(sql);
-            if !mysql && r.no_tx_block {
-                if open {
-                    let (commit, rollback) = self.tx_keys();
-                    let sql = super::runlog::excerpt(sql, 40);
-                    let m = Msg::TxNoTxBlockRefused { sql, commit, rollback };
-                    out.refused = Some(Notice::new(m, Level::Error));
-                    return out;
-                }
-                if manual {
-                    out.reasons.push((i, TxReason::OutsideTx));
-                }
-            }
-            if mysql && manual && r.danger == Some(Danger::Locks) && r.implicit_commit {
-                out.refused = Some(Notice::new(Label::TxLockTablesRefused, Level::Error));
+            let v = rules.statement(&TxStatement { sql, risk: &r, step, open, manual });
+            if let Some(refused) = v.refused {
+                out.refused = Some(match refused {
+                    TxRefusal::NoTxBlock => {
+                        let (commit, rollback) = self.tx_keys();
+                        let sql = super::runlog::excerpt(sql, 40);
+                        Notice::new(Msg::TxNoTxBlockRefused { sql, commit, rollback }, Level::Error)
+                    }
+                    TxRefusal::LockTables => Notice::new(Label::TxLockTablesRefused, Level::Error),
+                });
                 return out;
             }
-            if mysql && r.implicit_commit {
-                if open && manual {
+            match v.ask {
+                Some(TxAsk::OutsideTx) => out.reasons.push((i, TxReason::OutsideTx)),
+                Some(TxAsk::ImplicitCommit) => {
                     let statements = changes + pending;
                     out.reasons.push((i, TxReason::ImplicitCommit { statements, rows }));
-                } else if manual && r.class == datarig_core::sql::risk::Class::Ddl {
-                    out.notes.push(Notice::new(Msg::TxMysqlDdl { step: step_text(i) }, Level::Warning));
                 }
-                open = false;
-                (changes, rows, pending) = (0, 0, 0);
-            }
-            if !mysql && r.adds_enum_value && (open || (manual && step == TxStep::Opens)) {
-                out.notes.push(Notice::new(Msg::TxEnumValue { step: step_text(i) }, Level::Warning));
+                None => {}
             }
             // DDL in a transaction holds its lock until the transaction ends: said, with what
             // waits for it.
-            if !mysql
-                && r.class == datarig_core::sql::risk::Class::Ddl
-                && (open || (manual && step == TxStep::Opens))
-                && let Some(lock) = ddl_lock(sql)
-            {
+            for note in v.notes {
                 let step = step_text(i);
-                let m = match lock {
-                    DdlLock::Exclusive(target) => Msg::TxDdlLockExclusive { step, target },
-                    DdlLock::DropIndex(target) => Msg::TxDdlLockDropIndex { step, target },
-                    DdlLock::Share(target) => Msg::TxDdlLockShare { step, target },
-                    DdlLock::Kept(target) => Msg::TxDdlLockKept { step, target },
+                let m = match note {
+                    TxNote::MysqlDdl => Msg::TxMysqlDdl { step },
+                    TxNote::EnumValue => Msg::TxEnumValue { step },
+                    TxNote::DdlLock(DdlLock::Exclusive(target)) => Msg::TxDdlLockExclusive { step, target },
+                    TxNote::DdlLock(DdlLock::DropIndex(target)) => Msg::TxDdlLockDropIndex { step, target },
+                    TxNote::DdlLock(DdlLock::Share(target)) => Msg::TxDdlLockShare { step, target },
+                    TxNote::DdlLock(DdlLock::Kept(target)) => Msg::TxDdlLockKept { step, target },
                 };
                 out.notes.push(Notice::new(m, Level::Warning));
+            }
+            if v.ends_tx {
+                open = false;
+                (changes, rows, pending) = (0, 0, 0);
             }
             match block_change(sql, dialect) {
                 Some(o) => {
@@ -922,106 +920,3 @@ impl App {
         !tabs.is_empty()
     }
 }
-
-/// What a PostgreSQL DDL statement holds until its transaction ends ([`ddl_lock`]).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum DdlLock {
-    /// `ACCESS EXCLUSIVE` on the object named: other sessions' reads of it wait.
-    Exclusive(String),
-    /// `DROP INDEX`: `ACCESS EXCLUSIVE` on the index's table.
-    DropIndex(String),
-    /// `CREATE INDEX`: `SHARE` on the table: other sessions' writes to it wait.
-    Share(String),
-    /// Some lock on the object named, which mode this text does not tell for sure.
-    Kept(String),
-}
-
-/// The lock PostgreSQL's DDL statement `sql` holds on what it changes, by its kind, as
-/// PostgreSQL's documentation gives it (no catalog is read). Only forms known to take
-/// `ACCESS EXCLUSIVE` say so: `ALTER TABLE` with one action of `ADD [COLUMN]`, `DROP [COLUMN]`,
-/// `DROP CONSTRAINT`, `ALTER [COLUMN] … TYPE`/`SET DATA TYPE`/`SET NOT NULL`/`DROP NOT NULL`,
-/// `RENAME`, `OWNER TO`, `SET TABLESPACE`, `SET LOGGED`/`UNLOGGED`, `DETACH PARTITION` (not
-/// `CONCURRENTLY`); `DROP TABLE`, `VIEW`, `MATERIALIZED VIEW`, `SEQUENCE`; `TRUNCATE`.
-/// `DROP INDEX` locks its table so; `CREATE INDEX` takes `SHARE`. Other `ALTER` forms keep some
-/// lock ([`DdlLock::Kept`]); anything else (a `CREATE` of something new, `… ALL IN
-/// TABLESPACE`, a name not read) has no note.
-pub(crate) fn ddl_lock(sql: &str) -> Option<DdlLock> {
-    use datarig_core::sql::lexer::Tok;
-    let toks: Vec<_> =
-        datarig_core::sql::lexer::lex_in(sql, Dialect::Postgres).into_iter().filter(|t| !t.is_trivia()).collect();
-    let up = |i: usize| toks.get(i).filter(|t| t.is_word()).map(|t| t.text(sql).to_ascii_uppercase());
-    let is = |i: usize, w: &str| up(i).as_deref() == Some(w);
-    // The name at `k` (past `IF EXISTS`, `ONLY`): the words and dots that touch; where it ends.
-    let name_at = |mut k: usize| -> Option<(String, usize)> {
-        while up(k).is_some_and(|w| ["IF", "EXISTS", "ONLY"].contains(&w.as_str())) {
-            k += 1;
-        }
-        let mut name = String::new();
-        let mut end = None;
-        let mut next = k;
-        for t in toks.iter().skip(k) {
-            let part = t.is_word() || matches!(t.kind, Tok::QuotedIdent | Tok::Dot);
-            if !part || end.is_some_and(|e| e != t.start) {
-                break;
-            }
-            name.push_str(t.text(sql));
-            end = Some(t.end);
-            next += 1;
-        }
-        (!name.is_empty() && name != "ALL" && !name.eq_ignore_ascii_case("all")).then_some((name, next))
-    };
-    // One action: no comma outside parentheses (several actions take the strongest of their
-    // locks; `numeric(10,2)`, `DEFAULT f(a, b)` are one).
-    let mut depth = 0i32;
-    let one_action = !toks.iter().any(|t| {
-        match t.kind {
-            Tok::LParen => depth += 1,
-            Tok::RParen => depth -= 1,
-            _ => {}
-        }
-        t.kind == Tok::Comma && depth == 0
-    });
-    match (up(0)?.as_str(), up(1).as_deref()) {
-        ("CREATE", Some("INDEX" | "UNIQUE")) => {
-            if toks.iter().any(|t| t.is_word() && t.text(sql).eq_ignore_ascii_case("CONCURRENTLY")) {
-                return None;
-            }
-            let on = toks.iter().position(|t| t.is_word() && t.text(sql).eq_ignore_ascii_case("ON"))?;
-            name_at(on + 1).map(|(n, _)| DdlLock::Share(n))
-        }
-        ("DROP", Some("INDEX")) => name_at(2).map(|(n, _)| DdlLock::DropIndex(n)),
-        ("DROP", Some("TABLE" | "VIEW" | "SEQUENCE")) => name_at(2).map(|(n, _)| DdlLock::Exclusive(n)),
-        ("DROP", Some("MATERIALIZED")) if is(2, "VIEW") => name_at(3).map(|(n, _)| DdlLock::Exclusive(n)),
-        ("TRUNCATE", _) => name_at(if is(1, "TABLE") { 2 } else { 1 }).map(|(n, _)| DdlLock::Exclusive(n)),
-        ("ALTER", Some("TABLE")) => {
-            let (name, a) = name_at(2)?;
-            let exclusive = one_action
-                && match up(a).as_deref() {
-                    Some("ADD") => !matches!(
-                        up(a + 1).as_deref(),
-                        Some("CONSTRAINT" | "PRIMARY" | "UNIQUE" | "FOREIGN" | "CHECK" | "EXCLUDE")
-                    ),
-                    Some("DROP") => true,
-                    Some("ALTER") => {
-                        let c = if is(a + 1, "COLUMN") { a + 3 } else { a + 2 };
-                        is(c, "TYPE")
-                            || (is(c, "SET") && (is(c + 1, "DATA") || is(c + 1, "NOT")))
-                            || (is(c, "DROP") && is(c + 1, "NOT"))
-                    }
-                    Some("RENAME" | "OWNER") => true,
-                    Some("SET") => matches!(up(a + 1).as_deref(), Some("TABLESPACE" | "LOGGED" | "UNLOGGED")),
-                    Some("DETACH") => !toks.iter().any(|t| {
-                        t.is_word() && ["CONCURRENTLY", "FINALIZE"].contains(&t.text(sql).to_ascii_uppercase().as_str())
-                    }),
-                    _ => false,
-                };
-            Some(if exclusive { DdlLock::Exclusive(name) } else { DdlLock::Kept(name) })
-        }
-        ("ALTER", Some("INDEX" | "VIEW" | "SEQUENCE")) => name_at(2).map(|(n, _)| DdlLock::Kept(n)),
-        ("ALTER", Some("MATERIALIZED")) if is(2, "VIEW") => name_at(3).map(|(n, _)| DdlLock::Kept(n)),
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests;

@@ -1,8 +1,10 @@
 //! Where a statement runs on a session that commits by hand while no transaction is open
-//! (`Classifier::tx_step`), with the risk flags it reads.
+//! (`Classifier::tx_step`), with the risk flags it reads; and what the engine's transaction
+//! rules say of it (`TxRules::statement`).
 
 use crate::Engine::{MariaDb, MySql, Pg};
 use crate::{Case, Engine};
+use datarig_core::engine::TxStatement;
 use datarig_core::sql::dialect::{Dialect, Language};
 use datarig_core::sql::risk::Classifier;
 
@@ -204,6 +206,129 @@ pub fn cases() -> Vec<Case<&'static str>> {
                 (MySql, "Opens implicit_commit=false no_tx_block=false adds_enum_value=false"),
                 (MariaDb, "Opens implicit_commit=false no_tx_block=false adds_enum_value=false"),
             ],
+        },
+    ]
+}
+
+/// One statement of a run, as the transaction checks read it: its text, whether a transaction
+/// is open when it is reached, and whether the session commits by hand.
+pub struct TxInput {
+    pub sql: &'static str,
+    pub open: bool,
+    pub manual: bool,
+}
+
+/// What the engine's transaction rules say of the statement of `input` on `e`
+/// (`TxRules::statement`), its step and risk read by a fresh classifier of `e`'s dialect.
+pub fn verdict(e: Engine, input: &TxInput) -> String {
+    let d = e.dialect();
+    let mut c = Classifier::new(Language::Sql(d));
+    let step = c.tx_step(input.sql);
+    let risk = c.classify(input.sql);
+    let s = TxStatement { sql: input.sql, risk: &risk, step, open: input.open, manual: input.manual };
+    let v = d.engine().spec().tx.statement(&s);
+    format!("refused={:?} ask={:?} notes={:?} ends_tx={}", v.refused, v.ask, v.notes, v.ends_tx)
+}
+
+const NOTHING: &str = "refused=None ask=None notes=[] ends_tx=false";
+
+pub fn statement_cases() -> Vec<Case<TxInput>> {
+    vec![
+        Case {
+            name: "no tx block, open",
+            input: TxInput { sql: "VACUUM users", open: true, manual: true },
+            expect: &[
+                (Pg, "refused=Some(NoTxBlock) ask=None notes=[] ends_tx=false"),
+                (MySql, NOTHING),
+                (MariaDb, NOTHING),
+            ],
+        },
+        Case {
+            name: "no tx block, manual, none open",
+            input: TxInput { sql: "VACUUM users", open: false, manual: true },
+            expect: &[
+                (Pg, "refused=None ask=Some(OutsideTx) notes=[] ends_tx=false"),
+                (MySql, NOTHING),
+                (MariaDb, NOTHING),
+            ],
+        },
+        Case {
+            name: "no tx block, automatic commit",
+            input: TxInput { sql: "VACUUM users", open: false, manual: false },
+            expect: &[(Pg, NOTHING), (MySql, NOTHING), (MariaDb, NOTHING)],
+        },
+        Case {
+            name: "ddl, open",
+            input: TxInput { sql: "ALTER TABLE users ADD COLUMN zz_c int", open: true, manual: true },
+            expect: &[
+                (Pg, "refused=None ask=None notes=[DdlLock(Exclusive(\"users\"))] ends_tx=false"),
+                (MySql, "refused=None ask=Some(ImplicitCommit) notes=[] ends_tx=true"),
+                (MariaDb, "refused=None ask=Some(ImplicitCommit) notes=[] ends_tx=true"),
+            ],
+        },
+        Case {
+            name: "ddl, open, automatic commit",
+            input: TxInput { sql: "ALTER TABLE users ADD COLUMN zz_c int", open: true, manual: false },
+            expect: &[
+                (Pg, "refused=None ask=None notes=[DdlLock(Exclusive(\"users\"))] ends_tx=false"),
+                (MySql, "refused=None ask=None notes=[] ends_tx=true"),
+                (MariaDb, "refused=None ask=None notes=[] ends_tx=true"),
+            ],
+        },
+        Case {
+            name: "ddl, manual, none open",
+            input: TxInput { sql: "CREATE TABLE zz_t (id int)", open: false, manual: true },
+            expect: &[
+                (Pg, NOTHING),
+                (MySql, "refused=None ask=None notes=[MysqlDdl] ends_tx=true"),
+                (MariaDb, "refused=None ask=None notes=[MysqlDdl] ends_tx=true"),
+            ],
+        },
+        Case {
+            name: "enum value, manual, none open",
+            input: TxInput { sql: "ALTER TYPE mood ADD VALUE 'meh'", open: false, manual: true },
+            expect: &[
+                (Pg, "refused=None ask=None notes=[EnumValue] ends_tx=false"),
+                (MySql, NOTHING),
+                (MariaDb, NOTHING),
+            ],
+        },
+        Case {
+            name: "enum value, automatic commit",
+            input: TxInput { sql: "ALTER TYPE mood ADD VALUE 'meh'", open: false, manual: false },
+            expect: &[(Pg, NOTHING), (MySql, NOTHING), (MariaDb, NOTHING)],
+        },
+        Case {
+            name: "lock tables, manual",
+            input: TxInput { sql: "LOCK TABLES users WRITE", open: false, manual: true },
+            expect: &[
+                (Pg, NOTHING),
+                (MySql, "refused=Some(LockTables) ask=None notes=[] ends_tx=false"),
+                (MariaDb, "refused=Some(LockTables) ask=None notes=[] ends_tx=false"),
+            ],
+        },
+        Case {
+            name: "lock tables, automatic commit",
+            input: TxInput { sql: "LOCK TABLES users WRITE", open: false, manual: false },
+            expect: &[
+                (Pg, NOTHING),
+                (MySql, "refused=None ask=None notes=[] ends_tx=true"),
+                (MariaDb, "refused=None ask=None notes=[] ends_tx=true"),
+            ],
+        },
+        Case {
+            name: "create index, open",
+            input: TxInput { sql: "CREATE INDEX i ON t (a)", open: true, manual: true },
+            expect: &[
+                (Pg, "refused=None ask=None notes=[DdlLock(Share(\"t\"))] ends_tx=false"),
+                (MySql, "refused=None ask=Some(ImplicitCommit) notes=[] ends_tx=true"),
+                (MariaDb, "refused=None ask=Some(ImplicitCommit) notes=[] ends_tx=true"),
+            ],
+        },
+        Case {
+            name: "write, open",
+            input: TxInput { sql: "UPDATE users SET name = 'x' WHERE id = 1", open: true, manual: true },
+            expect: &[(Pg, NOTHING), (MySql, NOTHING), (MariaDb, NOTHING)],
         },
     ]
 }

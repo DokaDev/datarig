@@ -10,6 +10,7 @@ pub fn why_text(why: &Why) -> Label {
         Why::VersionUnknown => Label::EngineWhyVersionUnknown,
         Why::VersionsDisagree => Label::EngineWhyVersionsDisagree,
         Why::EnginesDisagree => Label::EngineWhyEnginesDisagree,
+        Why::NotOnEngine => Label::EngineWhyNotOnEngine,
     }
 }
 
