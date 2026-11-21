@@ -1,10 +1,11 @@
 //! PostgreSQL's row of the registry.
 
 use super::{
-    CountInTx, DdlLock, EngineId, EngineSpec, Fact, RiskRules, ServerFacts, SessionRules, Support, TextRules,
-    Transport, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict,
+    CountInTx, DdlLock, EngineId, EngineSpec, Fact, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, RiskRules,
+    ServerFacts, SessionRules, Support, TextRules, Transport, TxAsk, TxNote, TxRefusal, TxRules, TxStatement,
+    TxVerdict,
 };
-use crate::driver::Hierarchy;
+use crate::driver::{Hierarchy, SessionRole};
 use crate::profile::dsn::Scheme;
 use crate::sql::dialect::{Dialect, DollarQuotes, Language};
 use crate::sql::risk::mysql::Judged;
@@ -114,6 +115,28 @@ impl SessionRules for PgSession {
     /// which is the safe side.
     fn server_idle_limit(&self) -> Support {
         Fact::Known(())
+    }
+
+    /// Every transaction a PostgreSQL session opens is `READ ONLY` itself, so a session whose
+    /// default the server did not make read-only (a pooler may drop the startup option) still
+    /// opens, and the user is told. A monitor session asks nothing: each of its reads is read-only
+    /// by itself. A session that proved nothing else opens on no other answer.
+    fn read_only_open(&self, role: SessionRole, proof: ReadOnlyProof) -> OpenVerdict {
+        match (role, proof) {
+            (SessionRole::Query | SessionRole::Meta | SessionRole::Monitor, ReadOnlyProof::Confirmed) => {
+                OpenVerdict::Open
+            }
+            (SessionRole::Query | SessionRole::Meta | SessionRole::Monitor, ReadOnlyProof::PerTransaction) => {
+                OpenVerdict::OpenPerTransaction
+            }
+            (SessionRole::Monitor, ReadOnlyProof::NotAsked) => OpenVerdict::Open,
+            (SessionRole::Query | SessionRole::Meta, ReadOnlyProof::NotAsked) => {
+                OpenVerdict::Refused(READ_ONLY_NOT_PROVEN.to_string())
+            }
+            (SessionRole::Query | SessionRole::Meta | SessionRole::Monitor, ReadOnlyProof::Unconfirmed(detail)) => {
+                OpenVerdict::Refused(detail)
+            }
+        }
     }
 }
 

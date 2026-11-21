@@ -1,7 +1,7 @@
 //! What is fixed per engine, known without a connection: one [`EngineSpec`] per engine.
 
-use super::{CountInTx, EngineId, ServerFacts, Support, TxStatement, TxVerdict};
-use crate::driver::Hierarchy;
+use super::{CountInTx, EngineId, OpenVerdict, ReadOnlyProof, ServerFacts, Support, TxStatement, TxVerdict};
+use crate::driver::{Hierarchy, SessionRole};
 use crate::profile::dsn::Scheme;
 use crate::sql::dialect::{Dialect, DollarQuotes};
 use crate::sql::risk::Classifier;
@@ -81,4 +81,8 @@ pub trait SessionRules: Sync {
     /// Whether the server may be given an idle limit for a transaction opened for manual
     /// commit, so that it ends a session the app could not roll back itself.
     fn server_idle_limit(&self) -> Support;
+
+    /// Whether a session of `role` of a read-only profile opens when its connection proved
+    /// `proof`. Asked only when read-only applies to the session.
+    fn read_only_open(&self, role: SessionRole, proof: ReadOnlyProof) -> OpenVerdict;
 }
