@@ -565,7 +565,13 @@ fn byte_wise(name: &str) -> bool {
 /// number (or a bit or hexadecimal value, written as such); an expression (`DEFAULT_GENERATED`)
 /// is written in its parentheses, but `CURRENT_TIMESTAMP`, which a temporal column takes bare.
 /// MariaDB's is already SQL (`'text'`, `current_timestamp()`, `NULL` for none).
-fn default_text(value: Option<String>, data_type: &str, extra: &str, mariadb: bool, d: Dialect) -> Option<String> {
+pub(crate) fn default_text(
+    value: Option<String>,
+    data_type: &str,
+    extra: &str,
+    mariadb: bool,
+    d: Dialect,
+) -> Option<String> {
     let current = |v: &str| v.to_ascii_uppercase().starts_with("CURRENT_TIMESTAMP");
     let value = match value {
         None => None,

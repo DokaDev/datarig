@@ -914,7 +914,7 @@ async fn not_undone(
 
 /// The question [`not_undone`] asks about `names` (as `risk::mysql::named` gives them), read
 /// as [`check_sql`] reads them, of a MariaDB server or not.
-fn not_undone_sql(names: &[String], d: Dialect, mariadb: bool) -> String {
+pub(crate) fn not_undone_sql(names: &[String], d: Dialect, mariadb: bool) -> String {
     let cond = name_condition(names, d);
     // The session's account as the privilege tables write a grantee (`'user'@'host'`); a grant
     // that reaches it otherwise (through a role) is not seen, so the table counts as one whose
@@ -2213,18 +2213,18 @@ async fn asked_server(
 }
 
 /// What the allowlist's question ([`asked_server`]) learnt of the session besides.
-struct Asked {
+pub(crate) struct Asked {
     /// Its transaction isolation, as the server writes it (`REPEATABLE-READ`).
-    isolation: String,
+    pub(crate) isolation: String,
     /// The time limit of its `SELECT`s (`max_execution_time`, MariaDB's `max_statement_time`),
     /// when it has one. The question's own `MAX_EXECUTION_TIME` hint limits the question alone
     /// and leaves this variable as the session has it (unlike `SET_VAR`).
-    statement: Option<Duration>,
+    pub(crate) statement: Option<Duration>,
     /// MariaDB: the session's `lock_wait_timeout` in seconds (0 is not to wait at all).
-    lock: Option<u64>,
+    pub(crate) lock: Option<u64>,
     /// The session's `max_sort_length`: the bytes of a string the server sorts and groups by
     /// (a group count's values at least this long may share a group with others).
-    sort_length: Option<u64>,
+    pub(crate) sort_length: Option<u64>,
 }
 
 /// How long a bounded read of the app's own ([`bounded_select`]) waits for a metadata lock, in
@@ -2237,7 +2237,7 @@ const BOUNDED_LOCK_WAIT: u64 = 1;
 
 /// A session's statement time limit as the server writes it (milliseconds; MariaDB: seconds,
 /// with decimals), `None` for none (0) or a value that does not read.
-fn session_limit(v: &str, mariadb: bool) -> Option<Duration> {
+pub(crate) fn session_limit(v: &str, mariadb: bool) -> Option<Duration> {
     let d = if mariadb {
         let secs: f64 = v.trim().parse().ok()?;
         (secs.is_finite() && secs > 0.0 && secs < 1e9).then(|| Duration::from_secs_f64(secs))?
@@ -2254,7 +2254,7 @@ fn session_limit(v: &str, mariadb: bool) -> Option<Duration> {
 /// never longer than the one the session has (`asked`), so a shorter limit the user set stays;
 /// the lock wait is the shortest the server takes. `hints` go with MySQL's. With the time limit
 /// that applies; `None` for a text that does not start with `SELECT`.
-fn bounded_select(
+pub(crate) fn bounded_select(
     sql: &str,
     statement: Duration,
     asked: &Asked,
@@ -2345,7 +2345,7 @@ fn name_parts(name: &str) -> Vec<String> {
 /// MySQL asks in one statement. MariaDB in two: the session's values first, unbounded (it reads
 /// no table), then the lookup bounded by [`mariadb_bound`], inside which `@@SESSION.x` would be
 /// the bound's value, not the session's.
-fn check_sql(names: &[String], d: Dialect, server: &Server) -> Vec<String> {
+pub(crate) fn check_sql(names: &[String], d: Dialect, server: &Server) -> Vec<String> {
     let cond = name_condition(names, d);
     let isolation = server.isolation_var();
     let lookup = format!(
@@ -2801,7 +2801,7 @@ async fn read_own_as(
 /// For this statement alone, no row limit of the session's: the one paging leaves there
 /// (`sql_select_limit`, a page and one row more) caps what the planner expects too. A `LIMIT` the
 /// statement writes still counts.
-const ALL_ROWS: &str = " SET_VAR(sql_select_limit=18446744073709551615)";
+pub(crate) const ALL_ROWS: &str = " SET_VAR(sql_select_limit=18446744073709551615)";
 
 /// The planner's estimate of the rows of `sql` (the app's read of a table, on the allowlist,
 /// checked again here): after the allowlist's question, its `EXPLAIN FORMAT=TREE` (never
@@ -2865,7 +2865,7 @@ async fn check_repeat(
 }
 
 mod apply;
-mod export;
+pub(crate) mod export;
 mod group;
 
 #[cfg(test)]

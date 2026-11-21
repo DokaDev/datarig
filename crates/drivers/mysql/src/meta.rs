@@ -32,7 +32,7 @@ mod ddl;
 mod keys;
 pub(crate) mod monitor;
 mod order_keys;
-mod structure;
+pub(crate) mod structure;
 
 /// The databases of the server's own, never listed.
 const HIDDEN: &str = "('information_schema', 'mysql', 'performance_schema', 'sys')";
