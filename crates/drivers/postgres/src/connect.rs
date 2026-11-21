@@ -14,7 +14,7 @@ use datarig_core::driver::{
     CancelMark, Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, PingError, PingInfo,
     ServerMessage, Session, SessionRole, SessionStatement,
 };
-use datarig_core::engine::EngineId;
+use datarig_core::engine::{EngineId, OpenVerdict, ReadOnlyProof};
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::tls::{TlsProblem, TlsSettings};
@@ -506,10 +506,27 @@ async fn run_session(
     };
     // A pooler may drop startup options, so the session's default may not be read-only. The
     // query session does not depend on it (every transaction it opens is `READ ONLY`, see
-    // `query`), and the metadata session runs only the app's own catalog reads: the session
-    // opens, and the UI is told the server ignored the option.
+    // `query`), and the metadata session runs only the app's own catalog reads: the engine's
+    // rules say whether the session opens, and whether the UI is told the server ignored the
+    // option.
     // A monitor session opens every read `READ ONLY` itself and asks nothing before its probe.
-    let default_ignored = opts.read_only && role != SessionRole::Monitor && !is_read_only(&client).await;
+    let read_only = match opts.read_only {
+        true => {
+            let proof = match role {
+                SessionRole::Monitor => ReadOnlyProof::NotAsked,
+                SessionRole::Query | SessionRole::Meta => match is_read_only(&client).await {
+                    true => ReadOnlyProof::Confirmed,
+                    false => ReadOnlyProof::PerTransaction,
+                },
+            };
+            crate::engine::session_rules().read_only_open(role, proof)
+        }
+        false => OpenVerdict::Open,
+    };
+    if let OpenVerdict::Refused(detail) = &read_only {
+        let _ = events.send(DbEvent::ConnectFailed { error: DbError::Connection(Fault::other(detail)), auth: false });
+        return;
+    }
     // A session in a context of its own checks it and says where it works; one with the
     // profile's defaults costs nothing more (no round trip).
     let context = match opts.context.is_default() {
@@ -563,8 +580,14 @@ async fn run_session(
     });
     let _ = events.send(DbEvent::Encryption(tls.encryption()));
     let _ = events.send(DbEvent::Connected);
-    if default_ignored {
-        let _ = events.send(DbEvent::ReadOnlyPerTransaction);
+    match read_only {
+        OpenVerdict::Open | OpenVerdict::Refused(_) => {}
+        OpenVerdict::OpenPerTransaction => {
+            let _ = events.send(DbEvent::ReadOnlyPerTransaction);
+        }
+        OpenVerdict::OpenUnconfirmed(detail) => {
+            let _ = events.send(DbEvent::ReadOnlyUnconfirmed(detail));
+        }
     }
     let mut path = None;
     if let Some(Placed { database, schemas, per_transaction }) = context {

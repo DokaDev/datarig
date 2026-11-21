@@ -6,7 +6,7 @@
 use crate::route::{Route, io_fault};
 use crate::wire::{TlsFailed, Wire};
 use datarig_core::driver::{CancelFailure, DbError, Isolation, SessionRole, SessionValues};
-use datarig_core::engine::ServerFacts;
+use datarig_core::engine::{OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, ServerFacts};
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::profile::dsn::{self, Scheme};
@@ -612,19 +612,19 @@ pub(crate) fn not_read_only(
 }
 
 /// Whether the session on `conn` is read-only: on when the server reported it on, else as the
-/// server answers [`ask_read_only`] (which `tracked` then keeps). `None` when it is; otherwise
-/// what the server reported and answered ([`not_read_only`]).
-async fn confirm_read_only(conn: &mut Conn, server: &Server, tracked: &mut Tracked) -> Result<Option<String>, DbError> {
+/// server answers [`ask_read_only`] (which `tracked` then keeps). Confirmed when it is;
+/// otherwise unconfirmed with what the server reported and answered ([`not_read_only`]).
+async fn confirm_read_only(conn: &mut Conn, server: &Server, tracked: &mut Tracked) -> Result<ReadOnlyProof, DbError> {
     if tracked.read_only == Some(true) {
-        return Ok(None);
+        return Ok(ReadOnlyProof::Confirmed);
     }
     let asked: Option<ReadOnlyAsked> = conn.query_first(ask_read_only(server)).await.map_err(|e| my_error(&e))?;
     let asked = asked.unwrap_or_default();
     tracked.read_only = Some(asked.0.as_deref().is_some_and(on));
     if tracked.read_only == Some(true) {
-        return Ok(None);
+        return Ok(ReadOnlyProof::Confirmed);
     }
-    Ok(Some(not_read_only(server, tracked.read_only_reported.as_deref(), &asked)))
+    Ok(ReadOnlyProof::Unconfirmed(not_read_only(server, tracked.read_only_reported.as_deref(), &asked)))
 }
 
 /// A connection that is ready for the session.
@@ -725,9 +725,15 @@ pub(crate) async fn open(
     // statement that turns it off unreported, which the check below asks again.
     if settings.role == SessionRole::Query && settings.read_only && !session_sql.is_empty() {
         let reported = tracked.read_only;
-        let unconfirmed = confirm_read_only(&mut conn, &server, &mut tracked).await.map_err(|e| (e, false))?;
+        let proof = confirm_read_only(&mut conn, &server, &mut tracked).await.map_err(|e| (e, false))?;
         tracked.read_only = reported;
-        if let Some(detail) = unconfirmed {
+        // Only a session that opens without a word runs them.
+        let refused = match facts.engine().spec().session.read_only_open(settings.role, proof) {
+            OpenVerdict::Open => None,
+            OpenVerdict::Refused(detail) | OpenVerdict::OpenUnconfirmed(detail) => Some(detail),
+            OpenVerdict::OpenPerTransaction => Some(READ_ONLY_NOT_PROVEN.to_string()),
+        };
+        if let Some(detail) = refused {
             quit(conn).await;
             return Err((DbError::Connection(Fault::other(detail)), false));
         }
@@ -767,19 +773,25 @@ pub(crate) async fn open(
         }
     }
     // What the server reported is not trusted to say no: a value that is missing or not on is
-    // asked on the connection itself, and only the answer decides. A query session of a
-    // read-only profile is refused when the answer is not on; a metadata or monitor session
-    // opens anyway and says what the server answered (a reader that does not keep the setting
-    // would otherwise never connect).
+    // asked on the connection itself, and only the answer decides, by the engine's rules for
+    // the session's role (a query session the server did not make read-only is refused; a
+    // metadata or monitor session opens and says what the server answered).
     let mut read_only_unconfirmed = None;
     if read_only {
-        let unconfirmed = confirm_read_only(&mut conn, &server, &mut tracked).await.map_err(|e| (e, false))?;
-        if let Some(detail) = unconfirmed {
-            if settings.role == SessionRole::Query {
-                quit(conn).await;
-                return Err((DbError::Connection(Fault::other(detail)), false));
+        let proof = confirm_read_only(&mut conn, &server, &mut tracked).await.map_err(|e| (e, false))?;
+        let refused = match facts.engine().spec().session.read_only_open(settings.role, proof) {
+            OpenVerdict::Open => None,
+            OpenVerdict::OpenUnconfirmed(detail) => {
+                read_only_unconfirmed = Some(detail);
+                None
             }
-            read_only_unconfirmed = Some(detail);
+            OpenVerdict::Refused(detail) => Some(detail),
+            // Nothing here makes each transaction read-only instead.
+            OpenVerdict::OpenPerTransaction => Some(READ_ONLY_NOT_PROVEN.to_string()),
+        };
+        if let Some(detail) = refused {
+            quit(conn).await;
+            return Err((DbError::Connection(Fault::other(detail)), false));
         }
     }
     // The handshake has the id's lower 32 bits: MySQL's ids have no more, MariaDB's may.
