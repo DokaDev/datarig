@@ -64,8 +64,9 @@ type Build = Box<dyn Fn(&str, &str) -> String>;
 /// backslash modes: the statement around the names is the one built with plain names.
 #[test]
 fn each_name_is_one_literal_in_the_statements_built_with_it() {
-    let servers = [(8, 4, 0, false), (8, 0, 12, false), (10, 11, 0, true)]
-        .map(|(a, b, c, mariadb)| crate::session::Server { version: (a, b, c), mariadb });
+    let servers = [(8, 4, 0, false), (8, 0, 12, false), (10, 11, 0, true)].map(|(a, b, c, mariadb)| {
+        crate::engine::Greeting { mariadb, handshake: datarig_core::engine::Version::new(a, b, c) }
+    });
     for no_backslash_escapes in [false, true] {
         let mode = MySqlMode { no_backslash_escapes, ..MySqlMode::default() };
         let d = Dialect::MySql(mode);

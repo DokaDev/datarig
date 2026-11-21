@@ -106,8 +106,7 @@ impl Driver for MyDriver {
                 let (_wire, conn, encryption) = session::login(&route, stream, opts).await;
                 let mut conn = conn.map_err(|e| connect_error(&e).0)?;
                 let greeting = crate::engine::greeting(&conn);
-                let server = session::Server::of_greeting(&greeting);
-                let report = match server.check() {
+                let report = match greeting.check() {
                     Ok(()) => crate::engine::confirm(&mut conn, &greeting).await,
                     Err(e) => Err(e),
                 };
@@ -216,7 +215,7 @@ async fn run_session(
             return;
         }
     };
-    let Opened { conn, wire, encryption, server, facts, tracked, id, read_only_unconfirmed, token, own } = opened;
+    let Opened { conn, wire, encryption, greeting, facts, tracked, id, read_only_unconfirmed, token, own } = opened;
     // The cancel logs in as the session does, without a database (one could be dropped since).
     let kill_opts = target.opts(None, &opts.application_name, &route);
     let killer = Killer::new(route, kill_opts, id, token.clone());
@@ -263,7 +262,7 @@ async fn run_session(
     let link = Link::new(rx, wire);
     match role {
         SessionRole::Meta => {
-            crate::meta::meta_loop(conn, link, events, tracked, server, crate::engine::dollar_quotes(&facts)).await
+            crate::meta::meta_loop(conn, link, events, tracked, greeting, crate::engine::dollar_quotes(&facts)).await
         }
         SessionRole::Monitor => {
             let marker = token.map(|token| crate::monitor::Marker { token, handshake: conn.id() });
