@@ -9,6 +9,11 @@ fn maria(major: u16, minor: u16, patch: u16) -> Greeting {
     Greeting { mariadb: true, handshake: Version::new(major, minor, patch) }
 }
 
+/// The greeting of MariaDB (`mariadb`) or MySQL at `version`.
+fn at(mariadb: bool, (major, minor, patch): (u16, u16, u16)) -> Greeting {
+    Greeting { mariadb, handshake: Version::new(major, minor, patch) }
+}
+
 /// A greeting with what a session on its server says: the plan format, the edits, whether the
 /// server reads dollar quotes and whether the text is read as MariaDB's.
 type Row = (Greeting, Option<ExplainFormat>, Option<EditFormat>, bool, bool);
@@ -72,14 +77,16 @@ fn per_server_capabilities_are_the_drivers_with_the_servers_answers() {
 }
 
 #[test]
-fn server_of_facts_is_the_greetings() {
+fn the_greeting_of_facts_is_the_sessions() {
     for (g, ..) in table() {
         for own in [Some(true), Some(false), None] {
-            assert_eq!(Server::of(&facts(&g, &VersionReport::agreeing(&g), own)), Server::of_greeting(&g), "{g:?}");
+            assert_eq!(Greeting::of(&facts(&g, &VersionReport::agreeing(&g), own)), g, "{g:?}");
         }
     }
-    assert_eq!(Server::of_greeting(&my(8, 4, 6)), Server { version: (8, 4, 6), mariadb: false });
-    assert_eq!(Server::of_greeting(&maria(11, 4, 13)), Server { version: (11, 4, 13), mariadb: true });
+    let g = my(8, 4, 6);
+    assert_eq!(Greeting::of(&facts(&g, &VersionReport::agreeing(&g), None)).label(), "MySQL 8.4.6");
+    let g = maria(11, 4, 13);
+    assert_eq!(Greeting::of(&facts(&g, &VersionReport::agreeing(&g), None)).label(), "MariaDB 11.4.13");
     // Facts no session of this driver finds: a server it refuses, with no plan and no edits.
     let pg = ServerFacts {
         version: Fact::Known(Version::new(17, 2, 0)),
@@ -88,9 +95,9 @@ fn server_of_facts_is_the_greetings() {
         topology: Fact::Known(Topology::Direct),
         detail: EngineFacts::Postgres(PgFacts::default()),
     };
-    assert_eq!(Server::of(&pg), Server::UNREAD);
-    assert_eq!(Server::UNREAD.version, (0, 0, 0));
-    assert!(Server::UNREAD.check().is_err());
+    assert_eq!(Greeting::of(&pg), Greeting::UNREAD);
+    assert_eq!(Greeting::UNREAD.handshake, Version::new(0, 0, 0));
+    assert!(Greeting::UNREAD.check().is_err());
     let d = derive(&pg, &Tracked::default());
     assert_eq!((d.explain, d.edit), (None, None));
 }
@@ -160,7 +167,7 @@ fn outcome(g: &Greeting, answer: &Answer) -> Outcome {
             Outcome::Line(r.engine, r.version)
         }
         Err(DbError::EngineUnconfirmed { greeting }) => {
-            assert_eq!(greeting, Server::of_greeting(g).label());
+            assert_eq!(greeting, g.label());
             Outcome::Unconfirmed
         }
         Err(e) => panic!("{g:?} {answer:?}: {e:?}"),
@@ -229,7 +236,7 @@ fn legacy_answers_follow_the_greeting_when_the_line_names_the_other_engine() {
             assert_eq!(f.version, Fact::Unknown(Why::EnginesDisagree), "{g:?}");
             assert_eq!(f.version_text.as_deref(), Some(line), "{g:?}");
             // Everything a session says and sends follows the greeting, as when both agree.
-            assert_eq!(Server::of(&f), Server::of_greeting(&g), "{g:?}");
+            assert_eq!(Greeting::of(&f), g, "{g:?}");
             let agreeing = facts(&g, &VersionReport::agreeing(&g), own);
             let tracked = Tracked { sql_mode: Some("ANSI_QUOTES".into()), ..Tracked::default() };
             let (d, a) = (derive(&f, &tracked), derive(&agreeing, &tracked));
@@ -274,11 +281,11 @@ fn session_set_up_texts() -> String {
     };
     // The floors and an unread version.
     for (mariadb, version) in [(false, (0, 0, 0)), (false, (5, 7, 44)), (true, (0, 0, 0)), (true, (10, 5, 27))] {
-        let server = Server { version, mariadb };
+        let server = at(mariadb, version);
         line(format!("check {}", server.label()), format!("{:?}", server.check()));
     }
     for (mariadb, version) in SET_UP_SERVERS {
-        let server = Server { version, mariadb };
+        let server = at(mariadb, version);
         let name = server.label();
         line(format!("check {name}"), format!("{:?}", server.check()));
         for role in [SessionRole::Query, SessionRole::Meta, SessionRole::Monitor] {
@@ -361,7 +368,7 @@ fn the_family_names_session_variables_by_version() {
     assert_eq!(family(EngineId::Postgres).engine(), EngineId::MySql);
     // A greeting's server asks the family of its engine, by the greeting's version.
     for (mariadb, version) in SET_UP_SERVERS {
-        let server = Server { version, mariadb };
+        let server = at(mariadb, version);
         let (major, minor, patch) = version;
         let known = Fact::Known(Version::new(major, minor, patch));
         assert_eq!(server.family().engine(), engine_of(mariadb));
@@ -393,9 +400,7 @@ const OWN_READ_SERVERS: [(bool, (u16, u16, u16)); 11] = [
 /// statement and how a column's default is written from the server's words.
 fn own_read_texts() -> String {
     use crate::meta::structure::{default_text, statement};
-    use crate::query::{
-        ALL_ROWS, Asked, bounded_select, check_sql, export::keyset_text, not_undone_sql, session_limit,
-    };
+    use crate::query::{ALL_ROWS, Asked, bounded_select, check_sql, not_undone_sql};
     use std::time::Duration;
     let mut out = String::new();
     let mut line = |what: String, text: String| {
@@ -411,7 +416,7 @@ fn own_read_texts() -> String {
     ];
     let name_sets: [&[&str]; 3] = [&[], &["shop.t", "u"], &["o'k", "a\\b", "`my t`.c", "\"x.y\".z"]];
     for (mariadb, version) in OWN_READ_SERVERS {
-        let server = Server { version, mariadb };
+        let server = at(mariadb, version);
         let name = server.label();
         for (mode_name, mode) in modes {
             let d = dialect(&server, mode);
@@ -420,7 +425,7 @@ fn own_read_texts() -> String {
             let plain = mode_name == "default";
             for names in name_sets.iter().filter(|n| plain || n.len() > 2) {
                 let names: Vec<String> = names.iter().map(|n| n.to_string()).collect();
-                let text = not_undone_sql(&names, d, server.mariadb);
+                let text = not_undone_sql(&names, d, server.family());
                 line(format!("not_undone {name} {mode_name} {names:?}"), format!("{text:?}"));
                 line(format!("check {name} {mode_name} {names:?}"), format!("{:?}", check_sql(&names, d, &server)));
             }
@@ -434,7 +439,7 @@ fn own_read_texts() -> String {
     }
     // What depends on the engine alone.
     for (mariadb, version) in [(false, (8, 4, 6)), (true, (11, 4, 13))] {
-        let server = Server { version, mariadb };
+        let server = at(mariadb, version);
         let name = server.label();
         let sqls = [
             "SELECT COUNT(*) FROM (\nSELECT * FROM `t` WHERE (a > 1) LIMIT 10\n) AS datarig_count",
@@ -456,7 +461,7 @@ fn own_read_texts() -> String {
                                     "bounded {name} {sql:?} limit={limit:?} session={statement:?} lock={lock:?} \
                                      hints={hints:?}"
                                 ),
-                                format!("{:?}", bounded_select(sql, limit, &asked, server.mariadb, hints)),
+                                format!("{:?}", bounded_select(sql, limit, &asked, server.family(), hints)),
                             );
                         }
                     }
@@ -464,7 +469,7 @@ fn own_read_texts() -> String {
             }
         }
         for v in ["0", "2500", " 2500 ", "0.000000", "1.500000", "0.0005", "x", "", "-1", "1e10", "NaN", "inf"] {
-            line(format!("session_limit {name} {v:?}"), format!("{:?}", session_limit(v, server.mariadb)));
+            line(format!("session_limit {name} {v:?}"), format!("{:?}", server.family().session_limit(v)));
         }
         for sql in [
             "SELECT * FROM `s`.`t` WHERE `id` > 7 ORDER BY `id` LIMIT 10000",
@@ -473,7 +478,7 @@ fn own_read_texts() -> String {
             " SELECT 1",
             "WITH x AS (SELECT 1) SELECT * FROM x",
         ] {
-            line(format!("keyset {name} {sql:?}"), format!("{:?}", keyset_text(sql, server.mariadb)));
+            line(format!("keyset {name} {sql:?}"), format!("{:?}", server.family().keyset_text(sql)));
         }
         let d = dialect(&server, MySqlMode::default());
         for value in [
@@ -493,7 +498,7 @@ fn own_read_texts() -> String {
                 for extra in ["", "DEFAULT_GENERATED", "DEFAULT_GENERATED on update CURRENT_TIMESTAMP"] {
                     line(
                         format!("default {name} {value:?} {data_type} {extra:?}"),
-                        format!("{:?}", default_text(value.map(str::to_string), data_type, extra, server.mariadb, d)),
+                        format!("{:?}", default_text(value.map(str::to_string), data_type, extra, server.family(), d)),
                     );
                 }
             }
