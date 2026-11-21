@@ -261,3 +261,23 @@ fn comments_holding_executable_comments_are_kept() {
         assert_eq!(split(src).iter().map(|s| s.body(src)).collect::<Vec<_>>(), [want], "{src}");
     }
 }
+
+/// A line comment that holds an executable comment is kept around a statement too, in every
+/// dialect: what one lexer reads as a line comment another server may read as code (`v=0--1` is
+/// `v = 0 - -1` to MySQL and MariaDB, a comment from `--` on to PostgreSQL's lexer).
+#[test]
+fn line_comments_holding_executable_comments_are_kept() {
+    use crate::sql::dialect::MySqlMode;
+    let mode = MySqlMode::default();
+    for d in [Dialect::Postgres, Dialect::MySql(mode), Dialect::MariaDb(mode)] {
+        for src in
+            ["UPDATE t SET v=0--1 /*M! , w=1 */", "UPDATE t SET v=0 -- note /*! , w=1 */", "SELECT 1 -- a\n/*M! , 2 */"]
+        {
+            assert_eq!(bodies_in(src, d), [src], "{d:?}: {src:?}");
+        }
+    }
+    let mysql = Dialect::MySql(mode);
+    assert_eq!(bodies_in("SELECT 1 # /*M! , 2 */", mysql), ["SELECT 1 # /*M! , 2 */"]);
+    // A line comment without one is trimmed as before.
+    assert_eq!(bodies_in("SELECT 1 -- note\n", Dialect::Postgres), ["SELECT 1"]);
+}
