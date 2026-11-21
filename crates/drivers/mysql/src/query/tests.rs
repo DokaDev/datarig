@@ -373,6 +373,67 @@ fn a_bounded_read_is_limited_for_its_statement_and_never_longer_than_the_session
     assert_eq!(family_of(false).session_limit("x"), None);
 }
 
+/// A count or a group count without a time limit (`[results] count_timeout = "off"`) carries the
+/// lock wait bound alone on a session whose reports name one engine, in that engine's form, never
+/// longer than the session's own wait (MariaDB's, when asked; 0 stays not waiting): it gives up
+/// behind a lock as one with a time limit does, and no time limit is added. With a time limit it
+/// is the bounded read as before. A session whose reports name two engines sends it as written.
+#[test]
+fn a_count_without_a_time_limit_is_bounded_behind_a_lock() {
+    let count = "SELECT COUNT(*) FROM (\nSELECT * FROM `t` WHERE (a > 1) LIMIT 10\n) AS datarig_count";
+    let group = "SELECT\n`a`, COUNT(*) FROM `t` GROUP BY `a`";
+    let asked = |lock| Asked { isolation: String::new(), statement: None, lock, sort_length: None };
+    let none = asked(None);
+    let text = |sql, limit, asked: &Asked, mariadb, disagree| {
+        let (text, applied) = count_text(sql, limit, asked, family_of(mariadb), disagree);
+        (text.into_owned(), applied)
+    };
+    // MySQL: the hint alone, whatever the session's own wait.
+    assert_eq!(
+        text(count, None, &none, false, false),
+        (
+            "SELECT /*+ SET_VAR(lock_wait_timeout=1) */ COUNT(*) FROM (\nSELECT * FROM `t` WHERE (a > 1) LIMIT 10\n) \
+             AS datarig_count"
+                .to_string(),
+            None
+        )
+    );
+    assert_eq!(
+        text(group, None, &asked(Some(50)), false, false).0,
+        "SELECT /*+ SET_VAR(lock_wait_timeout=1) */ `a`, COUNT(*) FROM `t` GROUP BY `a`"
+    );
+    // MariaDB: `SET STATEMENT` with the lock wait alone, never longer than the session's.
+    assert_eq!(
+        text(count, None, &asked(Some(50)), true, false),
+        (format!("SET STATEMENT lock_wait_timeout = 1 FOR {count}"), None)
+    );
+    assert_eq!(
+        text(group, None, &asked(Some(0)), true, false).0,
+        format!("SET STATEMENT lock_wait_timeout = 0 FOR {group}")
+    );
+    assert_eq!(text(count, None, &none, true, false).0, format!("SET STATEMENT lock_wait_timeout = 0 FOR {count}"));
+    // A time limit of the session's own is not added.
+    let short = Asked { statement: Some(Duration::from_secs(5)), ..asked(Some(50)) };
+    assert_eq!(text(count, None, &short, true, false).0, format!("SET STATEMENT lock_wait_timeout = 1 FOR {count}"));
+    assert!(
+        text(count, None, &short, false, false).0.starts_with("SELECT /*+ SET_VAR(lock_wait_timeout=1) */ COUNT(*)")
+    );
+    // With a time limit: the bounded read, as before.
+    for mariadb in [false, true] {
+        for a in [&none, &short] {
+            let thirty = Duration::from_secs(30);
+            let (want, applied) = bounded_select(count, thirty, a, family_of(mariadb), "").unwrap();
+            assert_eq!(text(count, Some(thirty), a, mariadb, false), (want.clone(), Some(applied)));
+            assert_eq!(text(count, Some(thirty), a, mariadb, true), (want, Some(applied)), "disagreeing: as today");
+        }
+        // Reports naming two engines: as written without a time limit.
+        assert_eq!(text(count, None, &asked(Some(50)), mariadb, true), (count.to_string(), None));
+        assert_eq!(text(group, None, &none, mariadb, true), (group.to_string(), None));
+        // Only the app's own form, a text starting with `SELECT`, is bounded.
+        assert_eq!(text(" SELECT 1", None, &none, mariadb, false), (" SELECT 1".to_string(), None));
+    }
+}
+
 #[test]
 fn a_bounded_read_stopped_by_the_server_is_told_apart_from_a_cancel_and_a_lock_wait() {
     let server = |code: u16| {
