@@ -262,12 +262,18 @@ impl StatementList {
         let dialect = self.dbms.unwrap_or(Dbms::Postgres).language().dialect();
         let mut cuts = vec![0];
         let mut line_start = false;
+        // Inside an executable comment (`/*! … */`): its lines are one piece of the statement.
+        let mut exec = false;
         for t in lex_in(text, dialect) {
             match t.kind {
                 Tok::Whitespace => line_start |= t.text(text).contains(['\n', '\r']),
                 Tok::LineComment | Tok::BlockComment => {}
+                Tok::ExecComment => {
+                    exec = t.text(text).starts_with("/*");
+                    line_start = false;
+                }
                 _ => {
-                    if line_start && t.start > 0 && t.is_word() && t.text(text).eq_ignore_ascii_case("SET") {
+                    if line_start && !exec && t.start > 0 && t.is_word() && t.text(text).eq_ignore_ascii_case("SET") {
                         cuts.push(t.start);
                     }
                     line_start = false;
