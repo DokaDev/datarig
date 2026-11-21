@@ -401,8 +401,8 @@ and is not tickable until you count again; an answer to an earlier count is drop
 The other conditions go through every [check](#what-is-refused-and-why) a run has, and a function
 a run would ask about refuses the count instead (a count from the dialog asks nothing). It has the
 limits of a [row count](#limits-and-outcomes-of-a-count): it stops after `[results]
-count_timeout` (30 seconds unless set) and, unless that is `"off"`, gives up on a lock after 2
-seconds (1 on MySQL). On
+count_timeout` (30 seconds unless set) and gives up on a lock after 2 seconds (1 on MySQL and
+MariaDB, also when the setting is `"off"`; on PostgreSQL not when it is `"off"`). On
 PostgreSQL it runs in a read-only transaction of its own; inside your own transaction, or while a
 result is held open, it has no time limit and says so, and when the session cannot tell whether a
 transaction is open it is refused. On MySQL it is refused while settings you gave for the next
@@ -714,9 +714,9 @@ transaction of its own only when autocommit is off.
 ### Limits and outcomes of a count
 
 The server stops a count statement after 30 seconds (`[results] count_timeout` in the
-[configuration](../reference/configuration.md), `"off"` for no limit). It also gives up on a single
-lock another session holds on the table after waiting 2 seconds (1 second on MySQL), unless the
-setting is `"off"`. These are the server's limits on the statement and on each lock wait, not on the
+[configuration](../reference/configuration.md), `"off"` for no time limit). It also gives up on a
+single lock another session holds on the table after waiting 2 seconds (1 second on MySQL and
+MariaDB). On PostgreSQL `"off"` removes this lock limit too; on MySQL and MariaDB it stays. These are the server's limits on the statement and on each lock wait, not on the
 whole request: the time to reach the server, or to get a connection from a pooler, comes on top.
 Neither is ever longer than one your session already has (PostgreSQL's `statement_timeout` and
 `lock_timeout`, MySQL's `max_execution_time`; MySQL's 1 second lock wait is the shortest

@@ -39,6 +39,12 @@ impl Family for MySql {
         "transaction_isolation"
     }
 
+    /// The lock wait's optimizer hint alone, as in [`Family::bounded_select`].
+    fn lock_bounded_select(&self, sql: &str, _: Option<u64>) -> Option<String> {
+        let rest = select_rest(sql)?;
+        Some(format!("SELECT /*+ SET_VAR(lock_wait_timeout={BOUNDED_LOCK_WAIT}) */ {rest}"))
+    }
+
     /// `max_execution_time`, in milliseconds.
     fn statement_timeout(&self, ms: u64) -> String {
         format!("SESSION max_execution_time = {ms}")

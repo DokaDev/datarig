@@ -1,6 +1,6 @@
 //! `DbCommand::GroupCount`: the values of one column and the rows that hold each, read as a count
 //! is read ([`count`](super::count)): one statement after the allowlist's question, bounded by the
-//! statement's own hints ([`bounded_select`]), in a read-only transaction of its own at
+//! statement's own hints ([`count_text`]), in a read-only transaction of its own at
 //! `REPEATABLE READ` when the session runs without autocommit and none is open
 //! ([`read_own_as`]). Every value is shown as a cell of its column is ([`display`]).
 //!
@@ -57,12 +57,8 @@ pub(super) async fn group_count(
         Err(why) => return Ok((Err(why), false)),
     };
     let snapshot = in_snapshot(s, &asked);
-    let bounded = limit.and_then(|l| bounded_select(sql, l, &asked, env.greeting.family(), ""));
-    let (text, applied) = match &bounded {
-        Some((text, applied)) => (text.as_str(), Some(*applied)),
-        None => (sql, None),
-    };
-    let read = read_own_as(conn, link, env, s, text, was_open, applied, OwnWant::Rows).await?;
+    let (text, applied) = count_text(sql, limit, &asked, env.greeting.family(), env.facts.reports_disagree());
+    let read = read_own_as(conn, link, env, s, &text, was_open, applied, OwnWant::Rows).await?;
     let counted = read.and_then(|got| match got {
         OwnGot::Rows(GroupRows { rows, prefixed, inexact }) => GroupCounts::from_rows(rows).map(|mut counts| {
             counts.mark_inexact(&inexact);
