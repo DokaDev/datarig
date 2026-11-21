@@ -37,7 +37,7 @@
 //! background` whether the theme paints its background or leaves the terminal's showing.
 //! `[history] filters` says whether a table tab keeps the filters it ran, to pick one again.
 //! `[results] count_timeout` is how long the server may count a result's rows for the user
-//! (`#`) before it stops (default 30 s, `"off"` for no limit).
+//! (`#`) before it stops (default 30 s, `"off"` for no time limit).
 //! `[updates] check` says whether datarig asks GitHub once a day for a newer release, and
 //! `[updates] whats_new` whether What's new shows once after an update.
 //! `[monitor] interval` is how often the server monitor reads the server while its tab is shown.
