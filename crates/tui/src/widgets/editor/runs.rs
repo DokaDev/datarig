@@ -355,8 +355,9 @@ impl Editor {
         let head = self.lex(&rest[..cut], state).first().copied()?;
         // A client command line (MySQL's `DELIMITER`) starts no statement. A `$` may have read
         // otherwise at the last check (in MySQL a name's character after a terminator such as
-        // `\G` made `$$` part of a name, not a dollar quote): checked in full.
-        if head.is_trivia()
+        // `\G` made `$$` part of a name, not a dollar quote): checked in full. An executable
+        // comment the lexer reads as a comment starts a statement, as the splitter keeps it.
+        if (head.is_trivia() && !datarig_core::sql::split::is_executable_comment(head.text(&rest[..cut])))
             || head.kind == Tok::Directive
             || rest.starts_with('$')
             || (head.end == cut && cut < rest.len())

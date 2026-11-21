@@ -50,7 +50,7 @@ pub fn split_from(src: &str, d: Dialect, state: LexState) -> Vec<Statement> {
             if let Some(s) = start.take() {
                 out.push(Statement { start: s, body_end, end: body_end });
             }
-        } else if !t.is_trivia() || executable(t.text(src)) {
+        } else if !t.is_trivia() || is_executable_comment(t.text(src)) {
             start.get_or_insert(t.start);
             body_end = t.end;
         }
@@ -65,7 +65,7 @@ pub fn split_from(src: &str, d: Dialect, state: LexState) -> Vec<Statement> {
 /// `/*M! … */` (`/*M!100500 … */`). Kept in a statement whatever the text's dialect, since that is
 /// the client's reading and the server may be another (a MySQL reading of a MariaDB server, or
 /// text before the database is known).
-fn executable(comment: &str) -> bool {
+pub fn is_executable_comment(comment: &str) -> bool {
     comment.starts_with("/*!") || comment.starts_with("/*M!")
 }
 
