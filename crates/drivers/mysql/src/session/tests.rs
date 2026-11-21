@@ -2498,3 +2498,25 @@ async fn a_marker_on_two_connections_is_not_confirmed_live() {
     quit(a).await;
     quit(b).await;
 }
+
+/// What a session's connection knows of its own id as it opened: from the lookup with its
+/// marker, confirmed only when the server lists the marker on that id and the handshake has its
+/// lower 32 bits; from the id read alone after a failed lookup, whether it is the handshake's,
+/// never confirmed (no kill from a connection of its own); from nothing, the handshake's id and
+/// not known.
+#[test]
+fn the_own_id_is_read_alone_after_a_failed_marker_lookup() {
+    let t = || "zz-token".to_string();
+    assert_eq!(OWN_ID_SQL, "SELECT CONNECTION_ID() LIMIT 1");
+    assert_eq!(own_of(7, t(), OwnRead::Marked(7, Some(7))), (7, Some(t()), Some(true)));
+    assert_eq!(own_of(7, t(), OwnRead::Marked(7, None)), (7, None, Some(true)));
+    assert_eq!(own_of(7, t(), OwnRead::Marked(7, Some(8))), (7, None, Some(true)));
+    assert_eq!(own_of(7, t(), OwnRead::Marked(9, Some(9))), (9, None, Some(false)));
+    // MariaDB's ids may pass 32 bits: the handshake has the lower ones.
+    let big = (1u64 << 32) | 7;
+    assert_eq!(own_of(7, t(), OwnRead::Marked(big, Some(big))), (big, Some(t()), Some(true)));
+    assert_eq!(own_of(7, t(), OwnRead::IdOnly(big)), (big, None, Some(true)));
+    assert_eq!(own_of(7, t(), OwnRead::IdOnly(7)), (7, None, Some(true)));
+    assert_eq!(own_of(7, t(), OwnRead::IdOnly(9)), (9, None, Some(false)));
+    assert_eq!(own_of(7, t(), OwnRead::Unread), (7, None, None));
+}

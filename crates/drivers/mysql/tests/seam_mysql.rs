@@ -527,13 +527,13 @@ async fn the_server_facts_come_first_once_and_the_words_before_connected_follow_
 
 /// Where a session's facts say it reaches the server, by the connection's own check of its id
 /// as it opened: straight to the server, directly; through a proxy whose greeting carries an id
-/// of its own, pooled; through one that fails the check's read, not checked (the session still
-/// opens). On each way every role's language, plan format and edits are the server's, as
+/// of its own, pooled; through one that fails the check's marker lookup, directly too, from its
+/// id read alone (the session opens either way). On each way every role's language, plan format and edits are the server's, as
 /// straight to it, and a query session answers which server session is its own and takes a
 /// cancel as it did before: straight to the server the statement is stopped (its `SLEEP`
 /// answers 1 on MySQL, fails cancelled on MariaDB) and the session goes on; behind the proxy numbering its clients the session is
-/// not its own, and after the failed read it checks its id when asked and finds it its own, but
-/// on both ways its marker was never confirmed, so no kill is sent: the run ends cancelled and
+/// not its own, and after the failed marker lookup it is its own, but on both ways its marker
+/// was never confirmed, so no kill is sent: the run ends cancelled and
 /// the session is given up, as the cancel could not be confirmed.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_facts_topology_is_the_own_id_check() {
@@ -559,7 +559,7 @@ async fn the_facts_topology_is_the_own_id_check() {
         let topology = match way {
             Way::Direct => Fact::Known(Topology::Direct),
             Way::Numbering => Fact::Known(Topology::Pooled),
-            Way::FailedRead => Fact::Unknown(Why::NotChecked),
+            Way::FailedRead => Fact::Known(Topology::Direct),
         };
         for (n, role) in [SessionRole::Query, SessionRole::Meta, SessionRole::Monitor].into_iter().enumerate() {
             if way == Way::FailedRead {
@@ -635,6 +635,58 @@ async fn the_facts_topology_is_the_own_id_check() {
             }
         }
     }
+}
+
+/// When the marker lookup of a session's own-id check fails on the server (here a proxy sends
+/// the server a statement it refuses in its place), the session reads its id alone (`SELECT
+/// CONNECTION_ID() LIMIT 1`, once, on that failure only): its facts say it reaches the server
+/// directly, and asked which server session is its own it answers at once with that id, the one
+/// the server runs its statements on, without reading it again. Its marker is still not
+/// confirmed, so a cancel sends no kill: the run ends cancelled and the session is given up as
+/// the cancel could not be confirmed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_marker_lookup_still_reads_the_own_id() {
+    let test = "a_failed_marker_lookup_still_reads_the_own_id";
+    let Some((url, admin)) = urls(test) else { return };
+    let failing = Proxy::start(&upstream(&url)).await;
+    failing.fault_start("SELECT CONNECTION_ID(), ", Fault::Instead("SELECT zz_seam_no_such_column".into()));
+    let (mut c, before) = Conn::start(&failing.url(&url), SessionRole::Query, test).await;
+    assert!(!failing.fault_pending(), "the marker lookup met its fault");
+    let id_reads =
+        |q: &[String]| q.iter().filter(|q| q.starts_with("SELECT CONNECTION_ID()")).cloned().collect::<Vec<_>>();
+    let opened = failing.queries();
+    let reads = id_reads(&opened);
+    assert_eq!(reads.len(), 2, "the lookup, then the id alone: {opened:?}");
+    assert!(reads[0].starts_with("SELECT CONNECTION_ID(), "), "{reads:?}");
+    assert_eq!(reads[1], "SELECT CONNECTION_ID() LIMIT 1", "{reads:?}");
+    let f = facts_first(SessionRole::Query, &before);
+    assert_eq!(f.topology, Fact::Known(Topology::Direct), "{f:?}");
+    c.session.send(DbCommand::ServerSession { request: 7 });
+    let own = loop {
+        if let DbEvent::ServerSession { request: 7, own } = c.next(15).await {
+            break own;
+        }
+    };
+    assert_eq!(failing.queries().len(), opened.len(), "answered at once, nothing read again");
+    let OwnSession::Direct { id } = own else { panic!("{own:?}") };
+    let marker = format!("zz_seam_own_id_{}", std::process::id());
+    let mut a = side(&admin).await;
+    c.send(1, &[&format!("SELECT SLEEP(3) AS {marker}")]);
+    let running_on = running(&mut a, &marker).await;
+    assert_eq!(u64::try_from(id).ok(), Some(running_on), "the server's id of the session");
+    c.session.cancel();
+    let evs = c.answer(1).await;
+    assert!(matches!(evs.last(), Some(DbEvent::Failed { error: DbError::Cancelled, cancelled: true, .. })), "{evs:?}");
+    let lost = loop {
+        if let DbEvent::Lost { error } = c.next(15).await {
+            break error;
+        }
+    };
+    assert!(
+        matches!(&lost, DbError::CancelNotTaken(CancelFailure::NotSent(why)) if **why == DbError::CancelUnconfirmed),
+        "{lost:?}"
+    );
+    a.disconnect().await.unwrap();
 }
 
 /// A test connection says the server's engine (MariaDB on a MariaDB server) and the version of
