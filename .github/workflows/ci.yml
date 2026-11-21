@@ -1,16 +1,20 @@
 name: CI
 
 on:
+  # main, and the release branches `release/X.Y` that patch releases are made from (the
+  # release gate reads these push runs).
   push:
-    branches: [main]
+    branches: [main, 'release/[0-9]+.[0-9]+']
   pull_request:
-  # By hand, on main: when GitHub lost the push event of a commit and no run started for it.
+  # By hand, on main or a release branch: when GitHub lost the push event of a commit and no
+  # run started for it.
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# A newer push to the same pull request cancels the run it supersedes; pushes to main all run.
+# A newer push to the same pull request cancels the run it supersedes; pushes to a branch all
+# run.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -36,7 +40,8 @@ jobs:
   # site, the pages checked against the code (the `tests (ubuntu-latest)` job) and the cheap
   # checks still run. Each skipped check reports under its own name, as passed (a job skipped
   # by its condition concludes `skipped`, which counts as passing), so nothing waits for it.
-  # Pushes to main always run everything: the release gate wants every job.
+  # Pushes to main and to release branches always run everything: the release gate wants every
+  # job.
   changes:
     name: what changed
     runs-on: ubuntu-latest
@@ -66,8 +71,9 @@ jobs:
   # offline), the same build release.yml deploys. Runs on every push and pull request like the
   # other jobs: the release gate wants each one to succeed. The generated pages and screens are
   # compared with their sources by the `test` jobs (tests/*_doc.rs, tests/book_*.rs). Also the
-  # tests of the docs rule of pull requests (docs-rule.yml), of scripts/changes.sh and of
-  # .github/scripts/code-changed.sh, the public text style (scripts/text-style.py), and that
+  # tests of the docs rule of pull requests (docs-rule.yml), of scripts/changes.sh, of
+  # .github/scripts/code-changed.sh and of the release gate (.github/scripts/release-ci-gate.sh),
+  # the public text style (scripts/text-style.py), and that
   # every demo recording the pages show is made by a tape (.github/scripts/demo-refs.sh).
   docs:
     name: docs site
@@ -92,11 +98,12 @@ jobs:
       # Every recording the README and the site show is one a tape makes.
       - name: Demo recordings named in the pages
         run: bash .github/scripts/demo-refs.sh
-      - name: Tests of docs-rule.sh, changes.sh and code-changed.sh
+      - name: Tests of docs-rule.sh, changes.sh, code-changed.sh and release-ci-gate.sh
         run: |
           bash .github/scripts/tests/docs-rule-test.sh
           bash .github/scripts/tests/changes-test.sh
           bash .github/scripts/tests/code-changed-test.sh
+          bash .github/scripts/tests/release-ci-gate-test.sh
 
   # On every OS the tests run on: code behind `cfg(unix)` / `cfg(windows)` warns differently.
   # Skipped step by step for a docs-only pull request: a matrix job skipped as a whole would
