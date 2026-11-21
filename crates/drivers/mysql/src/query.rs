@@ -2318,7 +2318,8 @@ pub(crate) enum SetsNext {
     /// It does, once it succeeded: `SET TRANSACTION …`, `SET @@transaction_isolation = …`.
     Yes,
     /// It may, whether it succeeded or not (code of the server's that may have run in part, or
-    /// text that is not read): a `CALL`, an `EXECUTE`, an executable comment `/*! … */`.
+    /// text that is not read): a `CALL`, an `EXECUTE`, an executable comment `/*! … */` (and
+    /// MariaDB's `/*M! … */` there).
     Maybe,
 }
 
@@ -2331,13 +2332,19 @@ pub(crate) fn sets_next_transaction(sql: &str, mode: MySqlMode) -> SetsNext {
         return SetsNext::No;
     }
     let toks = set_tokens(sql, mode);
-    if toks.iter().any(|t| t.kind == Tok::ExecComment) {
+    if toks.iter().any(|t| t.kind == Tok::ExecComment) || (mode.mariadb && mariadb_runs_some(sql, mode)) {
         return SetsNext::Maybe;
     }
     if matches!(first_word(sql, mode).as_deref(), Some("CALL" | "EXECUTE")) {
         return SetsNext::Maybe;
     }
     if sets_next_isolation(sql, mode) || sets_next_access(sql, mode) { SetsNext::Yes } else { SetsNext::No }
+}
+
+/// Whether `sql` holds a comment MariaDB runs (`/*M! … */`, `/*M!100500 … */`), which the lexer
+/// reads as a plain comment (MySQL does).
+fn mariadb_runs_some(sql: &str, mode: MySqlMode) -> bool {
+    lex_in(sql, Dialect::MySql(mode)).iter().any(|t| t.kind == Tok::BlockComment && t.text(sql).starts_with("/*M!"))
 }
 
 /// Whether MariaDB runs none of `sql`: the whole text (blanks around it aside) is one

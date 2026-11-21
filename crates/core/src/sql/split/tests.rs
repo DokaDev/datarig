@@ -172,3 +172,77 @@ fn split_in_postgres_is_split() {
         }
     }
 }
+
+fn bodies_in(src: &str, d: Dialect) -> Vec<&str> {
+    split_in(src, d).iter().map(|s| s.body(src)).collect()
+}
+
+/// An executable comment is code to the server that runs it: MySQL's `/*! … */` and
+/// `/*!NNNNN … */`, and MariaDB's `/*M! … */` and `/*M!NNNNNN … */` (MariaDB runs both; MySQL
+/// reads `/*M!` as a plain comment). A statement keeps every one of them, at its start, in it
+/// and at its end, and one that holds nothing else is a statement too. In every dialect: a
+/// MySQL reading (the driver's before a session says which server it is on) may be a MariaDB
+/// server's, and text with no database known yet is read as PostgreSQL's.
+#[test]
+fn executable_comments_are_kept_when_splitting() {
+    use crate::sql::dialect::MySqlMode;
+    let mysql = MySqlMode::default();
+    let mariadb = MySqlMode { mariadb: true, ..MySqlMode::default() };
+    let ansi = MySqlMode { ansi_quotes: true, mariadb: true, ..MySqlMode::default() };
+    for d in [Dialect::MySql(mysql), Dialect::MySql(mariadb), Dialect::MySql(ansi), Dialect::Postgres] {
+        for (src, want) in [
+            ("UPDATE t SET v=0 /*M! WHERE id=1 */;", vec!["UPDATE t SET v=0 /*M! WHERE id=1 */"]),
+            ("DELETE FROM t /*M! WHERE id=1 */", vec!["DELETE FROM t /*M! WHERE id=1 */"]),
+            ("DELETE FROM t /*M!100500 WHERE id=1 */ ;", vec!["DELETE FROM t /*M!100500 WHERE id=1 */"]),
+            ("SELECT 1 /*M! , 2 */", vec!["SELECT 1 /*M! , 2 */"]),
+            ("/*M! SET @a=1 */;", vec!["/*M! SET @a=1 */"]),
+            ("/*M!100500 SET @a=1 */", vec!["/*M!100500 SET @a=1 */"]),
+            ("/*M! SET @a=1 */ SELECT 1;", vec!["/*M! SET @a=1 */ SELECT 1"]),
+            ("/*M!100500 SET @a=1 */ SELECT 1", vec!["/*M!100500 SET @a=1 */ SELECT 1"]),
+            ("UPDATE t SET v=0 /*! WHERE id=1 */;", vec!["UPDATE t SET v=0 /*! WHERE id=1 */"]),
+            ("SELECT 1 /*!80000 , 2 */", vec!["SELECT 1 /*!80000 , 2 */"]),
+            ("/*! SET @a=1 */;", vec!["/*! SET @a=1 */"]),
+            ("/*!80000 SET @a=1 */", vec!["/*!80000 SET @a=1 */"]),
+            ("/*! SET @a=1 */ SELECT 1;", vec!["/*! SET @a=1 */ SELECT 1"]),
+            ("/*!80000 SET @a=1 */ SELECT 1", vec!["/*!80000 SET @a=1 */ SELECT 1"]),
+            (
+                "UPDATE t SET v=0 /* why */ /*M! WHERE id=1 */ -- note\n; SELECT 2 /*M! , 3 */",
+                vec!["UPDATE t SET v=0 /* why */ /*M! WHERE id=1 */", "SELECT 2 /*M! , 3 */"],
+            ),
+            (" /* a */ /*M! SET @a=1 */ ; /*M! SET @b=2 */", vec!["/*M! SET @a=1 */", "/*M! SET @b=2 */"]),
+            // Blanks and plain comments around a statement are trimmed as before.
+            ("  /* a */ SELECT 1 /* b */ -- c\n;", vec!["SELECT 1"]),
+            ("/* only */ ; -- line\n", vec![]),
+            ("/*m! lower case is a plain comment */ SELECT 1 /*+ hint */", vec!["SELECT 1"]),
+        ] {
+            assert_eq!(bodies_in(src, d), want, "{d:?}: {src:?}");
+        }
+    }
+}
+
+/// A client command line (`DELIMITER`) after an executable comment that no `;` ended ends the
+/// statement the comment is: the statements and their text are those of the same script with a
+/// plain comment there, and the executable comments besides.
+#[test]
+fn executable_comments_before_a_client_command_keep_the_statements_apart() {
+    use crate::sql::dialect::MySqlMode;
+    let script = "/*M! SET @a = 1 */\nDELIMITER //\nCREATE PROCEDURE p() BEGIN SELECT 1; END //\n\
+                  /*M!100500 SET @b = 2 */\nDELIMITER ;\nCALL p();\n/*M! SET @c = 3 */ DELIMITER $$\nSELECT 4$$";
+    let plain = script.replace("/*M!", "/*");
+    for mode in [MySqlMode::default(), MySqlMode { mariadb: true, ..MySqlMode::default() }] {
+        let d = Dialect::MySql(mode);
+        assert_eq!(
+            bodies_in(script, d),
+            [
+                "/*M! SET @a = 1 */",
+                "CREATE PROCEDURE p() BEGIN SELECT 1; END",
+                "/*M!100500 SET @b = 2 */",
+                "CALL p()",
+                "/*M! SET @c = 3 */",
+                "SELECT 4",
+            ],
+            "{d:?}"
+        );
+        assert_eq!(bodies_in(&plain, d), ["CREATE PROCEDURE p() BEGIN SELECT 1; END", "CALL p()", "SELECT 4"]);
+    }
+}

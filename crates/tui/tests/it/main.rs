@@ -28,6 +28,7 @@ mod flows_edit_rows;
 mod flows_editor;
 mod flows_env_colors;
 mod flows_environments;
+mod flows_exec_comments;
 mod flows_explorer;
 mod flows_explorer_mouse;
 mod flows_explorer_search;

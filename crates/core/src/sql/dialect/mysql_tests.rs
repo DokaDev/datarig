@@ -179,8 +179,9 @@ fn danger_02_executable_comments_are_code() {
         assert_eq!((risk.class, risk.danger), (Class::Unknown, Some(Danger::ExecutableComment)), "{text}");
         assert!(risk.read_only().is_err(), "{text}");
     }
-    // PostgreSQL: a comment, as before.
-    assert_eq!(bodies("/*! DROP TABLE t */;", PG), Vec::<&str>::new());
+    // PostgreSQL reads it as a comment, and a statement keeps it there too: text read so may be
+    // sent to a server that runs it (one with no database known yet).
+    assert_eq!(bodies("/*! DROP TABLE t */;", PG), ["/*! DROP TABLE t */"]);
 }
 
 /// 3. A MySQL string literal escapes backslashes (and NULs) for the session's mode; copying rows
