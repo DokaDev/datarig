@@ -381,7 +381,8 @@ impl Editor {
         }
         let semi = before.iter().rposition(|t| t.ends_statement());
         let lead = &before[semi.map_or(0, |i| i + 1)..];
-        if !lead.iter().all(|t| t.is_trivia()) {
+        // Blanks and plain comments only: an executable comment there is part of the statement.
+        if !lead.iter().all(|t| t.is_trivia() && !datarig_core::sql::split::is_executable_comment(t.text(&text))) {
             return None;
         }
         // After a `;` lexed here (its lead starts after it from now on), or (none) after the one

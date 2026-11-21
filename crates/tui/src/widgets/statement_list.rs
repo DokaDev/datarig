@@ -267,6 +267,10 @@ impl StatementList {
         for t in lex_in(text, dialect) {
             match t.kind {
                 Tok::Whitespace => line_start |= t.text(text).contains(['\n', '\r']),
+                // MariaDB's `/*M! … */` (a block comment to the lexer) is read as `/*! … */`.
+                Tok::BlockComment if datarig_core::sql::split::is_executable_comment(t.text(text)) => {
+                    line_start = false;
+                }
                 Tok::LineComment | Tok::BlockComment => {}
                 Tok::ExecComment => {
                     exec = t.text(text).starts_with("/*");

@@ -61,12 +61,13 @@ pub fn split_from(src: &str, d: Dialect, state: LexState) -> Vec<Statement> {
     out
 }
 
-/// A comment some server runs: MySQL's and MariaDB's `/*! … */` (`/*!80000 … */`) and MariaDB's
-/// `/*M! … */` (`/*M!100500 … */`). Kept in a statement whatever the text's dialect, since that is
-/// the client's reading and the server may be another (a MySQL reading of a MariaDB server, or
-/// text before the database is known).
+/// A block comment that is, or holds, a comment some server runs: MySQL's and MariaDB's
+/// `/*! … */` (`/*!80000 … */`) and MariaDB's `/*M! … */` (`/*M!100500 … */`), also one a
+/// dialect that nests comments read inside a plain one (`/* a /*M! … */ */`). Kept in a statement
+/// whatever the text's dialect, since that is the client's reading and the server may be another
+/// (a MySQL reading of a MariaDB server, or text before the database is known).
 pub fn is_executable_comment(comment: &str) -> bool {
-    comment.starts_with("/*!") || comment.starts_with("/*M!")
+    comment.starts_with("/*") && (comment.contains("/*!") || comment.contains("/*M!"))
 }
 
 /// Statement under the cursor: the one whose `[start, end]` contains it (so "right after `;`"

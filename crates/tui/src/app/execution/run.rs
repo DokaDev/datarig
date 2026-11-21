@@ -131,6 +131,11 @@ impl App {
         if !self.table_pending_holds(id, &statements) {
             return self.unstage_run(id);
         }
+        // Refused for MariaDB's own executable comments first, as a new run is.
+        if let Some(refused) = self.m_bang_refusal(id, &statements) {
+            self.unstage_run(id);
+            return self.tab_status(id, refused);
+        }
         // The allowed extensions' functions, if this connection has not asked for them yet.
         self.ask_extension_functions(pid);
         if let Some(refused) = self.read_only_refusal(id, pid, &statements) {
