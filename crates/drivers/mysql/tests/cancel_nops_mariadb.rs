@@ -383,3 +383,30 @@ async fn the_own_session_is_not_known_but_its_id_is_shown() {
     let on: Option<i64> = rows[0][0].as_deref().and_then(|v| v.parse().ok());
     assert_eq!(*shown, on, "the id its statements run on");
 }
+
+/// Every session's facts say the server has `performance_schema` off, so whether a statement
+/// can be stopped on it is answered before any cancel: no, for that reason.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_facts_say_performance_schema_is_off() {
+    use datarig_core::engine::{EngineFacts, Fact, Feature, Why};
+    let test = "the_facts_say_performance_schema_is_off";
+    let Some(url) = nops_url(test).await else { return };
+    let _alone = ALONE.lock().await;
+    let off = Fact::No(Why::FeatureOff(Feature::PerformanceSchema));
+    for role in [SessionRole::Query, SessionRole::Meta, SessionRole::Monitor] {
+        let (tx, mut rx) = unbounded_channel();
+        let tag = format!("nops{}-{test}", std::process::id());
+        let _session = MyDriver.connect(&profile(&url), role, ConnectOptions::new(PAGE, role, &tag), tx);
+        let facts = loop {
+            match tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.expect("an answer") {
+                Some(DbEvent::Server(facts)) => break facts,
+                Some(DbEvent::ConnectFailed { error, .. }) => panic!("{role:?}: connect failed: {error:?}"),
+                Some(_) => {}
+                None => panic!("event channel closed"),
+            }
+        };
+        let EngineFacts::MariaDb(my) = &facts.detail else { panic!("{role:?}: {facts:?}") };
+        assert_eq!(my.performance_schema, off, "{role:?}");
+        assert_eq!(facts.engine().spec().cancel.server_cancel(&facts), off, "{role:?}");
+    }
+}

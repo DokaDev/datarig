@@ -735,6 +735,59 @@ async fn a_failed_marker_lookup_still_reads_the_own_id() {
     assert!(!failing.fault_pending(), "both faults met their statements: {failed:?}");
 }
 
+/// Whether the server's `performance_schema` is on, in a session's facts (the dev servers have
+/// it on): a session whose marker the server confirmed found it there, so it is on and nothing
+/// more is read; a session whose marker was not confirmed (behind a proxy that numbers its
+/// clients, or after a failed marker lookup) reads it alone, once, last. When that read fails it
+/// is not known, and nothing else changes: the session opens, and reaches the server as its own
+/// id says.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_facts_say_whether_performance_schema_is_on() {
+    use datarig_core::engine::EngineFacts;
+    let test = "the_facts_say_whether_performance_schema_is_on";
+    let Some((url, _admin)) = urls(test) else { return };
+    const READ: &str = "SELECT @@GLOBAL.performance_schema LIMIT 1";
+    let ps_of = |f: &ServerFacts| match &f.detail {
+        EngineFacts::MySql(my) | EngineFacts::MariaDb(my) => my.performance_schema.clone(),
+        EngineFacts::Postgres(_) => panic!("{f:?}"),
+    };
+    let reads = |p: &Proxy| p.queries().iter().filter(|q| q.as_str() == READ).count();
+    // (numbering, marker lookup fails, the read fails) -> (read sent, topology, performance_schema)
+    let rows = [
+        ((false, false, false), (0, Fact::Known(Topology::Direct), Fact::Known(()))),
+        ((true, false, false), (1, Fact::Known(Topology::Pooled), Fact::Known(()))),
+        ((true, false, true), (1, Fact::Known(Topology::Pooled), Fact::Unknown(Why::NotChecked))),
+        ((false, true, false), (1, Fact::Known(Topology::Direct), Fact::Known(()))),
+        ((false, true, true), (1, Fact::Known(Topology::Direct), Fact::Unknown(Why::NotChecked))),
+    ];
+    for ((numbering, lookup_fails, read_fails), (sent, topology, ps)) in rows {
+        let what = format!("numbering {numbering}, lookup fails {lookup_fails}, read fails {read_fails}");
+        let proxy = Proxy::start(&upstream(&url)).await;
+        if numbering {
+            proxy.offset_ids(0x0100_0000);
+        }
+        for role in [SessionRole::Query, SessionRole::Meta, SessionRole::Monitor] {
+            if lookup_fails {
+                proxy.fault_start("SELECT CONNECTION_ID(), ", Fault::Instead("SELECT zz_seam_no_such_column".into()));
+            }
+            if read_fails {
+                proxy.fault_start(READ, Fault::Instead("SELECT zz_seam_no_such_column".into()));
+            }
+            let before_reads = reads(&proxy);
+            let (mut c, before) = Conn::start(&proxy.url(&url), role, test).await;
+            assert!(!proxy.fault_pending(), "{what} {role:?}: every fault met its statement");
+            let f = facts_first(role, &before);
+            assert_eq!(reads(&proxy) - before_reads, sent, "{what} {role:?}");
+            assert_eq!(f.topology, topology, "{what} {role:?}: {f:?}");
+            assert_eq!(ps_of(&f), ps, "{what} {role:?}: {f:?}");
+            if role == SessionRole::Query {
+                let evs = c.ok(1, "SELECT 1").await;
+                assert!(matches!(evs.last(), Some(DbEvent::Page { .. })), "{what}: the session goes on: {evs:?}");
+            }
+        }
+    }
+}
+
 /// A test connection says the server's engine (MariaDB on a MariaDB server) and the version of
 /// its greeting, the number its version line starts with.
 #[tokio::test(flavor = "multi_thread")]

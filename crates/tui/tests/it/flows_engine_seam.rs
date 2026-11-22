@@ -941,14 +941,12 @@ fn facts_of(engine: Engine) -> DbEvent {
     use datarig_core::engine::{EngineFacts, EngineId, Fact, MyFacts, PgFacts, ServerFacts, Topology, Version, Why};
     let (version, detail) = match engine {
         Engine::Postgres => (Version::new(17, 2, 0), EngineFacts::Postgres(PgFacts::default())),
-        Engine::MySql => (
-            Version::new(8, 4, 6),
-            EngineFacts::MySql(MyFacts { handshake: Version::new(8, 4, 6), greeting: EngineId::MySql }),
-        ),
-        Engine::MariaDb => (
-            Version::new(11, 4, 13),
-            EngineFacts::MariaDb(MyFacts { handshake: Version::new(11, 4, 13), greeting: EngineId::MariaDb }),
-        ),
+        Engine::MySql => {
+            (Version::new(8, 4, 6), EngineFacts::MySql(MyFacts::new(Version::new(8, 4, 6), EngineId::MySql)))
+        }
+        Engine::MariaDb => {
+            (Version::new(11, 4, 13), EngineFacts::MariaDb(MyFacts::new(Version::new(11, 4, 13), EngineId::MariaDb)))
+        }
     };
     DbEvent::Server(Arc::new(ServerFacts {
         version: Fact::Known(version),
@@ -1031,8 +1029,8 @@ fn facts_at(engine: Engine, version: datarig_core::engine::Version) -> Arc<datar
     use datarig_core::engine::{EngineFacts, EngineId, Fact, MyFacts, PgFacts, ServerFacts, Topology, Why};
     let detail = match engine {
         Engine::Postgres => EngineFacts::Postgres(PgFacts::default()),
-        Engine::MySql => EngineFacts::MySql(MyFacts { handshake: version, greeting: EngineId::MySql }),
-        Engine::MariaDb => EngineFacts::MariaDb(MyFacts { handshake: version, greeting: EngineId::MariaDb }),
+        Engine::MySql => EngineFacts::MySql(MyFacts::new(version, EngineId::MySql)),
+        Engine::MariaDb => EngineFacts::MariaDb(MyFacts::new(version, EngineId::MariaDb)),
     };
     Arc::new(ServerFacts {
         version: Fact::Known(version),
@@ -1267,12 +1265,11 @@ fn a_dollar_quotes_unknown_refusal_is_worded_and_nothing_else_runs() {
 fn disagreeing_facts(greeting: Engine) -> DbEvent {
     use datarig_core::engine::{EngineFacts, EngineId, Fact, MyFacts, ServerFacts, Version, Why};
     let (detail, line) = match greeting {
-        Engine::MySql => (
-            EngineFacts::MariaDb(MyFacts { handshake: Version::new(8, 4, 6), greeting: EngineId::MySql }),
-            "11.4.13-MariaDB",
-        ),
+        Engine::MySql => {
+            (EngineFacts::MariaDb(MyFacts::new(Version::new(8, 4, 6), EngineId::MySql)), "11.4.13-MariaDB")
+        }
         Engine::MariaDb | Engine::Postgres => {
-            (EngineFacts::MySql(MyFacts { handshake: Version::new(11, 4, 13), greeting: EngineId::MariaDb }), "8.4.6")
+            (EngineFacts::MySql(MyFacts::new(Version::new(11, 4, 13), EngineId::MariaDb)), "8.4.6")
         }
     };
     DbEvent::Server(Arc::new(ServerFacts {
@@ -1821,4 +1818,175 @@ fn every_kind_of_session_feeds_the_profiles_engines_alike() {
         }
     }
     assert!(wrong.is_empty(), "not judged alike:\n{}", wrong.join("\n"));
+}
+
+// ── A cancel on a server that cannot stop a running statement ──────────────────────────────
+
+/// `performance_schema` off on the server.
+fn ps_off() -> datarig_core::engine::Support {
+    use datarig_core::engine::{Fact, Feature, Why};
+    Fact::No(Why::FeatureOff(Feature::PerformanceSchema))
+}
+
+/// What a session of a MariaDB 11.4.13 server reached directly says first, its
+/// `performance_schema` as `ps` says.
+fn mariadb_facts(ps: datarig_core::engine::Support) -> DbEvent {
+    use datarig_core::engine::{EngineFacts, EngineId, Fact, MyFacts, ServerFacts, Topology, Version, Why};
+    let v = Version::new(11, 4, 13);
+    DbEvent::Server(Arc::new(ServerFacts {
+        version: Fact::Known(v),
+        version_text: None,
+        provider: Fact::Unknown(Why::NotChecked),
+        topology: Fact::Known(Topology::Direct),
+        detail: EngineFacts::MariaDb(MyFacts { performance_schema: ps, ..MyFacts::new(v, EngineId::MariaDb) }),
+    }))
+}
+
+/// A MariaDB profile `seam` that holds results open, connected; its first tab runs `sql`, whose query session said
+/// `facts` first (`None`: it has said nothing yet), and the run's first statement started.
+fn running_on_mariadb(sql: &str, facts: Option<DbEvent>) -> (Harness, u64) {
+    let (mut h, id) = sent_on_mariadb(sql, facts, true);
+    h.tab_db(0, DbEvent::Started { id, index: 0 });
+    (h, id)
+}
+
+/// [`running_on_mariadb`], before the driver said the statement started, through the fake
+/// MySQL driver (`reads_to_end`: it reads a held result to its end at once) or one that leaves
+/// a held result to be paged.
+fn sent_on_mariadb(sql: &str, facts: Option<DbEvent>, reads_to_end: bool) -> (Harness, u64) {
+    let p = ConnectionConfig {
+        name: "seam".into(),
+        driver: "mysql".into(),
+        policy: Some("hold".into()),
+        ..ConnectionConfig::test_db()
+    };
+    let mut cfg = Config { connections: vec![p], ..Config::default() };
+    // Results held open, so the rest of one can be fetched.
+    cfg.policies.insert("hold", Policy { paging: datarig_core::driver::PagingMode::Hold, ..Policy::default() });
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver(reads_to_end));
+    h.db(DbEvent::Language(mariadb()));
+    h.db(DbEvent::Explain(None));
+    h.db(DbEvent::Edit(None));
+    h.db(DbEvent::Connected);
+    h.app.focus = Focus::Editor;
+    h.sent();
+    run_all(&mut h, sql);
+    let id = h.app.tab().exec.query_id;
+    if let Some(f) = facts {
+        h.tab_db(0, f);
+    }
+    (h, id)
+}
+
+/// The notice a cancel gets on a server whose `performance_schema` is off, in words.
+const CLOSES: &str = "This server cannot stop a running statement (performance_schema is off on the server): \
+                      cancelling a statement that is running closes the connection";
+
+/// The run's Messages that say a cancel closes the connection, in words.
+fn closes_notes(h: &Harness) -> Vec<String> {
+    notes(h)
+        .iter()
+        .filter(|m| matches!(m, Msg::QueryCancelClosesConnection { .. }))
+        .map(|m| h.app.i18n.msg(m).to_string())
+        .collect()
+}
+
+/// A cancel of a statement that runs on a server whose tab's own session said
+/// `performance_schema` is off says, in the run's Messages and before the session answers, that
+/// cancelling a running statement closes the connection; the cancel still reaches the session.
+/// The status line's word of a copy that was fetching every row is kept too. A server with it
+/// on, or not known, and PostgreSQL say nothing of it.
+#[test]
+fn a_cancel_on_a_server_without_performance_schema_says_up_front_when_it_closes_the_connection() {
+    use datarig_core::engine::{Fact, Why};
+    let (mut h, id) = running_on_mariadb("SELECT SLEEP(5)", Some(mariadb_facts(ps_off())));
+    h.app.dispatch(Action::CancelQuery);
+    assert_eq!(closes_notes(&h), [CLOSES], "said before the session answers");
+    let session = h.roles().iter().position(|r| *r == SessionRole::Query).expect("a query session");
+    assert!(h.session_cancelled(session), "the cancel reached the session");
+    // A second cancel while it is cancelling says nothing more.
+    h.app.dispatch(Action::CancelQuery);
+    assert_eq!(closes_notes(&h), [CLOSES]);
+    h.tab_db(0, DbEvent::Failed { id, error: DbError::Cancelled, cancelled: true });
+    assert_eq!(closes_notes(&h), [CLOSES], "kept with the run");
+    for ps in [Fact::Known(()), Fact::Unknown(Why::NotChecked)] {
+        let (mut h, _) = running_on_mariadb("SELECT SLEEP(5)", Some(mariadb_facts(ps.clone())));
+        h.app.dispatch(Action::CancelQuery);
+        assert!(closes_notes(&h).is_empty(), "{ps:?}");
+        let session = h.roles().iter().position(|r| *r == SessionRole::Query).expect("a query session");
+        assert!(h.session_cancelled(session), "{ps:?}");
+    }
+    let mut h = Harness::connected(Lang::En);
+    h.app.focus = Focus::Editor;
+    run_all(&mut h, "SELECT pg_sleep(5)");
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(0, facts_of(Engine::Postgres));
+    h.tab_db(0, DbEvent::Started { id, index: 0 });
+    h.app.dispatch(Action::CancelQuery);
+    assert!(closes_notes(&h).is_empty(), "PostgreSQL");
+
+    // A copy fetching every row of a held result: both words, the copy's in the status line.
+    // A MySQL-family session reads a held result to its end at once, so no copy can wait for
+    // its rows there today: the words are checked on a driver that leaves it to be paged.
+    let (mut h, id) = sent_on_mariadb("SELECT * FROM t", Some(mariadb_facts(ps_off())), false);
+    let rows = (0..600).map(|i| vec![Some(i.to_string())]).collect::<Vec<_>>();
+    let columns = Some(vec![meta("n", "int", true, false)]);
+    h.tab_db(0, DbEvent::Page { id, columns, rows, more: true, elapsed: MS });
+    assert!(h.app.tab().exec.running.is_none(), "the result rests: {:?}", h.sent());
+    h.key(KeyCode::Tab);
+    h.keys("gg");
+    h.draw(160, 45);
+    let (x, y) = (h.app.tab().grid.hit_cols[0].0 + 2, h.app.tab().grid.data_y);
+    h.app.handle_event(ratatui::crossterm::event::Event::Mouse(ratatui::crossterm::event::MouseEvent {
+        kind: ratatui::crossterm::event::MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Right),
+        column: x,
+        row: y,
+        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+    }));
+    let menu = h.screen(160, 45);
+    assert!(menu.contains("Fetch all, then copy ▸"), "{menu}");
+    (0..6).for_each(|_| h.key(KeyCode::Down));
+    h.key(KeyCode::Enter);
+    h.keys("c");
+    h.sent();
+    h.keys("y");
+    let sent = h.sent();
+    assert!(matches!(&sent[..], [DbCommand::FetchMore { .. }]), "fetching the rest: {sent:?}\n{}", h.screen(160, 45));
+    h.ctrl('c');
+    assert_eq!(tab_status(&h), Some(Msg::Label(Label::CopyFetchCancelled)));
+    assert_eq!(closes_notes(&h), [CLOSES]);
+}
+
+/// While the tab's query session opens (it has said nothing of its server yet), a cancel says
+/// nothing of `performance_schema`, even when the profile's metadata session said it is off:
+/// the words follow the tab's own session only. The cancel still reaches the session.
+#[test]
+fn a_cancel_while_the_query_session_opens_says_nothing_of_performance_schema() {
+    let (mut h, _) = running_on_mariadb("SELECT SLEEP(5)", None);
+    h.meta_db("seam", mariadb_facts(ps_off()));
+    h.app.dispatch(Action::CancelQuery);
+    assert!(closes_notes(&h).is_empty(), "{:?}", notes(&h));
+    let session = h.roles().iter().position(|r| *r == SessionRole::Query).expect("a query session");
+    assert!(h.session_cancelled(session));
+}
+
+/// A cancel between two statements of a run on a server whose `performance_schema` is off says
+/// the same words (whether a statement still runs cannot be told), and the session the driver
+/// keeps stays: the run ends cancelled, the next run goes to the same session.
+#[test]
+fn a_cancel_between_statements_without_performance_schema_keeps_the_session() {
+    let (mut h, id) = running_on_mariadb("SELECT 1;\nSELECT SLEEP(5);\nSELECT 2;", Some(mariadb_facts(ps_off())));
+    h.tab_db(0, DbEvent::Finished { id, index: 0, outcome: Outcome::Command("SELECT".into()), elapsed: MS });
+    h.app.dispatch(Action::CancelQuery);
+    assert_eq!(closes_notes(&h), [CLOSES]);
+    let session = h.roles().iter().position(|r| *r == SessionRole::Query).expect("a query session");
+    assert!(h.session_cancelled(session));
+    h.tab_db(0, DbEvent::Failed { id, error: DbError::Cancelled, cancelled: true });
+    assert!(h.app.tab().exec.running.is_none());
+    assert!(h.app.tab().exec.session.is_some(), "the session stays");
+    let sessions = query_sessions(&h);
+    executes(&mut h);
+    run_all(&mut h, "SELECT 3");
+    assert_eq!(executes(&mut h), [vec!["SELECT 3".to_string()]], "sent to the session");
+    assert_eq!(query_sessions(&h), sessions, "no new session");
 }

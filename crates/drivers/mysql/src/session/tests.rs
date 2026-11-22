@@ -2554,3 +2554,24 @@ fn the_shown_id_never_confirms_the_session() {
         }
     }
 }
+
+/// Whether `performance_schema` is on, from the server's answer: `1`/`ON` on, `0`/`OFF` off,
+/// anything else or no answer not known.
+#[test]
+fn performance_schema_is_read_from_the_servers_answer() {
+    use datarig_core::engine::{Feature, Why};
+    assert_eq!(PERFORMANCE_SCHEMA_SQL, "SELECT @@GLOBAL.performance_schema LIMIT 1");
+    let off = Fact::No(Why::FeatureOff(Feature::PerformanceSchema));
+    for (answer, want) in [
+        (Some("1"), Fact::Known(())),
+        (Some("ON"), Fact::Known(())),
+        (Some(" on "), Fact::Known(())),
+        (Some("0"), off.clone()),
+        (Some("OFF"), off),
+        (Some(""), Fact::Unknown(Why::NotChecked)),
+        (Some("2"), Fact::Unknown(Why::NotChecked)),
+        (None, Fact::Unknown(Why::NotChecked)),
+    ] {
+        assert_eq!(performance_schema(answer), want, "{answer:?}");
+    }
+}
