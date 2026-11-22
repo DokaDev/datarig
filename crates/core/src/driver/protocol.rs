@@ -1155,7 +1155,7 @@ impl DbCommand {
                 DbEvent::MonitorFollowUp { request: *request, result: Err(error) }
             }
             DbCommand::ServerSession { request } => {
-                DbEvent::ServerSession { request: *request, own: OwnSession::NotKnown }
+                DbEvent::ServerSession { request: *request, own: OwnSession::NotKnown, shown: None }
             }
             DbCommand::Judged { command, .. } => command.not_supported(),
         }
@@ -1766,6 +1766,11 @@ pub enum DbEvent {
     ServerSession {
         request: u64,
         own: OwnSession,
+        /// For display only, with `own` not known: the id the server names this connection by,
+        /// when that is the id the connection was greeted with (a MySQL-family session whose
+        /// marker the server did not list). The monitor marks the tab's row by it; nothing else
+        /// reads it, and it never says the connection reaches the server directly.
+        shown: Option<i64>,
     },
 }
 

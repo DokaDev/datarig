@@ -28,12 +28,12 @@ impl App {
     pub(super) fn tab_event(&mut self, id: TabId, ev: DbEvent) {
         let profile = self.tabs.get(id).and_then(|t| t.profile);
         // Which server session this one is: kept only as the answer to the ask in flight.
-        if let DbEvent::ServerSession { request, own } = ev {
+        if let DbEvent::ServerSession { request, own, shown } = ev {
             let now = self.now();
             if let Some(t) = self.tabs.get_mut(id)
                 && t.exec.own == crate::app::tabs::OwnAsk::Asked(request)
             {
-                t.exec.own = crate::app::tabs::OwnAsk::Known(own, now);
+                t.exec.own = crate::app::tabs::OwnAsk::Known(own, shown, now);
             }
             return;
         }

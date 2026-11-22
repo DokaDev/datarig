@@ -2435,7 +2435,7 @@ fn a_tab_that_could_not_tell_its_session_is_asked_again_once_idle() {
     h.sent();
     let (mut h, asks) = sessions_asked(h, pg_format(), rows());
     assert_eq!(asks.len(), 1);
-    h.tab_db(0, DbEvent::ServerSession { request: asks[0], own: OwnSession::NotKnown });
+    h.tab_db(0, DbEvent::ServerSession { request: asks[0], own: OwnSession::NotKnown, shown: None });
     // Not while it runs.
     for _ in 0..3 {
         h.advance(Duration::from_secs(2));
@@ -2599,6 +2599,17 @@ fn own_tab_running(text: &str) -> (Harness, usize, u64) {
 
 /// [`own_tab_running`] with a monitor of `format` listing `rows()` (session 4211 listing `text`).
 fn own_tab_running_on(text: &str, format: MonitorFormat, rows: fn() -> Vec<SessionRow>) -> (Harness, usize, u64) {
+    own_tab_answered(text, format, rows, OwnSession::Direct { id: 4211 }, None)
+}
+
+/// [`own_tab_running_on`], the session answering `own` and showing `shown`.
+fn own_tab_answered(
+    text: &str,
+    format: MonitorFormat,
+    rows: fn() -> Vec<SessionRow>,
+    own: OwnSession,
+    shown: Option<i64>,
+) -> (Harness, usize, u64) {
     let mut h = Harness::connected(Lang::En);
     h.app.set_instance_tag("t");
     let mut h = sessions_on(h, format, rows());
@@ -2623,7 +2634,7 @@ fn own_tab_running_on(text: &str, format: MonitorFormat, rows: fn() -> Vec<Sessi
     }
     assert_eq!(kinds, ["ServerSession", "Execute"], "asked right before the run");
     h.tab_db(0, DbEvent::Connected);
-    h.tab_db(0, DbEvent::ServerSession { request: asks[0], own: OwnSession::Direct { id: 4211 } });
+    h.tab_db(0, DbEvent::ServerSession { request: asks[0], own, shown });
     let id = h.app.tabs.iter().next().unwrap().exec.query_id;
     h.tab_db(0, DbEvent::Started { id, index: 0 });
     h.advance(Duration::from_millis(10));
@@ -3133,4 +3144,39 @@ fn an_unconfirmed_engine_is_not_retried() {
     h.advance(Duration::from_secs(600));
     assert_eq!(monitors(&h), 1, "no new monitor connection");
     assert!(matches!(monitor(&h).state, MonState::Unavailable(_)));
+}
+
+/// A session that cannot confirm it is the server's own (a MySQL-family session whose marker is
+/// not listed, as with `performance_schema` off) but whose server names it by the handshake's id
+/// shows that id for display only: the monitor marks the tab's row by it and names the tab in
+/// the row's details, as before, and does not ask again. It is never more than that: the tab's
+/// own session is not known (no cancel of the tab's own is offered by it).
+#[test]
+fn a_shown_id_marks_the_tabs_own_row_for_display_only() {
+    let (mut h, q, _) = own_tab_answered("SELECT pg_sleep(60)", pg_format(), rows, OwnSession::NotKnown, Some(4211));
+    h.key(KeyCode::Enter);
+    assert!(tab_field(&h.screen(120, 40)), "the details name the tab");
+    h.key(KeyCode::Esc);
+    let t = h.app.tabs.iter().next().unwrap();
+    assert!(
+        matches!(t.exec.own, datarig_tui::app::tabs::OwnAsk::Known(OwnSession::NotKnown, Some(4211), _)),
+        "{:?}",
+        t.exec.own
+    );
+    // Not asked again later, as a direct answer is not.
+    h.sent_to(q);
+    for _ in 0..3 {
+        h.advance(Duration::from_secs(5));
+        if let Some(t) = ticks(&mut h).first() {
+            h.monitor_db(DbEvent::MonitorSnapshot {
+                request: t.0,
+                result: Ok(snapshot(2.0, 1001, running(rows(), "SELECT pg_sleep(60)"), false)),
+            });
+        }
+    }
+    assert!(!kinds_sent_to(&mut h, q).contains(&"ServerSession"), "not asked again");
+    // Without a shown id the row is not marked.
+    let (mut h, _, _) = own_tab_answered("SELECT pg_sleep(60)", pg_format(), rows, OwnSession::NotKnown, None);
+    h.key(KeyCode::Enter);
+    assert!(!tab_field(&h.screen(120, 40)), "no tab named");
 }

@@ -458,7 +458,7 @@ async fn own_session(client: &Client, link: &mut Link, env: &Env<'_>, tx: &Tx, r
     {
         let _ = env.own.direct.set(direct);
     }
-    let _ = env.events.send(DbEvent::ServerSession { request, own: env.own.answer() });
+    let _ = env.events.send(DbEvent::ServerSession { request, own: env.own.answer(), shown: None });
     Ok(())
 }
 
@@ -2541,7 +2541,7 @@ async fn portal<'a>(
             // Answered from what is known (nothing is sent in the portal's transaction): the
             // result goes on paging.
             Next::Command(DbCommand::ServerSession { request }) => {
-                let _ = env.events.send(DbEvent::ServerSession { request, own: env.own.answer() });
+                let _ = env.events.send(DbEvent::ServerSession { request, own: env.own.answer(), shown: None });
             }
             Next::Command(DbCommand::FetchMore { .. } | DbCommand::ClosePortal { .. }) => {}
             Next::Command(other) => {
