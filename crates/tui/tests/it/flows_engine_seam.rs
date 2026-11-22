@@ -1334,9 +1334,8 @@ fn user_text_holding_mariadb_comment_bytes_is_refused_where_mariadb_may_run_it()
     }
 }
 
-/// A tab without a connection splits its text before any engine is known; once a profile whose
-/// server is MariaDB is picked for it, the statement goes with the comments around it that hold
-/// an executable comment, and is refused there as any other text holding `/*M! … */`.
+/// A run of a tab without a connection keeps the comments that hold an executable comment, and
+/// the profile picked for it then judges them: on MariaDB the text is refused.
 #[test]
 fn a_tab_without_a_connection_keeps_executable_comments_for_the_profile_it_picks() {
     for sql in ["SELECT 0 /* outer /* inner */ /*M! , 1 */", "SELECT 0--1 /*M! , 1 */"] {

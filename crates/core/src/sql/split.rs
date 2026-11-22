@@ -1,8 +1,8 @@
 //! Statement splitter. Splits on `;` outside strings, quoted identifiers,
 //! dollar bodies and comments (as the text's dialect lexes them; in MySQL, on the terminator a
 //! client `DELIMITER` line set, and the line itself is no statement). Comment/whitespace-only
-//! pieces are not statements. An executable comment (`/*! … */`, MariaDB's `/*M! … */`) is never
-//! left out of a statement, in any dialect: a server may run what it holds.
+//! pieces are not statements. An executable comment (`/*! … */`, MariaDB's `/*M! … */`), or a
+//! comment that holds one, is never left out of a statement, in any dialect.
 
 use super::dialect::Dialect;
 use super::lexer::{LexState, Tok, lex_from};
@@ -61,12 +61,9 @@ pub fn split_from(src: &str, d: Dialect, state: LexState) -> Vec<Statement> {
     out
 }
 
-/// A comment of any kind that is, or holds, a comment some server runs: MySQL's and MariaDB's
-/// `/*! … */` (`/*!80000 … */`) and MariaDB's `/*M! … */` (`/*M!100500 … */`), also one a dialect
-/// that nests comments read inside a plain one (`/* a /*M! … */ */`) or one inside what this
-/// dialect reads as a line comment (`v=0--1 /*M! … */`, which MySQL reads as `v = 0 - -1`). Kept
-/// in a statement whatever the text's dialect, since that is the client's reading and the server
-/// may be another (a MySQL reading of a MariaDB server, or text before the database is known).
+/// A comment that is, or holds, an executable comment (MySQL's and MariaDB's `/*! … */`,
+/// MariaDB's `/*M! … */`, versioned too). Kept in a statement whatever the text's dialect: the
+/// server may be of another kind than the reading.
 pub fn is_executable_comment(comment: &str) -> bool {
     comment.contains("/*!") || comment.contains("/*M!")
 }

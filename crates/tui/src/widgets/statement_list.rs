@@ -30,6 +30,20 @@ struct Row {
     /// shows that, the statement is the file's.
     original: Option<(String, String)>,
     note: Option<Note>,
+    /// Made by paste `.0` of [`StatementList::pastes`], with the text `.1` it was given then.
+    pasted: Option<(usize, String)>,
+}
+
+/// Text pasted as rows of their own, kept so that the rows are split again when the database
+/// kind changes (while they are as the paste made them).
+#[derive(Clone, Debug)]
+struct Paste {
+    raw: String,
+    /// On one line: what the focused row had before and after the cursor.
+    head: String,
+    tail: String,
+    /// A text with a line break: rows of its own.
+    lines: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -44,19 +58,20 @@ pub struct StatementList {
     pub follow: bool,
     /// The database the statements are for (`None`: none, nothing is checked).
     dbms: Option<Dbms>,
+    pastes: Vec<Paste>,
 }
 
 impl StatementList {
     /// The statements `sql` of `dbms`, one per row.
     pub fn new(dbms: Option<Dbms>, sql: &[String]) -> Self {
-        let mut list = StatementList { rows: Vec::new(), row: 0, scroll: 0, follow: true, dbms };
+        let mut list = StatementList { rows: Vec::new(), row: 0, scroll: 0, follow: true, dbms, pastes: Vec::new() };
         for s in sql {
             let input = TextInput::new(&list.display(s));
             let shown = input.text().to_string();
-            list.rows.push(Row { input, original: Some((s.clone(), shown)), note: None });
+            list.rows.push(Row { input, original: Some((s.clone(), shown)), note: None, pasted: None });
         }
         if list.rows.is_empty() {
-            list.rows.push(Row { input: TextInput::default(), original: None, note: None });
+            list.rows.push(Row { input: TextInput::default(), original: None, note: None, pasted: None });
         }
         list.check_all();
         list
@@ -69,12 +84,75 @@ impl StatementList {
         one.replace("\r\n", "\n").replace(['\n', '\r'], NEWLINE)
     }
 
-    /// Check the statements again for `dbms` (the form's database changed).
+    /// Check the statements again for `dbms` (the form's database changed). Pasted rows are
+    /// split again when the database kind changes.
     pub fn set_dbms(&mut self, dbms: Option<Dbms>) {
         if self.dbms != dbms {
+            let other = self.dbms.unwrap_or(Dbms::Postgres) != dbms.unwrap_or(Dbms::Postgres);
             self.dbms = dbms;
+            if other {
+                self.split_pastes_again();
+            }
             self.check_all();
         }
+    }
+
+    /// The rows of each paste whose rows are all still as it made them, split again as the
+    /// form's database reads it.
+    fn split_pastes_again(&mut self) {
+        for id in 0..self.pastes.len() {
+            let at: Vec<usize> =
+                (0..self.rows.len()).filter(|&i| self.rows[i].pasted.as_ref().is_some_and(|p| p.0 == id)).collect();
+            let (Some(&first), Some(&last)) = (at.first(), at.last()) else { continue };
+            let whole = last - first + 1 == at.len();
+            if !whole
+                || !at.iter().all(|&i| self.rows[i].pasted.as_ref().is_some_and(|p| p.1 == self.rows[i].input.text()))
+            {
+                continue;
+            }
+            let rows = self.paste_rows(&self.pastes[id].clone());
+            let made: Vec<Row> = rows
+                .into_iter()
+                .map(|t| Row { input: TextInput::new(&t), original: None, note: None, pasted: Some((id, t)) })
+                .collect();
+            self.rows.splice(first..=last, made);
+        }
+        if self.rows.is_empty() {
+            self.rows.push(Row { input: TextInput::default(), original: None, note: None, pasted: None });
+        }
+        self.row = self.row.min(self.rows.len() - 1);
+    }
+
+    /// The statements of pasted text `text`, each as a row shows it.
+    fn parts_of(&self, text: &str) -> Vec<String> {
+        let dbms = self.dbms.unwrap_or(Dbms::Postgres);
+        session::split_statements(dbms, text)
+            .iter()
+            .flat_map(|p| self.split_lines(p))
+            .map(|p| self.display(&p))
+            .filter(|p| !p.is_empty())
+            .collect()
+    }
+
+    /// The rows paste `p` makes.
+    fn paste_rows(&self, p: &Paste) -> Vec<String> {
+        let parts = self.parts_of(&p.raw);
+        if p.lines {
+            return parts;
+        }
+        if parts.len() < 2 {
+            return vec![format!("{}{}{}", p.head, p.raw, p.tail)];
+        }
+        let last = parts.len() - 1;
+        parts
+            .iter()
+            .enumerate()
+            .map(|(n, s)| match n {
+                0 => format!("{}{s}", p.head),
+                n if n == last => format!("{s}{}", p.tail),
+                _ => s.clone(),
+            })
+            .collect()
     }
 
     fn check_all(&mut self) {
@@ -186,7 +264,7 @@ impl StatementList {
     /// An empty row below the focused one, focused.
     pub fn add_below(&mut self) {
         let at = (self.row + 1).min(self.rows.len());
-        self.rows.insert(at, Row { input: TextInput::default(), original: None, note: None });
+        self.rows.insert(at, Row { input: TextInput::default(), original: None, note: None, pasted: None });
         self.focus(at);
     }
 
@@ -204,7 +282,7 @@ impl StatementList {
             return;
         }
         if self.rows.len() == 1 {
-            self.rows[0] = Row { input: TextInput::default(), original: None, note: None };
+            self.rows[0] = Row { input: TextInput::default(), original: None, note: None, pasted: None };
         } else {
             self.rows.remove(i);
         }
@@ -294,17 +372,13 @@ impl StatementList {
     /// after the focused one (what followed the cursor goes at the end of the last); one goes in
     /// at the cursor.
     pub fn paste(&mut self, text: &str) {
-        let dbms = self.dbms.unwrap_or(Dbms::Postgres);
-        let parts: Vec<String> = session::split_statements(dbms, text)
-            .iter()
-            .flat_map(|p| self.split_lines(p))
-            .map(|p| self.display(&p))
-            .filter(|p| !p.is_empty())
-            .collect();
+        let parts = self.parts_of(text);
         if text.contains(['\n', '\r']) {
             if parts.is_empty() {
                 return;
             }
+            let id = self.pastes.len();
+            self.pastes.push(Paste { raw: text.to_string(), head: String::new(), tail: String::new(), lines: true });
             let i = self.row.min(self.rows.len() - 1);
             let mut at = if self.text(i).trim().is_empty() {
                 self.rows.remove(i);
@@ -313,7 +387,8 @@ impl StatementList {
                 i + 1
             };
             for p in parts {
-                self.rows.insert(at, Row { input: TextInput::new(&p), original: None, note: None });
+                let row = Row { input: TextInput::new(&p), original: None, note: None, pasted: Some((id, p)) };
+                self.rows.insert(at, row);
                 self.check(at);
                 at += 1;
             }
@@ -331,16 +406,13 @@ impl StatementList {
             let at: usize = t.graphemes(true).take(self.rows[i].input.cursor()).map(str::len).sum();
             (t[..at].to_string(), t[at..].to_string())
         };
-        let shown = parts;
-        let last = shown.len() - 1;
-        for (n, s) in shown.iter().enumerate() {
-            let text = match n {
-                0 if last == 0 => format!("{head}{s}{tail}"),
-                0 => format!("{head}{s}"),
-                n if n == last => format!("{s}{tail}"),
-                _ => s.clone(),
-            };
-            let row = Row { input: TextInput::new(&text), original: None, note: None };
+        let id = self.pastes.len();
+        let paste = Paste { raw: text.to_string(), head, tail, lines: false };
+        let rows = self.paste_rows(&paste);
+        self.pastes.push(paste);
+        let last = rows.len() - 1;
+        for (n, text) in rows.into_iter().enumerate() {
+            let row = Row { input: TextInput::new(&text), original: None, note: None, pasted: Some((id, text)) };
             if n == 0 {
                 self.rows[i] = row;
             } else {
@@ -348,8 +420,7 @@ impl StatementList {
             }
             self.check(i + n);
         }
-        let end = i + last;
-        self.focus(end);
+        self.focus(i + last);
     }
 }
 
@@ -475,27 +546,37 @@ mod tests {
         }
     }
 
-    /// Text pasted before the form's database is MySQL or MariaDB (none yet, or PostgreSQL)
-    /// keeps every comment that holds an executable comment, nested or a line comment, in its
-    /// rows: once the database is MySQL or MariaDB, those rows are what that server would run
-    /// and are checked as such (a start-up statement may not hold an executable comment), never
-    /// a shorter text the other reading cut.
+    /// Rows pasted before the form has a database, or for another kind, are split again when
+    /// the database kind changes, as long as they are as the paste made them.
     #[test]
-    fn a_paste_before_the_database_is_known_keeps_executable_comments() {
+    fn pasted_rows_are_split_again_when_the_database_kind_changes() {
         for first in [None, Some(Dbms::Postgres)] {
-            for (text, kept) in [
-                ("SET @a = 1 /* x /* y */ /*M! , @b = 2 */;\nSET @c = 3", "/*M! , @b = 2 */"),
-                ("SET @a = 1 /* x /* y */ /*! , @b = 2 */\n", "/*! , @b = 2 */"),
-                ("SET @a = 1 --1 /*M! , @b = 2 */\nSET @c = 3", "--1 /*M! , @b = 2 */"),
+            for (text, want) in [
+                ("SET @a = 5--1\n/*M! , @b = 2 */", vec!["SET @a = 5--1 /*M! , @b = 2 */"]),
+                ("SET @a = 5--1\nSET @b = 2", vec!["SET @a = 5--1", "SET @b = 2"]),
+                ("SET @a = 1 /* x /* y */;\nSET @b = 2", vec!["SET @a = 1", "SET @b = 2"]),
+                (
+                    "SET @a = 1 /* x /* y */ /*M! , @b = 2 */;\nSET @c = 3",
+                    vec!["SET @a = 1 /* x /* y */ /*M! , @b = 2 */", "SET @c = 3"],
+                ),
+                ("SET @a = 1; SET @b = 5--1", vec!["SET @a = 1", "SET @b = 5--1"]),
             ] {
                 let mut l = StatementList::new(first, &[]);
                 l.paste(text);
-                assert!(l.statements().iter().any(|s| s.contains(kept)), "{first:?} {text:?}: {:?}", l.statements());
                 l.set_dbms(Some(Dbms::MySql));
-                assert!(l.statements().iter().any(|s| s.contains(kept)), "{first:?} {text:?}: {:?}", l.statements());
-                assert!(l.problem().is_some(), "{first:?} {text:?}: {:?}", l.statements());
+                assert_eq!(l.statements(), want, "{first:?} {text:?}");
+                let mut direct = StatementList::new(Some(Dbms::MySql), &[]);
+                direct.paste(text);
+                assert_eq!(direct.statements(), want, "pasted for MySQL: {text:?}");
             }
         }
+        // A row edited since is the user's: it stays as it is.
+        let mut l = StatementList::new(None, &[]);
+        l.paste("SET @a = 1 /* x /* y */;\nSET @b = 2");
+        l.current_mut().insert_str(" ");
+        l.edited();
+        l.set_dbms(Some(Dbms::MySql));
+        assert_eq!(l.statements(), ["SET @a = 1"]);
     }
 
     /// A line inside an executable comment that starts with `SET` starts no row: the comment is

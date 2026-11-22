@@ -246,9 +246,8 @@ fn executable_comments_before_a_client_command_keep_the_statements_apart() {
     }
 }
 
-/// A comment around a statement that holds an executable comment (`/*!`, `/*M!`), whatever
-/// grouped it (PostgreSQL nests comments, so there a `/*M! … */` may sit inside a plain one), is
-/// kept in the statement; other comments around it are trimmed as before.
+/// A comment around a statement that holds an executable comment (`/*!`, `/*M!`) is kept in the
+/// statement; other comments around it are trimmed as before.
 #[test]
 fn comments_holding_executable_comments_are_kept() {
     for (src, want) in [
@@ -262,9 +261,8 @@ fn comments_holding_executable_comments_are_kept() {
     }
 }
 
-/// A line comment that holds an executable comment is kept around a statement too, in every
-/// dialect: what one lexer reads as a line comment another server may read as code (`v=0--1` is
-/// `v = 0 - -1` to MySQL and MariaDB, a comment from `--` on to PostgreSQL's lexer).
+/// A line comment around a statement that holds an executable comment is kept too, in every
+/// dialect.
 #[test]
 fn line_comments_holding_executable_comments_are_kept() {
     use crate::sql::dialect::MySqlMode;

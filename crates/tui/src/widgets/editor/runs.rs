@@ -24,7 +24,7 @@
 use super::lexing::REGION_LINES;
 use super::{Editor, Sel};
 use datarig_core::sql::lexer::{Delimiter, Tok};
-use datarig_core::sql::split::split_from;
+use datarig_core::sql::split::{is_executable_comment, split_from};
 use std::collections::{HashMap, HashSet};
 
 /// Hints kept at most; past it the oldest go.
@@ -355,9 +355,9 @@ impl Editor {
         let head = self.lex(&rest[..cut], state).first().copied()?;
         // A client command line (MySQL's `DELIMITER`) starts no statement. A `$` may have read
         // otherwise at the last check (in MySQL a name's character after a terminator such as
-        // `\G` made `$$` part of a name, not a dollar quote): checked in full. An executable
-        // comment the lexer reads as a comment starts a statement, as the splitter keeps it.
-        if (head.is_trivia() && !datarig_core::sql::split::is_executable_comment(head.text(&rest[..cut])))
+        // `\G` made `$$` part of a name, not a dollar quote): checked in full. A comment that
+        // holds an executable comment starts a statement.
+        if (head.is_trivia() && !is_executable_comment(head.text(&rest[..cut])))
             || head.kind == Tok::Directive
             || rest.starts_with('$')
             || (head.end == cut && cut < rest.len())
@@ -381,8 +381,8 @@ impl Editor {
         }
         let semi = before.iter().rposition(|t| t.ends_statement());
         let lead = &before[semi.map_or(0, |i| i + 1)..];
-        // Blanks and plain comments only: an executable comment there is part of the statement.
-        if !lead.iter().all(|t| t.is_trivia() && !datarig_core::sql::split::is_executable_comment(t.text(&text))) {
+        // A comment that holds an executable comment is a statement's text, not its lead.
+        if !lead.iter().all(|t| t.is_trivia() && !is_executable_comment(t.text(&text))) {
             return None;
         }
         // After a `;` lexed here (its lead starts after it from now on), or (none) after the one
