@@ -675,9 +675,12 @@ pub fn join_statements(dbms: Dbms, sql: &[String]) -> String {
                 _ => out.push_str(t.text(s)),
             }
         }
-        out.trim_end().to_string()
+        // Blanks go at the end; the line break after a kept line comment stays until the last
+        // statement (the next one must not follow on its line).
+        out.trim_end_matches(' ').to_string()
     };
-    sql.iter().map(one).collect::<Vec<_>>().join("; ")
+    let joined = sql.iter().map(one).collect::<Vec<_>>().join("; ");
+    joined.trim_end().to_string()
 }
 
 /// A line comment the field keeps: one that holds an executable comment, or `--` not followed by
