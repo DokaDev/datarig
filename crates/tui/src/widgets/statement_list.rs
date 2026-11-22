@@ -542,37 +542,51 @@ mod tests {
         }
     }
 
-    /// Rows pasted before the form has a database, or for another kind, are split again when
-    /// the database kind changes, as long as they are as the paste made them.
+    /// When the form's database kind changes, a row whose text splits otherwise for it, or that
+    /// was pasted from text that does, asks to be checked (the form does not save) until it is
+    /// edited or pasted again. Rows that split the same are kept as they are.
     #[test]
-    fn pasted_rows_are_split_again_when_the_database_kind_changes() {
+    fn rows_that_split_otherwise_for_another_database_ask_to_be_checked() {
+        let splits_otherwise = |l: &StatementList| l.problem().is_some();
         for first in [None, Some(Dbms::Postgres)] {
-            for (text, want) in [
-                ("SET @a = 5--1\n/*M! , @b = 2 */", vec!["SET @a = 5--1 /*M! , @b = 2 */"]),
-                ("SET @a = 5--1\nSET @b = 2", vec!["SET @a = 5--1", "SET @b = 2"]),
-                ("SET @a = 1 /* x /* y */;\nSET @b = 2", vec!["SET @a = 1", "SET @b = 2"]),
-                (
-                    "SET @a = 1 /* x /* y */ /*M! , @b = 2 */;\nSET @c = 3",
-                    vec!["SET @a = 1 /* x /* y */ /*M! , @b = 2 */", "SET @c = 3"],
-                ),
-                ("SET @a = 1; SET @b = 5--1", vec!["SET @a = 1", "SET @b = 5--1"]),
+            for text in [
+                "SET @a = 5--1\n/*M! , @b = 2 */",
+                "SET @a = 5--1\nSET @b = 2",
+                "SET @a = 1 /* x /* y */;\nSET @b = 2",
+                "SET @a = 5--1; SET @b = 2",
             ] {
                 let mut l = StatementList::new(first, &[]);
                 l.paste(text);
+                let before = l.statements();
                 l.set_dbms(Some(Dbms::MySql));
-                assert_eq!(l.statements(), want, "{first:?} {text:?}");
-                let mut direct = StatementList::new(Some(Dbms::MySql), &[]);
-                direct.paste(text);
-                assert_eq!(direct.statements(), want, "pasted for MySQL: {text:?}");
+                assert!(splits_otherwise(&l), "{first:?} {text:?}: {:?}", l.problem());
+                assert_eq!(l.statements(), before, "kept as they are: {text:?}");
             }
+            // Text both databases split the same: kept, and saved as it is.
+            let mut l = StatementList::new(first, &[]);
+            l.paste("SET @a = 1 /* x */;\nSET @b = 2");
+            l.set_dbms(Some(Dbms::MySql));
+            assert_eq!((l.statements(), l.problem()), (vec!["SET @a = 1".to_string(), "SET @b = 2".to_string()], None));
         }
-        // A row edited since is the user's: it stays as it is.
+        // A deleted row stays deleted.
+        let mut l = StatementList::new(None, &[]);
+        l.paste("SET @a = 1;\nSET @b = 2");
+        l.remove(1);
+        l.set_dbms(Some(Dbms::MySql));
+        assert_eq!((l.statements(), l.problem()), (vec!["SET @a = 1".to_string()], None));
+        // Rows of the file that split the same are saved unchanged.
+        let mut l = StatementList::new(Some(Dbms::Postgres), &["SET @a = 1 -- note".to_string()]);
+        l.set_dbms(Some(Dbms::MySql));
+        assert_eq!((l.statements(), l.problem()), (vec!["SET @a = 1 -- note".to_string()], None));
+        // Edited, a row is read for the form's database from then on.
         let mut l = StatementList::new(None, &[]);
         l.paste("SET @a = 1 /* x /* y */;\nSET @b = 2");
+        l.set_dbms(Some(Dbms::MySql));
+        assert!(splits_otherwise(&l));
+        l.focus(0);
         l.current_mut().insert_str(" ");
         l.edited();
-        l.set_dbms(Some(Dbms::MySql));
-        assert_eq!(l.statements(), ["SET @a = 1"]);
+        assert_eq!(l.problem(), None);
     }
 
     /// A line inside an executable comment that starts with `SET` starts no row: the comment is

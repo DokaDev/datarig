@@ -387,3 +387,40 @@ fn a_profile_with_an_open_transaction_keeps_its_connection_until_it_ends() {
     save_as_postgresql(&mut h);
     assert!(h.app.tab().exec.session.is_none(), "disconnected once nothing is open");
 }
+
+/// A change of where the profile connects, saved while nothing is open but asked about first
+/// (its password moves to another store): a run that waited starts meanwhile and opens a
+/// transaction. The yes is refused then; the session and its transaction stay.
+#[test]
+fn a_save_asked_about_first_is_checked_again_when_it_is_applied() {
+    let mut h = Harness::connected(Lang::En);
+    let id = h.app.tab().id;
+    let name = h.app.conn().map(|c| c.name.clone()).expect("a profile");
+    let pid = h.app.tab().profile.expect("its profile");
+    let account = h.app.profiles.iter().find(|p| p.id == pid).expect("the profile").id.account();
+    h.store.set(&account, "pw").unwrap();
+    h.app.tab_mut().editor = datarig_tui::widgets::editor::Editor::new("SELECT 1");
+    h.keys(" cx");
+    h.ctrl('e');
+    assert!(h.app.is_queued(id), "waits for the connection");
+    h.explore(&name);
+    h.keys("e");
+    assert!(h.form_open());
+    let form = h.app.overlays.form_mut().expect("the form");
+    form.driver = 1;
+    form.source = datarig_core::secret::SourceKind::File;
+    h.ctrl('s');
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm), "the move of the password asks first");
+    // Meanwhile the profile connects: the run that waited starts, and opens a transaction.
+    h.sent();
+    h.db(DbEvent::Connected);
+    assert!(!executes(&mut h).is_empty(), "the run that waited is sent");
+    h.tab_db(0, DbEvent::Block(true));
+    h.tab_db(0, DbEvent::TxOpen(true));
+    h.key(KeyCode::Char('y'));
+    assert!(h.form_open(), "not saved: the form stays open");
+    assert_eq!(h.app.profiles.iter().find(|p| p.id == pid).expect("the profile").driver, "postgres");
+    let tab = h.app.tabs.get(id).expect("the tab");
+    assert!(tab.exec.session.is_some() && tab.exec.tx_open, "the session and its transaction stay");
+    assert_eq!(h.store.get(&account).unwrap().as_deref(), Some("pw"), "the password stays where it was");
+}
