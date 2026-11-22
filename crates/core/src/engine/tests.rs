@@ -434,28 +434,41 @@ fn ddl_locks_are_said_only_where_the_documentation_gives_them() {
 }
 
 /// Whether a statement can be stopped on the server, per engine: always on PostgreSQL (a cancel
-/// request); on MySQL and MariaDB as their `performance_schema` is (on, off, or not read), on
-/// agreeing and disagreeing reports alike.
+/// request); on MySQL and MariaDB only once the server listed the session's marker on its own id
+/// (the cancel's connection names the session by it), and never with `performance_schema` off,
+/// which is the reason said first. On agreeing and disagreeing reports alike.
 #[test]
 fn server_cancel_on_every_engine() {
     let off = Fact::No(Why::FeatureOff(Feature::PerformanceSchema));
+    let unconfirmed = Fact::No(Why::MarkerUnconfirmed);
     let pg = agreeing(EngineId::Postgres, Version::new(17, 2, 0));
     assert_eq!(EngineId::Postgres.spec().cancel.server_cancel(&pg), Fact::Known(()));
     for (engine, version) in [(EngineId::MySql, Version::new(8, 4, 6)), (EngineId::MariaDb, Version::new(11, 4, 13))] {
-        for ps in [Fact::Known(()), off.clone(), Fact::Unknown(Why::NotChecked)] {
+        for (ps, marker, want) in [
+            (Fact::Known(()), Fact::Known(()), Fact::Known(())),
+            (Fact::Known(()), unconfirmed.clone(), unconfirmed.clone()),
+            (Fact::Unknown(Why::NotChecked), unconfirmed.clone(), unconfirmed.clone()),
+            (Fact::Unknown(Why::NotChecked), Fact::Known(()), Fact::Known(())),
+            (off.clone(), unconfirmed.clone(), off.clone()),
+            (off.clone(), Fact::Unknown(Why::NotChecked), off.clone()),
+            (Fact::Known(()), Fact::Unknown(Why::NotChecked), Fact::Unknown(Why::NotChecked)),
+        ] {
             let mut f = agreeing(engine, version);
             if let EngineFacts::MySql(my) | EngineFacts::MariaDb(my) = &mut f.detail {
                 my.performance_schema = ps.clone();
+                my.marker = marker.clone();
             }
-            assert_eq!(engine.spec().cancel.server_cancel(&f), ps, "{engine:?} {ps:?}");
+            let what = format!("{engine:?} {ps:?} {marker:?}");
+            assert_eq!(engine.spec().cancel.server_cancel(&f), want, "{what}");
             // The greeting naming the other engine changes nothing.
             if let EngineFacts::MySql(my) | EngineFacts::MariaDb(my) = &mut f.detail {
                 my.greeting = if engine == EngineId::MySql { EngineId::MariaDb } else { EngineId::MySql };
             }
             assert!(f.reports_disagree());
-            assert_eq!(engine.spec().cancel.server_cancel(&f), ps, "{engine:?} {ps:?}, disagreeing");
+            assert_eq!(engine.spec().cancel.server_cancel(&f), want, "{what}, disagreeing");
         }
     }
-    // A greeting's facts say nothing of it until a connection read it.
-    assert_eq!(MyFacts::new(Version::new(8, 4, 6), EngineId::MySql).performance_schema, Fact::Unknown(Why::NotChecked));
+    // A greeting's facts say nothing of either until a connection read them.
+    let my = MyFacts::new(Version::new(8, 4, 6), EngineId::MySql);
+    assert_eq!((my.performance_schema, my.marker), (Fact::Unknown(Why::NotChecked), Fact::Unknown(Why::NotChecked)));
 }

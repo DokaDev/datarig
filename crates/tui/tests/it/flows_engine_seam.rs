@@ -1829,8 +1829,13 @@ fn ps_off() -> datarig_core::engine::Support {
 }
 
 /// What a session of a MariaDB 11.4.13 server reached directly says first, its
-/// `performance_schema` as `ps` says.
+/// `performance_schema` as `ps` says, its marker confirmed.
 fn mariadb_facts(ps: datarig_core::engine::Support) -> DbEvent {
+    mariadb_facts_marked(ps, datarig_core::engine::Fact::Known(()))
+}
+
+/// [`mariadb_facts`], its marker as `marker` says.
+fn mariadb_facts_marked(ps: datarig_core::engine::Support, marker: datarig_core::engine::Support) -> DbEvent {
     use datarig_core::engine::{EngineFacts, EngineId, Fact, MyFacts, ServerFacts, Topology, Version, Why};
     let v = Version::new(11, 4, 13);
     DbEvent::Server(Arc::new(ServerFacts {
@@ -1838,7 +1843,7 @@ fn mariadb_facts(ps: datarig_core::engine::Support) -> DbEvent {
         version_text: None,
         provider: Fact::Unknown(Why::NotChecked),
         topology: Fact::Known(Topology::Direct),
-        detail: EngineFacts::MariaDb(MyFacts { performance_schema: ps, ..MyFacts::new(v, EngineId::MariaDb) }),
+        detail: EngineFacts::MariaDb(MyFacts { performance_schema: ps, marker, ..MyFacts::new(v, EngineId::MariaDb) }),
     }))
 }
 
@@ -1916,6 +1921,17 @@ fn a_cancel_on_a_server_without_performance_schema_says_up_front_when_it_closes_
         let session = h.roles().iter().position(|r| *r == SessionRole::Query).expect("a query session");
         assert!(h.session_cancelled(session), "{ps:?}");
     }
+    // `performance_schema` on, but the session's marker not confirmed (behind a proxy, or an
+    // account that cannot read the connection attributes): no statement is stopped on the server
+    // either, and the words say why.
+    let unconfirmed = Fact::No(Why::MarkerUnconfirmed);
+    let (mut h, _) = running_on_mariadb("SELECT SLEEP(5)", Some(mariadb_facts_marked(Fact::Known(()), unconfirmed)));
+    h.app.dispatch(Action::CancelQuery);
+    assert_eq!(
+        closes_notes(&h),
+        ["This server cannot stop a running statement (this tab's own session could not be confirmed on \
+          the server): cancelling a statement that is running closes the connection"]
+    );
     let mut h = Harness::connected(Lang::En);
     h.app.focus = Focus::Editor;
     run_all(&mut h, "SELECT pg_sleep(5)");

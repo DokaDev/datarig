@@ -14,6 +14,7 @@ fn every_why_has_a_text_in_en_and_ko() {
         Why::EnginesDisagree,
         Why::NotOnEngine,
         Why::FeatureOff(Feature::PerformanceSchema),
+        Why::MarkerUnconfirmed,
     ];
     // A new reason fails to compile here until it is listed above.
     for why in &all {
@@ -23,7 +24,8 @@ fn every_why_has_a_text_in_en_and_ko() {
             | Why::VersionsDisagree
             | Why::EnginesDisagree
             | Why::NotOnEngine
-            | Why::FeatureOff(Feature::PerformanceSchema) => {}
+            | Why::FeatureOff(Feature::PerformanceSchema)
+            | Why::MarkerUnconfirmed => {}
         }
     }
     for lang in [Lang::En, Lang::Ko] {
