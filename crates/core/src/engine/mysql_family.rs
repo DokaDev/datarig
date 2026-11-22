@@ -2,8 +2,9 @@
 //! the rules the two engines share.
 
 use super::{
-    CancelRules, CountInTx, EngineFacts, EngineId, Fact, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, ServerFacts,
-    SessionRules, Support, TextRules, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, Version, Why,
+    CancelRules, CountInTx, EngineFacts, EngineId, Fact, FilterCalls, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof,
+    ServerFacts, SessionRules, Support, TextRules, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, Version,
+    Why,
 };
 use crate::driver::SessionRole;
 use crate::sql::dialect::{Dialect, DollarQuotes, Language};
@@ -174,4 +175,118 @@ impl CancelRules for FamilyCancel {
             EngineFacts::Postgres(_) => Fact::Unknown(Why::NotChecked),
         }
     }
+}
+
+/// MySQL built-ins a filter may call without asking, upper case: they read their arguments and
+/// nothing else. Sorted.
+pub const MYSQL_FILTER_CALLS: &[&str] = &[
+    "ABS",
+    "CAST",
+    "CEIL",
+    "CEILING",
+    "CHARACTER_LENGTH",
+    "CHAR_LENGTH",
+    "COALESCE",
+    "CONCAT",
+    "CONCAT_WS",
+    "CONVERT",
+    "CONVERT_TZ",
+    "CURDATE",
+    "CURRENT_DATE",
+    "CURRENT_TIMESTAMP",
+    "CURTIME",
+    "DATE",
+    "DATEDIFF",
+    "DATE_ADD",
+    "DATE_FORMAT",
+    "DATE_SUB",
+    "DAY",
+    "DAYOFMONTH",
+    "DAYOFWEEK",
+    "EXTRACT",
+    "FIND_IN_SET",
+    "FLOOR",
+    "GREATEST",
+    "HEX",
+    "HOUR",
+    "IF",
+    "IFNULL",
+    "INSTR",
+    "JSON_CONTAINS",
+    "JSON_EXTRACT",
+    "JSON_LENGTH",
+    "JSON_TYPE",
+    "JSON_UNQUOTE",
+    "LCASE",
+    "LEAST",
+    "LEFT",
+    "LENGTH",
+    "LOCATE",
+    "LOWER",
+    "LPAD",
+    "LTRIM",
+    "MD5",
+    "MID",
+    "MINUTE",
+    "MOD",
+    "MONTH",
+    "NOW",
+    "NULLIF",
+    "OCTET_LENGTH",
+    "POSITION",
+    "REPLACE",
+    "REVERSE",
+    "RIGHT",
+    "ROUND",
+    "RPAD",
+    "RTRIM",
+    "SECOND",
+    "SIGN",
+    "STR_TO_DATE",
+    "SUBSTR",
+    "SUBSTRING",
+    "TIME",
+    "TIMESTAMPDIFF",
+    "TRIM",
+    "TRUNCATE",
+    "UCASE",
+    "UNHEX",
+    "UPPER",
+    "UTC_TIMESTAMP",
+    "YEAR",
+];
+
+/// MySQL built-ins a filter may not call: they wait, take or test user locks, read a file of the
+/// server, or advance or set a sequence (MariaDB's `NEXTVAL`, `SETVAL`); or they read the
+/// outcome of the statement before (`FOUND_ROWS`, `ROW_COUNT`), which for a table's statement
+/// is one the app sent. Sorted.
+pub const MYSQL_REFUSED_CALLS: &[&str] = &[
+    "BENCHMARK",
+    "FOUND_ROWS",
+    "GET_LOCK",
+    "IS_FREE_LOCK",
+    "IS_USED_LOCK",
+    "LOAD_FILE",
+    "MASTER_POS_WAIT",
+    "NEXTVAL",
+    "RELEASE_ALL_LOCKS",
+    "RELEASE_LOCK",
+    "ROW_COUNT",
+    "SETVAL",
+    "SLEEP",
+    "SOURCE_POS_WAIT",
+    "WAIT_FOR_EXECUTED_GTID_SET",
+    "WAIT_UNTIL_SQL_THREAD_AFTER_GTIDS",
+];
+
+/// The family's answers of [`RiskRules`](super::RiskRules) beside the classifier: the
+/// environment's read-only functions are PostgreSQL's alone, no result of the family is checked
+/// for its text style, and both engines' filters use the family's call lists.
+pub(super) fn family_read_only_calls() -> Support {
+    Fact::No(Why::NotOnEngine)
+}
+
+/// See [`family_read_only_calls`].
+pub(super) fn family_filter_calls() -> FilterCalls {
+    FilterCalls { allowed: MYSQL_FILTER_CALLS, refused: MYSQL_REFUSED_CALLS }
 }

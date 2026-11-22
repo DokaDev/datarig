@@ -59,6 +59,26 @@ pub trait RiskRules: Sync {
     /// A fresh classifier of text in dialect `d`, its calls judged on the engines `j` says, for
     /// a session that prepared nothing.
     fn new_classifier(&self, d: Dialect, j: Judged) -> Classifier;
+
+    /// Whether the environment's list of functions a read-only profile may call
+    /// (`read_only_functions`, `read_only_extensions`) applies to the engine's sessions.
+    fn read_only_calls(&self) -> Support;
+
+    /// Whether statement `sql`, whose first page shows values written in the session's text
+    /// style, is one the app may run again to learn that style: `Some(true)` when it is,
+    /// `Some(false)` when it is not, `None` on an engine whose results are never checked so.
+    fn rerun_style(&self, sql: &str) -> Option<bool>;
+
+    /// The calls a table's filter may make without asking, and those it may not make.
+    fn filter_calls(&self) -> FilterCalls;
+}
+
+/// The calls a table's filter may make without asking (`allowed`) and those it may not make
+/// (`refused`), each sorted as the filter check looks them up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FilterCalls {
+    pub allowed: &'static [&'static str],
+    pub refused: &'static [&'static str],
 }
 
 /// How an engine's statements stand to the transaction open on a session.

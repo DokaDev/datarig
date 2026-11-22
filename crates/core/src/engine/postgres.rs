@@ -1,9 +1,9 @@
 //! PostgreSQL's row of the registry.
 
 use super::{
-    CancelRules, CountInTx, DdlLock, EngineId, EngineSpec, Fact, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof,
-    RiskRules, ServerFacts, SessionRules, Support, TextRules, Transport, TxAsk, TxNote, TxRefusal, TxRules,
-    TxStatement, TxVerdict,
+    CancelRules, CountInTx, DdlLock, EngineId, EngineSpec, Fact, FilterCalls, OpenVerdict, READ_ONLY_NOT_PROVEN,
+    ReadOnlyProof, RiskRules, ServerFacts, SessionRules, Support, TextRules, Transport, TxAsk, TxNote, TxRefusal,
+    TxRules, TxStatement, TxVerdict,
 };
 use crate::driver::{Hierarchy, SessionRole};
 use crate::profile::dsn::Scheme;
@@ -48,6 +48,20 @@ impl RiskRules for PgRisk {
             // PostgreSQL has no sibling engine: its sessions are judged on its own rules.
             Judged::Own | Judged::WithSibling => Classifier::new(Language::Sql(d)),
         }
+    }
+
+    /// Always: a read-only profile may call what its environment allows.
+    fn read_only_calls(&self) -> Support {
+        Fact::Known(())
+    }
+
+    /// A statement on the re-run allowlist.
+    fn rerun_style(&self, sql: &str) -> Option<bool> {
+        Some(crate::sql::risk::repeat::repeatable(sql).is_ok())
+    }
+
+    fn filter_calls(&self) -> FilterCalls {
+        FilterCalls { allowed: PG_FILTER_CALLS, refused: PG_REFUSED_CALLS }
     }
 }
 
@@ -237,3 +251,127 @@ impl CancelRules for PgCancel {
         Fact::Known(())
     }
 }
+
+/// PostgreSQL built-ins a filter may call without asking, by name: they read their arguments
+/// and nothing else. Sorted.
+pub const PG_FILTER_CALLS: &[&str] = &[
+    "abs",
+    "age",
+    "array_length",
+    "btrim",
+    "cardinality",
+    "ceil",
+    "ceiling",
+    "char_length",
+    "character_length",
+    "concat",
+    "concat_ws",
+    "date_part",
+    "date_trunc",
+    "extract",
+    "floor",
+    "initcap",
+    "isfinite",
+    "json_array_length",
+    "json_extract_path",
+    "json_extract_path_text",
+    "json_typeof",
+    "jsonb_array_length",
+    "jsonb_extract_path",
+    "jsonb_extract_path_text",
+    "jsonb_typeof",
+    "left",
+    "length",
+    "like_escape",
+    "lower",
+    "lpad",
+    "ltrim",
+    "make_date",
+    "md5",
+    "mod",
+    "now",
+    "octet_length",
+    "overlay",
+    "position",
+    "regexp_replace",
+    "replace",
+    "reverse",
+    "right",
+    "round",
+    "rpad",
+    "rtrim",
+    "sign",
+    "split_part",
+    "starts_with",
+    "strpos",
+    "substr",
+    "substring",
+    "timezone",
+    "to_char",
+    "to_date",
+    "to_number",
+    "to_timestamp",
+    "trunc",
+    "upper",
+];
+
+/// PostgreSQL built-ins a filter may not call, by name however qualified: they wait, take
+/// locks, change the session or a sequence, notify, reach another server, or read, list or write
+/// the server's files or its large objects (a filter is one boolean expression with no effect).
+/// Sorted.
+pub const PG_REFUSED_CALLS: &[&str] = &[
+    "dblink",
+    "dblink_connect",
+    "dblink_connect_u",
+    "dblink_exec",
+    "dblink_send_query",
+    "lo_close",
+    "lo_creat",
+    "lo_create",
+    "lo_export",
+    "lo_from_bytea",
+    "lo_get",
+    "lo_import",
+    "lo_lseek",
+    "lo_lseek64",
+    "lo_open",
+    "lo_put",
+    "lo_tell",
+    "lo_tell64",
+    "lo_truncate",
+    "lo_truncate64",
+    "lo_unlink",
+    "loread",
+    "lowrite",
+    "nextval",
+    "pg_advisory_lock",
+    "pg_advisory_lock_shared",
+    "pg_advisory_unlock",
+    "pg_advisory_unlock_all",
+    "pg_advisory_unlock_shared",
+    "pg_advisory_xact_lock",
+    "pg_advisory_xact_lock_shared",
+    "pg_ls_archive_statusdir",
+    "pg_ls_dir",
+    "pg_ls_logdir",
+    "pg_ls_logicalmapdir",
+    "pg_ls_logicalsnapdir",
+    "pg_ls_replslotdir",
+    "pg_ls_summariesdir",
+    "pg_ls_tmpdir",
+    "pg_ls_waldir",
+    "pg_notify",
+    "pg_read_binary_file",
+    "pg_read_file",
+    "pg_sleep",
+    "pg_sleep_for",
+    "pg_sleep_until",
+    "pg_stat_file",
+    "pg_try_advisory_lock",
+    "pg_try_advisory_lock_shared",
+    "pg_try_advisory_xact_lock",
+    "pg_try_advisory_xact_lock_shared",
+    "set_config",
+    "setseed",
+    "setval",
+];

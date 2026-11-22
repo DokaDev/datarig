@@ -114,15 +114,17 @@ impl ResultSet {
         }
     }
 
-    /// Its first page came while its session wrote text in `now`, from statement `sql` (of
-    /// PostgreSQL when `pg`): known at once when no column is `styled`; else, for a statement
-    /// on the plain-read allowlist as far as its text tells, once the server says the rest
-    /// (`text_check`, the number `seq` gives; the question to send, returned); else not known.
+    /// Its first page came while its session wrote text in `now`, from statement `sql` of an
+    /// engine whose classifier rules are `risk`: known at once when no column is `styled`;
+    /// else, for a statement the engine may run again as far as its text tells
+    /// ([`RiskRules::rerun_style`](datarig_core::engine::RiskRules::rerun_style)), once the
+    /// server says the rest (`text_check`, the number `seq` gives; the question to send,
+    /// returned); else not known.
     pub fn first_styled(
         &mut self,
         now: Option<&datarig_core::driver::TextStyle>,
         sql: &str,
-        pg: bool,
+        risk: &dyn datarig_core::engine::RiskRules,
         seq: &mut u64,
     ) -> Option<(u64, String)> {
         self.text_in = None;
@@ -132,7 +134,7 @@ impl ResultSet {
             self.text_in = Some(now.clone());
             return None;
         }
-        if !pg || datarig_core::sql::risk::repeat::repeatable(sql).is_err() {
+        if risk.rerun_style(sql) != Some(true) {
             return None;
         }
         *seq += 1;

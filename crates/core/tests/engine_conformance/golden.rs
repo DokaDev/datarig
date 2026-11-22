@@ -69,16 +69,14 @@ fn classifier_verdicts_are_todays() {
     assert_eq!(got.len(), want.len());
 }
 
-/// The filter check's call lists of each engine, one name per line under its engine and list.
+/// The filter check's call lists of each engine (its classifier rules' `filter_calls`), one
+/// name per line under its engine and list.
 fn filter_calls() -> String {
-    use datarig_core::query::{MYSQL_FILTER_CALLS, MYSQL_REFUSED_CALLS, PG_FILTER_CALLS, PG_REFUSED_CALLS};
+    use datarig_core::engine::EngineId;
     let mut out = String::new();
-    for (engine, allowed, refused) in [
-        ("Postgres", PG_FILTER_CALLS, PG_REFUSED_CALLS),
-        ("MySql", MYSQL_FILTER_CALLS, MYSQL_REFUSED_CALLS),
-        ("MariaDb", MYSQL_FILTER_CALLS, MYSQL_REFUSED_CALLS),
-    ] {
-        for (list, names) in [("allowed", allowed), ("refused", refused)] {
+    for (engine, id) in [("Postgres", EngineId::Postgres), ("MySql", EngineId::MySql), ("MariaDb", EngineId::MariaDb)] {
+        let lists = id.spec().risk.filter_calls();
+        for (list, names) in [("allowed", lists.allowed), ("refused", lists.refused)] {
             for name in names {
                 out.push_str(&format!("{engine} {list} {name}\n"));
             }
@@ -97,4 +95,32 @@ fn the_filter_call_lists_are_todays() {
     }
     let want = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     assert_eq!(got, want, "DATARIG_BLESS=1 cargo test -p datarig-core --test engine_conformance");
+}
+
+/// What each engine's classifier rules answer besides the classifier: whether the environment's
+/// read-only functions apply (PostgreSQL only), whether a styled first page is checked by a
+/// re-run (PostgreSQL only: the allowlist's answer), and that no family risk ever names a call
+/// for the read-only context to look up (so that context is PostgreSQL's alone).
+#[test]
+fn risk_rules_on_every_engine() {
+    use datarig_core::engine::{EngineId, Fact, Why};
+    use datarig_core::sql::risk::mysql::Judged;
+    for id in EngineId::ALL {
+        let risk = id.spec().risk;
+        let pg = *id == EngineId::Postgres;
+        let want = if pg { Fact::Known(()) } else { Fact::No(Why::NotOnEngine) };
+        assert_eq!(risk.read_only_calls(), want, "{id:?}");
+        for (sql, again) in [("SELECT 1", true), ("SELECT random()", false), ("DELETE FROM t", false)] {
+            assert_eq!(risk.rerun_style(sql), pg.then_some(again), "{id:?} {sql}");
+        }
+    }
+    let family = [Dialect::MySql(MySqlMode::default()), Dialect::MariaDb(MySqlMode::default())];
+    for (sql, _) in CORPUS {
+        for d in family {
+            for judged in [Judged::Own, Judged::WithSibling] {
+                let risk = d.engine().spec().risk.new_classifier(d, judged).classify(sql);
+                assert!(risk.unchecked_calls.is_empty(), "{d:?} {judged:?} {sql}: {:?}", risk.unchecked_calls);
+            }
+        }
+    }
 }
