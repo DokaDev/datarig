@@ -444,3 +444,19 @@ fn line_comments_another_database_may_read_stay_in_the_field() {
     // Other line comments go as before.
     assert_eq!(join_statements(Dbms::Postgres, &["SET a.b = 1 -- one".to_string()]), "SET a.b = 1");
 }
+
+/// A statement that ends in a line comment the field keeps keeps its line break when another
+/// statement follows it: the field splits into the same statements again.
+#[test]
+fn a_kept_line_comment_at_a_statements_end_keeps_its_line_break_before_the_next() {
+    for dbms in [Dbms::Postgres, Dbms::MySql] {
+        let sql = ["SET @a = 1 -- /*! note */".to_string(), "SET @b = 2".to_string()];
+        let field = join_statements(dbms, &sql);
+        assert_eq!(field, "SET @a = 1 -- /*! note */\n; SET @b = 2", "{dbms:?}");
+        assert_eq!(split_statements(dbms, &field), sql, "{dbms:?}");
+    }
+    let sql = ["SET a.b = 5--1".to_string(), "SET c.d = 2".to_string()];
+    assert_eq!(join_statements(Dbms::Postgres, &sql), "SET a.b = 5--1\n; SET c.d = 2");
+    // The last statement ends without one.
+    assert_eq!(join_statements(Dbms::Postgres, &["SET a.b = 5--1".to_string()]), "SET a.b = 5--1");
+}
