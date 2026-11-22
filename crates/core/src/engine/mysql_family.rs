@@ -67,8 +67,8 @@ fn reads_dollar_quotes(engine: EngineId, v: Version) -> DollarQuotes {
 }
 
 /// A fresh classifier of text in dialect `d` of a family session, judged on the engines `j`
-/// says: on its own engine's lists, or with the sibling's too. Each engine's [`RiskRules`]
-/// builds its classifiers with it.
+/// says: on its own engine's lists, or with the sibling's too. Each engine's
+/// [`RiskRules`](super::RiskRules) builds its classifiers with it.
 pub(super) fn family_classifier(d: Dialect, j: Judged) -> Classifier {
     match j {
         Judged::Own => Classifier::new(Language::Sql(d)),
