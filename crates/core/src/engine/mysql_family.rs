@@ -2,9 +2,8 @@
 //! the rules the two engines share.
 
 use super::{
-    CancelRules, CountInTx, EngineFacts, EngineId, Fact, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, RiskRules,
-    ServerFacts, SessionRules, Support, TextRules, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, Version,
-    Why,
+    CancelRules, CountInTx, EngineFacts, EngineId, Fact, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, ServerFacts,
+    SessionRules, Support, TextRules, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, Version, Why,
 };
 use crate::driver::SessionRole;
 use crate::sql::dialect::{Dialect, DollarQuotes, Language};
@@ -67,20 +66,18 @@ fn reads_dollar_quotes(engine: EngineId, v: Version) -> DollarQuotes {
     }
 }
 
-/// How MySQL's and MariaDB's statements are judged.
-pub(super) struct FamilyRisk;
-
-impl RiskRules for FamilyRisk {
-    fn new_classifier(&self, d: Dialect, j: Judged) -> Classifier {
-        match j {
-            Judged::Own => Classifier::new(Language::Sql(d)),
-            Judged::WithSibling => match d {
-                Dialect::MySql(mode) => Classifier::MySql(mode, j),
-                Dialect::MariaDb(mode) => Classifier::MariaDb(mode, j),
-                // Never a dialect of the family's sessions: its own classifier.
-                Dialect::Postgres => Classifier::new(Language::Sql(d)),
-            },
-        }
+/// A fresh classifier of text in dialect `d` of a family session, judged on the engines `j`
+/// says: on its own engine's lists, or with the sibling's too. Each engine's [`RiskRules`]
+/// builds its classifiers with it.
+pub(super) fn family_classifier(d: Dialect, j: Judged) -> Classifier {
+    match j {
+        Judged::Own => Classifier::new(Language::Sql(d)),
+        Judged::WithSibling => match d {
+            Dialect::MySql(mode) => Classifier::MySql(mode, j),
+            Dialect::MariaDb(mode) => Classifier::MariaDb(mode, j),
+            // Never a dialect of the family's sessions: its own classifier.
+            Dialect::Postgres => Classifier::new(Language::Sql(d)),
+        },
     }
 }
 
