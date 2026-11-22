@@ -246,3 +246,126 @@ fn legacy_answers_follow_the_greeting_when_the_line_names_the_other_engine() {
         assert_eq!(i.version, Fact::Unknown(Why::EnginesDisagree), "{g:?}");
     }
 }
+
+/// The servers the session's set-up is recorded for: MySQL and MariaDB around each version its
+/// statements depend on.
+const SET_UP_SERVERS: [(bool, (u16, u16, u16)); 7] = [
+    (false, (8, 0, 0)),
+    (false, (8, 0, 40)),
+    (false, (8, 4, 6)),
+    (true, (10, 6, 0)),
+    (true, (11, 0, 6)),
+    (true, (11, 1, 0)),
+    (true, (11, 4, 13)),
+];
+
+/// Every statement and message of a session's set-up on each of [`SET_UP_SERVERS`], one per
+/// line: whether the version is supported, the settings by role, read-only policy and limit,
+/// the read-only question and its message, and the question for what the server did not report.
+fn session_set_up_texts() -> String {
+    use crate::session::{Settings, ask_read_only, ask_unreported, init_sql, not_read_only};
+    use datarig_core::driver::SessionRole;
+    let mut out = String::new();
+    let mut line = |what: String, text: String| {
+        out.push_str(&what);
+        out.push_str(": ");
+        out.push_str(&text);
+        out.push('\n');
+    };
+    // The floors and an unread version.
+    for (mariadb, version) in [(false, (0, 0, 0)), (false, (5, 7, 44)), (true, (0, 0, 0)), (true, (10, 5, 27))] {
+        let server = Server { version, mariadb };
+        line(format!("check {}", server.label()), format!("{:?}", server.check()));
+    }
+    for (mariadb, version) in SET_UP_SERVERS {
+        let server = Server { version, mariadb };
+        let name = server.label();
+        line(format!("check {name}"), format!("{:?}", server.check()));
+        for role in [SessionRole::Query, SessionRole::Meta, SessionRole::Monitor] {
+            for read_only in [false, true] {
+                for select_limit in [None, Some(501)] {
+                    for lock_wait in [None, Some(7)] {
+                        for wait_timeout in [None, Some(360)] {
+                            let s = Settings { role, read_only, select_limit, lock_wait, wait_timeout };
+                            line(
+                                format!(
+                                    "init_sql {name} {role:?} read_only={read_only} select_limit={select_limit:?} \
+                                     lock_wait={lock_wait:?} wait_timeout={wait_timeout:?}"
+                                ),
+                                init_sql(&server, &s),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        line(format!("ask_read_only {name}"), ask_read_only(&server));
+        let answered = (Some("0".to_string()), Some("1".to_string()), Some("0".to_string()));
+        line(format!("not_read_only {name} reported OFF"), not_read_only(&server, Some("OFF"), &answered));
+        line(format!("not_read_only {name} reported none"), not_read_only(&server, None, &(None, None, None)));
+        line(format!("ask_unreported {name}"), ask_unreported(&server));
+    }
+    out
+}
+
+#[test]
+fn init_sql_is_todays_for_every_role_engine_and_version() {
+    let got = session_set_up_texts();
+    let want = include_str!("golden/session_set_up.txt");
+    let (got, want): (Vec<&str>, Vec<&str>) = (got.lines().collect(), want.lines().collect());
+    for (n, (got, want)) in got.iter().zip(&want).enumerate() {
+        assert_eq!(got, want, "line {}", n + 1);
+    }
+    assert_eq!(got.len(), want.len());
+}
+
+#[test]
+fn the_family_names_session_variables_by_version() {
+    let (tx, transaction) = (("tx_read_only", "tx_isolation"), ("transaction_read_only", "transaction_isolation"));
+    let v = |a, b, c| Fact::Known(Version::new(a, b, c));
+    // What each engine names on a version it was told, and on one it was not: MariaDB takes its
+    // older names, which every version it serves has; MySQL has one name on every version.
+    let rows = [
+        (EngineId::MariaDb, v(10, 6, 0), tx),
+        (EngineId::MariaDb, v(11, 0, 6), tx),
+        (EngineId::MariaDb, v(11, 1, 0), transaction),
+        (EngineId::MariaDb, v(11, 4, 13), transaction),
+        (EngineId::MariaDb, Fact::Unknown(Why::VersionUnknown), tx),
+        (EngineId::MariaDb, Fact::Unknown(Why::VersionsDisagree), tx),
+        (EngineId::MariaDb, Fact::Unknown(Why::EnginesDisagree), tx),
+        (EngineId::MariaDb, Fact::Unknown(Why::NotChecked), tx),
+        (EngineId::MariaDb, Fact::No(Why::NotOnEngine), tx),
+        (EngineId::MySql, v(8, 0, 0), transaction),
+        (EngineId::MySql, v(8, 0, 40), transaction),
+        (EngineId::MySql, v(8, 4, 6), transaction),
+        (EngineId::MySql, Fact::Unknown(Why::VersionUnknown), transaction),
+        (EngineId::MySql, Fact::Unknown(Why::VersionsDisagree), transaction),
+        (EngineId::MySql, Fact::Unknown(Why::EnginesDisagree), transaction),
+        (EngineId::MySql, Fact::Unknown(Why::NotChecked), transaction),
+        (EngineId::MySql, Fact::No(Why::NotOnEngine), transaction),
+    ];
+    for (engine, version, (read_only, isolation)) in rows {
+        let f = family(engine);
+        assert_eq!(f.engine(), engine);
+        assert_eq!(f.read_only_var(&version), read_only, "{engine:?} {version:?}");
+        assert_eq!(f.isolation_var(&version), isolation, "{engine:?} {version:?}");
+    }
+    // The rest of a session's set-up does not depend on the version.
+    assert_eq!(family(EngineId::MySql).statement_timeout(5_000), "SESSION max_execution_time = 5000");
+    assert_eq!(family(EngineId::MariaDb).statement_timeout(5_000), "SESSION max_statement_time = 5");
+    assert_eq!(family(EngineId::MySql).super_read_only(), Some("super_read_only"));
+    assert_eq!(family(EngineId::MariaDb).super_read_only(), None);
+    assert_eq!(family(EngineId::MySql).min_version(), Version::new(8, 0, 0));
+    assert_eq!(family(EngineId::MariaDb).min_version(), Version::new(10, 6, 0));
+    // Never this driver's engine: MySQL's rules.
+    assert_eq!(family(EngineId::Postgres).engine(), EngineId::MySql);
+    // A greeting's server asks the family of its engine, by the greeting's version.
+    for (mariadb, version) in SET_UP_SERVERS {
+        let server = Server { version, mariadb };
+        let (major, minor, patch) = version;
+        let known = Fact::Known(Version::new(major, minor, patch));
+        assert_eq!(server.family().engine(), engine_of(mariadb));
+        assert_eq!(server.read_only_var(), server.family().read_only_var(&known));
+        assert_eq!(server.isolation_var(), server.family().isolation_var(&known));
+    }
+}
