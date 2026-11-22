@@ -94,6 +94,8 @@ fn the_filter_call_lists_are_todays() {
         std::fs::write(&path, &got).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     }
     let want = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    // Line by line: a checkout may end the file's lines with `\r\n`.
+    let (got, want): (Vec<&str>, Vec<&str>) = (got.lines().collect(), want.lines().collect());
     assert_eq!(got, want, "DATARIG_BLESS=1 cargo test -p datarig-core --test engine_conformance");
 }
 
