@@ -170,6 +170,10 @@ pub enum DbError {
     /// and in its `VERSION()` line that it does not, or the other way round, so where the
     /// server would end its statements is not known. Nothing of the command was sent.
     DollarQuotesUnknown,
+    /// A text holding MariaDB's own executable comment (`/*M! … */`) was not sent: the session's
+    /// server is MariaDB, or may be, and datarig does not read what MariaDB runs of such a
+    /// comment. `/*! … */` is the form to use. Nothing of the command was sent.
+    CommentUnsupported,
     /// The command was judged on fewer engines' rules than the session's server's reports name
     /// (the app judged it before the session said its greeting and `VERSION()` name two
     /// engines): nothing of it was sent. Run again, it is judged anew.
@@ -428,6 +432,7 @@ impl DbError {
             | DbError::CopyStdio
             | DbError::CappedOutcome
             | DbError::DollarQuotesUnknown
+            | DbError::CommentUnsupported
             | DbError::ReportsChanged
             | DbError::CopyStarted
             | DbError::NotRepeatable(_)

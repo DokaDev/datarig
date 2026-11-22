@@ -105,7 +105,7 @@ use datarig_core::driver::{
 };
 use datarig_core::engine::{Fact, ServerFacts, Version};
 use datarig_core::sql::dialect::{Dialect, DollarQuotes};
-use datarig_core::sql::lexer::mysql::has_dollar_opener;
+use datarig_core::sql::lexer::mysql::{has_dollar_opener, has_m_bang};
 use datarig_core::sql::lexer::{Tok, Token, lex_in};
 use datarig_core::sql::risk::mysql::{self as risk, Judge, Judged};
 use datarig_core::sql::risk::repeat::NotRepeatable;
@@ -556,6 +556,18 @@ pub(crate) async fn query_loop(
             }
             continue;
         }
+        // MariaDB's own executable comments are not read: a session whose server is MariaDB, or
+        // may be, sends no text the user wrote that holds the bytes `/*M!`, and the command fails
+        // at once.
+        if let Next::Command(cmd) = &next
+            && s.dialect.engine().spec().risk.refuses_m_bang(s.judged)
+            && user_written(cmd).into_iter().any(has_m_bang)
+        {
+            if let Some(answer) = cmd.unsent(DbError::CommentUnsupported, false) {
+                let _ = events.send(answer);
+            }
+            continue;
+        }
         // Judged on fewer engines' rules than the session's server's reports name (the app
         // judged it before the session said so): nothing of it is sent, and the user runs it
         // again, judged anew.
@@ -725,6 +737,42 @@ fn user_text(cmd: &DbCommand) -> Vec<&str> {
         | DbCommand::MonitorAction { .. }
         | DbCommand::MonitorFollowUp { .. } => Vec::new(),
         DbCommand::Judged { command, .. } => user_text(command),
+    }
+}
+
+/// The text of command `cmd` as the user wrote it: a run's statements, a statement run again for
+/// its next page, a statement checked before it is run again. Not the text the app writes around
+/// values it quotes itself (an Apply's statements, an edit's checks, an export's and a count's
+/// text around a result that ran already, an export's next chunk), nor a command with no text.
+fn user_written(cmd: &DbCommand) -> Vec<&str> {
+    match cmd {
+        DbCommand::Execute { statements, .. } => statements.iter().map(String::as_str).collect(),
+        DbCommand::Resume { sql, .. } | DbCommand::CheckRepeat { sql, .. } => vec![sql.as_str()],
+        DbCommand::Count { .. }
+        | DbCommand::GroupCount { .. }
+        | DbCommand::Estimate { .. }
+        | DbCommand::Export { .. }
+        | DbCommand::ApplyEdits { .. }
+        | DbCommand::EndTx { .. }
+        | DbCommand::FetchMore { .. }
+        | DbCommand::ClosePortal { .. }
+        | DbCommand::ServerSession { .. }
+        | DbCommand::LoadSchemas
+        | DbCommand::LoadObjects { .. }
+        | DbCommand::LoadCatalog
+        | DbCommand::LoadKeys
+        | DbCommand::LoadDatabases
+        | DbCommand::LoadTypeKinds { .. }
+        | DbCommand::LoadExtensionFunctions { .. }
+        | DbCommand::LoadStructure { .. }
+        | DbCommand::LoadTableKeys { .. }
+        | DbCommand::LoadDdl { .. }
+        | DbCommand::MonitorTick { .. }
+        | DbCommand::MonitorQueryText { .. }
+        | DbCommand::MonitorReplication { .. }
+        | DbCommand::MonitorAction { .. }
+        | DbCommand::MonitorFollowUp { .. } => Vec::new(),
+        DbCommand::Judged { command, .. } => user_written(command),
     }
 }
 

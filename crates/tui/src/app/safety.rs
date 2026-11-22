@@ -280,6 +280,19 @@ impl App {
         Some(Notice::new(Msg::SafetyCopyStdio { sql }, Level::Error))
     }
 
+    /// MariaDB's own executable comments are not read: statements the user wrote (a run's: the
+    /// editor's, a table tab's filter text) holding the bytes `/*M!`
+    /// ([`datarig_core::sql::lexer::mysql::has_m_bang`]) are refused where MariaDB may run them,
+    /// under the tab's rules as they are now (a run that waited for its connection too). Values the
+    /// app writes itself never hold them ([`datarig_core::query::render`] writes such a value as
+    /// its bytes), and text the app writes around a result that ran already is not checked.
+    pub(super) fn m_bang_refusal(&self, tab: TabId, statements: &[String]) -> Option<Notice> {
+        if !statements.iter().any(|s| datarig_core::sql::lexer::mysql::has_m_bang(s)) {
+            return None;
+        }
+        self.classifier(tab).refuses_m_bang().then(|| Notice::new(Label::EngineCommentUnsupported, Level::Error))
+    }
+
     /// The classifier of tab `tab`, with the statements its session has prepared (none without
     /// a session): each run's statements are checked in order against a copy, so an `EXPLAIN`
     /// or `EXECUTE` sees what the run prepared before it.
@@ -325,8 +338,15 @@ impl App {
 
     /// Ask before `statements` run in tab `id` (bound to profile `pid`); `items` are the ones
     /// that ask.
-    pub(super) fn ask_before_run(&mut self, id: TabId, pid: ProfileId, statements: Vec<String>, items: Vec<Dangerous>) {
-        self.ask_before_run_as(id, pid, statements, items, false)
+    pub(super) fn ask_before_run(
+        &mut self,
+        id: TabId,
+        pid: ProfileId,
+        statements: Vec<String>,
+        items: Vec<Dangerous>,
+        read_in: Dialect,
+    ) {
+        self.ask_before_run_as(id, pid, statements, items, false, read_in)
     }
 
     /// [`App::ask_before_run`]; `as_is`: the statements are to run as they are, outside any
@@ -338,6 +358,7 @@ impl App {
         statements: Vec<String>,
         items: Vec<Dangerous>,
         as_is: bool,
+        read_in: Dialect,
     ) {
         let Some((binding, generation)) = self.tabs.get(id).map(|t| (t.binding, t.exec.generation)) else { return };
         self.overlays.close(OverlayKind::Commands);
@@ -349,6 +370,7 @@ impl App {
             profile: pid,
             binding,
             statements,
+            read_in,
             items,
             run_focused: false,
             as_is,
@@ -408,7 +430,7 @@ impl App {
         let same_session = |t: &Tab| !c.as_is || (t.exec.generation == c.generation && t.exec.session.is_some());
         match self.tabs.get(c.tab).map(|t| (t.profile, t.binding, same_session(t))) {
             Some((Some(p), b, true)) if p == c.profile && b == c.binding => {
-                self.run_approved_as(c.tab, c.statements, c.as_is, c.approved)
+                self.run_approved_as(c.tab, c.statements, c.as_is, c.approved, c.read_in)
             }
             Some(_) => {
                 self.unstage_run(c.tab);

@@ -678,3 +678,26 @@ fn the_shown_id_is_for_display_only() {
     assert_eq!(own_answer_of(None, false, 7), (OwnSession::NotKnown, None));
     assert_eq!(own_answer_of(None, true, u64::MAX), (OwnSession::NotKnown, None), "no id to show");
 }
+
+/// Only text the user wrote is checked for MariaDB's own executable comments: a run's
+/// statements, a statement run again or checked before it is; not a count or an export the app
+/// writes around values it quotes itself.
+#[test]
+fn only_user_written_text_is_checked_for_mariadb_comments() {
+    use datarig_core::driver::{DbCommand, PagingMode, TxRule};
+    let sql = "SELECT '/*M!' AS v".to_string();
+    let run = DbCommand::Execute {
+        id: 1,
+        statements: vec![sql.clone()],
+        paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
+        max_rows: None,
+    };
+    assert_eq!(user_written(&run), [sql.as_str()]);
+    let check = DbCommand::CheckRepeat { id: 2, sql: sql.clone() };
+    assert_eq!(user_written(&check), [sql.as_str()]);
+    let count = DbCommand::Count { id: 3, sql: "SELECT COUNT(*) FROM t WHERE `v` = '/*M!'".into(), limit: None };
+    assert!(user_written(&count).is_empty());
+    let judged = DbCommand::Judged { judged: Judged::WithSibling, command: Box::new(count) };
+    assert!(user_written(&judged).is_empty());
+}

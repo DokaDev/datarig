@@ -1,5 +1,5 @@
 use super::super::{LexState, Tok, lex_from, lex_in};
-use super::has_dollar_opener;
+use super::{has_dollar_opener, has_m_bang};
 use crate::sql::dialect::{Dialect, DollarQuotes, MySqlMode};
 
 const MY: Dialect = Dialect::MySql(MySqlMode {
@@ -445,4 +445,23 @@ fn a_backslash_at_a_line_end_is_dropped() {
     assert_eq!(kinds("select 1 \\"), [(Tok::Keyword, "select"), (Tok::Number, "1")]);
     let crlf = "\\\r\ndelimiter $$\r\nselect 6$$";
     assert_eq!(kinds(crlf)[0], (Tok::Directive, "delimiter $$\r"));
+}
+
+/// `/*M!` counts wherever its bytes are, with no reading of the text: in a string, a quoted name
+/// or a comment too. Uppercase `M` only, as MariaDB reads it.
+#[test]
+fn a_mariadb_comment_counts_wherever_its_bytes_are() {
+    for text in [
+        "SELECT 1 /*M! , 2 */",
+        "/*M!100500 SET @a = 1 */",
+        "SELECT 1 /*!99999 ' */ /*M! , 2 */",
+        "SELECT '/*M!' AS v",
+        "SELECT 1 AS `/*M!`",
+        "SELECT 1 -- /*M!",
+    ] {
+        assert!(has_m_bang(text), "{text}");
+    }
+    for text in ["SELECT 1 /*m! , 2 */", "SELECT 1 /*! , 2 */", "SELECT '/*' 'M!'"] {
+        assert!(!has_m_bang(text), "{text}");
+    }
 }

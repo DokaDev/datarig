@@ -65,6 +65,7 @@
 "profiles.deleted_tx" = { one = "Deleted {name}; its tab closed and its open transaction was rolled back", other = "Deleted {name}; its {count} tabs closed and their open transactions were rolled back" }
 "profiles.deleted_query_tx" = { one = "Deleted {name}; its tab closed, its running query was cancelled and its open transaction rolled back", other = "Deleted {name}; its {count} tabs closed, their running queries were cancelled and open transactions rolled back" }
 "profiles.deleted_queued" = { one = "Deleted {name}; its tab closed and the statement waiting for it was dropped", other = "Deleted {name}; its {count} tabs closed and the statements waiting for it were dropped" }
+"profiles.connection_in_use" = "Not saved: a tab on this profile has an open transaction, pending changes or a running statement. End them before changing where this profile connects."
 "form.section.basic" = "Basic"
 "form.section.ssh" = "SSH"
 "form.section.advanced" = "Advanced"

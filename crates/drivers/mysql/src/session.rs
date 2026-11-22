@@ -762,6 +762,16 @@ pub(crate) async fn open(
             DbError::SessionSql { index, statement: sql.clone(), error: Box::new(DbError::DollarQuotesUnknown) };
         return Err((error, false));
     }
+    // Nor, where MariaDB may run them, one that holds the characters of MariaDB's own executable
+    // comment (`/*M!`), as any other text the user wrote.
+    let maria = facts.engine().spec().risk.refuses_m_bang(judged);
+    let m_bang =
+        session_sql.iter().enumerate().find(|(_, sql)| maria && datarig_core::sql::lexer::mysql::has_m_bang(sql));
+    if let Some((index, sql)) = m_bang {
+        quit(conn).await;
+        let error = DbError::SessionSql { index, statement: sql.clone(), error: Box::new(DbError::CommentUnsupported) };
+        return Err((error, false));
+    }
     // The version the session's settings are named by.
     let version = crate::engine::session_version(&facts);
     let mut tracked = Tracked::default();

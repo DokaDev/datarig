@@ -478,8 +478,10 @@ fn text_literal(t: &Target, s: &str) -> String {
             format!("E'{body}'")
         }
         Dialect::Postgres => d.quote_literal(s),
+        // A value holding the characters `/*M!` (MariaDB's own executable comment) is written as
+        // its bytes too: a MariaDB session refuses text that holds them as typed.
         Dialect::MySql(_) | Dialect::MariaDb(_)
-            if t.utf8mb4 && !s.contains(['\\', '\0']) && !s.contains(LINE_BREAKS) =>
+            if t.utf8mb4 && !s.contains(['\\', '\0']) && !s.contains(LINE_BREAKS) && !s.contains("/*M!") =>
         {
             d.quote_literal(s)
         }

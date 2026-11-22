@@ -178,3 +178,16 @@ fn lex_in_postgres_is_lex() {
         assert_eq!(Dialect::Postgres.is_keyword(w), is_keyword(w), "{w}");
     }
 }
+
+/// DDL inside MariaDB's own executable comment is a comment to MySQL, which runs none of it: the
+/// schema is not read again for it there. (On a session where MariaDB may run it, the text is
+/// refused before it is sent.) MySQL's own `/*! … */` counts as before.
+#[test]
+fn ddl_in_a_mariadb_comment_changes_no_schema_on_mysql() {
+    use crate::sql::dialect::MySqlMode;
+    let d = Dialect::MySql(MySqlMode::default());
+    assert!(!changes_schema_in("/*M! CREATE TABLE t (a INT) */", d));
+    assert!(!changes_schema_in("/*M!100500 DROP TABLE t */", d));
+    assert!(changes_schema_in("/*! CREATE TABLE t (a INT) */", d));
+    assert!(changes_schema_in("/*M! x */ CREATE TABLE t (a INT)", d));
+}

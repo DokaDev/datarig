@@ -57,21 +57,30 @@ impl App {
     /// connection asks for one first (quick connect); a tab whose profile is not connected
     /// connects it and runs once it is.
     pub(in crate::app) fn run_in(&mut self, id: TabId, statements: Vec<String>) {
+        let read_in = self.tab_dialect(id);
+        self.run_read_in(id, statements, read_in);
+    }
+
+    /// [`App::run_in`] for `statements` read in dialect `read_in`.
+    pub(in crate::app) fn run_read_in(&mut self, id: TabId, statements: Vec<String>, read_in: Dialect) {
         if self.tab_busy(id) {
             self.flash_busy();
             return;
         }
         let Some(t) = self.tabs.get(id) else { return };
         let Some(pid) = t.profile else {
-            return self.open_quick(QuickPurpose::Bind { tab: id, run: Some(statements) });
+            return self.open_quick(QuickPurpose::Bind { tab: id, run: Some((statements, read_in)) });
         };
         // A run replaces the tab's results, and their pending changes with them: asked first.
         if self.ask_leave(crate::app::edit::Leave::Run(id)) {
-            self.pending_leave = Some((id, statements));
+            self.pending_leave = Some((id, statements, read_in));
+            return;
+        }
+        if self.read_elsewhere(id, read_in) {
             return;
         }
         // Checked before anything is queued or sent.
-        if let Some(refused) = self.unsupported(id, &statements) {
+        if let Some(refused) = self.m_bang_refusal(id, &statements).or_else(|| self.unsupported(id, &statements)) {
             self.unstage_run(id);
             return self.tab_status(id, refused);
         }
@@ -92,16 +101,34 @@ impl App {
         let items =
             crate::app::safety::with_tx_reasons(self.dangerous(id, pid, &statements), &statements, check.reasons);
         if !items.is_empty() {
-            return self.ask_before_run(id, pid, statements, items);
+            return self.ask_before_run(id, pid, statements, items, read_in);
         }
-        self.run_approved(id, statements);
+        self.run_approved(id, statements, read_in);
     }
 
     /// Run `statements` in tab `id` once the checks passed or the user confirmed them: on its
     /// session, or queued until its profile connects. Right before they are sent they are
     /// judged again from scratch, under the rules the tab has then ([`App::run_approved_as`]).
-    pub(in crate::app) fn run_approved(&mut self, id: TabId, statements: Vec<String>) {
-        self.run_approved_as(id, statements, false, Vec::new())
+    pub(in crate::app) fn run_approved(&mut self, id: TabId, statements: Vec<String>, read_in: Dialect) {
+        self.run_approved_as(id, statements, false, Vec::new(), read_in)
+    }
+
+    /// Whether statements read in dialect `read_in` are for another kind of database than tab
+    /// `id`'s now: they are not sent, and the tab says to run them again (they are split again
+    /// when the database kind changes).
+    pub(in crate::app) fn read_elsewhere(&mut self, id: TabId, read_in: Dialect) -> bool {
+        let now = self.tab_dialect(id);
+        self.read_for_other(id, read_in, now)
+    }
+
+    /// [`App::read_elsewhere`] against dialect `now` (the tab's, or its session's).
+    fn read_for_other(&mut self, id: TabId, read_in: Dialect, now: Dialect) -> bool {
+        if same_kind(read_in, now) {
+            return false;
+        }
+        self.unstage_run(id);
+        self.tab_status(id, Notice::new(Label::QueryReadForOtherDatabase, Level::Warning));
+        true
     }
 
     /// [`App::run_approved`]; `as_is`: with manual commit, every statement runs as it is (no
@@ -120,16 +147,27 @@ impl App {
         statements: Vec<String>,
         as_is: bool,
         confirmed: Vec<crate::app::safety::Dangerous>,
+        read_in: Dialect,
     ) {
         if self.tab_busy(id) {
             self.flash_busy();
             return;
         }
         let Some(pid) = self.tabs.get(id).and_then(|t| t.profile) else { return };
+        // Checked where every run ends (one that waited for its connection or its confirmation
+        // too).
+        if self.read_elsewhere(id, read_in) {
+            return;
+        }
         // A table tab's filter checked again as the policy is now (it may have waited for the
         // connection while the environment changed).
         if !self.table_pending_holds(id, &statements) {
             return self.unstage_run(id);
+        }
+        // Refused for MariaDB's own executable comments first, as a new run is.
+        if let Some(refused) = self.m_bang_refusal(id, &statements) {
+            self.unstage_run(id);
+            return self.tab_status(id, refused);
         }
         // The allowed extensions' functions, if this connection has not asked for them yet.
         self.ask_extension_functions(pid);
@@ -149,7 +187,7 @@ impl App {
             && self.conns.get(pid).is_none_or(|c| c.resolved.is_none() || c.idle_closed.is_some())
         {
             // Bound to this tab, this profile and this tab generation.
-            let q = Queued { tab: id, profile: pid, binding: t.binding, statements, confirmed };
+            let q = Queued { tab: id, profile: pid, binding: t.binding, statements, confirmed, read_in };
             let c = self.conns.entry(pid);
             c.pending.push(q);
             if c.connecting.is_none() {
@@ -160,9 +198,16 @@ impl App {
         if t.exec.session.is_none() && !self.open_query_session(id) {
             return self.unstage_run(id);
         }
+        // And against the session it goes to (one just opened too).
+        let session = self.tabs.get(id).and_then(|t| t.exec.session.as_ref()).map(|s| s.caps.language.dialect());
+        if let Some(now) = session
+            && self.read_for_other(id, read_in, now)
+        {
+            return;
+        }
         // Judged again on the session it goes to, under its rules as they are now (a run that
         // waited for its connection or for the user's answer).
-        if let Some(refused) = self.unsupported(id, &statements) {
+        if let Some(refused) = self.m_bang_refusal(id, &statements).or_else(|| self.unsupported(id, &statements)) {
             self.unstage_run(id);
             return self.tab_status(id, refused);
         }
@@ -174,7 +219,7 @@ impl App {
         let items =
             crate::app::safety::with_tx_reasons(self.dangerous(id, pid, &statements), &statements, check.reasons);
         if !items.iter().all(|i| crate::app::safety::covers(&confirmed, i)) {
-            return self.ask_before_run_as(id, pid, statements, items, as_is);
+            return self.ask_before_run_as(id, pid, statements, items, as_is, read_in);
         }
         // A table tab's read, checked again right before it is sent on the session it goes to
         // (its state as it is now, a session still opening as not known yet): one that locks
@@ -314,4 +359,10 @@ impl App {
         }
         true
     }
+}
+
+/// Whether dialects `a` and `b` are of the same kind of database (a MySQL sql mode may differ,
+/// and MySQL and MariaDB are one kind): as their engines' specs say.
+fn same_kind(a: Dialect, b: Dialect) -> bool {
+    a.engine().spec().preset_key == b.engine().spec().preset_key
 }

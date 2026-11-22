@@ -49,4 +49,9 @@ impl RiskRules for MariadbRisk {
     fn filter_calls(&self) -> FilterCalls {
         family_filter_calls()
     }
+
+    /// Always: MariaDB runs what the comment holds.
+    fn refuses_m_bang(&self, _: Judged) -> bool {
+        true
+    }
 }

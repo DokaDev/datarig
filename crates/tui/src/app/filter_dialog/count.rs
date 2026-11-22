@@ -101,6 +101,14 @@ impl App {
         let kept_expr = d.draft.where_.terms().iter().any(|term| {
             term.is_expr() && term.text.as_deref().is_some_and(|x| values::mentions(x, &c.name, d.dialect))
         });
+        // What the user typed in the draft (its expressions) is their text: refused where the
+        // session refuses it (MariaDB's own executable comments). Values the dialog writes
+        // itself are not.
+        let typed: Vec<String> =
+            d.draft.where_.terms().iter().filter(|t| t.is_expr()).filter_map(|t| t.text.clone()).collect();
+        if let Some(n) = self.m_bang_refusal(tab, &typed) {
+            return Err(n);
+        }
         let pid = scope.profile;
         let read_only = self.read_only(pid);
         let classifier = self.classifier(tab);

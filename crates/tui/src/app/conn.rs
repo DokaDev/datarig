@@ -59,6 +59,8 @@ pub struct Queued {
     /// What the user saw and said yes to before it was queued (nothing: not asked): judged
     /// again when it is sent, anything more that asks is asked again.
     pub confirmed: Vec<super::safety::Dangerous>,
+    /// The dialect the statements were read in.
+    pub read_in: datarig_core::sql::dialect::Dialect,
 }
 
 /// The key constraints of a profile's tables. Not knowing them is never taken for "no keys":

@@ -1,16 +1,17 @@
 //! Statement splitter. Splits on `;` outside strings, quoted identifiers,
 //! dollar bodies and comments (as the text's dialect lexes them; in MySQL, on the terminator a
 //! client `DELIMITER` line set, and the line itself is no statement). Comment/whitespace-only
-//! pieces are not statements.
+//! pieces are not statements. An executable comment (`/*! … */`, MariaDB's `/*M! … */`), or a
+//! comment that holds one, is never left out of a statement, in any dialect.
 
 use super::dialect::Dialect;
 use super::lexer::{LexState, Tok, lex_from};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Statement {
-    /// First non-trivia byte.
+    /// First byte of code (not a blank or a plain comment).
     pub start: usize,
-    /// End of the last non-trivia token before the terminating `;` (exclusive).
+    /// End of the last token of code before the terminating `;` (exclusive).
     pub body_end: usize,
     /// End including the `;` when present (exclusive).
     pub end: usize,
@@ -44,8 +45,12 @@ pub fn split_from(src: &str, d: Dialect, state: LexState) -> Vec<Statement> {
                 out.push(Statement { start: s, body_end, end: t.end });
             }
         } else if t.kind == Tok::Directive {
-            // A client command comes only where no statement has begun.
-        } else if !t.is_trivia() {
+            // A client command comes only where no statement has begun, or after executable
+            // comments that no `;` ended: they are a statement of their own.
+            if let Some(s) = start.take() {
+                out.push(Statement { start: s, body_end, end: body_end });
+            }
+        } else if !t.is_trivia() || is_executable_comment(t.text(src)) {
             start.get_or_insert(t.start);
             body_end = t.end;
         }
@@ -54,6 +59,13 @@ pub fn split_from(src: &str, d: Dialect, state: LexState) -> Vec<Statement> {
         out.push(Statement { start: s, body_end, end: body_end });
     }
     out
+}
+
+/// A comment that is, or holds, an executable comment (MySQL's and MariaDB's `/*! … */`,
+/// MariaDB's `/*M! … */`, versioned too). Kept in a statement whatever the text's dialect: the
+/// server may be of another kind than the reading.
+pub fn is_executable_comment(comment: &str) -> bool {
+    comment.contains("/*!") || comment.contains("/*M!")
 }
 
 /// Statement under the cursor: the one whose `[start, end]` contains it (so "right after `;`"

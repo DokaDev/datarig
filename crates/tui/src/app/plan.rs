@@ -593,6 +593,10 @@ impl App {
         {
             return self.tab_status(id, refused);
         }
+        // Refused now too when the session would refuse it (MariaDB's own executable comments).
+        if let Some(refused) = self.m_bang_refusal(id, &[json.statement.clone(), json.sql.clone()]) {
+            return self.tab_status(id, refused);
+        }
         let p = AsPlan {
             tab: id,
             binding: t.binding,

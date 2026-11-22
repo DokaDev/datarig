@@ -253,6 +253,14 @@ pub fn has_dollar_opener(text: &str) -> bool {
     false
 }
 
+/// Whether `text` holds the bytes of MariaDB's own executable comment, `/*M!` (`/*M! … */`,
+/// `/*M!100500 … */`), anywhere, in a string, a quoted name or a comment too: read with no
+/// lexing, like [`has_dollar_opener`]. MariaDB runs what such a comment holds; MySQL reads it as a
+/// plain comment.
+pub fn has_m_bang(text: &str) -> bool {
+    text.contains("/*M!")
+}
+
 /// What follows `--` makes it a comment, to the client: a blank, or the end of the line.
 fn dash_comment(next: Option<char>) -> bool {
     next.is_none_or(is_space)

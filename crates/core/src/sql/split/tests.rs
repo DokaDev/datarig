@@ -172,3 +172,118 @@ fn split_in_postgres_is_split() {
         }
     }
 }
+
+fn bodies_in(src: &str, d: Dialect) -> Vec<&str> {
+    split_in(src, d).iter().map(|s| s.body(src)).collect()
+}
+
+/// An executable comment is code to the server that runs it: MySQL's `/*! … */` and
+/// `/*!NNNNN … */`, and MariaDB's `/*M! … */` and `/*M!NNNNNN … */` (MariaDB runs both; MySQL
+/// reads `/*M!` as a plain comment). A statement keeps every one of them, at its start, in it
+/// and at its end, and one that holds nothing else is a statement too. In every dialect: a
+/// MySQL reading (the driver's before a session says which server it is on) may be a MariaDB
+/// server's, and text with no database known yet is read as PostgreSQL's.
+#[test]
+fn executable_comments_are_kept_when_splitting() {
+    use crate::sql::dialect::MySqlMode;
+    let mode = MySqlMode::default();
+    let ansi = MySqlMode { ansi_quotes: true, ..MySqlMode::default() };
+    for d in [Dialect::MySql(mode), Dialect::MariaDb(mode), Dialect::MariaDb(ansi), Dialect::Postgres] {
+        for (src, want) in [
+            ("SELECT 0 /*M! , 1 */;", vec!["SELECT 0 /*M! , 1 */"]),
+            ("SELECT a FROM t /*M! , b */", vec!["SELECT a FROM t /*M! , b */"]),
+            ("SELECT a FROM t /*M!100500 , b */ ;", vec!["SELECT a FROM t /*M!100500 , b */"]),
+            ("SELECT 1 /*M! , 2 */", vec!["SELECT 1 /*M! , 2 */"]),
+            ("/*M! SET @a=1 */;", vec!["/*M! SET @a=1 */"]),
+            ("/*M!100500 SET @a=1 */", vec!["/*M!100500 SET @a=1 */"]),
+            ("/*M! SET @a=1 */ SELECT 1;", vec!["/*M! SET @a=1 */ SELECT 1"]),
+            ("/*M!100500 SET @a=1 */ SELECT 1", vec!["/*M!100500 SET @a=1 */ SELECT 1"]),
+            ("SELECT 0 /*! , 1 */;", vec!["SELECT 0 /*! , 1 */"]),
+            ("SELECT 1 /*!80000 , 2 */", vec!["SELECT 1 /*!80000 , 2 */"]),
+            ("/*! SET @a=1 */;", vec!["/*! SET @a=1 */"]),
+            ("/*!80000 SET @a=1 */", vec!["/*!80000 SET @a=1 */"]),
+            ("/*! SET @a=1 */ SELECT 1;", vec!["/*! SET @a=1 */ SELECT 1"]),
+            ("/*!80000 SET @a=1 */ SELECT 1", vec!["/*!80000 SET @a=1 */ SELECT 1"]),
+            (
+                "SELECT 0 /* why */ /*M! , 1 */ -- note\n; SELECT 2 /*M! , 3 */",
+                vec!["SELECT 0 /* why */ /*M! , 1 */", "SELECT 2 /*M! , 3 */"],
+            ),
+            (" /* a */ /*M! SET @a=1 */ ; /*M! SET @b=2 */", vec!["/*M! SET @a=1 */", "/*M! SET @b=2 */"]),
+            // Blanks and plain comments around a statement are trimmed as before.
+            ("  /* a */ SELECT 1 /* b */ -- c\n;", vec!["SELECT 1"]),
+            ("/* only */ ; -- line\n", vec![]),
+            ("/*m! lower case is a plain comment */ SELECT 1 /*+ hint */", vec!["SELECT 1"]),
+        ] {
+            assert_eq!(bodies_in(src, d), want, "{d:?}: {src:?}");
+        }
+    }
+}
+
+/// A client command line (`DELIMITER`) after an executable comment that no `;` ended ends the
+/// statement the comment is: the statements and their text are those of the same script with a
+/// plain comment there, and the executable comments besides.
+#[test]
+fn executable_comments_before_a_client_command_keep_the_statements_apart() {
+    use crate::sql::dialect::MySqlMode;
+    let script = "/*M! SET @a = 1 */\nDELIMITER //\nCREATE PROCEDURE p() BEGIN SELECT 1; END //\n\
+                  /*M!100500 SET @b = 2 */\nDELIMITER ;\nCALL p();\n/*M! SET @c = 3 */ DELIMITER $$\nSELECT 4$$";
+    let plain = script.replace("/*M!", "/*");
+    let mode = MySqlMode::default();
+    for d in [Dialect::MySql(mode), Dialect::MariaDb(mode)] {
+        assert_eq!(
+            bodies_in(script, d),
+            [
+                "/*M! SET @a = 1 */",
+                "CREATE PROCEDURE p() BEGIN SELECT 1; END",
+                "/*M!100500 SET @b = 2 */",
+                "CALL p()",
+                "/*M! SET @c = 3 */",
+                "SELECT 4",
+            ],
+            "{d:?}"
+        );
+        assert_eq!(bodies_in(&plain, d), ["CREATE PROCEDURE p() BEGIN SELECT 1; END", "CALL p()", "SELECT 4"]);
+    }
+}
+
+/// A comment that holds an executable comment is kept around a statement, nested or not, in
+/// PostgreSQL's reading too; a plain comment, nested or not, is trimmed as before.
+#[test]
+fn comments_holding_executable_comments_are_kept() {
+    for (src, want) in [
+        ("SELECT 1 /* a /* b */ /*M! , 2 */", "SELECT 1 /* a /* b */ /*M! , 2 */"),
+        ("SELECT 1 /* a /* b */ /*! , 2 */ */;", "SELECT 1 /* a /* b */ /*! , 2 */ */"),
+        ("SELECT 1 /* a /* b */ /*M!100500 , 2 */", "SELECT 1 /* a /* b */ /*M!100500 , 2 */"),
+        ("SELECT 1 /* a /* b */ /*!80000 , 2 */", "SELECT 1 /* a /* b */ /*!80000 , 2 */"),
+        ("/* a /*M! SELECT 0; */ */ SELECT 1;", "/* a /*M! SELECT 0; */ */ SELECT 1"),
+        ("/* a /* b */ */ SELECT 1 /* c */;", "SELECT 1"),
+    ] {
+        assert_eq!(bodies_in(src, Dialect::Postgres), [want], "{src}");
+        assert_eq!(split(src).iter().map(|s| s.body(src)).collect::<Vec<_>>(), [want], "{src}");
+    }
+    // A comment left open runs to the end of the text, which stays in the one statement.
+    let src = "SELECT 1 /* a /* b */ /*M! , 2 */; SELECT 3;";
+    assert_eq!(bodies_in(src, Dialect::Postgres), [src]);
+}
+
+/// A line comment that holds an executable comment is kept around a statement too, in every
+/// dialect.
+#[test]
+fn line_comments_holding_executable_comments_are_kept() {
+    use crate::sql::dialect::MySqlMode;
+    let mysql = MySqlMode::default();
+    for d in [Dialect::Postgres, Dialect::MySql(mysql), Dialect::MariaDb(mysql)] {
+        for src in [
+            "SELECT 5--1 /*M! , 2 */",
+            "SELECT 5 --1 /*! , 2 */",
+            "SELECT 1 -- note /*! , 2 */",
+            "SELECT 1 -- a\n/*M! , 2 */",
+        ] {
+            assert_eq!(bodies_in(src, d), [src], "{d:?}: {src:?}");
+        }
+    }
+    assert_eq!(bodies_in("SELECT 1 # /*M! , 2 */", Dialect::MySql(mysql)), ["SELECT 1 # /*M! , 2 */"]);
+    // A line comment without one is trimmed as before.
+    assert_eq!(bodies_in("SELECT 1 -- note\n", Dialect::Postgres), ["SELECT 1"]);
+    assert_eq!(bodies_in("SELECT 1 # note\n", Dialect::MySql(mysql)), ["SELECT 1"]);
+}

@@ -532,3 +532,41 @@ fn a_hint_on_a_statement_starting_with_a_dollar_is_checked_in_full() {
         assert!(split.iter().any(|s| s.start == h.span.start && s.end == h.span.end), "{:?} in {t:?}", h.span);
     }
 }
+
+/// A statement that starts with an executable comment (`/*! … */`, `/*M! … */`, versioned too)
+/// starts there, as the splitter keeps it: a change before it keeps its hint and lexes only up
+/// to it, however long the statement is.
+#[test]
+fn a_statement_that_starts_with_an_executable_comment_is_checked_only_up_to_it() {
+    let values: String = (0..50_000).map(|i| format!("({i}, 'row {i}'), ")).collect();
+    for head in ["/*M! SET @a = 1 */", "/*M!100500 SET @a = 1 */", "/*! SET @a = 1 */"] {
+        let mut e = Editor::new(&format!("SELECT 0;\n-- the rows\n{head} INSERT INTO t VALUES {values}(0, 'end');"));
+        keys(&mut e, "G");
+        run(&mut e, 1);
+        e.finish_run(1, vec![hint("one")]);
+        assert_eq!(e.run_hints().count(), 1, "{head}");
+        keys(&mut e, "k");
+        e.take_check_work();
+        for _ in 0..3 {
+            keys(&mut e, "A x\x1b");
+            assert_eq!(e.run_hints().count(), 1, "{head}");
+            let work = e.take_check_work();
+            assert!(work > 0 && work < 1_000, "{head}: {work} bytes");
+        }
+    }
+}
+
+/// An executable comment put before a statement on its line joins the statement: its hint
+/// goes, as for any other text put there.
+#[test]
+fn an_executable_comment_put_before_a_statement_is_an_edit_of_it() {
+    for keys_ in ["jI/*M! x */ \x1b", "o/*M! x */\x1b", "A /*M! x */\x1b", "o/*! x */\x1b", "A /*! x */\x1b"] {
+        let mut e = Editor::new("SELECT 0;\nSELECT 1;");
+        keys(&mut e, "j");
+        run(&mut e, 1);
+        e.finish_run(1, vec![hint("one")]);
+        keys(&mut e, "gg");
+        keys(&mut e, keys_);
+        assert_eq!(e.run_hints().count(), 0, "{keys_:?}: {:?}", e.text());
+    }
+}

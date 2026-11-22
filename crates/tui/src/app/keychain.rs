@@ -686,6 +686,9 @@ impl App {
         };
         // Step 2: the config says `to` (the profile may have moved in the list meanwhile).
         let Some(i) = self.profiles.iter().position(|q| q.id == p.id) else { return };
+        if self.connect_change_refused(Some(i), &p) {
+            return;
+        }
         let old = self.profiles[i].clone();
         self.put_profile(Some(i), p.clone());
         if let Err(fault) = self.try_persist() {

@@ -30,6 +30,10 @@ struct Row {
     /// shows that, the statement is the file's.
     original: Option<(String, String)>,
     note: Option<Note>,
+    /// The database its text was read for (`Postgres` for none).
+    read_for: Dbms,
+    /// Pasted text the other kind of database splits otherwise: that kind.
+    pasted_otherwise: Option<Dbms>,
 }
 
 #[derive(Clone, Debug)]
@@ -53,10 +57,22 @@ impl StatementList {
         for s in sql {
             let input = TextInput::new(&list.display(s));
             let shown = input.text().to_string();
-            list.rows.push(Row { input, original: Some((s.clone(), shown)), note: None });
+            list.rows.push(Row {
+                input,
+                original: Some((s.clone(), shown)),
+                note: None,
+                read_for: dbms.unwrap_or(Dbms::Postgres),
+                pasted_otherwise: None,
+            });
         }
         if list.rows.is_empty() {
-            list.rows.push(Row { input: TextInput::default(), original: None, note: None });
+            list.rows.push(Row {
+                input: TextInput::default(),
+                original: None,
+                note: None,
+                read_for: Dbms::Postgres,
+                pasted_otherwise: None,
+            });
         }
         list.check_all();
         list
@@ -65,11 +81,17 @@ impl StatementList {
     /// Statement `s` as one row shows it: on one line, without its line comments, a line break
     /// inside a string as [`NEWLINE`].
     fn display(&self, s: &str) -> String {
-        let one = session::join_statements(self.dbms.unwrap_or(Dbms::Postgres), &[s.to_string()]);
+        self.display_in(self.dbms.unwrap_or(Dbms::Postgres), s)
+    }
+
+    /// [`StatementList::display`] as `dbms` reads it.
+    fn display_in(&self, dbms: Dbms, s: &str) -> String {
+        let one = session::join_statements(dbms, &[s.to_string()]);
         one.replace("\r\n", "\n").replace(['\n', '\r'], NEWLINE)
     }
 
-    /// Check the statements again for `dbms` (the form's database changed).
+    /// Check the statements again for `dbms` (the form's database changed): a row whose text
+    /// splits otherwise for it than for the database it was read for asks to be checked.
     pub fn set_dbms(&mut self, dbms: Option<Dbms>) {
         if self.dbms != dbms {
             self.dbms = dbms;
@@ -85,6 +107,9 @@ impl StatementList {
 
     fn check(&mut self, i: usize) {
         let note = match (self.dbms, self.statement(i)) {
+            (Some(dbms), Some(s)) if self.splits_otherwise(i, dbms, &s) => {
+                Some(Note::Refused(SetProblem::SplitsOtherwise))
+            }
             (Some(dbms), Some(s)) => match Classifier::session_set(dbms.language(), &s) {
                 Err(p) => Some(Note::Refused(p)),
                 Ok(set) => set.read_only().err().map(Note::ReadOnly),
@@ -92,6 +117,14 @@ impl StatementList {
             _ => None,
         };
         self.rows[i].note = note;
+    }
+
+    /// Whether row `i`'s statement `s` reads otherwise for `dbms` than for the database it was
+    /// read for: it splits into other statements, or it was pasted from text that does.
+    fn splits_otherwise(&self, i: usize, dbms: Dbms, s: &str) -> bool {
+        let r = &self.rows[i];
+        r.pasted_otherwise == Some(dbms)
+            || (r.read_for != dbms && session::split_statements(r.read_for, s) != session::split_statements(dbms, s))
     }
 
     /// How many rows it has (one at least).
@@ -121,6 +154,9 @@ impl StatementList {
     /// The focused row was edited: its text is its own now, checked again.
     pub fn edited(&mut self) {
         self.row = self.row.min(self.rows.len() - 1);
+        let r = &mut self.rows[self.row];
+        r.read_for = self.dbms.unwrap_or(Dbms::Postgres);
+        r.pasted_otherwise = None;
         self.check(self.row);
         self.follow = true;
     }
@@ -186,7 +222,16 @@ impl StatementList {
     /// An empty row below the focused one, focused.
     pub fn add_below(&mut self) {
         let at = (self.row + 1).min(self.rows.len());
-        self.rows.insert(at, Row { input: TextInput::default(), original: None, note: None });
+        self.rows.insert(
+            at,
+            Row {
+                input: TextInput::default(),
+                original: None,
+                note: None,
+                read_for: Dbms::Postgres,
+                pasted_otherwise: None,
+            },
+        );
         self.focus(at);
     }
 
@@ -204,7 +249,13 @@ impl StatementList {
             return;
         }
         if self.rows.len() == 1 {
-            self.rows[0] = Row { input: TextInput::default(), original: None, note: None };
+            self.rows[0] = Row {
+                input: TextInput::default(),
+                original: None,
+                note: None,
+                read_for: Dbms::Postgres,
+                pasted_otherwise: None,
+            };
         } else {
             self.rows.remove(i);
         }
@@ -257,17 +308,27 @@ impl StatementList {
 
     /// Statement text `text` cut before each line that starts with `SET` (outside strings and
     /// comments): a statement of its own, which no `;` ended.
-    fn split_lines(&self, text: &str) -> Vec<String> {
+    fn split_lines(&self, dbms: Dbms, text: &str) -> Vec<String> {
         use datarig_core::sql::lexer::{Tok, lex_in};
-        let dialect = self.dbms.unwrap_or(Dbms::Postgres).language().dialect();
+        let dialect = dbms.language().dialect();
         let mut cuts = vec![0];
         let mut line_start = false;
+        // Inside an executable comment (`/*! … */`): its lines are one piece of the statement.
+        let mut exec = false;
         for t in lex_in(text, dialect) {
             match t.kind {
                 Tok::Whitespace => line_start |= t.text(text).contains(['\n', '\r']),
+                // MariaDB's `/*M! … */` (a block comment to the lexer) is read as `/*! … */`.
+                Tok::BlockComment if datarig_core::sql::split::is_executable_comment(t.text(text)) => {
+                    line_start = false;
+                }
                 Tok::LineComment | Tok::BlockComment => {}
+                Tok::ExecComment => {
+                    exec = t.text(text).starts_with("/*");
+                    line_start = false;
+                }
                 _ => {
-                    if line_start && t.start > 0 && t.is_word() && t.text(text).eq_ignore_ascii_case("SET") {
+                    if line_start && !exec && t.start > 0 && t.is_word() && t.text(text).eq_ignore_ascii_case("SET") {
                         cuts.push(t.start);
                     }
                     line_start = false;
@@ -278,6 +339,16 @@ impl StatementList {
         cuts.windows(2).map(|w| text[w[0]..w[1]].trim().to_string()).filter(|p| !p.is_empty()).collect()
     }
 
+    /// The rows pasted text `text` makes as `dbms` reads it.
+    fn parts_in(&self, dbms: Dbms, text: &str) -> Vec<String> {
+        session::split_statements(dbms, text)
+            .iter()
+            .flat_map(|p| self.split_lines(dbms, p))
+            .map(|p| self.display_in(dbms, &p))
+            .filter(|p| !p.is_empty())
+            .collect()
+    }
+
     /// Text pasted into the focused row. Its statements are those `;` ends, and each line that
     /// starts with `SET` starts one too. A text with a line break is rows of its own: in the
     /// focused row when that is empty, else after it. On one line, several statements become rows
@@ -285,12 +356,17 @@ impl StatementList {
     /// at the cursor.
     pub fn paste(&mut self, text: &str) {
         let dbms = self.dbms.unwrap_or(Dbms::Postgres);
-        let parts: Vec<String> = session::split_statements(dbms, text)
-            .iter()
-            .flat_map(|p| self.split_lines(p))
-            .map(|p| self.display(&p))
-            .filter(|p| !p.is_empty())
-            .collect();
+        let parts = self.parts_in(dbms, text);
+        // Another kind of database splits the text otherwise: its rows ask to be checked when
+        // the form's database becomes that kind.
+        let otherwise = Dbms::ALL.into_iter().find(|&o| o != dbms && self.parts_in(o, text) != parts);
+        let row = |t: &str| Row {
+            input: TextInput::new(t),
+            original: None,
+            note: None,
+            read_for: dbms,
+            pasted_otherwise: otherwise,
+        };
         if text.contains(['\n', '\r']) {
             if parts.is_empty() {
                 return;
@@ -303,7 +379,7 @@ impl StatementList {
                 i + 1
             };
             for p in parts {
-                self.rows.insert(at, Row { input: TextInput::new(&p), original: None, note: None });
+                self.rows.insert(at, row(&p));
                 self.check(at);
                 at += 1;
             }
@@ -313,6 +389,9 @@ impl StatementList {
         if parts.len() < 2 {
             self.current_mut().insert_str(text);
             self.edited();
+            let i = self.row;
+            self.rows[i].pasted_otherwise = otherwise;
+            self.check(i);
             return;
         }
         let i = self.row.min(self.rows.len() - 1);
@@ -330,7 +409,7 @@ impl StatementList {
                 n if n == last => format!("{s}{tail}"),
                 _ => s.clone(),
             };
-            let row = Row { input: TextInput::new(&text), original: None, note: None };
+            let row = row(&text);
             if n == 0 {
                 self.rows[i] = row;
             } else {
@@ -438,6 +517,101 @@ mod tests {
         l.paste("\nSET @x1 = 1");
         assert_eq!(l.statements(), ["SET autocommit = 0", "SET @x1 = 1"]);
         assert_eq!(l.row, 1);
+    }
+
+    /// A pasted statement keeps the executable comments it starts or ends with (`/*! … */`,
+    /// `/*M! … */`, versioned too), and one that is only such a comment is a row: the server
+    /// may run what they hold. Also before the form knows its database.
+    #[test]
+    fn a_paste_keeps_executable_comments() {
+        for dbms in [Some(Dbms::MySql), None] {
+            let mut l = StatementList::new(dbms, &[]);
+            l.paste(
+                "SET @a = 1 /*M! , @b = 2 */;\n/*M!100500 SET @c = 3 */;\n/*! SET @d = 4 */ ;\n\
+                 /*M! SET @e = 5 */ SET @f = 6;\nSET @g = 7 /*!80000 , @h = 8 */",
+            );
+            assert_eq!(
+                l.statements(),
+                [
+                    "SET @a = 1 /*M! , @b = 2 */",
+                    "/*M!100500 SET @c = 3 */",
+                    "/*! SET @d = 4 */",
+                    "/*M! SET @e = 5 */ SET @f = 6",
+                    "SET @g = 7 /*!80000 , @h = 8 */",
+                ],
+                "{dbms:?}"
+            );
+        }
+    }
+
+    /// When the form's database kind changes, a row whose text splits otherwise for it, or that
+    /// was pasted from text that does, asks to be checked (the form does not save) until it is
+    /// edited or pasted again. Rows that split the same are kept as they are.
+    #[test]
+    fn rows_that_split_otherwise_for_another_database_ask_to_be_checked() {
+        let splits_otherwise = |l: &StatementList| l.problem().is_some();
+        for first in [None, Some(Dbms::Postgres)] {
+            for text in [
+                "SET @a = 5--1\n/*M! , @b = 2 */",
+                "SET @a = 5--1\nSET @b = 2",
+                "SET @a = 1 /* x /* y */;\nSET @b = 2",
+                "SET @a = 5--1; SET @b = 2",
+            ] {
+                let mut l = StatementList::new(first, &[]);
+                l.paste(text);
+                let before = l.statements();
+                l.set_dbms(Some(Dbms::MySql));
+                assert!(splits_otherwise(&l), "{first:?} {text:?}: {:?}", l.problem());
+                assert_eq!(l.statements(), before, "kept as they are: {text:?}");
+            }
+            // Text both databases split the same: kept, and saved as it is.
+            let mut l = StatementList::new(first, &[]);
+            l.paste("SET @a = 1 /* x */;\nSET @b = 2");
+            l.set_dbms(Some(Dbms::MySql));
+            assert_eq!((l.statements(), l.problem()), (vec!["SET @a = 1".to_string(), "SET @b = 2".to_string()], None));
+        }
+        // A deleted row stays deleted.
+        let mut l = StatementList::new(None, &[]);
+        l.paste("SET @a = 1;\nSET @b = 2");
+        l.remove(1);
+        l.set_dbms(Some(Dbms::MySql));
+        assert_eq!((l.statements(), l.problem()), (vec!["SET @a = 1".to_string()], None));
+        // Rows of the file that split the same are saved unchanged.
+        let mut l = StatementList::new(Some(Dbms::Postgres), &["SET @a = 1 -- note".to_string()]);
+        l.set_dbms(Some(Dbms::MySql));
+        assert_eq!((l.statements(), l.problem()), (vec!["SET @a = 1 -- note".to_string()], None));
+        // Edited, a row is read for the form's database from then on.
+        let mut l = StatementList::new(None, &[]);
+        l.paste("SET @a = 1 /* x /* y */;\nSET @b = 2");
+        l.set_dbms(Some(Dbms::MySql));
+        assert!(splits_otherwise(&l));
+        l.focus(0);
+        l.current_mut().insert_str(" ");
+        l.edited();
+        assert_eq!(l.problem(), None);
+    }
+
+    /// A line inside an executable comment that starts with `SET` starts no row: the comment is
+    /// one piece of its statement.
+    #[test]
+    fn a_paste_keeps_an_executable_comment_of_several_lines_in_one_row() {
+        let mut l = StatementList::new(Some(Dbms::MySql), &[]);
+        l.paste("/*!40101\nSET @a = 1 */;\nSET @b = 2 /*!50000\nSET @c = 3 */\nSET @d = 4");
+        assert_eq!(l.statements(), ["/*!40101 SET @a = 1 */", "SET @b = 2 /*!50000 SET @c = 3 */", "SET @d = 4"]);
+    }
+
+    /// A line that starts with MariaDB's `/*M! … */` is read as one that starts with `/*! … */`:
+    /// a `SET` after the comment on that line starts no row of its own.
+    #[test]
+    fn a_paste_reads_a_mariadb_comment_as_an_executable_one() {
+        let rows = |text: &str| {
+            let mut l = StatementList::new(Some(Dbms::MySql), &[]);
+            l.paste(text);
+            l.statements().iter().map(|s| s.replace("/*M!", "/*!")).collect::<Vec<_>>()
+        };
+        for text in ["SET @a = 1\n/*M!40101 */ SET @b = 2", "SET @a = 1;\n/*M! SET @c = 3 */\nSET @b = 2"] {
+            assert_eq!(rows(text), rows(&text.replace("/*M!", "/*!")), "{text}");
+        }
     }
 
     #[test]

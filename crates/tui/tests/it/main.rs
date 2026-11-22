@@ -76,6 +76,7 @@ mod flows_query_bar;
 mod flows_query_popups;
 mod flows_queued;
 mod flows_result_tabs;
+mod flows_run_after_connection_pick;
 mod flows_run_feedback;
 mod flows_runs;
 mod flows_safety;

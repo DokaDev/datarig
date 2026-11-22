@@ -36,6 +36,7 @@
 "query.busy" = "이미 실행 중인 쿼리가 있습니다 ({key}로 취소)"
 "query.queued_dropped" = "실행하지 않음: 이 문장은 {name} 연결을 기다렸지만, 연결되기 전에 탭의 연결이 바뀌었습니다"
 "query.queued_failed" = "실행하지 않음: 이 문장은 {name} 연결을 기다렸지만 연결되지 않았습니다"
+"query.read_for_other_database" = "실행하지 않음: 문장을 읽은 데이터베이스 종류와 연결된 데이터베이스 종류가 다릅니다. 다시 실행하세요."
 
 "results.empty" = "{run}로 쿼리를 실행하세요"
 "results.running" = "실행 중… 결과가 오면 여기에 표시됩니다."
