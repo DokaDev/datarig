@@ -850,8 +850,10 @@ pub(crate) async fn open(
     // else it is read alone, and a failed read leaves it not known and nothing else changed.
     let performance_schema = match token {
         Some(_) => Fact::Known(()),
-        None => match conn.query_first::<String, _>(PERFORMANCE_SCHEMA_SQL).await {
-            Ok(answer) => self::performance_schema(answer.as_deref()),
+        // Read as a value that may be `NULL` (a proxy may answer so): a plain `String` would not
+        // read one.
+        None => match conn.query_first::<Option<String>, _>(PERFORMANCE_SCHEMA_SQL).await {
+            Ok(answer) => self::performance_schema(answer.flatten().as_deref()),
             Err(_) => Fact::Unknown(Why::NotChecked),
         },
     };
