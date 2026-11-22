@@ -1326,3 +1326,42 @@ fn analyze_format_takes_a_name_or_a_string() {
         assert_eq!(r.danger, Some(Danger::DeleteAll), "{judge:?}");
     }
 }
+
+/// Judged on both engines, the statement `ANALYZE` names keeps the stricter engine's verdict: a
+/// call that only MariaDB reads as a stored function (`ANY_VALUE`) is an unchecked call on
+/// both judges with their sibling, as in the bare statement.
+#[test]
+fn analyze_judged_on_both_engines_keeps_the_stricter_verdict() {
+    for judge in [MYSQL.with_sibling(), MARIADB.with_sibling()] {
+        for prefix in ["ANALYZE ", "ANALYZE FORMAT=JSON "] {
+            let bare = classify("SELECT ANY_VALUE(a) FROM t GROUP BY b", judge);
+            let r = classify(&format!("{prefix}SELECT ANY_VALUE(a) FROM t GROUP BY b"), judge);
+            assert!(bare.read_only().is_err(), "{judge:?}: the bare statement is refused");
+            assert_eq!(
+                (r.class, r.read_only().is_ok(), r.confirm(false)),
+                (bare.class, bare.read_only().is_ok(), bare.confirm(false)),
+                "{judge:?} {prefix}"
+            );
+        }
+    }
+}
+
+/// A parenthesised statement after `ANALYZE` is a query (`SELECT`, `WITH`, `VALUES` inside the
+/// parentheses); anything else in them, `ANALYZE` again included, is not known.
+#[test]
+fn analyze_of_parentheses_takes_a_query_only() {
+    for judge in [MYSQL, MARIADB, MYSQL.with_sibling(), MARIADB.with_sibling()] {
+        for sql in
+            ["ANALYZE (ANALYZE SELECT 1)", "ANALYZE ((EXPLAIN SELECT 1))", "ANALYZE FORMAT=JSON (DELETE FROM zz_t)"]
+        {
+            let r = classify(sql, judge);
+            assert!(r.confirm(false).is_some() && r.read_only().is_err(), "{judge:?} {sql}: {r:?}");
+        }
+        for sql in
+            ["ANALYZE (SELECT 1)", "ANALYZE ((SELECT 1))", "ANALYZE FORMAT=JSON (WITH c AS (SELECT 1) SELECT * FROM c)"]
+        {
+            let r = classify(sql, judge);
+            assert!(r.class == Class::Read && r.read_only().is_ok(), "{judge:?} {sql}: {r:?}");
+        }
+    }
+}
