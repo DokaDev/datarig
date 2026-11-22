@@ -357,10 +357,9 @@ impl StatementList {
     pub fn paste(&mut self, text: &str) {
         let dbms = self.dbms.unwrap_or(Dbms::Postgres);
         let parts = self.parts_in(dbms, text);
-        // The other kind of database splits the text otherwise: its rows ask to be checked
-        // when the form's database becomes that kind.
-        let other = if dbms == Dbms::Postgres { Dbms::MySql } else { Dbms::Postgres };
-        let otherwise = (self.parts_in(other, text) != parts).then_some(other);
+        // Another kind of database splits the text otherwise: its rows ask to be checked when
+        // the form's database becomes that kind.
+        let otherwise = Dbms::ALL.into_iter().find(|&o| o != dbms && self.parts_in(o, text) != parts);
         let row = |t: &str| Row {
             input: TextInput::new(t),
             original: None,
