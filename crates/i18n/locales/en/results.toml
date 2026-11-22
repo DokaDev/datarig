@@ -37,6 +37,7 @@
 "query.busy" = "A query is already running ({key} to cancel)"
 "query.queued_dropped" = "Not run: this statement waited for {name}, but the tab's connection changed before it connected"
 "query.queued_failed" = "Not run: this statement waited for {name}, which did not connect"
+"query.read_for_other_database" = "Not run: the connection is to another kind of database than the statements were read for. Run them again."
 
 "results.empty" = "Run a query with {run}"
 "results.running" = "Running… the result shows here when it comes."

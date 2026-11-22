@@ -62,6 +62,7 @@
 "profiles.deleted_tx" = "{name} 삭제함. 탭 {count}개를 닫고 열려 있던 트랜잭션을 롤백했습니다"
 "profiles.deleted_query_tx" = "{name} 삭제함. 탭 {count}개를 닫고 실행 중인 쿼리를 취소했으며 열려 있던 트랜잭션을 롤백했습니다"
 "profiles.deleted_queued" = "{name} 삭제함. 탭 {count}개를 닫고 연결을 기다리던 문장을 버렸습니다"
+"profiles.connection_in_use" = "저장하지 않음: 이 프로필의 탭에 열린 트랜잭션, 적용하지 않은 변경 또는 실행 중인 문장이 있습니다. 연결 대상을 바꾸기 전에 끝내세요."
 "form.section.basic" = "기본"
 "form.section.ssh" = "SSH"
 "form.section.advanced" = "고급"

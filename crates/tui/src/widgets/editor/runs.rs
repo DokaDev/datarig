@@ -24,7 +24,7 @@
 use super::lexing::REGION_LINES;
 use super::{Editor, Sel};
 use datarig_core::sql::lexer::{Delimiter, Tok};
-use datarig_core::sql::split::split_from;
+use datarig_core::sql::split::{is_executable_comment, split_from};
 use std::collections::{HashMap, HashSet};
 
 /// Hints kept at most; past it the oldest go.
@@ -380,7 +380,8 @@ impl Editor {
         }
         let semi = before.iter().rposition(|t| t.ends_statement());
         let lead = &before[semi.map_or(0, |i| i + 1)..];
-        if !lead.iter().all(|t| t.is_trivia()) {
+        // A comment that holds an executable comment is a statement's text, not its lead.
+        if !lead.iter().all(|t| t.is_trivia() && !is_executable_comment(t.text(&text))) {
             return None;
         }
         // After a `;` lexed here (its lead starts after it from now on), or (none) after the one

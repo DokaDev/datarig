@@ -246,3 +246,46 @@ fn executable_comments_before_a_client_command_keep_the_statements_apart() {
         assert_eq!(bodies_in(&plain, d), ["CREATE PROCEDURE p() BEGIN SELECT 1; END", "CALL p()", "SELECT 4"]);
     }
 }
+
+/// A comment that holds an executable comment is kept around a statement, nested or not, in
+/// PostgreSQL's reading too; a plain comment, nested or not, is trimmed as before.
+#[test]
+fn comments_holding_executable_comments_are_kept() {
+    for (src, want) in [
+        ("SELECT 1 /* a /* b */ /*M! , 2 */", "SELECT 1 /* a /* b */ /*M! , 2 */"),
+        ("SELECT 1 /* a /* b */ /*! , 2 */ */;", "SELECT 1 /* a /* b */ /*! , 2 */ */"),
+        ("SELECT 1 /* a /* b */ /*M!100500 , 2 */", "SELECT 1 /* a /* b */ /*M!100500 , 2 */"),
+        ("SELECT 1 /* a /* b */ /*!80000 , 2 */", "SELECT 1 /* a /* b */ /*!80000 , 2 */"),
+        ("/* a /*M! SELECT 0; */ */ SELECT 1;", "/* a /*M! SELECT 0; */ */ SELECT 1"),
+        ("/* a /* b */ */ SELECT 1 /* c */;", "SELECT 1"),
+    ] {
+        assert_eq!(bodies_in(src, Dialect::Postgres), [want], "{src}");
+        assert_eq!(split(src).iter().map(|s| s.body(src)).collect::<Vec<_>>(), [want], "{src}");
+    }
+    // A comment left open runs to the end of the text, which stays in the one statement.
+    let src = "SELECT 1 /* a /* b */ /*M! , 2 */; SELECT 3;";
+    assert_eq!(bodies_in(src, Dialect::Postgres), [src]);
+}
+
+/// A line comment that holds an executable comment is kept around a statement too, in every
+/// dialect.
+#[test]
+fn line_comments_holding_executable_comments_are_kept() {
+    use crate::sql::dialect::MySqlMode;
+    let mysql = MySqlMode::default();
+    let mariadb = MySqlMode { mariadb: true, ..MySqlMode::default() };
+    for d in [Dialect::Postgres, Dialect::MySql(mysql), Dialect::MySql(mariadb)] {
+        for src in [
+            "SELECT 5--1 /*M! , 2 */",
+            "SELECT 5 --1 /*! , 2 */",
+            "SELECT 1 -- note /*! , 2 */",
+            "SELECT 1 -- a\n/*M! , 2 */",
+        ] {
+            assert_eq!(bodies_in(src, d), [src], "{d:?}: {src:?}");
+        }
+    }
+    assert_eq!(bodies_in("SELECT 1 # /*M! , 2 */", Dialect::MySql(mysql)), ["SELECT 1 # /*M! , 2 */"]);
+    // A line comment without one is trimmed as before.
+    assert_eq!(bodies_in("SELECT 1 -- note\n", Dialect::Postgres), ["SELECT 1"]);
+    assert_eq!(bodies_in("SELECT 1 # note\n", Dialect::MySql(mysql)), ["SELECT 1"]);
+}

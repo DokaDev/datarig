@@ -20,8 +20,9 @@ pub enum QuickPurpose {
     Open,
     /// Always a new console tab (`Ctrl+T` without a profile to use).
     NewConsole,
-    /// Tab `tab` runs on the picked profile from now on; `run`: then run these statements.
-    Bind { tab: TabId, run: Option<Vec<String>> },
+    /// Tab `tab` runs on the picked profile from now on; `run`: then run these statements, read
+    /// in that dialect (the tab's before it had a profile).
+    Bind { tab: TabId, run: Option<(Vec<String>, Dialect)> },
 }
 
 /// Why a level of the list has no rows to pick.
@@ -442,10 +443,14 @@ impl App {
             }
             (QuickPurpose::Bind { tab, run }, context) => {
                 self.bind_tab_in(tab, id, context.unwrap_or_default());
-                if let Some(statements) = run {
-                    self.run_in(tab, statements);
-                } else if self.conns.state(id) != NodeState::Connected {
-                    self.connect(id);
+                match run {
+                    // Read for another kind of database: not run (the tab says to run it
+                    // again); the profile connects.
+                    Some((statements, read_in)) if !self.read_elsewhere(tab, read_in) => {
+                        self.run_read_in(tab, statements, read_in);
+                    }
+                    _ if self.conns.state(id) != NodeState::Connected => self.connect(id),
+                    _ => {}
                 }
             }
         }

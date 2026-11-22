@@ -437,6 +437,13 @@ impl App {
             }
             return;
         }
+        // A change of where the profile connects disconnects it: refused while that would end
+        // something of a tab's (the form stays open, with its edits).
+        let p = form.to_profile();
+        if self.connect_change_refused(editing, &p) {
+            return;
+        }
+        let Some(form) = self.overlays.form() else { return };
         // A preset environment picked here is written with the profile: other profiles that
         // already name it (while no environment has that name) would take its rules. Asked first.
         let (made_env, id) = (form.made_environment().cloned(), form.profile_id());
@@ -512,6 +519,12 @@ impl App {
         let Some(form) = self.overlays.form() else { return };
         let editing = form.editing;
         let mut p = form.to_profile();
+        // Checked again where it is applied: a run that waited may have started meanwhile.
+        if self.connect_change_refused(editing, &p) {
+            self.pending_tunnel_secret = None;
+            return;
+        }
+        let Some(form) = self.overlays.form() else { return };
         // "Save as tunnel preset": the preset is saved with the profile (one write), then the
         // profile's tunnel secret moves to it, from the store it is in as saved (the form may
         // have changed it) to the one the preset keeps it in.
@@ -695,8 +708,10 @@ impl App {
         }
     }
 
-    /// Put the saved profile in the list (and in the active connection); its index.
+    /// Put the saved profile in the list (and in the active connection); its index. A profile
+    /// whose driver or server changed is disconnected (its sessions are for the old one).
     pub(super) fn put_profile(&mut self, editing: Option<usize>, p: ConnectionConfig) -> usize {
+        let moved = editing.and_then(|i| self.profiles.get(i)).is_some_and(|o| moves(o, &p));
         let idx = match editing {
             Some(i) => {
                 self.profiles[i] = p.clone();
@@ -711,7 +726,28 @@ impl App {
             self.folders.insert(&f);
         }
         self.sync_profile_tabs(p.id);
+        if moved {
+            self.disconnect(p.id, false);
+        }
         idx
+    }
+
+    /// A save of profile `p` (editing profile `editing`) that changes where it connects, while a
+    /// tab on it has what the disconnect would end: refused, and said so (the form stays open).
+    pub(super) fn connect_change_refused(&mut self, editing: Option<usize>, p: &ConnectionConfig) -> bool {
+        let moved = editing.and_then(|i| self.profiles.get(i)).is_some_and(|o| moves(o, p));
+        if !moved || !self.profile_busy(p.id) {
+            return false;
+        }
+        self.flash(Notice::new(Label::ProfilesConnectionInUse, Level::Warning));
+        true
+    }
+
+    /// A tab on profile `id` has what a disconnect would end: an open transaction, pending
+    /// changes or a running statement.
+    fn profile_busy(&self, id: ProfileId) -> bool {
+        let mine: Vec<&Tab> = self.tabs.iter().filter(|t| t.profile == Some(id)).collect();
+        mine.iter().any(|t| t.exec.tx_at_risk() || t.exec.running.is_some() || self.pending_in(Some(t.id)) > 0)
     }
 
     /// The tabs on profile `id` follow its driver's language (its driver may have changed).
@@ -841,4 +877,9 @@ pub struct PasswordPrompt {
     /// Where the checkbox was drawn, and the buttons (kept by the renderer, for the mouse).
     pub checkbox: ratatui::layout::Rect,
     pub buttons: overlay::Buttons,
+}
+
+/// Whether profile `o` saved as `p` connects elsewhere: another driver or server.
+fn moves(o: &ConnectionConfig, p: &ConnectionConfig) -> bool {
+    (&o.driver, &o.host, o.port, &o.dsn) != (&p.driver, &p.host, p.port, &p.dsn)
 }

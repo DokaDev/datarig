@@ -8699,6 +8699,47 @@ async fn executable_comments_reach_the_server_as_written() {
     side_c.disconnect().await.unwrap();
 }
 
+/// A statement with a comment that holds an executable comment reaches the server as written,
+/// split in every reading, and each server reads it as its own: MariaDB runs `/*M! … */` and
+/// `/*! … */`, MySQL runs `/*! … */`.
+#[tokio::test(flavor = "multi_thread")]
+async fn comments_holding_executable_comments_reach_the_server_as_written() {
+    let test = "comments_holding_executable_comments_reach_the_server";
+    let Some(url) = my_url(test) else { return };
+    let maria = mariadb(&url).await;
+    // (written, the row MariaDB answers, the row MySQL answers)
+    let cases: [(&str, &[&str], &[&str]); 4] = [
+        ("SELECT 1 /* a /* b */ /*M! , 2 */", &["1", "2"], &["1"]),
+        ("SELECT 1 /* a /* b */ /*! , 2 */", &["1", "2"], &["1", "2"]),
+        ("SELECT 5--1 /*M! , 2 */", &["6", "2"], &["6"]),
+        ("SELECT 5--1 /*! , 2 */", &["6", "2"], &["6", "2"]),
+    ];
+    let modes = [MySqlMode::default(), MySqlMode { mariadb: true, ..MySqlMode::default() }];
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let mut id = 0;
+    for (written, on_maria, on_mysql) in cases {
+        for d in modes.map(Dialect::MySql).into_iter().chain([Dialect::Postgres]) {
+            let sent: Vec<&str> =
+                datarig_core::sql::split::split_in(written, d).iter().map(|s| s.body(written)).collect();
+            assert_eq!(sent, [written], "{d:?}");
+            id += 1;
+            let evs = c.run(id, &sent).await;
+            let row: Option<Vec<String>> = evs.iter().find_map(|e| match e {
+                DbEvent::Page { rows, .. } => {
+                    rows.first().map(|r| r.iter().map(|v| v.clone().unwrap_or_default()).collect())
+                }
+                _ => None,
+            });
+            let want = if maria { on_maria } else { on_mysql };
+            assert_eq!(
+                row.as_deref(),
+                Some(want.iter().map(|s| s.to_string()).collect::<Vec<_>>().as_slice()),
+                "{d:?} {written} (MariaDB {maria}): {evs:?}"
+            );
+        }
+    }
+}
+
 /// MariaDB runs what `/*M! … */` holds: after `/*M! SET TRANSACTION … */` a count is refused
 /// there (the next transaction may have settings of its own, which the count would use up).
 /// MySQL reads it as a plain comment, so the count runs.
