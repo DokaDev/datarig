@@ -829,6 +829,8 @@ fn count_query_wraps_a_repeatable_query() {
 
 /// Statements a read-only policy must refuse, whatever is written around their words.
 const NOT_READS: &[&str] = &[
+    "ANALYZE DELETE FROM t",
+    "ANALYZE FORMAT=JSON UPDATE t SET a = 1",
     "DELETE FROM t WHERE id = 1",
     "DELETE FROM t",
     "UPDATE t SET a = 1 WHERE id = 1",
@@ -1051,9 +1053,12 @@ fn analyze_of_a_statement_is_judged_as_that_statement() {
             "INSERT INTO zz_t VALUES (1)",
             "REPLACE INTO zz_t VALUES (1)",
             "SELECT * FROM zz_t",
+            "(SELECT * FROM zz_t)",
+            "WITH c AS (SELECT 1) DELETE FROM zz_t",
         ] {
             let bare = classify(stmt, mode);
-            for prefix in ["ANALYZE ", "ANALYZE FORMAT=JSON ", "analyze format = json "] {
+            for prefix in ["ANALYZE ", "ANALYZE FORMAT=JSON ", "analyze format = json ", "ANALYZE FORMAT=TRADITIONAL "]
+            {
                 let sql = format!("{prefix}{stmt}");
                 let r = classify(&sql, mode);
                 for writes in [false, true] {

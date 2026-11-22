@@ -107,6 +107,13 @@ fn analyze_of_a_statement_asks_as_that_statement() {
             assert!(matches!(status, Some(Msg::SafetyReadOnlyBlocked { .. })), "{case}: {status:?}");
             assert!(executes(&mut h).is_empty(), "{case}: refused, nothing sent");
         }
+        // The plan of a read runs on a read-only profile.
+        for sql in ["ANALYZE FORMAT=JSON (SELECT * FROM zz_t)", "ANALYZE FORMAT=TRADITIONAL SELECT 1"] {
+            let mut h = connected(driver, maria, true);
+            run(&mut h, sql);
+            assert!(asked(&h).is_empty(), "read-only, {driver} {maria}: {sql}");
+            assert_eq!(executes(&mut h), [[sql]], "read-only, {driver} {maria}: {sql}");
+        }
         // `ANALYZE TABLE` runs as before.
         let mut h = connected(driver, maria, false);
         run(&mut h, "ANALYZE TABLE zz_t");
