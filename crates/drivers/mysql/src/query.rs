@@ -160,11 +160,19 @@ pub(crate) struct Settings {
 /// What is known of the connection's own server session ([`DbCommand::ServerSession`]): a
 /// proxy may send a handshake id of its own, or pass the server's on, so the id is taken for the
 /// server's only once the server listed the connection's marker on it.
-fn own_answer(env: &Env<'_>) -> OwnSession {
-    match (env.own.get(), i64::try_from(env.killer.id())) {
-        (Some(true), Ok(id)) => OwnSession::Direct { id },
-        (Some(false), _) => OwnSession::NotDirect,
-        _ => OwnSession::NotKnown,
+fn own_answer(env: &Env<'_>) -> (OwnSession, Option<i64>) {
+    own_answer_of(env.own.get().copied(), env.shown.load(Ordering::SeqCst), env.killer.id())
+}
+
+/// [`own_answer`] from whether the connection is the server's own (`own`), whether its id `id`
+/// is shown for display only (`shown`): direct only when confirmed; the id shown only with the
+/// answer not known.
+pub(crate) fn own_answer_of(own: Option<bool>, shown: bool, id: u64) -> (OwnSession, Option<i64>) {
+    match (own, i64::try_from(id)) {
+        (Some(true), Ok(id)) => (OwnSession::Direct { id }, None),
+        (Some(false), _) => (OwnSession::NotDirect, None),
+        (Some(true), Err(_)) | (None, Err(_)) => (OwnSession::NotKnown, None),
+        (None, Ok(id)) => (OwnSession::NotKnown, shown.then_some(id)),
     }
 }
 
@@ -179,13 +187,17 @@ async fn own_session(conn: &mut Conn, link: &mut Link, env: &Env<'_>, s: &State,
             Ok(Some(id)) => {
                 if id != env.killer.id() {
                     let _ = env.own.set(false);
+                } else {
+                    // The handshake's id: shown for display only, never taken as confirmed.
+                    env.shown.store(true, Ordering::SeqCst);
                 }
             }
             Err(e) if e.is_fatal() => return Err(Stop::Lost(my_error(&e))),
             Ok(None) | Err(_) => {}
         }
     }
-    let _ = env.events.send(DbEvent::ServerSession { request, own: own_answer(env) });
+    let (own, shown) = own_answer(env);
+    let _ = env.events.send(DbEvent::ServerSession { request, own, shown });
     Ok(())
 }
 
@@ -195,6 +207,8 @@ struct Env<'a> {
     /// opened, or not (its id is not the handshake's), read then or once asked
     /// ([`DbCommand::ServerSession`]).
     own: &'a OnceLock<bool>,
+    /// The connection's id is shown for display only ([`own_answer_of`]).
+    shown: &'a AtomicBool,
     killer: &'a Killer,
     /// The UI asked to cancel this run: a run of several statements stops
     /// before its next one.
@@ -476,14 +490,17 @@ pub(crate) async fn query_loop(
     tracked: Tracked,
     select_limit: Option<u64>,
     own: Option<bool>,
+    shown: bool,
 ) {
     let greeting = Greeting::of(&facts);
     let failed = AtomicBool::new(false);
     // Known from the open's own read, else read when first asked.
     let own = own.map_or_else(OnceLock::new, OnceLock::from);
+    let shown = AtomicBool::new(shown);
     let env = Env {
         events: &events,
         own: &own,
+        shown: &shown,
         killer: &killer,
         asked: &asked,
         busy: &busy,
@@ -1781,7 +1798,8 @@ async fn hold_on(
             ) => held.waiting.push(kept(c)),
             // Answered from what is known (nothing is sent while the result is read): it goes on.
             Next::Command(DbCommand::ServerSession { request }) => {
-                let _ = env.events.send(DbEvent::ServerSession { request, own: own_answer(env) });
+                let (own, shown) = own_answer(env);
+                let _ = env.events.send(DbEvent::ServerSession { request, own, shown });
             }
             Next::Command(DbCommand::FetchMore { .. } | DbCommand::ClosePortal { .. }) => {}
             // Behind what waited already: commands run in the order they were sent, which the

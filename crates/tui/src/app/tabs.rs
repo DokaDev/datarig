@@ -350,8 +350,10 @@ pub enum OwnAsk {
     NotAsked,
     /// Asked (`DbCommand::ServerSession`), with this request; not answered yet.
     Asked(u64),
-    /// Its answer, and when it came (an answer that tells nothing is asked again later).
-    Known(datarig_core::driver::OwnSession, std::time::Instant),
+    /// Its answer, the id shown for display only with an answer not known (the monitor marks
+    /// the tab's row by it, nothing else reads it), and when it came (an answer that tells
+    /// nothing and shows no id is asked again later).
+    Known(datarig_core::driver::OwnSession, Option<i64>, std::time::Instant),
 }
 
 /// See [`TabSession::reading`].

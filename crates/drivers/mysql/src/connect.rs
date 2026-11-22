@@ -215,7 +215,8 @@ async fn run_session(
             return;
         }
     };
-    let Opened { conn, wire, encryption, greeting, facts, tracked, id, read_only_unconfirmed, token, own } = opened;
+    let Opened { conn, wire, encryption, greeting, facts, tracked, id, read_only_unconfirmed, token, own, shown } =
+        opened;
     // The cancel logs in as the session does, without a database (one could be dropped since).
     let kill_opts = target.opts(None, &opts.application_name, &route);
     let killer = Killer::new(route, kill_opts, id, token.clone());
@@ -285,6 +286,7 @@ async fn run_session(
                 tracked,
                 select_limit,
                 own,
+                shown,
             )
             .await
         }

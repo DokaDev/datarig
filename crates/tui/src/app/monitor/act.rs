@@ -212,8 +212,12 @@ impl App {
         if row.application.as_deref() != Some(application.as_str()) {
             return None;
         }
+        // The answer the session gave, or the id it showed for display only (its server named it
+        // by the id it was greeted with, unconfirmed): only for marking the row.
         let ours = |t: &Tab| match t.exec.own {
-            OwnAsk::Known(OwnSession::Direct { id }, _) => id == row.key.id,
+            OwnAsk::Known(OwnSession::Direct { id }, _, _) | OwnAsk::Known(OwnSession::NotKnown, Some(id), _) => {
+                id == row.key.id
+            }
             _ => false,
         };
         // The database the tab's session works in: as the server said, else as the tab asks.
@@ -235,7 +239,7 @@ impl App {
     pub(super) fn monitor_ask_own(&mut self, profile: ProfileId, interval: Duration, now: Instant) {
         let due = |t: &Tab| match t.exec.own {
             OwnAsk::NotAsked => true,
-            OwnAsk::Known(OwnSession::NotKnown, at) => {
+            OwnAsk::Known(OwnSession::NotKnown, None, at) => {
                 !t.exec.in_block && t.exec.running.is_none() && now >= at + interval
             }
             _ => false,
@@ -265,7 +269,7 @@ impl App {
         let Some(profile) = t.profile else { return };
         let due = match t.exec.own {
             OwnAsk::NotAsked => true,
-            OwnAsk::Known(OwnSession::NotKnown, _) => !t.exec.in_block,
+            OwnAsk::Known(OwnSession::NotKnown, None, _) => !t.exec.in_block,
             _ => false,
         };
         if !due || t.exec.session.is_none() || !self.tabs.iter().any(|m| m.is_monitor() && m.profile == Some(profile)) {

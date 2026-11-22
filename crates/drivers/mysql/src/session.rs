@@ -211,6 +211,16 @@ pub(crate) fn own_of(handshake: u32, token: String, read: OwnRead) -> (u64, Opti
     }
 }
 
+/// Whether the connection's id is shown for display only ([`DbEvent::ServerSession`]'s
+/// `shown`): it read its id (`read`), the id is the handshake's (lower 32 bits), and whether it
+/// is the server's own is not known (`own`, [`own_of`]: a marker not confirmed). Never with a
+/// confirmed or a pooled answer.
+///
+/// [`DbEvent::ServerSession`]: datarig_core::driver::DbEvent::ServerSession
+pub(crate) fn shown_of(own: Option<bool>, read: OwnRead) -> bool {
+    own.is_none() && matches!(read, OwnRead::Marked(..) | OwnRead::IdOnly(..))
+}
+
 /// A subquery: the id of the one connection the server lists with the marker `token`, `NULL`
 /// when it lists none or more than one.
 pub(crate) fn marked_once(token: &str) -> String {
@@ -659,6 +669,8 @@ pub(crate) struct Opened {
     /// confirmed marker, `Some(false)` when `CONNECTION_ID()` is not the handshake's id (lower 32
     /// bits); `None`: not known.
     pub(crate) own: Option<bool>,
+    /// Whether `id` is shown for display only ([`shown_of`]).
+    pub(crate) shown: bool,
 }
 
 /// Open a connection to `target` over a stream of `route` with `opts`, check the server's
@@ -816,8 +828,9 @@ pub(crate) async fn open(
         Ok(None) | Err(_) => OwnRead::Unread,
     };
     let (id, token, own) = own_of(handshake, token, read);
+    let shown = shown_of(own, read);
     let facts = crate::engine::facts(&greeting, &report, own);
-    Ok(Opened { conn, wire, encryption, greeting, facts, tracked, id, read_only_unconfirmed, token, own })
+    Ok(Opened { conn, wire, encryption, greeting, facts, tracked, id, read_only_unconfirmed, token, own, shown })
 }
 
 /// The handshake and login over `stream` of `route`, through a [`Wire`]: encrypted as the
