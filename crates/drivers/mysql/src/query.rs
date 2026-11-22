@@ -158,8 +158,8 @@ pub(crate) struct Settings {
 
 /// What a statement run needs besides the connection.
 /// What is known of the connection's own server session ([`DbCommand::ServerSession`]): a
-/// proxy may send a handshake id of its own, so the id is taken for the server's only once the
-/// server named the same one (`CONNECTION_ID()`).
+/// proxy may send a handshake id of its own, or pass the server's on, so the id is taken for the
+/// server's only once the server listed the connection's marker on it.
 fn own_answer(env: &Env<'_>) -> OwnSession {
     match (env.own.get(), i64::try_from(env.killer.id())) {
         (Some(true), Ok(id)) => OwnSession::Direct { id },
@@ -170,12 +170,16 @@ fn own_answer(env: &Env<'_>) -> OwnSession {
 
 /// Answer [`DbCommand::ServerSession`] `request` between runs: what is known, else one read of
 /// `CONNECTION_ID()` now (a read of no table, no transaction is opened), only when no
-/// transaction is open; asked again later otherwise.
+/// transaction is open; asked again later otherwise. The id alone says only that the session
+/// is not the server's own (another id than the connection's): the same id stays not known, as
+/// a proxy may pass the server's id on.
 async fn own_session(conn: &mut Conn, link: &mut Link, env: &Env<'_>, s: &State, request: u64) -> Result<(), Stop> {
     if env.own.get().is_none() && !s.tx.open && !link.tainted() {
         match link.guard(None, conn.query_first::<u64, _>("SELECT CONNECTION_ID()")).await? {
             Ok(Some(id)) => {
-                let _ = env.own.set(id == env.killer.id());
+                if id != env.killer.id() {
+                    let _ = env.own.set(false);
+                }
             }
             Err(e) if e.is_fatal() => return Err(Stop::Lost(my_error(&e))),
             Ok(None) | Err(_) => {}
@@ -187,8 +191,9 @@ async fn own_session(conn: &mut Conn, link: &mut Link, env: &Env<'_>, s: &State,
 
 struct Env<'a> {
     events: &'a UnboundedSender<DbEvent>,
-    /// Whether the handshake's connection id is the server's own: read as the session opened,
-    /// else once asked ([`DbCommand::ServerSession`]).
+    /// Whether the connection is the server's own: confirmed by its marker as the session
+    /// opened, or not (its id is not the handshake's), read then or once asked
+    /// ([`DbCommand::ServerSession`]).
     own: &'a OnceLock<bool>,
     killer: &'a Killer,
     /// The UI asked to cancel this run: a run of several statements stops

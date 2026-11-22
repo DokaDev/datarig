@@ -190,14 +190,23 @@ pub(crate) enum OwnRead {
 }
 
 /// The connection's id, its confirmed marker (`token` when [`own_verdict`] confirms it) and
-/// whether the id is the handshake's (`handshake`, lower 32 bits), from what it read (`read`):
-/// with nothing read, the handshake's id and not known. An id read alone is never confirmed.
+/// whether it is the server's own connection (`handshake`: the handshake's id, lower 32 bits),
+/// from what it read (`read`): only a confirmed marker says it is (`Some(true)`); an id whose
+/// lower 32 bits are not the handshake's says a proxy numbers its clients (`Some(false)`);
+/// anything else is not known (`None`), as a proxy may pass the server's id on. With nothing
+/// read, the handshake's id.
 pub(crate) fn own_of(handshake: u32, token: String, read: OwnRead) -> (u64, Option<String>, Option<bool>) {
+    let own = |confirmed: bool, id: u64| match (confirmed, low32(id) == handshake) {
+        (true, _) => Some(true),
+        (false, false) => Some(false),
+        (false, true) => None,
+    };
     match read {
         OwnRead::Marked(id, marker) => {
-            (id, own_verdict(handshake, id, marker).then_some(token), Some(low32(id) == handshake))
+            let confirmed = own_verdict(handshake, id, marker);
+            (id, confirmed.then_some(token), own(confirmed, id))
         }
-        OwnRead::IdOnly(id) => (id, None, Some(low32(id) == handshake)),
+        OwnRead::IdOnly(id) => (id, None, own(false, id)),
         OwnRead::Unread => (u64::from(handshake), None, None),
     }
 }
@@ -646,7 +655,9 @@ pub(crate) struct Opened {
     /// ([`own_verdict`]); `None`: not confirmed, and the session is never cancelled from a
     /// connection of its own.
     pub(crate) token: Option<String>,
-    /// Whether `CONNECTION_ID()` is the handshake's id (lower 32 bits); `None`: not read.
+    /// Whether the connection is the server's own ([`own_of`]): `Some(true)` only from a
+    /// confirmed marker, `Some(false)` when `CONNECTION_ID()` is not the handshake's id (lower 32
+    /// bits); `None`: not known.
     pub(crate) own: Option<bool>,
 }
 
@@ -667,7 +678,8 @@ pub(crate) struct Opened {
 /// The connection carries a marker of its own ([`MARKER`]), and reads its id and where the
 /// server lists the marker in one statement last ([`own_sql`]); a failure of that read leaves
 /// the session unconfirmed ([`Opened::token`]), never fails the open. When the server refused
-/// it, the id is read alone ([`OWN_ID_SQL`]), so whether it is the handshake's is still known.
+/// it, the id is read alone ([`OWN_ID_SQL`]), so a proxy that numbers its clients is still told
+/// apart; a connection lost on that read fails the open.
 pub(crate) async fn open(
     route: &Route,
     opts: Opts,
@@ -797,6 +809,8 @@ pub(crate) async fn open(
         // handshake's.
         Err(mysql_async::Error::Server(_)) => match conn.query_first::<u64, _>(OWN_ID_SQL).await {
             Ok(Some(id)) => OwnRead::IdOnly(id),
+            // The connection is gone: the open fails here, not at the session's first statement.
+            Err(e) if e.is_fatal() => return Err((my_error(&e), false)),
             Ok(None) | Err(_) => OwnRead::Unread,
         },
         Ok(None) | Err(_) => OwnRead::Unread,
