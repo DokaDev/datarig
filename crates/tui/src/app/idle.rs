@@ -52,24 +52,12 @@ pub fn own_idle_lead(limit: Duration) -> Duration {
 /// rolled back, the app says so (at most half the limit).
 pub const IDLE_WARN_LEAD: Duration = Duration::from_secs(60);
 
-/// How long the session may take to answer the `ROLLBACK` the app sends for an idle
-/// transaction before the app closes it instead (PostgreSQL's rollback only marks the
-/// transaction aborted: it answers at once).
-pub const TX_ROLLBACK_ANSWER_WAIT: Duration = Duration::from_secs(10);
+pub use datarig_core::engine::TX_ROLLBACK_ANSWER_WAIT;
 
-/// [`TX_ROLLBACK_ANSWER_WAIT`] on MySQL, whose rollback undoes the transaction's rows one by one
-/// and may take about as long as its writes did (closing the session would not make that
-/// faster: the server still undoes them, holding the locks).
-pub const TX_ROLLBACK_ANSWER_WAIT_MYSQL: Duration = Duration::from_secs(60);
-
-/// How long tab `t`'s session may take to answer the rollback of its idle transaction.
+/// How long tab `t`'s session may take to answer the rollback of its idle transaction, as its
+/// engine says.
 fn rollback_wait(t: &Tab) -> Duration {
-    match t.exec.prepared.language().dialect() {
-        datarig_core::sql::dialect::Dialect::MySql(_) | datarig_core::sql::dialect::Dialect::MariaDb(_) => {
-            TX_ROLLBACK_ANSWER_WAIT_MYSQL
-        }
-        _ => TX_ROLLBACK_ANSWER_WAIT,
-    }
+    t.exec.prepared.language().dialect().engine().spec().tx.rollback_wait()
 }
 
 /// PostgreSQL's server ends a session whose transaction opened for manual commit sat idle for

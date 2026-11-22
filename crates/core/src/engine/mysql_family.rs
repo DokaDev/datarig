@@ -1,10 +1,14 @@
 //! What MySQL and MariaDB servers say of themselves, read the same way wherever it is read, and
 //! the rules the two engines share.
 
-use super::{EngineFacts, EngineId, RiskRules, ServerFacts, TextRules, Version};
+use super::{
+    CountInTx, EngineFacts, EngineId, Fact, RiskRules, ServerFacts, SessionRules, Support, TextRules, TxAsk, TxNote,
+    TxRefusal, TxRules, TxStatement, TxVerdict, Version, Why,
+};
 use crate::sql::dialect::{Dialect, DollarQuotes, Language};
-use crate::sql::risk::Classifier;
 use crate::sql::risk::mysql::Judged;
+use crate::sql::risk::{Class, Classifier, Danger};
+use std::time::Duration;
 
 /// Whether a server's version line (`VERSION()`, `@@version`, a greeting's version text) names
 /// MariaDB: `11.4.13-MariaDB-ubu2404`, `5.5.5-10.6.12-MariaDB`. Any other line is MySQL's.
@@ -75,5 +79,62 @@ impl RiskRules for FamilyRisk {
                 Dialect::Postgres => Classifier::new(Language::Sql(d)),
             },
         }
+    }
+}
+
+/// How long a MySQL or MariaDB session may take to answer the rollback of an idle transaction:
+/// the rollback undoes the transaction's rows one by one and may take about as long as its
+/// writes did (closing the session would not make that faster: the server still undoes them,
+/// holding the locks).
+const TX_ROLLBACK_ANSWER_WAIT: Duration = Duration::from_secs(60);
+
+/// How MySQL's and MariaDB's statements stand to the transaction open on a session.
+pub(super) struct FamilyTx;
+
+impl TxRules for FamilyTx {
+    /// With manual commit `LOCK TABLES` is refused. A statement that commits the open
+    /// transaction before it runs ends that transaction; with manual commit it asks while one
+    /// is open, and DDL is noted while none is (it applies at once and cannot be rolled back).
+    fn statement(&self, s: &TxStatement) -> TxVerdict {
+        let mut v = TxVerdict::default();
+        let r = s.risk;
+        if s.manual && r.danger == Some(Danger::Locks) && r.implicit_commit {
+            v.refused = Some(TxRefusal::LockTables);
+            return v;
+        }
+        if r.implicit_commit {
+            if s.open && s.manual {
+                v.ask = Some(TxAsk::ImplicitCommit);
+            } else if s.manual && r.class == Class::Ddl {
+                v.notes.push(TxNote::MysqlDdl);
+            }
+            v.ends_tx = true;
+        }
+        v
+    }
+
+    fn rollback_wait(&self) -> Duration {
+        TX_ROLLBACK_ANSWER_WAIT
+    }
+
+    /// Always: the limit is for the statement alone.
+    fn count_in_tx(&self) -> CountInTx {
+        CountInTx::Limited
+    }
+
+    /// At `SERIALIZABLE`, or with autocommit off, plain reads lock the rows they read.
+    fn reads_lock_rows(&self) -> bool {
+        true
+    }
+}
+
+/// What MySQL's and MariaDB's sessions may be given.
+pub(super) struct FamilySession;
+
+impl SessionRules for FamilySession {
+    /// None: the engines have no idle limit for one transaction (the app's own timer rolls
+    /// back).
+    fn server_idle_limit(&self) -> Support {
+        Fact::No(Why::NotOnEngine)
     }
 }
