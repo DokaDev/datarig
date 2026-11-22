@@ -274,11 +274,12 @@ pub const KEYS: &[KeyDoc] = &[
         "results",
         "count_timeout",
         "\"30s\"",
-        "a duration from `\"1s\"` to `\"24h\"` (`\"2m\"`), or `0` or `\"off\"` (no limit)",
+        "a duration from `\"1s\"` to `\"24h\"` (`\"2m\"`), or `0` or `\"off\"` (no time limit)",
         "How long the server may count a result's rows when you ask (`#`) before it stops; the \
-         count then says the number is not known. `\"off\"` also sets no limit on waiting \
-         for a lock. Inside your own transaction, or while a result's cursor is held open, a \
-         PostgreSQL count has no limit.",
+         count then says the number is not known. `\"off\"` removes only this time limit: on \
+         MySQL and MariaDB a count still gives up on each lock after waiting 1 second; on \
+         PostgreSQL `\"off\"` also sets no limit on waiting for a lock. Inside your own \
+         transaction, or while a result's cursor is held open, a PostgreSQL count has no limit.",
     ),
     // [updates]
     key("updates", "check", "\"on\"", "`\"on\"`, `\"off\"`", ""),
