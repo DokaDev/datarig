@@ -71,8 +71,8 @@ pub fn classifier_cases() -> Vec<Case<&'static str>> {
             input: "ANALYZE SELECT * FROM t",
             expect: &[
                 (Pg, "Unknown Some(Unparsed) read-only Unparsed"),
-                (MySql, "Maintenance None read-only Class(Maintenance)"),
-                (MariaDb, "Maintenance None read-only Class(Maintenance)"),
+                (MySql, "Read None read-only ok"),
+                (MariaDb, "Read None read-only ok"),
             ],
         },
         Case {
@@ -80,8 +80,8 @@ pub fn classifier_cases() -> Vec<Case<&'static str>> {
             input: "ANALYZE t",
             expect: &[
                 (Pg, "Maintenance None read-only Class(Maintenance)"),
-                (MySql, "Maintenance None read-only Class(Maintenance)"),
-                (MariaDb, "Maintenance None read-only Class(Maintenance)"),
+                (MySql, "Unknown Some(Unrecognized) read-only Unrecognized"),
+                (MariaDb, "Unknown Some(Unrecognized) read-only Unrecognized"),
             ],
         },
         Case {
