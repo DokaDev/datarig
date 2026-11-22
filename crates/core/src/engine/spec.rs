@@ -65,7 +65,9 @@ pub trait RiskRules: Sync {
     fn read_only_calls(&self) -> Support;
 
     /// Whether statement `sql`, whose first page shows values written in the session's text
-    /// style, is one the app may run again to learn that style: `Some(true)` when it is,
+    /// style, is on the engine's re-run allowlist as far as its text tells, so that the app
+    /// asks the server about it (the allowlist's question, which reads the catalogue only and
+    /// does not run `sql`) to learn whether that style holds: `Some(true)` when it is,
     /// `Some(false)` when it is not, `None` on an engine whose results are never checked so.
     fn rerun_style(&self, sql: &str) -> Option<bool>;
 
