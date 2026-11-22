@@ -1,0 +1,1 @@
+- A MariaDB session whose version cannot be read now uses the `tx_` session variable names.
