@@ -3,6 +3,15 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.41.7 (2026-11-22)
+
+A patch release with one fix to how statements are judged on MariaDB.
+
+### Fixed
+
+- On MariaDB, `ANALYZE` of a statement is judged as the statement it runs: it asks and is
+  refused as that statement is.
+
 ## 0.41.6 (2026-11-22)
 
 A patch release with fixes to how statements are split and sent when the database kind changes.
