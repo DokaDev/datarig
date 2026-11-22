@@ -1584,6 +1584,12 @@ fn analyzes_table(ws: &[W]) -> bool {
     ws.get(at).is_some_and(|w| w.is("TABLE") || w.is("TABLES"))
 }
 
+/// `ANALYZE FORMAT = <v>` with a name or a quoted string as `<v>` (the server refuses
+/// anything else).
+fn format_given(ws: &[W]) -> bool {
+    ws.get(2).is_some_and(|w| w.is_op("=")) && ws.get(3).is_some_and(|w| w.is_name() || w.kind == Tok::Str)
+}
+
 /// The first word of a statement `ANALYZE` names (one: never `ANALYZE` or `EXPLAIN` again).
 fn starts_analyzed(w: &W) -> bool {
     w.kind == Tok::LParen
@@ -1597,7 +1603,7 @@ fn analyzed<'a, 'b>(ws: &'b [W<'a>]) -> &'b [W<'a>] {
     }
     let at = if ws[1].is("FORMAT") { 4 } else { 1 };
     match ws.get(at..) {
-        Some(rest) if rest.first().is_some_and(starts_analyzed) && (at == 1 || ws[2].is_op("=")) => rest,
+        Some(rest) if rest.first().is_some_and(starts_analyzed) && (at == 1 || format_given(ws)) => rest,
         _ => ws,
     }
 }
@@ -1607,7 +1613,7 @@ fn analyzed<'a, 'b>(ws: &'b [W<'a>]) -> &'b [W<'a>] {
 /// refuses the text).
 fn analyze(ws: &[W], judge: Judge) -> Risk {
     let at = if ws[1].is("FORMAT") {
-        if !ws.get(2).is_some_and(|w| w.is_op("=")) {
+        if !format_given(ws) {
             return unrecognized();
         }
         4
