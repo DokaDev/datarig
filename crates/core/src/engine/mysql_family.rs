@@ -2,9 +2,10 @@
 //! the rules the two engines share.
 
 use super::{
-    CountInTx, EngineFacts, EngineId, Fact, RiskRules, ServerFacts, SessionRules, Support, TextRules, TxAsk, TxNote,
-    TxRefusal, TxRules, TxStatement, TxVerdict, Version, Why,
+    CountInTx, EngineFacts, EngineId, Fact, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, RiskRules, ServerFacts,
+    SessionRules, Support, TextRules, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, Version, Why,
 };
+use crate::driver::SessionRole;
 use crate::sql::dialect::{Dialect, DollarQuotes, Language};
 use crate::sql::risk::mysql::Judged;
 use crate::sql::risk::{Class, Classifier, Danger};
@@ -136,5 +137,25 @@ impl SessionRules for FamilySession {
     /// back).
     fn server_idle_limit(&self) -> Support {
         Fact::No(Why::NotOnEngine)
+    }
+
+    /// Only the server's answer makes a MySQL or MariaDB session read-only. A query session the
+    /// server did not make read-only is refused; a metadata or monitor session opens anyway and
+    /// the user is told what the server answered (a reader that does not keep the setting would
+    /// otherwise never connect). A session that proved nothing else opens on no other answer.
+    fn read_only_open(&self, role: SessionRole, proof: ReadOnlyProof) -> OpenVerdict {
+        match (role, proof) {
+            (SessionRole::Query | SessionRole::Meta | SessionRole::Monitor, ReadOnlyProof::Confirmed) => {
+                OpenVerdict::Open
+            }
+            (SessionRole::Query, ReadOnlyProof::Unconfirmed(detail)) => OpenVerdict::Refused(detail),
+            (SessionRole::Meta | SessionRole::Monitor, ReadOnlyProof::Unconfirmed(detail)) => {
+                OpenVerdict::OpenUnconfirmed(detail)
+            }
+            (
+                SessionRole::Query | SessionRole::Meta | SessionRole::Monitor,
+                ReadOnlyProof::PerTransaction | ReadOnlyProof::NotAsked,
+            ) => OpenVerdict::Refused(READ_ONLY_NOT_PROVEN.to_string()),
+        }
     }
 }

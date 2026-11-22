@@ -3,11 +3,11 @@
 //! what one connection found its server to be ([`ServerFacts`], each answer a [`Fact`] with a
 //! [`Why`] when it is not known), what is fixed per engine ([`EngineSpec`], one row per
 //! engine in the registry [`EngineId::spec`], with the rules its text and statements are read
-//! and judged by, its statements stand to a transaction by and its sessions are given) and what
-//! the app knows of a tab's server ([`Rules`]).
+//! and judged by, its statements stand to a transaction by and its sessions are given and open
+//! by) and what the app knows of a tab's server ([`Rules`]).
 //!
-//! `id`, `why` and `facts` are plain vocabulary: they import nothing else of this crate; `tx`
-//! imports only the risk of a statement.
+//! `id`, `why`, `facts` and `session` are plain vocabulary: they import nothing else of this
+//! crate; `tx` imports only the risk of a statement.
 
 mod facts;
 mod id;
@@ -16,6 +16,7 @@ mod mysql;
 pub mod mysql_family;
 mod postgres;
 mod rules;
+mod session;
 mod spec;
 mod tx;
 mod why;
@@ -24,6 +25,7 @@ pub use facts::{EngineFacts, Fact, MyFacts, PgFacts, PingIdentity, Provider, Ser
 pub use id::{EngineId, Expected};
 pub use postgres::TX_ROLLBACK_ANSWER_WAIT;
 pub use rules::{Rules, UNBOUND_TAB_DIALECT};
+pub use session::{OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof};
 pub use spec::{EngineSpec, RiskRules, SessionRules, TextRules, Transport, TxRules};
 pub use tx::{CountInTx, DdlLock, TxAsk, TxNote, TxRefusal, TxStatement, TxVerdict};
 pub use why::Why;

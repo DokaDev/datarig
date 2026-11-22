@@ -2,13 +2,20 @@
 //! and the facts a session's connection found ([`facts`]).
 
 use datarig_core::driver::{Capabilities, EditFormat, ExplainFormat, Hierarchy};
-use datarig_core::engine::{EngineFacts, EngineId, Fact, PgFacts, PingIdentity, ServerFacts, Topology, Version, Why};
+use datarig_core::engine::{
+    EngineFacts, EngineId, Fact, PgFacts, PingIdentity, ServerFacts, SessionRules, Topology, Version, Why,
+};
 use datarig_core::sql::dialect::{Dialect, Language};
 use std::sync::Arc;
 use tokio_postgres::SharedParameters;
 
 /// The engines the driver serves.
 pub(crate) const ENGINES: &[EngineId] = &[EngineId::Postgres];
+
+/// What the engine's sessions may be given and open on.
+pub(crate) fn session_rules() -> &'static dyn SessionRules {
+    EngineId::Postgres.spec().session
+}
 
 /// What the driver offers.
 pub(crate) const CAPABILITIES: Capabilities = Capabilities {
