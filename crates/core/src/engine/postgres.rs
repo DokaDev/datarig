@@ -1,9 +1,9 @@
 //! PostgreSQL's row of the registry.
 
 use super::{
-    CountInTx, DdlLock, EngineId, EngineSpec, Fact, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, RiskRules,
-    ServerFacts, SessionRules, Support, TextRules, Transport, TxAsk, TxNote, TxRefusal, TxRules, TxStatement,
-    TxVerdict,
+    CancelRules, CountInTx, DdlLock, EngineId, EngineSpec, Fact, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof,
+    RiskRules, ServerFacts, SessionRules, Support, TextRules, Transport, TxAsk, TxNote, TxRefusal, TxRules,
+    TxStatement, TxVerdict,
 };
 use crate::driver::{Hierarchy, SessionRole};
 use crate::profile::dsn::Scheme;
@@ -26,6 +26,7 @@ pub static SPEC: EngineSpec = EngineSpec {
     risk: &PgRisk,
     tx: &PgTx,
     session: &PgSession,
+    cancel: &PgCancel,
 };
 
 /// How PostgreSQL's text is read.
@@ -224,5 +225,15 @@ pub(super) fn ddl_lock(sql: &str) -> Option<DdlLock> {
         ("ALTER", Some("INDEX" | "VIEW" | "SEQUENCE")) => name_at(2).map(|(n, _)| DdlLock::Kept(n)),
         ("ALTER", Some("MATERIALIZED")) if is(2, "VIEW") => name_at(3).map(|(n, _)| DdlLock::Kept(n)),
         _ => None,
+    }
+}
+
+/// How PostgreSQL stops a statement.
+struct PgCancel;
+
+impl CancelRules for PgCancel {
+    /// Always: a cancel request on a connection of its own, by the session's key.
+    fn server_cancel(&self, _: &ServerFacts) -> Support {
+        Fact::Known(())
     }
 }

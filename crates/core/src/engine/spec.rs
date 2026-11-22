@@ -44,6 +44,8 @@ pub struct EngineSpec {
     pub tx: &'static dyn TxRules,
     /// What its sessions may be given.
     pub session: &'static dyn SessionRules,
+    /// Whether a statement can be stopped on its server.
+    pub cancel: &'static dyn CancelRules,
 }
 
 /// How an engine's text is read on a server.
@@ -85,4 +87,12 @@ pub trait SessionRules: Sync {
     /// Whether a session of `role` of a read-only profile opens when its connection proved
     /// `proof`. Asked only when read-only applies to the session.
     fn read_only_open(&self, role: SessionRole, proof: ReadOnlyProof) -> OpenVerdict;
+}
+
+/// Whether a statement that runs can be stopped on an engine's server. Advisory, for what the
+/// UI says before a cancel: every cancel still goes to the session, which stops a run between
+/// its statements whatever this says, and its driver decides how to stop a running one.
+pub trait CancelRules: Sync {
+    /// Whether the server of `f` can stop a running statement of the session's.
+    fn server_cancel(&self, f: &ServerFacts) -> Support;
 }

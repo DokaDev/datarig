@@ -15,7 +15,9 @@ pub(crate) use family::{Family, family};
 use crate::session::{Tracked, my_error};
 use datarig_core::driver::{Capabilities, DbError, EditFormat, ExplainFormat, Hierarchy, MySqlEdit};
 use datarig_core::engine::mysql_family::line_names_mariadb;
-use datarig_core::engine::{EngineFacts, EngineId, Fact, MyFacts, PingIdentity, ServerFacts, Topology, Version, Why};
+use datarig_core::engine::{
+    EngineFacts, EngineId, Fact, MyFacts, PingIdentity, ServerFacts, Support, Topology, Version, Why,
+};
 use datarig_core::sql::dialect::{Dialect, DollarQuotes, Language, MySqlMode};
 use datarig_core::sql::risk::mysql::{Judge, Judged};
 use mysql_async::prelude::Queryable;
@@ -202,9 +204,19 @@ fn greeting_of(my: &MyFacts) -> Greeting {
 /// once it opened: the engine is the one the line names. Whether its connection id is the
 /// server's own (`own`, read as it opened; `None`: not read) says whether it reaches the server
 /// directly, unless the greeting names the other engine: then something in between wrote it,
-/// and how the session reaches the server is not known.
+/// and how the session reaches the server is not known. Its `performance_schema` not read.
 pub(crate) fn facts(g: &Greeting, report: &VersionReport, own: Option<bool>) -> Arc<ServerFacts> {
-    let my = MyFacts { handshake: g.handshake, greeting: engine_of(g.mariadb) };
+    opened_facts(g, report, own, Fact::Unknown(Why::NotChecked))
+}
+
+/// [`facts`], with whether the server's `performance_schema` is on as the connection read it.
+pub(crate) fn opened_facts(
+    g: &Greeting,
+    report: &VersionReport,
+    own: Option<bool>,
+    performance_schema: Support,
+) -> Arc<ServerFacts> {
+    let my = MyFacts { performance_schema, ..MyFacts::new(g.handshake, engine_of(g.mariadb)) };
     let topology = match own {
         _ if report.engine != my.greeting => Fact::Unknown(Why::EnginesDisagree),
         Some(true) => Fact::Known(Topology::Direct),

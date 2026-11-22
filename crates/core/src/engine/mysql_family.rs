@@ -2,8 +2,9 @@
 //! the rules the two engines share.
 
 use super::{
-    CountInTx, EngineFacts, EngineId, Fact, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, RiskRules, ServerFacts,
-    SessionRules, Support, TextRules, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, Version, Why,
+    CancelRules, CountInTx, EngineFacts, EngineId, Fact, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, RiskRules,
+    ServerFacts, SessionRules, Support, TextRules, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, Version,
+    Why,
 };
 use crate::driver::SessionRole;
 use crate::sql::dialect::{Dialect, DollarQuotes, Language};
@@ -156,6 +157,20 @@ impl SessionRules for FamilySession {
                 SessionRole::Query | SessionRole::Meta | SessionRole::Monitor,
                 ReadOnlyProof::PerTransaction | ReadOnlyProof::NotAsked,
             ) => OpenVerdict::Refused(READ_ONLY_NOT_PROVEN.to_string()),
+        }
+    }
+}
+
+/// How MySQL and MariaDB stop a statement.
+pub(super) struct FamilyCancel;
+
+impl CancelRules for FamilyCancel {
+    /// As `performance_schema` is: the driver stops a statement only once it confirmed, there,
+    /// which connection runs it; with it off no statement is stopped on the server.
+    fn server_cancel(&self, f: &ServerFacts) -> Support {
+        match &f.detail {
+            EngineFacts::MySql(my) | EngineFacts::MariaDb(my) => my.performance_schema.clone(),
+            EngineFacts::Postgres(_) => Fact::Unknown(Why::NotChecked),
         }
     }
 }
