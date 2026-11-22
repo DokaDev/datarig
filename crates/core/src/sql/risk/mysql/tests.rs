@@ -1071,3 +1071,22 @@ fn analyze_of_a_statement_is_judged_as_that_statement() {
         assert!(explain.rolls_back() && explain.danger == Some(Danger::DeleteAll), "{mode:?}");
     }
 }
+
+/// `ANALYZE` names one statement: after `ANALYZE [FORMAT=<v>]` only a statement starts, so a
+/// long run of the prefix is read at once (not one level per prefix) and is not known: it asks
+/// and a read-only profile refuses it.
+#[test]
+fn analyze_takes_one_statement_only() {
+    let long = format!("{}SELECT 1", "ANALYZE FORMAT=JSON ".repeat(12_000));
+    for sql in [
+        long.as_str(),
+        "ANALYZE ANALYZE DELETE FROM zz_t",
+        "ANALYZE FORMAT=JSON EXPLAIN DELETE FROM zz_t",
+        "ANALYZE FORMAT=JSON",
+    ] {
+        for mode in [MODE, MARIADB] {
+            let r = classify(sql, mode);
+            assert!(r.confirm(false).is_some() && r.read_only().is_err(), "{mode:?} {}", &sql[..sql.len().min(60)]);
+        }
+    }
+}
