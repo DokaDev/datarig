@@ -282,13 +282,18 @@ fn run_text(h: &mut Harness, sql: &str) {
     h.ctrl('e');
 }
 
-/// The profile `target` saved with PostgreSQL as its driver (its form, from the explorer).
-fn save_as_postgresql(h: &mut Harness) {
+/// Profile `target`'s form, from the explorer, with PostgreSQL as its driver; Ctrl+S.
+fn try_save_as_postgresql(h: &mut Harness) {
     h.explore("target");
     h.keys("e");
     assert!(h.form_open());
     h.app.overlays.form_mut().expect("the form").driver = 0;
     h.ctrl('s');
+}
+
+/// The profile `target` saved with PostgreSQL as its driver (its form, from the explorer).
+fn save_as_postgresql(h: &mut Harness) {
+    try_save_as_postgresql(h);
     assert!(!h.form_open(), "saved");
     let id = h.app.tab().id;
     assert_eq!(h.app.tab_language(id).dialect(), Dialect::Postgres, "the tab follows the driver");
@@ -339,4 +344,46 @@ fn a_profile_whose_driver_changes_is_connected_again_before_its_next_run() {
     save_as_postgresql(&mut h);
     run_text(&mut h, "SELECT 2");
     assert_sent_to_the_new_connection(&mut h, &my, "SELECT 2", "no session");
+}
+
+/// A tab on the profile has an open transaction: a change of where the profile connects is not
+/// saved (the form stays open, with its edits), the session stays and nothing is ended. Once
+/// the transaction ends, the save goes through and the profile is disconnected.
+#[test]
+fn a_profile_with_an_open_transaction_keeps_its_connection_until_it_ends() {
+    let dirs = Dirs::new("open-tx");
+    let (mut h, my) = connected_apart(&dirs);
+    run_text(&mut h, "SELECT 1");
+    assert_eq!(executes_on(&my), [["SELECT 1"]]);
+    let id = h.app.tab().exec.query_id;
+    let done = DbEvent::Done {
+        id,
+        outcome: datarig_core::driver::Outcome::Command("SELECT 1".into()),
+        elapsed: std::time::Duration::from_millis(1),
+    };
+    h.tab_db(0, done);
+    h.tab_db(0, DbEvent::Block(true));
+    h.tab_db(0, DbEvent::TxOpen(true));
+    assert!(h.app.tab().exec.tx_open);
+    try_save_as_postgresql(&mut h);
+    assert!(h.form_open(), "not saved: the form stays open");
+    assert_eq!(h.app.overlays.form_mut().expect("the form").driver, 0, "with its edits");
+    assert_eq!(h.app.profiles[0].driver, "mysql", "the profile is as it was");
+    let tab = h.app.tabs.iter().next().expect("the tab");
+    assert!(tab.exec.session.is_some() && tab.exec.tx_open, "the session and its transaction stay");
+    let sessions = my.sessions.lock().unwrap();
+    assert!(sessions.iter().all(|s| !s.cmds.is_closed()), "no session of the MySQL driver was closed");
+    drop(sessions);
+    assert!(!h.cancelled.load(Ordering::SeqCst) && executes_on(&my).is_empty(), "nothing rolled back");
+    let status = h.status(200, 40);
+    assert!(status.contains("open transaction"), "{status}");
+    // The transaction ends: the save goes through, and the profile is disconnected.
+    h.key(KeyCode::Esc);
+    if h.form_open() {
+        h.keys("y");
+    }
+    h.tab_db(0, DbEvent::TxOpen(false));
+    h.tab_db(0, DbEvent::Block(false));
+    save_as_postgresql(&mut h);
+    assert!(h.app.tab().exec.session.is_none(), "disconnected once nothing is open");
 }
