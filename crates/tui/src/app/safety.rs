@@ -274,19 +274,18 @@ impl App {
     /// STDIN` and `COPY … TO STDOUT` need the COPY protocol, which the app does not carry yet
     /// (sent, the first broke the tab's connection).
     pub(super) fn unsupported(&self, tab: TabId, statements: &[String]) -> Option<Notice> {
-        if let Some(refused) = self.m_bang_refusal(tab, statements) {
-            return Some(refused);
-        }
         let classifier = self.classifier(tab).fresh();
         let sql = statements.iter().find(|sql| classifier.clone().classify(sql).stdio)?;
         let sql = super::runlog::excerpt(sql, 60);
         Some(Notice::new(Msg::SafetyCopyStdio { sql }, Level::Error))
     }
 
-    /// MariaDB's own executable comments are not read: statements the user wrote holding the
-    /// bytes `/*M!` ([`datarig_core::sql::lexer::mysql::has_m_bang`]) are refused where MariaDB
-    /// may run them, under the tab's rules as they are now (a run that waited for its connection
-    /// too).
+    /// MariaDB's own executable comments are not read: statements the user wrote (a run's: the
+    /// editor's, a table tab's filter text) holding the bytes `/*M!`
+    /// ([`datarig_core::sql::lexer::mysql::has_m_bang`]) are refused where MariaDB may run them,
+    /// under the tab's rules as they are now (a run that waited for its connection too). Values the
+    /// app writes itself never hold them ([`datarig_core::query::render`] writes such a value as
+    /// its bytes), and text the app writes around a result that ran already is not checked.
     pub(super) fn m_bang_refusal(&self, tab: TabId, statements: &[String]) -> Option<Notice> {
         if !statements.iter().any(|s| datarig_core::sql::lexer::mysql::has_m_bang(s)) {
             return None;

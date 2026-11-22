@@ -39,10 +39,12 @@ engines, a statement you run whose text holds the characters `/*M!` anywhere is 
 anything of it is sent, with a message that says why: write the comment as `/*! … */` instead,
 which datarig reads and asks about as an executable comment. The check reads no text, so
 `/*M!` in a string or a quoted name is refused too (`SELECT '/*M!'`; write `CONCAT('/*', 'M!')`
-instead). Values datarig writes itself are not checked: an edited cell holding `/*M!` is saved,
-and an export or a row count of a result reads it. A run waiting for its connection is checked
-again once the server has said which engine it is. On a MySQL server the text runs as before.
-Startup SQL takes no executable comment of either form.
+instead). Values datarig writes itself are not affected: an edited cell holding `/*M!` is saved,
+a filter on such a value runs (datarig writes the value as its bytes), and an export or a row
+count of a result reads it. A run waiting for its connection is checked again once the server
+has said which engine it is, and a Startup SQL statement holding `/*M!` fails the connection the
+same way, before it is sent. On a MySQL server the text runs as before. Startup SQL takes no
+executable comment of either form.
 
 A MySQL profile has `driver = "mysql"`, and a URL starts with `mysql://` (or `mariadb://`).
 

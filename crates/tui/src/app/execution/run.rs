@@ -71,7 +71,7 @@ impl App {
             return;
         }
         // Checked before anything is queued or sent.
-        if let Some(refused) = self.unsupported(id, &statements) {
+        if let Some(refused) = self.m_bang_refusal(id, &statements).or_else(|| self.unsupported(id, &statements)) {
             self.unstage_run(id);
             return self.tab_status(id, refused);
         }
@@ -167,7 +167,7 @@ impl App {
         }
         // Judged again on the session it goes to, under its rules as they are now (a run that
         // waited for its connection or for the user's answer).
-        if let Some(refused) = self.unsupported(id, &statements) {
+        if let Some(refused) = self.m_bang_refusal(id, &statements).or_else(|| self.unsupported(id, &statements)) {
             self.unstage_run(id);
             return self.tab_status(id, refused);
         }
