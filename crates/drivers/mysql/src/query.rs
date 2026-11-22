@@ -557,10 +557,11 @@ pub(crate) async fn query_loop(
             continue;
         }
         // MariaDB's own executable comments are not read: a session whose server is MariaDB, or
-        // may be, sends no text that holds one, and the command fails at once.
+        // may be, sends no text the user wrote that holds the bytes `/*M!`, and the command fails
+        // at once.
         if let Next::Command(cmd) = &next
             && risk::mariadb_may_run(s.dialect, s.judged)
-            && user_text(cmd).into_iter().any(has_m_bang)
+            && user_written(cmd).into_iter().any(has_m_bang)
         {
             if let Some(answer) = cmd.unsent(DbError::CommentUnsupported, false) {
                 let _ = events.send(answer);
@@ -736,6 +737,42 @@ fn user_text(cmd: &DbCommand) -> Vec<&str> {
         | DbCommand::MonitorAction { .. }
         | DbCommand::MonitorFollowUp { .. } => Vec::new(),
         DbCommand::Judged { command, .. } => user_text(command),
+    }
+}
+
+/// The text of command `cmd` as the user wrote it: a run's statements, a statement run again for
+/// its next page, a statement checked before it is run again. Not the text the app writes around
+/// values it quotes itself (an Apply's statements, an edit's checks, an export's and a count's
+/// text around a result that ran already, an export's next chunk), nor a command with no text.
+fn user_written(cmd: &DbCommand) -> Vec<&str> {
+    match cmd {
+        DbCommand::Execute { statements, .. } => statements.iter().map(String::as_str).collect(),
+        DbCommand::Resume { sql, .. } | DbCommand::CheckRepeat { sql, .. } => vec![sql.as_str()],
+        DbCommand::Count { .. }
+        | DbCommand::GroupCount { .. }
+        | DbCommand::Estimate { .. }
+        | DbCommand::Export { .. }
+        | DbCommand::ApplyEdits { .. }
+        | DbCommand::EndTx { .. }
+        | DbCommand::FetchMore { .. }
+        | DbCommand::ClosePortal { .. }
+        | DbCommand::ServerSession { .. }
+        | DbCommand::LoadSchemas
+        | DbCommand::LoadObjects { .. }
+        | DbCommand::LoadCatalog
+        | DbCommand::LoadKeys
+        | DbCommand::LoadDatabases
+        | DbCommand::LoadTypeKinds { .. }
+        | DbCommand::LoadExtensionFunctions { .. }
+        | DbCommand::LoadStructure { .. }
+        | DbCommand::LoadTableKeys { .. }
+        | DbCommand::LoadDdl { .. }
+        | DbCommand::MonitorTick { .. }
+        | DbCommand::MonitorQueryText { .. }
+        | DbCommand::MonitorReplication { .. }
+        | DbCommand::MonitorAction { .. }
+        | DbCommand::MonitorFollowUp { .. } => Vec::new(),
+        DbCommand::Judged { command, .. } => user_written(command),
     }
 }
 

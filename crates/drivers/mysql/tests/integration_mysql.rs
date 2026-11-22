@@ -539,9 +539,9 @@ async fn mariadb_ignores_a_mysql8_version_comment() {
 }
 
 /// MariaDB's own executable comments (`/*M! … */`, versioned too) on a session whose reports
-/// agree: on MariaDB, which runs what they hold, a command holding one is refused before anything
-/// of it is sent (a run, a count, a capped read); on MySQL they are plain comments and the text
-/// runs (or is counted) as before. `/*! … */` runs on both, as before.
+/// agree: on MariaDB, which runs what they hold, a run holding one is refused before anything of
+/// it is sent (also a capped read); on MySQL they are plain comments and the text runs as before.
+/// A count around it is not the user's text, and its own check refuses it on both. `/*! … */` runs on both, as before.
 #[tokio::test(flavor = "multi_thread")]
 async fn mariadb_only_comments_are_refused_on_mariadb_and_comments_on_mysql() {
     let test = "mariadb_only_comments_are_refused_on_mariadb_and_comments_on_mysql";
@@ -580,39 +580,13 @@ async fn mariadb_only_comments_are_refused_on_mariadb_and_comments_on_mysql() {
     let evs = c.answer(6).await;
     assert_eq!(refused(&evs), maria, "{capped}: {evs:?}");
     let counted = format!("SELECT COUNT(*) FROM (SELECT id FROM {} /*M! LIMIT 3 */) AS datarig_count", t.q());
+    // A count is text the app writes around a result that ran already: the count's own check
+    // reads an executable comment as not repeatable, on both.
     let got = count(&mut c, 7, counted).await.0;
-    if maria {
-        assert_eq!(got, Err(DbError::CommentUnsupported));
-    } else {
-        // The count's own check reads the text as not repeatable, as before.
-        assert!(matches!(got, Err(DbError::NotRepeatable(_))), "{got:?}");
-    }
+    assert!(matches!(got, Err(DbError::NotRepeatable(_))), "{got:?}");
     // MySQL's form runs on both.
     let evs = c.run(8, &["SELECT 1 /*! , 2 */"]).await;
     assert_eq!(page_of(&evs).0.len(), 2, "{evs:?}");
-}
-
-/// The text `/*M!` where no reading opens a comment with it (in a string, a value written to a
-/// table, a quoted name) runs on MariaDB as on MySQL; where sql modes disagree on where a string
-/// ends and one of them opens a comment with it, MariaDB refuses it.
-#[tokio::test(flavor = "multi_thread")]
-async fn mariadb_only_comment_text_in_a_string_or_a_name_runs() {
-    let test = "mariadb_only_comment_text_in_a_string_or_a_name_runs";
-    let Some((url, admin)) = urls(test) else { return };
-    let t = Table::make(&admin, "mctext", &["CREATE TABLE {t} (id INT PRIMARY KEY, v TEXT)"]).await;
-    let maria = mariadb(&admin).await;
-    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
-    c.ok(1, &format!("INSERT INTO {} (id, v) VALUES (1, '/*M! , 2 */')", t.q())).await;
-    c.ok(2, &format!("UPDATE {} SET v = CONCAT(v, '/*M!') WHERE id = 1", t.q())).await;
-    let evs = c.run(3, &[&format!("SELECT v AS `/*M!` FROM {} WHERE id = 1", t.q())]).await;
-    let (cols, rows, _) = page_of(&evs);
-    assert_eq!((cols[0].name.as_str(), rows[0][0].as_deref()), ("/*M!", Some("/*M! , 2 *//*M!")), "{evs:?}");
-    let evs = c.run(4, &["SELECT 'a\\' /*M! , 2 */ ' AS v"]).await;
-    if maria {
-        assert!(matches!(evs.last(), Some(DbEvent::Failed { error: DbError::CommentUnsupported, .. })), "{evs:?}");
-    } else {
-        assert_eq!(page_of(&evs).0.len(), 1, "one string on MySQL: {evs:?}");
-    }
 }
 
 /// User text holding the bytes `/*M!` is refused on MariaDB wherever they are, in a string or a

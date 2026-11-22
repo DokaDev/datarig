@@ -253,105 +253,12 @@ pub fn has_dollar_opener(text: &str) -> bool {
     false
 }
 
-/// Whether `text` holds MariaDB's own executable comment (`/*M! … */`, `/*M!100500 … */`, also
-/// left open): a comment that opens with `/*M!` in some reading of the text that a session where
-/// MariaDB may run it can be in. MariaDB reads no dollar quotes; `"…"` is a string, or a name with
-/// `ANSI_QUOTES` (no backslash escape in it, as the server reads it); a backslash escapes in a
-/// string unless `NO_BACKSLASH_ESCAPES`; a versioned comment (`/*!99999 … */`) the server may
-/// skip, reading its body as a comment. Readings that cannot differ for `text` (no `"`, no `\`,
-/// no versioned comment) are not read twice. `/*M!` inside a string, a quoted name or a plain
-/// comment in every reading does not count. MariaDB runs what such a comment holds; MySQL reads
-/// it as a plain comment.
+/// Whether `text` holds the bytes of MariaDB's own executable comment, `/*M!` (`/*M! … */`,
+/// `/*M!100500 … */`), anywhere, in a string, a quoted name or a comment too: read with no
+/// lexing, like [`has_dollar_opener`]. MariaDB runs what such a comment holds; MySQL reads it as a
+/// plain comment.
 pub fn has_m_bang(text: &str) -> bool {
-    if !text.contains("/*M!") {
-        return false;
-    }
-    let ansi: &[bool] = if text.contains('"') { &[false, true] } else { &[false] };
-    let backslash: &[bool] = if text.contains('\\') { &[true, false] } else { &[true] };
-    let skip: &[bool] = if text.contains("/*!") { &[false, true] } else { &[false] };
-    ansi.iter().any(|&a| backslash.iter().any(|&b| skip.iter().any(|&k| opens_m_bang(text, a, b, k))))
-}
-
-/// [`has_m_bang`] in one reading: `"…"` a name (`ansi_quotes`), a backslash escaping in strings
-/// (`backslash`), a versioned executable comment read as a comment (`skip_versioned`). A scan of
-/// the bytes, no tokens kept.
-fn opens_m_bang(text: &str, ansi_quotes: bool, backslash: bool, skip_versioned: bool) -> bool {
-    let b = text.as_bytes();
-    let n = b.len();
-    // Past the first `*/` from `from` (the end when there is none).
-    let past_close = |from: usize| b[from.min(n)..].windows(2).position(|w| w == b"*/").map_or(n, |at| from + at + 2);
-    // At the end of the line from `from` (its `\n`, or the end).
-    let line_end = |from: usize| b[from..].iter().position(|&c| c == b'\n').map_or(n, |at| from + at);
-    let mut i = 0;
-    let mut exec = false;
-    while i < n {
-        match b[i] {
-            q @ (b'\'' | b'"') if !(q == b'"' && ansi_quotes) => {
-                i += 1;
-                while i < n {
-                    if backslash && b[i] == b'\\' {
-                        i += 2;
-                    } else if b[i] == q {
-                        i += 1;
-                        if i < n && b[i] == q {
-                            i += 1;
-                        } else {
-                            break;
-                        }
-                    } else {
-                        i += 1;
-                    }
-                }
-            }
-            q @ (b'"' | b'`') => {
-                i += 1;
-                while i < n {
-                    if b[i] == q {
-                        i += 1;
-                        if i < n && b[i] == q {
-                            i += 1;
-                        } else {
-                            break;
-                        }
-                    } else {
-                        i += 1;
-                    }
-                }
-            }
-            b'#' => i = line_end(i),
-            b'-' if b.get(i + 1) == Some(&b'-')
-                && b.get(i + 2).is_none_or(|&c| c.is_ascii() && is_space(c as char)) =>
-            {
-                i = line_end(i);
-            }
-            b'/' if b.get(i + 1) == Some(&b'*') => {
-                if b[i..].starts_with(b"/*M!") {
-                    return true;
-                }
-                if b.get(i + 2) == Some(&b'!') {
-                    let digits = b[i + 3..].iter().take_while(|c| c.is_ascii_digit()).count();
-                    if skip_versioned && digits >= 5 {
-                        i = past_close(i + 3);
-                    } else {
-                        exec = true;
-                        i += 3 + match digits {
-                            6 => 6,
-                            5.. => 5,
-                            _ => 0,
-                        };
-                    }
-                } else {
-                    i = past_close(i + 2);
-                }
-            }
-            b'*' if exec && b.get(i + 1) == Some(&b'/') => {
-                exec = false;
-                i += 2;
-            }
-            _ => i += 1,
-        }
-    }
-    false
+    text.contains("/*M!")
 }
 
 /// What follows `--` makes it a comment, to the client: a blank, or the end of the line.

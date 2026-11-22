@@ -283,9 +283,10 @@ impl App {
         Some(Notice::new(Msg::SafetyCopyStdio { sql }, Level::Error))
     }
 
-    /// MariaDB's own executable comments are not read: `statements` holding one
-    /// ([`datarig_core::sql::lexer::mysql::has_m_bang`]) are refused where MariaDB may run them,
-    /// under the tab's rules as they are now (a run that waited for its connection too).
+    /// MariaDB's own executable comments are not read: statements the user wrote holding the
+    /// bytes `/*M!` ([`datarig_core::sql::lexer::mysql::has_m_bang`]) are refused where MariaDB
+    /// may run them, under the tab's rules as they are now (a run that waited for its connection
+    /// too).
     pub(super) fn m_bang_refusal(&self, tab: TabId, statements: &[String]) -> Option<Notice> {
         if !statements.iter().any(|s| datarig_core::sql::lexer::mysql::has_m_bang(s)) {
             return None;

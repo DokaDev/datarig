@@ -1323,56 +1323,6 @@ fn a_mariadb_only_comment_is_refused_where_mariadb_may_run_it() {
     }
 }
 
-/// Where no reading of the text opens a comment with `/*M!` (a string, a quoted name, a plain
-/// comment), it runs on a MariaDB session and on one whose reports name both engines as before;
-/// where sql modes disagree on where a string ends and one opens a comment with it, it is
-/// refused.
-#[test]
-fn mariadb_only_comment_text_in_a_string_or_a_name_runs_where_mariadb_may_run_it() {
-    type Session = (&'static str, fn() -> DbEvent, Language);
-    let sessions: [Session; 2] = [
-        ("MariaDB", || facts_of(Engine::MariaDb), mariadb()),
-        ("MySQL greeting, MariaDB line", || disagreeing_facts(Engine::MySql), mysql(MySqlMode::default())),
-    ];
-    for (what, facts, lang) in sessions {
-        for sql in ["SELECT '/*M!' AS v", "SELECT 1 AS `/*M!`", "SELECT 1 /* plain /*M! */ AS v"] {
-            let mut h = two_engines(false, facts(), lang);
-            run_all(&mut h, sql);
-            assert_eq!(executes(&mut h), [[sql]], "{what}: {sql}");
-        }
-        let mut h = two_engines(false, facts(), lang);
-        run_all(&mut h, "SELECT 'a\\' /*M! , 2 */ ' AS v");
-        refused_m_comment(&mut h, &format!("{what}: readings disagree"));
-    }
-}
-
-/// A tab without a connection splits its text before any engine is known; once a profile whose
-/// server is MariaDB is picked for it, the statement goes with the comments around it that hold
-/// an executable comment, and is refused there as any other text holding `/*M! … */`.
-#[test]
-fn a_tab_without_a_connection_keeps_executable_comments_for_the_profile_it_picks() {
-    for sql in ["UPDATE t SET v=0 /* outer /* inner */ /*M! x */", "UPDATE t SET v=0--1 /*M! , w=1 */"] {
-        let mut h = two_engines(false, facts_of(Engine::MariaDb), mariadb());
-        h.ctrl('t');
-        h.app.tab_mut().profile = None;
-        edit(&mut h, sql);
-        h.ctrl('e');
-        assert!(h.overlay_kind().is_some(), "asks for a connection");
-        h.type_text("two");
-        h.key(KeyCode::Enter);
-        refused_m_comment(&mut h, &format!("picked for a tab without a connection: {sql}"));
-    }
-}
-
-/// On a read-only profile of a MariaDB server, text holding `/*M! … */` is refused for that
-/// reason, the same before and after it waited for its connection.
-#[test]
-fn a_read_only_mariadb_profile_says_why_it_refuses_a_mariadb_only_comment() {
-    let mut h = two_engines(true, facts_of(Engine::MariaDb), mariadb());
-    run_all(&mut h, "SELECT 1 /*M! , 2 */");
-    refused_m_comment(&mut h, "read-only");
-}
-
 /// User text holding the bytes `/*M!` is refused where MariaDB may run it wherever they are, in a
 /// string or a quoted name too: the check reads no text.
 #[test]

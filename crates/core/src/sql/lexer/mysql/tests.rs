@@ -447,51 +447,21 @@ fn a_backslash_at_a_line_end_is_dropped() {
     assert_eq!(kinds(crlf)[0], (Tok::Directive, "delimiter $$\r"));
 }
 
-/// MariaDB's own executable comment counts where a MySQL-family reading of the text opens a
-/// comment with it, in any sql mode the session may read the text in: not inside a string, a
-/// quoted name or a plain comment (a value `'/*M!'` of an edit, a name), but where the readings
-/// disagree on where a string or a name ends and one of them sees it open a comment.
+/// `/*M!` counts wherever its bytes are, with no reading of the text: in a string, a quoted name
+/// or a comment too. Uppercase `M` only, as MariaDB reads it.
 #[test]
-fn a_mariadb_comment_counts_where_a_reading_opens_one() {
+fn a_mariadb_comment_counts_wherever_its_bytes_are() {
     for text in [
         "SELECT 1 /*M! , 2 */",
         "/*M!100500 SET @a = 1 */",
-        "SELECT 1 /*M! , 2",
-        "SELECT 1; SELECT 2 /*M! , 3 */",
-        // With backslash escapes the string runs on; without them it ends at `\'`.
-        "SELECT 'a\\' /*M! , 2 */ '",
-        // As a string a backslash escapes the quote; as a name (ANSI_QUOTES) it does not.
-        "SELECT \"a\\\" /*M! , 2 */ \"",
+        "SELECT 1 /*!99999 ' */ /*M! , 2 */",
+        "SELECT '/*M!' AS v",
+        "SELECT 1 AS `/*M!`",
+        "SELECT 1 -- /*M!",
     ] {
         assert!(has_m_bang(text), "{text}");
     }
-    for text in [
-        "SELECT '/*M!'",
-        "SELECT '/*M! , 2 */' AS v",
-        "SELECT \"/*M!\"",
-        "SELECT 1 AS `/*M!`",
-        "SELECT 1 -- /*M! , 2 */",
-        "SELECT 1 # /*M! , 2 */",
-        "SELECT 1 /* plain /*M! , 2 */",
-        "SELECT 1 /*m! , 2 */",
-        "UPDATE `t` SET `v` = '/*M!' WHERE `id` = 1",
-        "INSERT INTO `t` (`v`) VALUES ('it''s /*M! here'), ('a\\\\ /*M!')",
-    ] {
+    for text in ["SELECT 1 /*m! , 2 */", "SELECT 1 /*! , 2 */", "SELECT '/*' 'M!'"] {
         assert!(!has_m_bang(text), "{text}");
     }
-}
-
-/// `/*M!` counts only in the readings a session where MariaDB may run the text can be in:
-/// dollar quotes are never read (MariaDB reads none), so `$x$` is a name and what follows is read
-/// as such; a server that skips a versioned comment (`/*!99999 … */`) reads its body as a
-/// comment, so a `/*M!` after it counts; and with `ANSI_QUOTES` a `"…"` name takes no backslash
-/// escape, as the server reads it.
-#[test]
-fn a_mariadb_comment_counts_in_the_readings_a_session_can_be_in() {
-    assert!(!has_m_bang("SELECT $x$ /* ' */, '$x$ /*M! */'"));
-    assert!(has_m_bang("SELECT 1 /*!99999 ' */ /*M! , 2 */"));
-    assert!(has_m_bang("SET @a = 1 /*!100000 ' */ /*M! , @b = 2 */"));
-    assert!(has_m_bang("SELECT 1 AS \"a\\\", 'b\\'c' /*M! , 2 */"));
-    // Text without `"`, `\` or a version comment has one reading.
-    assert!(!has_m_bang("SELECT '/*M!' AS v, `/*M!` FROM t -- /*M!"));
 }

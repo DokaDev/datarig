@@ -138,15 +138,6 @@ impl App {
             }
             false => Vec::new(),
         };
-        // None is sent when the session would refuse one (MariaDB's own executable comments).
-        let sqls: Vec<String> = counts.iter().map(|(_, sql)| sql.clone()).collect();
-        let counts = match self.m_bang_refusal(tab, &sqls) {
-            Some(refused) => {
-                self.tab_status(tab, refused);
-                Vec::new()
-            }
-            None => counts,
-        };
         let mut asked = Vec::with_capacity(counts.len());
         for (row, sql) in counts {
             self.query_seq += 1;
@@ -369,11 +360,6 @@ impl App {
     /// closed first (its rows stay). The preview stays open, saying it applies.
     pub(super) fn send_apply(&mut self, tab: TabId, result: u64, steps: Vec<edit::Step>, tx: ApplyTx) {
         self.clear_cant_apply();
-        // Refused before anything changes when the session would refuse it.
-        let sqls: Vec<String> = steps.iter().map(|s| s.sql.clone()).collect();
-        if let Some(refused) = self.m_bang_refusal(tab, &sqls) {
-            return self.tab_status(tab, refused);
-        }
         self.query_seq += 1;
         let id = self.query_seq;
         let now = self.now();

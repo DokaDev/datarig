@@ -898,7 +898,8 @@ async fn a_disagreeing_session_is_judged_on_both_engines() {
 }
 
 /// MariaDB's own executable comments (`/*M! … */`) on a session whose greeting names the other
-/// engine: either engine may be the one that runs the text, so a command holding one is refused
+/// engine: either engine may be the one that runs the text, so text the user wrote holding one
+/// (a run, a check before a statement runs again) is refused
 /// before anything of it is sent, whichever server is behind the greeting. A `/*! … */` comment
 /// goes on as before.
 #[tokio::test(flavor = "multi_thread")]
@@ -907,7 +908,8 @@ async fn a_disagreeing_session_sends_no_mariadb_only_comment() {
     let Some(url) = my_url(test) else { return };
     let mut s = TwoEngines::open(&url, test, false, &[]).await;
     let sql = "SELECT 1 /*M! , 2 */";
-    for (what, id, cmd) in [("Execute", 1, TwoEngines::execute(1, sql)), ("Count", 2, TwoEngines::count(2, sql))] {
+    let check = DbCommand::CheckRepeat { id: 2, sql: sql.into() };
+    for (what, id, cmd) in [("Execute", 1, TwoEngines::execute(1, sql)), ("CheckRepeat", 2, check)] {
         let from = s.proxy.queries().len();
         let got = s.ask_both(id, cmd).await;
         let sent = s.proxy.queries()[from..].to_vec();
