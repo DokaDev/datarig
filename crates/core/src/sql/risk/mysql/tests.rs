@@ -1301,3 +1301,28 @@ fn the_statement_analyze_names_is_read_on_its_own() {
         }
     }
 }
+
+/// `ANALYZE FORMAT=<v>` takes a name or a quoted string as `<v>` (the server refuses anything
+/// else as a syntax error): with anything else the statement is not known, so it asks and a
+/// read-only profile refuses it; a name or a string still names the statement that follows.
+#[test]
+fn analyze_format_takes_a_name_or_a_string() {
+    for judge in [MYSQL, MARIADB, MYSQL.with_sibling(), MARIADB.with_sibling()] {
+        for sql in [
+            "ANALYZE FORMAT=(SELECT 1)",
+            "ANALYZE FORMAT=+ SELECT 1",
+            "ANALYZE FORMAT=1 SELECT 1",
+            "ANALYZE FORMAT=@x SELECT 1",
+        ] {
+            let r = classify(sql, judge);
+            assert!(r.confirm(false).is_some() && r.read_only().is_err(), "{judge:?} {sql}: {r:?}");
+        }
+        for sql in ["ANALYZE FORMAT='JSON' SELECT 1", "ANALYZE FORMAT=`JSON` SELECT 1", "ANALYZE FORMAT=json SELECT 1"]
+        {
+            let r = classify(sql, judge);
+            assert!(r.class == Class::Read && r.read_only().is_ok(), "{judge:?} {sql}: {r:?}");
+        }
+        let r = classify("ANALYZE FORMAT='JSON' DELETE FROM zz_t", judge);
+        assert_eq!(r.danger, Some(Danger::DeleteAll), "{judge:?}");
+    }
+}
