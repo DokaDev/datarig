@@ -68,3 +68,33 @@ fn classifier_verdicts_are_todays() {
     }
     assert_eq!(got.len(), want.len());
 }
+
+/// The filter check's call lists of each engine, one name per line under its engine and list.
+fn filter_calls() -> String {
+    use datarig_core::query::{MYSQL_FILTER_CALLS, MYSQL_REFUSED_CALLS, PG_FILTER_CALLS, PG_REFUSED_CALLS};
+    let mut out = String::new();
+    for (engine, allowed, refused) in [
+        ("Postgres", PG_FILTER_CALLS, PG_REFUSED_CALLS),
+        ("MySql", MYSQL_FILTER_CALLS, MYSQL_REFUSED_CALLS),
+        ("MariaDb", MYSQL_FILTER_CALLS, MYSQL_REFUSED_CALLS),
+    ] {
+        for (list, names) in [("allowed", allowed), ("refused", refused)] {
+            for name in names {
+                out.push_str(&format!("{engine} {list} {name}\n"));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn the_filter_call_lists_are_todays() {
+    let got = filter_calls();
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/engine_conformance/golden/filter_calls.txt");
+    if std::env::var("DATARIG_BLESS").is_ok_and(|v| v == "1") {
+        std::fs::write(&path, &got).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    }
+    let want = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    assert_eq!(got, want, "DATARIG_BLESS=1 cargo test -p datarig-core --test engine_conformance");
+}
