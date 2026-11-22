@@ -48,4 +48,12 @@ impl RiskRules for MysqlRisk {
     fn filter_calls(&self) -> FilterCalls {
         family_filter_calls()
     }
+
+    /// On a session whose reports name MariaDB too.
+    fn refuses_m_bang(&self, j: Judged) -> bool {
+        match j {
+            Judged::Own => false,
+            Judged::WithSibling => true,
+        }
+    }
 }

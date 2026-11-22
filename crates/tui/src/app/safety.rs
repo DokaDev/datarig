@@ -290,7 +290,7 @@ impl App {
         if !statements.iter().any(|s| datarig_core::sql::lexer::mysql::has_m_bang(s)) {
             return None;
         }
-        self.classifier(tab).mariadb_may_run().then(|| Notice::new(Label::EngineCommentUnsupported, Level::Error))
+        self.classifier(tab).refuses_m_bang().then(|| Notice::new(Label::EngineCommentUnsupported, Level::Error))
     }
 
     /// The classifier of tab `tab`, with the statements its session has prepared (none without

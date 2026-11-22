@@ -63,6 +63,11 @@ impl RiskRules for PgRisk {
     fn filter_calls(&self) -> FilterCalls {
         FilterCalls { allowed: PG_FILTER_CALLS, refused: PG_REFUSED_CALLS }
     }
+
+    /// Never: no sibling engine runs it.
+    fn refuses_m_bang(&self, _: Judged) -> bool {
+        false
+    }
 }
 
 /// How long the session may take to answer the `ROLLBACK` the app sends for an idle

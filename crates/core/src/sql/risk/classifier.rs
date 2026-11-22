@@ -58,9 +58,10 @@ impl Classifier {
         }
     }
 
-    /// Whether MariaDB may run its session's text ([`mysql::mariadb_may_run`]).
-    pub fn mariadb_may_run(&self) -> bool {
-        mysql::mariadb_may_run(self.language().dialect(), self.judged())
+    /// Whether its session refuses text the user wrote holding `/*M!`, as the engine's rules say
+    /// ([`crate::engine::RiskRules::refuses_m_bang`]).
+    pub fn refuses_m_bang(&self) -> bool {
+        self.language().dialect().engine().spec().risk.refuses_m_bang(self.judged())
     }
 
     /// The language it classifies.

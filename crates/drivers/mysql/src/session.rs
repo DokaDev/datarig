@@ -764,10 +764,7 @@ pub(crate) async fn open(
     }
     // Nor, where MariaDB may run them, one that holds the characters of MariaDB's own executable
     // comment (`/*M!`), as any other text the user wrote.
-    let maria = datarig_core::sql::risk::mysql::mariadb_may_run(
-        crate::engine::dialect(&greeting, datarig_core::sql::dialect::MySqlMode::default()),
-        judged,
-    );
+    let maria = facts.engine().spec().risk.refuses_m_bang(judged);
     let m_bang =
         session_sql.iter().enumerate().find(|(_, sql)| maria && datarig_core::sql::lexer::mysql::has_m_bang(sql));
     if let Some((index, sql)) = m_bang {

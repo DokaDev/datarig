@@ -560,7 +560,7 @@ pub(crate) async fn query_loop(
         // may be, sends no text the user wrote that holds the bytes `/*M!`, and the command fails
         // at once.
         if let Next::Command(cmd) = &next
-            && risk::mariadb_may_run(s.dialect, s.judged)
+            && s.dialect.engine().spec().risk.refuses_m_bang(s.judged)
             && user_written(cmd).into_iter().any(has_m_bang)
         {
             if let Some(answer) = cmd.unsent(DbError::CommentUnsupported, false) {

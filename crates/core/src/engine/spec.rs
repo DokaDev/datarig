@@ -73,6 +73,11 @@ pub trait RiskRules: Sync {
 
     /// The calls a table's filter may make without asking, and those it may not make.
     fn filter_calls(&self) -> FilterCalls;
+
+    /// Whether a session of the engine judged on `j` refuses text the user wrote that holds
+    /// MariaDB's own executable comment, `/*M!` ([`crate::sql::lexer::mysql::has_m_bang`]):
+    /// where MariaDB may be the server that runs it, which reads what such a comment holds.
+    fn refuses_m_bang(&self, j: Judged) -> bool;
 }
 
 /// The calls a table's filter may make without asking (`allowed`) and those it may not make
