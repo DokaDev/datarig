@@ -21,7 +21,7 @@
 //!    `NEXT VALUE FOR` nor `s.nextval` (MariaDB's, which advance a sequence for each row read).
 //! 3. **Classifier**: the whole statement is a plain read with no danger
 //!    ([`crate::sql::risk`]); a text it cannot read or that is too complex is refused.
-//! 4. **Function calls**: only the built-ins of [`PG_FILTER_CALLS`] or [`MYSQL_FILTER_CALLS`]
+//! 4. **Function calls**: only the built-ins of [`PG_FILTER_CALLS`](crate::engine::PG_FILTER_CALLS) or [`MYSQL_FILTER_CALLS`](crate::engine::MYSQL_FILTER_CALLS)
 //!    pass without a word (by a bare name, or PostgreSQL's `pg_catalog.` one). A built-in of
 //!    [`PG_REFUSED_CALLS`] or [`MYSQL_REFUSED_CALLS`] (it waits, locks, changes the session,
 //!    calls out, reads or writes the server's files or large objects, or reads the outcome of
@@ -35,6 +35,7 @@
 //! attribute notation (`t.f`), a user-defined operator, and code a view or a policy runs.
 
 use super::{Filter, Query, Source, TableName, Target, compile};
+use crate::engine::FilterCalls;
 use crate::sql::dialect::Dialect;
 use crate::sql::lexer::{Tok, Token, lex_backslash_strings, lex_in};
 use crate::sql::risk::{self, Class, Classifier, Danger, ReadOnlyBlock};
@@ -168,232 +169,6 @@ pub enum ShapeProblem {
     Sequence,
 }
 
-/// PostgreSQL built-ins a filter may call without asking, by name: they read their arguments
-/// and nothing else. Sorted.
-pub const PG_FILTER_CALLS: &[&str] = &[
-    "abs",
-    "age",
-    "array_length",
-    "btrim",
-    "cardinality",
-    "ceil",
-    "ceiling",
-    "char_length",
-    "character_length",
-    "concat",
-    "concat_ws",
-    "date_part",
-    "date_trunc",
-    "extract",
-    "floor",
-    "initcap",
-    "isfinite",
-    "json_array_length",
-    "json_extract_path",
-    "json_extract_path_text",
-    "json_typeof",
-    "jsonb_array_length",
-    "jsonb_extract_path",
-    "jsonb_extract_path_text",
-    "jsonb_typeof",
-    "left",
-    "length",
-    "like_escape",
-    "lower",
-    "lpad",
-    "ltrim",
-    "make_date",
-    "md5",
-    "mod",
-    "now",
-    "octet_length",
-    "overlay",
-    "position",
-    "regexp_replace",
-    "replace",
-    "reverse",
-    "right",
-    "round",
-    "rpad",
-    "rtrim",
-    "sign",
-    "split_part",
-    "starts_with",
-    "strpos",
-    "substr",
-    "substring",
-    "timezone",
-    "to_char",
-    "to_date",
-    "to_number",
-    "to_timestamp",
-    "trunc",
-    "upper",
-];
-
-/// PostgreSQL built-ins a filter may not call, by name however qualified: they wait, take
-/// locks, change the session or a sequence, notify, reach another server, or read, list or write
-/// the server's files or its large objects (a filter is one boolean expression with no effect).
-/// Sorted.
-pub const PG_REFUSED_CALLS: &[&str] = &[
-    "dblink",
-    "dblink_connect",
-    "dblink_connect_u",
-    "dblink_exec",
-    "dblink_send_query",
-    "lo_close",
-    "lo_creat",
-    "lo_create",
-    "lo_export",
-    "lo_from_bytea",
-    "lo_get",
-    "lo_import",
-    "lo_lseek",
-    "lo_lseek64",
-    "lo_open",
-    "lo_put",
-    "lo_tell",
-    "lo_tell64",
-    "lo_truncate",
-    "lo_truncate64",
-    "lo_unlink",
-    "loread",
-    "lowrite",
-    "nextval",
-    "pg_advisory_lock",
-    "pg_advisory_lock_shared",
-    "pg_advisory_unlock",
-    "pg_advisory_unlock_all",
-    "pg_advisory_unlock_shared",
-    "pg_advisory_xact_lock",
-    "pg_advisory_xact_lock_shared",
-    "pg_ls_archive_statusdir",
-    "pg_ls_dir",
-    "pg_ls_logdir",
-    "pg_ls_logicalmapdir",
-    "pg_ls_logicalsnapdir",
-    "pg_ls_replslotdir",
-    "pg_ls_summariesdir",
-    "pg_ls_tmpdir",
-    "pg_ls_waldir",
-    "pg_notify",
-    "pg_read_binary_file",
-    "pg_read_file",
-    "pg_sleep",
-    "pg_sleep_for",
-    "pg_sleep_until",
-    "pg_stat_file",
-    "pg_try_advisory_lock",
-    "pg_try_advisory_lock_shared",
-    "pg_try_advisory_xact_lock",
-    "pg_try_advisory_xact_lock_shared",
-    "set_config",
-    "setseed",
-    "setval",
-];
-
-/// MySQL built-ins a filter may call without asking, upper case: they read their arguments and
-/// nothing else. Sorted.
-pub const MYSQL_FILTER_CALLS: &[&str] = &[
-    "ABS",
-    "CAST",
-    "CEIL",
-    "CEILING",
-    "CHARACTER_LENGTH",
-    "CHAR_LENGTH",
-    "COALESCE",
-    "CONCAT",
-    "CONCAT_WS",
-    "CONVERT",
-    "CONVERT_TZ",
-    "CURDATE",
-    "CURRENT_DATE",
-    "CURRENT_TIMESTAMP",
-    "CURTIME",
-    "DATE",
-    "DATEDIFF",
-    "DATE_ADD",
-    "DATE_FORMAT",
-    "DATE_SUB",
-    "DAY",
-    "DAYOFMONTH",
-    "DAYOFWEEK",
-    "EXTRACT",
-    "FIND_IN_SET",
-    "FLOOR",
-    "GREATEST",
-    "HEX",
-    "HOUR",
-    "IF",
-    "IFNULL",
-    "INSTR",
-    "JSON_CONTAINS",
-    "JSON_EXTRACT",
-    "JSON_LENGTH",
-    "JSON_TYPE",
-    "JSON_UNQUOTE",
-    "LCASE",
-    "LEAST",
-    "LEFT",
-    "LENGTH",
-    "LOCATE",
-    "LOWER",
-    "LPAD",
-    "LTRIM",
-    "MD5",
-    "MID",
-    "MINUTE",
-    "MOD",
-    "MONTH",
-    "NOW",
-    "NULLIF",
-    "OCTET_LENGTH",
-    "POSITION",
-    "REPLACE",
-    "REVERSE",
-    "RIGHT",
-    "ROUND",
-    "RPAD",
-    "RTRIM",
-    "SECOND",
-    "SIGN",
-    "STR_TO_DATE",
-    "SUBSTR",
-    "SUBSTRING",
-    "TIME",
-    "TIMESTAMPDIFF",
-    "TRIM",
-    "TRUNCATE",
-    "UCASE",
-    "UNHEX",
-    "UPPER",
-    "UTC_TIMESTAMP",
-    "YEAR",
-];
-
-/// MySQL built-ins a filter may not call: they wait, take or test user locks, read a file of the
-/// server, or advance or set a sequence (MariaDB's `NEXTVAL`, `SETVAL`); or they read the
-/// outcome of the statement before (`FOUND_ROWS`, `ROW_COUNT`), which for a table's statement
-/// is one the app sent. Sorted.
-pub const MYSQL_REFUSED_CALLS: &[&str] = &[
-    "BENCHMARK",
-    "FOUND_ROWS",
-    "GET_LOCK",
-    "IS_FREE_LOCK",
-    "IS_USED_LOCK",
-    "LOAD_FILE",
-    "MASTER_POS_WAIT",
-    "NEXTVAL",
-    "RELEASE_ALL_LOCKS",
-    "RELEASE_LOCK",
-    "ROW_COUNT",
-    "SETVAL",
-    "SLEEP",
-    "SOURCE_POS_WAIT",
-    "WAIT_FOR_EXECUTED_GTID_SET",
-    "WAIT_UNTIL_SQL_THREAD_AFTER_GTIDS",
-];
-
 /// Check filter `text` for table `table` of `target` (see the module docs): what the user must
 /// confirm before it runs, or why it may not. `classifier` is the session's (its dialect should
 /// be the target's); `read_only`: the profile is read-only.
@@ -427,7 +202,7 @@ pub fn check_filter(
     let calls: Vec<Call> = match target.dialect {
         Dialect::Postgres => {
             let Source::Table(t) = &query.source;
-            match pg_tree(&sql, t) {
+            match pg_tree(&sql, t, target.dialect.engine().spec().risk.filter_calls()) {
                 Some(Ok(calls)) => calls,
                 Some(Err(ShapeProblem::Locking)) => return Err(pg_lock()),
                 Some(Err(problem)) => return Err(BarRefusal::Shape { problem, at: None }),
@@ -452,10 +227,12 @@ pub fn check_filter(
                     continue;
                 };
                 let unread_here = || BarRefusal::NotRead { class: risk.class, danger: Some(Danger::Unrecognized) };
+                // The calls the filter of this engine allows and refuses.
+                let filter_calls = target.dialect.engine().spec().risk.filter_calls();
                 for (name, looked_up) in risk::mysql::called(&sql, judge).ok_or_else(unread_here)? {
                     let call = Call {
-                        allowed: !looked_up && MYSQL_FILTER_CALLS.binary_search(&name.as_str()).is_ok(),
-                        refused: MYSQL_REFUSED_CALLS.binary_search(&name.as_str()).is_ok(),
+                        allowed: !looked_up && filter_calls.allowed.binary_search(&name.as_str()).is_ok(),
+                        refused: filter_calls.refused.binary_search(&name.as_str()).is_ok(),
                         written: name,
                     };
                     if !calls.contains(&call) {
@@ -716,20 +493,21 @@ fn pg_lock_at(tokens: &[Token], text: &str) -> Option<Range<usize>> {
 
 /// The PostgreSQL shape check of statement `sql` on its parse tree, read on the classifier's
 /// thread: the calls it makes (each as written, `schema.f` with its schema), or what is wrong
-/// with its shape. `None` when the parser rejects it.
-fn pg_tree(sql: &str, table: &TableName) -> Option<Result<Vec<Call>, ShapeProblem>> {
+/// with its shape, the calls judged by the engine's filter lists `filter_calls`. `None` when the
+/// parser rejects it.
+fn pg_tree(sql: &str, table: &TableName, filter_calls: FilterCalls) -> Option<Result<Vec<Call>, ShapeProblem>> {
     std::thread::scope(|scope| {
         let worker = std::thread::Builder::new().name(risk::THREAD.to_string()).stack_size(risk::STACK);
-        worker.spawn_scoped(scope, || pg_tree_here(sql, table)).ok().and_then(|h| h.join().ok()).flatten()
+        worker.spawn_scoped(scope, || pg_tree_here(sql, table, filter_calls)).ok().and_then(|h| h.join().ok()).flatten()
     })
 }
 
-fn pg_tree_here(sql: &str, table: &TableName) -> Option<Result<Vec<Call>, ShapeProblem>> {
+fn pg_tree_here(sql: &str, table: &TableName, filter_calls: FilterCalls) -> Option<Result<Vec<Call>, ShapeProblem>> {
     let stmts = risk::parse(sql)?;
-    Some(pg_shape(&stmts, table))
+    Some(pg_shape(&stmts, table, filter_calls))
 }
 
-fn pg_shape(stmts: &[Value], table: &TableName) -> Result<Vec<Call>, ShapeProblem> {
+fn pg_shape(stmts: &[Value], table: &TableName, filter_calls: FilterCalls) -> Result<Vec<Call>, ShapeProblem> {
     let empty = |v: &Value| v.as_array().is_none_or(Vec::is_empty);
     let [stmt] = stmts else { return Err(ShapeProblem::NotOneSelect) };
     let Some(("SelectStmt", b)) = risk::node(stmt) else { return Err(ShapeProblem::NotOneSelect) };
@@ -795,12 +573,11 @@ fn pg_shape(stmts: &[Value], table: &TableName) -> Result<Vec<Call>, ShapeProble
         for found in risk::calls(o) {
             let call = match found {
                 risk::Call::Func(names, _) => {
-                    let allowed =
-                        matches!(names.as_slice(), [f] | ["pg_catalog", f] if PG_FILTER_CALLS.binary_search(f).is_ok());
-                    let refused = names.last().is_some_and(|f| PG_REFUSED_CALLS.binary_search(f).is_ok());
+                    let allowed = matches!(names.as_slice(), [f] | ["pg_catalog", f] if filter_calls.allowed.binary_search(f).is_ok());
+                    let refused = names.last().is_some_and(|f| filter_calls.refused.binary_search(f).is_ok());
                     Call { written: names.join("."), allowed, refused }
                 }
-                risk::Call::Attribute(f, _) if PG_REFUSED_CALLS.binary_search(&f).is_ok() => {
+                risk::Call::Attribute(f, _) if filter_calls.refused.binary_search(&f).is_ok() => {
                     Call { written: f.to_string(), allowed: false, refused: true }
                 }
                 risk::Call::Attribute(..) => continue,

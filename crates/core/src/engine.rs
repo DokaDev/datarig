@@ -23,10 +23,12 @@ mod why;
 
 pub use facts::{EngineFacts, Fact, MyFacts, PgFacts, PingIdentity, Provider, ServerFacts, Support, Topology, Version};
 pub use id::{EngineId, Expected};
+pub use mysql_family::{MYSQL_FILTER_CALLS, MYSQL_REFUSED_CALLS};
 pub use postgres::TX_ROLLBACK_ANSWER_WAIT;
+pub use postgres::{PG_FILTER_CALLS, PG_REFUSED_CALLS};
 pub use rules::{Rules, UNBOUND_TAB_DIALECT};
 pub use session::{OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof};
-pub use spec::{CancelRules, EngineSpec, RiskRules, SessionRules, TextRules, Transport, TxRules};
+pub use spec::{CancelRules, EngineSpec, FilterCalls, RiskRules, SessionRules, TextRules, Transport, TxRules};
 pub use tx::{CountInTx, DdlLock, TxAsk, TxNote, TxRefusal, TxStatement, TxVerdict};
 pub use why::{Feature, Why};
 
@@ -86,6 +88,13 @@ impl Expected {
             Some(Transport::Network { scheme, .. }) => scheme,
             Some(Transport::File) | None => LEGACY_FORM_SCHEME,
         }
+    }
+
+    /// Whether the environment's read-only functions apply to the profile before a server
+    /// answered ([`RiskRules::read_only_calls`] of the engine whose form and presets it
+    /// shows); not on a name no engine serves.
+    pub fn read_only_calls(&self) -> Support {
+        self.spec().map_or(Fact::No(Why::NotOnEngine), |s| s.risk.read_only_calls())
     }
 
     /// The database whose session presets apply (`None`: no preset is for it).

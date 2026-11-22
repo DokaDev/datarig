@@ -29,9 +29,10 @@ mod recognise;
 mod render;
 mod terms;
 
+pub use crate::engine::{MYSQL_FILTER_CALLS, MYSQL_REFUSED_CALLS, PG_FILTER_CALLS, PG_REFUSED_CALLS};
 pub use check::{
-    BarRefusal, Confirm, EstimateOff, FilterVerdict, LexProblem, MYSQL_FILTER_CALLS, MYSQL_REFUSED_CALLS,
-    PG_FILTER_CALLS, PG_REFUSED_CALLS, ShapeProblem, check_filter, estimate_allowed, has_subquery,
+    BarRefusal, Confirm, EstimateOff, FilterVerdict, LexProblem, ShapeProblem, check_filter, estimate_allowed,
+    has_subquery,
 };
 pub use compile::{Compiled, capped, compile, compile_capped};
 pub use group::{Compares, GROUP_PREVIEW, GROUP_VALUES, GroupCount, GroupRefusal, NoEquality, compares, group_count};

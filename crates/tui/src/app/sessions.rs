@@ -332,7 +332,7 @@ impl App {
         {
             head.push(SessionLine::Text(label(Label::SessionViewReadOnly), Tone::Warning));
             // What runs there although it is not a built-in (PostgreSQL only), as written.
-            if cfg.dbms() == Some(Dbms::Postgres) {
+            if cfg.expected().read_only_calls() == datarig_core::engine::Fact::Known(()) {
                 let functions = r.read_only_functions.iter().map(|f| f.entry.as_str()).collect::<Vec<_>>();
                 let mut said = |m: Msg| head.push(SessionLine::Text(self.i18n.msg(&m).to_string(), Tone::Muted));
                 if !functions.is_empty() {

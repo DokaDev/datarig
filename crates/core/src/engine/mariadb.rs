@@ -1,8 +1,10 @@
 //! MariaDB's row of the registry. Its profiles use MySQL's URL form, session presets, form
 //! row and icon.
 
-use super::mysql_family::{FamilyCancel, FamilySession, FamilyText, FamilyTx, family_classifier};
-use super::{EngineId, EngineSpec, MYSQL_FAMILY, RiskRules, Transport};
+use super::mysql_family::{
+    FamilyCancel, FamilySession, FamilyText, FamilyTx, family_classifier, family_filter_calls, family_read_only_calls,
+};
+use super::{EngineId, EngineSpec, FilterCalls, MYSQL_FAMILY, RiskRules, Support, Transport};
 use crate::driver::Hierarchy;
 use crate::profile::dsn::Scheme;
 use crate::sql::dialect::Dialect;
@@ -33,5 +35,18 @@ struct MariadbRisk;
 impl RiskRules for MariadbRisk {
     fn new_classifier(&self, d: Dialect, j: Judged) -> Classifier {
         family_classifier(d, j)
+    }
+
+    fn read_only_calls(&self) -> Support {
+        family_read_only_calls()
+    }
+
+    /// Never: the family's results are not checked for their text style.
+    fn rerun_style(&self, _: &str) -> Option<bool> {
+        None
+    }
+
+    fn filter_calls(&self) -> FilterCalls {
+        family_filter_calls()
     }
 }

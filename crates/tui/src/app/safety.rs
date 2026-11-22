@@ -25,8 +25,8 @@
 use super::conn::{ExtensionRead, ExtensionState};
 use super::overlay::RunConfirm;
 use super::*;
+use datarig_core::engine::Fact;
 use datarig_core::policy::{Confirm, Policy, UnknownEnvironment};
-use datarig_core::profile::session::Dbms;
 use datarig_core::sql::risk::{CallHint, Class, Danger, ExtensionLookup, NoWhere, ReadOnlyBlock, ReadOnlyContext, Why};
 
 /// A statement of a run that asks before it runs.
@@ -141,8 +141,8 @@ impl App {
     /// and PostgreSQL 18's built-ins called in `pg_catalog`, which need no server version.
     /// Nothing more on a profile that is not PostgreSQL's.
     pub(super) fn read_only_context(&self, tab: TabId, pid: ProfileId) -> ReadOnlyContext {
-        let postgres = self.profile(pid).is_some_and(|p| p.dbms() == Some(Dbms::Postgres));
-        if !postgres {
+        let applies = self.profile(pid).is_some_and(|p| p.expected().read_only_calls() == Fact::Known(()));
+        if !applies {
             return ReadOnlyContext::default();
         }
         let rules = self.rules_of(pid);
@@ -194,9 +194,9 @@ impl App {
     /// session lost before it answered for this list reopens, to ask again once connected
     /// (the run that asks is still refused as pending).
     pub(super) fn ask_extension_functions(&mut self, pid: ProfileId) {
-        let postgres = self.profile(pid).is_some_and(|p| p.dbms() == Some(Dbms::Postgres));
+        let applies = self.profile(pid).is_some_and(|p| p.expected().read_only_calls() == Fact::Known(()));
         let rules = self.rules_of(pid);
-        if !postgres || !rules.read_only || rules.read_only_extensions.is_empty() {
+        if !applies || !rules.read_only || rules.read_only_extensions.is_empty() {
             return;
         }
         let Some(c) = self.conns.get(pid) else { return };

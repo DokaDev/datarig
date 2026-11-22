@@ -327,7 +327,7 @@ impl App {
         let explain = self.tab_explain(id);
         // The allowlist's question about a result's statement, for the settings its text was
         // written in (`ResultSet::first_styled`).
-        let pg = self.tab_dialect(id) == datarig_core::sql::dialect::Dialect::Postgres;
+        let risk = self.tab_dialect(id).engine().spec().risk;
         let mut ask_style: Option<(u64, String)> = None;
         // A result's first page: the kinds of its columns' types to look up are asked.
         let first_page =
@@ -782,7 +782,7 @@ impl App {
                         let mut rs = ResultSet::new(cols, store, more, &null);
                         rs.read_in = read_in(&mut t.exec);
                         let sql = t.exec.run.statements.get(index).map_or("", |s| s.sql.as_str());
-                        ask_style = rs.first_styled(t.exec.text.as_ref(), sql, pg, &mut self.query_seq);
+                        ask_style = rs.first_styled(t.exec.text.as_ref(), sql, risk, &mut self.query_seq);
                         rs.edit.bind(bound);
                         let n = rs.rows.len();
                         let grid = GridState::paged(page_size, t.grid.page_rows);
@@ -963,7 +963,7 @@ impl App {
                 // Bound to the session's values now: a later `SET time_zone` is not this result's.
                 rs.read_in = read_in(&mut t.exec);
                 let sql = t.exec.run.statements.last().map_or("", |s| s.sql.as_str());
-                ask_style = rs.first_styled(t.exec.text.as_ref(), sql, pg, &mut self.query_seq);
+                ask_style = rs.first_styled(t.exec.text.as_ref(), sql, risk, &mut self.query_seq);
                 rs.edit.bind(bound);
                 let query = t.exec.query_id;
                 if t.exec.reading.query != query {
