@@ -854,10 +854,13 @@ pub(crate) async fn open(
         // read one.
         None => match conn.query_first::<Option<String>, _>(PERFORMANCE_SCHEMA_SQL).await {
             Ok(answer) => self::performance_schema(answer.flatten().as_deref()),
+            // The connection is gone: the open fails here, not at the session's first statement.
+            Err(e) if e.is_fatal() => return Err((my_error(&e), false)),
             Err(_) => Fact::Unknown(Why::NotChecked),
         },
     };
-    let facts = crate::engine::opened_facts(&greeting, &report, own, performance_schema);
+    let marker = if token.is_some() { Fact::Known(()) } else { Fact::No(Why::MarkerUnconfirmed) };
+    let facts = crate::engine::opened_facts(&greeting, &report, own, performance_schema, marker);
     Ok(Opened { conn, wire, encryption, greeting, facts, tracked, id, read_only_unconfirmed, token, own, shown })
 }
 

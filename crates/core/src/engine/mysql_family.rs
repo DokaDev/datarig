@@ -165,11 +165,15 @@ impl SessionRules for FamilySession {
 pub(super) struct FamilyCancel;
 
 impl CancelRules for FamilyCancel {
-    /// As `performance_schema` is: the driver stops a statement only once it confirmed, there,
-    /// which connection runs it; with it off no statement is stopped on the server.
+    /// As the session's marker is: the driver stops a statement only once the server listed
+    /// the marker on the session's connection (in `performance_schema`); with that off, it never
+    /// is, which is the reason said first.
     fn server_cancel(&self, f: &ServerFacts) -> Support {
         match &f.detail {
-            EngineFacts::MySql(my) | EngineFacts::MariaDb(my) => my.performance_schema.clone(),
+            EngineFacts::MySql(my) | EngineFacts::MariaDb(my) => match &my.performance_schema {
+                Fact::No(why) => Fact::No(why.clone()),
+                Fact::Known(()) | Fact::Unknown(_) => my.marker.clone(),
+            },
             EngineFacts::Postgres(_) => Fact::Unknown(Why::NotChecked),
         }
     }

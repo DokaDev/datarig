@@ -6,6 +6,7 @@
 "engine.why.engines_disagree" = "서버 인사말과 VERSION()이 서로 다른 엔진을 가리킴"
 "engine.why.not_on_engine" = "이 엔진에는 없는 기능"
 "engine.why.feature_off" = "서버에서 {feature}이(가) 꺼져 있음"
+"engine.why.marker_unconfirmed" = "이 탭의 세션을 서버에서 확인할 수 없음"
 "engine.unconfirmed" = "서버 엔진을 확인할 수 없습니다: VERSION()이 답하지 않아(인사말로는 {greeting}) 다른 것을 실행하기 전에 세션을 닫았습니다"
 "engine.reports_changed" = "확인한 뒤에 서버 인사말과 VERSION()이 두 엔진을 가리키는 것으로 드러났습니다. 아무것도 보내지 않았습니다. 다시 실행하면 두 엔진의 규칙으로 새로 확인합니다"
 "engine.dollar_quotes_unknown" = "이 글에는 `$$` 따옴표가 있는데, 서버 인사말과 VERSION()이 서버가 이를 읽는지에 대해 서로 다릅니다. 아무것도 보내지 않았습니다"

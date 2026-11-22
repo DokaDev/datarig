@@ -206,17 +206,19 @@ fn greeting_of(my: &MyFacts) -> Greeting {
 /// directly, unless the greeting names the other engine: then something in between wrote it,
 /// and how the session reaches the server is not known. Its `performance_schema` not read.
 pub(crate) fn facts(g: &Greeting, report: &VersionReport, own: Option<bool>) -> Arc<ServerFacts> {
-    opened_facts(g, report, own, Fact::Unknown(Why::NotChecked))
+    opened_facts(g, report, own, Fact::Unknown(Why::NotChecked), Fact::Unknown(Why::NotChecked))
 }
 
-/// [`facts`], with whether the server's `performance_schema` is on as the connection read it.
+/// [`facts`], with whether the server's `performance_schema` is on and whether it listed the
+/// session's marker on its connection, as the connection read them.
 pub(crate) fn opened_facts(
     g: &Greeting,
     report: &VersionReport,
     own: Option<bool>,
     performance_schema: Support,
+    marker: Support,
 ) -> Arc<ServerFacts> {
-    let my = MyFacts { performance_schema, ..MyFacts::new(g.handshake, engine_of(g.mariadb)) };
+    let my = MyFacts { performance_schema, marker, ..MyFacts::new(g.handshake, engine_of(g.mariadb)) };
     let topology = match own {
         _ if report.engine != my.greeting => Fact::Unknown(Why::EnginesDisagree),
         Some(true) => Fact::Known(Topology::Direct),

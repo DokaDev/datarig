@@ -18,6 +18,10 @@ pub enum Why {
     NotOnEngine,
     /// The server has it switched off.
     FeatureOff(Feature),
+    /// The server did not list the session's own marker on its connection, so another
+    /// connection cannot tell it is the session's (a proxy in between, or an account that
+    /// cannot read where the server lists it).
+    MarkerUnconfirmed,
 }
 
 /// A part of a server that may be switched off there.
