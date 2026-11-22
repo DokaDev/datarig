@@ -227,6 +227,15 @@ pub(crate) fn own_of(handshake: u32, token: String, read: OwnRead) -> (u64, Opti
     }
 }
 
+/// Whether the session's marker was confirmed on its connection (`token`, [`own_of`]): only then
+/// can a connection of its own stop its statement.
+pub(crate) fn marker_of(token: Option<&str>) -> Support {
+    match token {
+        Some(_) => Fact::Known(()),
+        None => Fact::No(Why::MarkerUnconfirmed),
+    }
+}
+
 /// Whether the connection's id is shown for display only ([`DbEvent::ServerSession`]'s
 /// `shown`): it read its id (`read`), the id is the handshake's (lower 32 bits), and whether it
 /// is the server's own is not known (`own`, [`own_of`]: a marker not confirmed). Never with a
@@ -859,7 +868,7 @@ pub(crate) async fn open(
             Err(_) => Fact::Unknown(Why::NotChecked),
         },
     };
-    let marker = if token.is_some() { Fact::Known(()) } else { Fact::No(Why::MarkerUnconfirmed) };
+    let marker = marker_of(token.as_deref());
     let facts = crate::engine::opened_facts(&greeting, &report, own, performance_schema, marker);
     Ok(Opened { conn, wire, encryption, greeting, facts, tracked, id, read_only_unconfirmed, token, own, shown })
 }
