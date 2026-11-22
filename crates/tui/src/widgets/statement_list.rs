@@ -30,20 +30,10 @@ struct Row {
     /// shows that, the statement is the file's.
     original: Option<(String, String)>,
     note: Option<Note>,
-    /// Made by paste `.0` of [`StatementList::pastes`], with the text `.1` it was given then.
-    pasted: Option<(usize, String)>,
-}
-
-/// Text pasted as rows of their own, kept so that the rows are split again when the database
-/// kind changes (while they are as the paste made them).
-#[derive(Clone, Debug)]
-struct Paste {
-    raw: String,
-    /// On one line: what the focused row had before and after the cursor.
-    head: String,
-    tail: String,
-    /// A text with a line break: rows of its own.
-    lines: bool,
+    /// The database its text was read for (`Postgres` for none).
+    read_for: Dbms,
+    /// Pasted text the other kind of database splits otherwise: that kind.
+    pasted_otherwise: Option<Dbms>,
 }
 
 #[derive(Clone, Debug)]
@@ -58,20 +48,31 @@ pub struct StatementList {
     pub follow: bool,
     /// The database the statements are for (`None`: none, nothing is checked).
     dbms: Option<Dbms>,
-    pastes: Vec<Paste>,
 }
 
 impl StatementList {
     /// The statements `sql` of `dbms`, one per row.
     pub fn new(dbms: Option<Dbms>, sql: &[String]) -> Self {
-        let mut list = StatementList { rows: Vec::new(), row: 0, scroll: 0, follow: true, dbms, pastes: Vec::new() };
+        let mut list = StatementList { rows: Vec::new(), row: 0, scroll: 0, follow: true, dbms };
         for s in sql {
             let input = TextInput::new(&list.display(s));
             let shown = input.text().to_string();
-            list.rows.push(Row { input, original: Some((s.clone(), shown)), note: None, pasted: None });
+            list.rows.push(Row {
+                input,
+                original: Some((s.clone(), shown)),
+                note: None,
+                read_for: dbms.unwrap_or(Dbms::Postgres),
+                pasted_otherwise: None,
+            });
         }
         if list.rows.is_empty() {
-            list.rows.push(Row { input: TextInput::default(), original: None, note: None, pasted: None });
+            list.rows.push(Row {
+                input: TextInput::default(),
+                original: None,
+                note: None,
+                read_for: Dbms::Postgres,
+                pasted_otherwise: None,
+            });
         }
         list.check_all();
         list
@@ -80,79 +81,22 @@ impl StatementList {
     /// Statement `s` as one row shows it: on one line, without its line comments, a line break
     /// inside a string as [`NEWLINE`].
     fn display(&self, s: &str) -> String {
-        let one = session::join_statements(self.dbms.unwrap_or(Dbms::Postgres), &[s.to_string()]);
+        self.display_in(self.dbms.unwrap_or(Dbms::Postgres), s)
+    }
+
+    /// [`StatementList::display`] as `dbms` reads it.
+    fn display_in(&self, dbms: Dbms, s: &str) -> String {
+        let one = session::join_statements(dbms, &[s.to_string()]);
         one.replace("\r\n", "\n").replace(['\n', '\r'], NEWLINE)
     }
 
-    /// Check the statements again for `dbms` (the form's database changed). Pasted rows are
-    /// split again when the database kind changes.
+    /// Check the statements again for `dbms` (the form's database changed): a row whose text
+    /// splits otherwise for it than for the database it was read for asks to be checked.
     pub fn set_dbms(&mut self, dbms: Option<Dbms>) {
         if self.dbms != dbms {
-            let other = self.dbms.unwrap_or(Dbms::Postgres) != dbms.unwrap_or(Dbms::Postgres);
             self.dbms = dbms;
-            if other {
-                self.split_pastes_again();
-            }
             self.check_all();
         }
-    }
-
-    /// The rows of each paste whose rows are all still as it made them, split again as the
-    /// form's database reads it.
-    fn split_pastes_again(&mut self) {
-        for id in 0..self.pastes.len() {
-            let at: Vec<usize> =
-                (0..self.rows.len()).filter(|&i| self.rows[i].pasted.as_ref().is_some_and(|p| p.0 == id)).collect();
-            let (Some(&first), Some(&last)) = (at.first(), at.last()) else { continue };
-            let whole = last - first + 1 == at.len();
-            if !whole
-                || !at.iter().all(|&i| self.rows[i].pasted.as_ref().is_some_and(|p| p.1 == self.rows[i].input.text()))
-            {
-                continue;
-            }
-            let rows = self.paste_rows(&self.pastes[id].clone());
-            let made: Vec<Row> = rows
-                .into_iter()
-                .map(|t| Row { input: TextInput::new(&t), original: None, note: None, pasted: Some((id, t)) })
-                .collect();
-            self.rows.splice(first..=last, made);
-        }
-        if self.rows.is_empty() {
-            self.rows.push(Row { input: TextInput::default(), original: None, note: None, pasted: None });
-        }
-        self.row = self.row.min(self.rows.len() - 1);
-    }
-
-    /// The statements of pasted text `text`, each as a row shows it.
-    fn parts_of(&self, text: &str) -> Vec<String> {
-        let dbms = self.dbms.unwrap_or(Dbms::Postgres);
-        session::split_statements(dbms, text)
-            .iter()
-            .flat_map(|p| self.split_lines(p))
-            .map(|p| self.display(&p))
-            .filter(|p| !p.is_empty())
-            .collect()
-    }
-
-    /// The rows paste `p` makes.
-    fn paste_rows(&self, p: &Paste) -> Vec<String> {
-        let parts = self.parts_of(&p.raw);
-        if p.lines {
-            return parts;
-        }
-        if parts.len() < 2 {
-            return vec![format!("{}{}{}", p.head, p.raw, p.tail)];
-        }
-        let last = parts.len() - 1;
-        parts
-            .iter()
-            .enumerate()
-            .map(|(n, s)| match n {
-                0 => format!("{}{s}", p.head),
-                n if n == last => format!("{s}{}", p.tail),
-                _ => s.clone(),
-            })
-            .collect()
     }
 
     fn check_all(&mut self) {
@@ -163,6 +107,9 @@ impl StatementList {
 
     fn check(&mut self, i: usize) {
         let note = match (self.dbms, self.statement(i)) {
+            (Some(dbms), Some(s)) if self.splits_otherwise(i, dbms, &s) => {
+                Some(Note::Refused(SetProblem::SplitsOtherwise))
+            }
             (Some(dbms), Some(s)) => match Classifier::session_set(dbms.language(), &s) {
                 Err(p) => Some(Note::Refused(p)),
                 Ok(set) => set.read_only().err().map(Note::ReadOnly),
@@ -170,6 +117,14 @@ impl StatementList {
             _ => None,
         };
         self.rows[i].note = note;
+    }
+
+    /// Whether row `i`'s statement `s` reads otherwise for `dbms` than for the database it was
+    /// read for: it splits into other statements, or it was pasted from text that does.
+    fn splits_otherwise(&self, i: usize, dbms: Dbms, s: &str) -> bool {
+        let r = &self.rows[i];
+        r.pasted_otherwise == Some(dbms)
+            || (r.read_for != dbms && session::split_statements(r.read_for, s) != session::split_statements(dbms, s))
     }
 
     /// How many rows it has (one at least).
@@ -199,6 +154,9 @@ impl StatementList {
     /// The focused row was edited: its text is its own now, checked again.
     pub fn edited(&mut self) {
         self.row = self.row.min(self.rows.len() - 1);
+        let r = &mut self.rows[self.row];
+        r.read_for = self.dbms.unwrap_or(Dbms::Postgres);
+        r.pasted_otherwise = None;
         self.check(self.row);
         self.follow = true;
     }
@@ -264,7 +222,16 @@ impl StatementList {
     /// An empty row below the focused one, focused.
     pub fn add_below(&mut self) {
         let at = (self.row + 1).min(self.rows.len());
-        self.rows.insert(at, Row { input: TextInput::default(), original: None, note: None, pasted: None });
+        self.rows.insert(
+            at,
+            Row {
+                input: TextInput::default(),
+                original: None,
+                note: None,
+                read_for: Dbms::Postgres,
+                pasted_otherwise: None,
+            },
+        );
         self.focus(at);
     }
 
@@ -282,7 +249,13 @@ impl StatementList {
             return;
         }
         if self.rows.len() == 1 {
-            self.rows[0] = Row { input: TextInput::default(), original: None, note: None, pasted: None };
+            self.rows[0] = Row {
+                input: TextInput::default(),
+                original: None,
+                note: None,
+                read_for: Dbms::Postgres,
+                pasted_otherwise: None,
+            };
         } else {
             self.rows.remove(i);
         }
@@ -335,9 +308,9 @@ impl StatementList {
 
     /// Statement text `text` cut before each line that starts with `SET` (outside strings and
     /// comments): a statement of its own, which no `;` ended.
-    fn split_lines(&self, text: &str) -> Vec<String> {
+    fn split_lines(&self, dbms: Dbms, text: &str) -> Vec<String> {
         use datarig_core::sql::lexer::{Tok, lex_in};
-        let dialect = self.dbms.unwrap_or(Dbms::Postgres).language().dialect();
+        let dialect = dbms.language().dialect();
         let mut cuts = vec![0];
         let mut line_start = false;
         // Inside an executable comment (`/*! … */`): its lines are one piece of the statement.
@@ -362,19 +335,39 @@ impl StatementList {
         cuts.windows(2).map(|w| text[w[0]..w[1]].trim().to_string()).filter(|p| !p.is_empty()).collect()
     }
 
+    /// The rows pasted text `text` makes as `dbms` reads it.
+    fn parts_in(&self, dbms: Dbms, text: &str) -> Vec<String> {
+        session::split_statements(dbms, text)
+            .iter()
+            .flat_map(|p| self.split_lines(dbms, p))
+            .map(|p| self.display_in(dbms, &p))
+            .filter(|p| !p.is_empty())
+            .collect()
+    }
+
     /// Text pasted into the focused row. Its statements are those `;` ends, and each line that
     /// starts with `SET` starts one too. A text with a line break is rows of its own: in the
     /// focused row when that is empty, else after it. On one line, several statements become rows
     /// after the focused one (what followed the cursor goes at the end of the last); one goes in
     /// at the cursor.
     pub fn paste(&mut self, text: &str) {
-        let parts = self.parts_of(text);
+        let dbms = self.dbms.unwrap_or(Dbms::Postgres);
+        let parts = self.parts_in(dbms, text);
+        // The other kind of database splits the text otherwise: its rows ask to be checked
+        // when the form's database becomes that kind.
+        let other = if dbms == Dbms::Postgres { Dbms::MySql } else { Dbms::Postgres };
+        let otherwise = (self.parts_in(other, text) != parts).then_some(other);
+        let row = |t: &str| Row {
+            input: TextInput::new(t),
+            original: None,
+            note: None,
+            read_for: dbms,
+            pasted_otherwise: otherwise,
+        };
         if text.contains(['\n', '\r']) {
             if parts.is_empty() {
                 return;
             }
-            let id = self.pastes.len();
-            self.pastes.push(Paste { raw: text.to_string(), head: String::new(), tail: String::new(), lines: true });
             let i = self.row.min(self.rows.len() - 1);
             let mut at = if self.text(i).trim().is_empty() {
                 self.rows.remove(i);
@@ -383,8 +376,7 @@ impl StatementList {
                 i + 1
             };
             for p in parts {
-                let row = Row { input: TextInput::new(&p), original: None, note: None, pasted: Some((id, p)) };
-                self.rows.insert(at, row);
+                self.rows.insert(at, row(&p));
                 self.check(at);
                 at += 1;
             }
@@ -394,6 +386,9 @@ impl StatementList {
         if parts.len() < 2 {
             self.current_mut().insert_str(text);
             self.edited();
+            let i = self.row;
+            self.rows[i].pasted_otherwise = otherwise;
+            self.check(i);
             return;
         }
         let i = self.row.min(self.rows.len() - 1);
@@ -402,13 +397,16 @@ impl StatementList {
             let at: usize = t.graphemes(true).take(self.rows[i].input.cursor()).map(str::len).sum();
             (t[..at].to_string(), t[at..].to_string())
         };
-        let id = self.pastes.len();
-        let paste = Paste { raw: text.to_string(), head, tail, lines: false };
-        let rows = self.paste_rows(&paste);
-        self.pastes.push(paste);
-        let last = rows.len() - 1;
-        for (n, text) in rows.into_iter().enumerate() {
-            let row = Row { input: TextInput::new(&text), original: None, note: None, pasted: Some((id, text)) };
+        let shown = parts;
+        let last = shown.len() - 1;
+        for (n, s) in shown.iter().enumerate() {
+            let text = match n {
+                0 if last == 0 => format!("{head}{s}{tail}"),
+                0 => format!("{head}{s}"),
+                n if n == last => format!("{s}{tail}"),
+                _ => s.clone(),
+            };
+            let row = row(&text);
             if n == 0 {
                 self.rows[i] = row;
             } else {
@@ -416,7 +414,8 @@ impl StatementList {
             }
             self.check(i + n);
         }
-        self.focus(i + last);
+        let end = i + last;
+        self.focus(end);
     }
 }
 

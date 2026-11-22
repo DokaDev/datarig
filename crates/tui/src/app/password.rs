@@ -439,10 +439,9 @@ impl App {
         }
         // A change of where the profile connects disconnects it: refused while that would end
         // something of a tab's (the form stays open, with its edits).
-        let moved = editing.and_then(|i| self.profiles.get(i)).is_some_and(|o| moves(o, &form.to_profile()));
-        let pid = form.profile_id();
-        if moved && self.profile_busy(pid) {
-            return self.flash(Notice::new(Label::ProfilesConnectionInUse, Level::Warning));
+        let p = form.to_profile();
+        if self.connect_change_refused(editing, &p) {
+            return;
         }
         let Some(form) = self.overlays.form() else { return };
         // A preset environment picked here is written with the profile: other profiles that
@@ -520,6 +519,12 @@ impl App {
         let Some(form) = self.overlays.form() else { return };
         let editing = form.editing;
         let mut p = form.to_profile();
+        // Checked again where it is applied: a run that waited may have started meanwhile.
+        if self.connect_change_refused(editing, &p) {
+            self.pending_tunnel_secret = None;
+            return;
+        }
+        let Some(form) = self.overlays.form() else { return };
         // "Save as tunnel preset": the preset is saved with the profile (one write), then the
         // profile's tunnel secret moves to it, from the store it is in as saved (the form may
         // have changed it) to the one the preset keeps it in.
@@ -725,6 +730,17 @@ impl App {
             self.disconnect(p.id, false);
         }
         idx
+    }
+
+    /// A save of profile `p` (editing profile `editing`) that changes where it connects, while a
+    /// tab on it has what the disconnect would end: refused, and said so (the form stays open).
+    pub(super) fn connect_change_refused(&mut self, editing: Option<usize>, p: &ConnectionConfig) -> bool {
+        let moved = editing.and_then(|i| self.profiles.get(i)).is_some_and(|o| moves(o, p));
+        if !moved || !self.profile_busy(p.id) {
+            return false;
+        }
+        self.flash(Notice::new(Label::ProfilesConnectionInUse, Level::Warning));
+        true
     }
 
     /// A tab on profile `id` has what a disconnect would end: an open transaction, pending

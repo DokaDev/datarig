@@ -59,6 +59,9 @@ pub enum SetProblem {
     /// from 1 (`DEFAULT`, `0`, which the server takes as 1, an expression): the server counts it
     /// inside a transaction too, so the app could not warn before it ends one.
     IdleValue,
+    /// Read for another kind of database, it splits into other statements for this one (the
+    /// form's database changed since it was written or pasted).
+    SplitsOtherwise,
 }
 
 /// Why the app does not let a start-up statement change a setting, and what sets it instead.

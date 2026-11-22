@@ -141,6 +141,7 @@ impl App {
             SetProblem::ModeDependent => Label::SetModeDependent,
             SetProblem::Backslash => Label::SetBackslash,
             SetProblem::IdleValue => Label::SetIdleValue,
+            SetProblem::SplitsOtherwise => Label::SetSplitsOtherwise,
             SetProblem::TransactionOnly { name } => {
                 return self.i18n.msg(&Msg::SetTransactionOnly { setting: name.clone() }).to_string();
             }
