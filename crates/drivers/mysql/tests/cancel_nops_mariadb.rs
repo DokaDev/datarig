@@ -376,11 +376,10 @@ async fn the_own_session_is_not_known_but_its_id_is_shown() {
     let evs = c.until(15, |e| matches!(e, DbEvent::ServerSession { request: 3, .. })).await;
     let Some(DbEvent::ServerSession { own, shown, .. }) = evs.last() else { panic!("{evs:?}") };
     assert_eq!(*own, OwnSession::NotKnown);
-    let marker = format!("zz_nops_shown_{}", std::process::id());
-    let mut a = side(&url).await;
-    c.send(4, &[&format!("SELECT SLEEP(1) AS {marker}")]);
-    let on = running(&mut a, &marker).await;
-    assert_eq!(*shown, i64::try_from(on).ok(), "the id its statements run on");
-    c.answer(4).await;
-    a.disconnect().await.unwrap();
+    // The id the server names the session by, asked on the session itself.
+    c.send(4, &["SELECT CONNECTION_ID()"]);
+    let evs = c.answer(4).await;
+    let Some(DbEvent::Page { rows, .. }) = evs.last() else { panic!("{evs:?}") };
+    let on: Option<i64> = rows[0][0].as_deref().and_then(|v| v.parse().ok());
+    assert_eq!(*shown, on, "the id its statements run on");
 }
