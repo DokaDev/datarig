@@ -1365,3 +1365,16 @@ fn analyze_of_parentheses_takes_a_query_only() {
         }
     }
 }
+
+/// With a format that is no name or string, the whole text is read, the format's words too: a
+/// call written there is seen (the statement is not known either way).
+#[test]
+fn a_format_that_is_no_name_keeps_the_whole_text_read() {
+    for judge in [MYSQL, MARIADB, MYSQL.with_sibling(), MARIADB.with_sibling()] {
+        let r = classify("ANALYZE FORMAT=zz_f(1) SELECT 1", judge);
+        assert!(r.unchecked_call.is_some() && r.read_only().is_err(), "{judge:?}: {r:?}");
+        // Text after a parenthesised query is read as the bare text is.
+        let (wrapped, bare) = (classify("ANALYZE (SELECT 1) SELECT 2", judge), classify("(SELECT 1) SELECT 2", judge));
+        assert_eq!((wrapped.class, wrapped.read_only().is_ok()), (bare.class, bare.read_only().is_ok()), "{judge:?}");
+    }
+}
