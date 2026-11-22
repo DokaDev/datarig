@@ -738,9 +738,9 @@ async fn a_failed_marker_lookup_still_reads_the_own_id() {
 /// Whether the server's `performance_schema` is on, in a session's facts (the dev servers have
 /// it on): a session whose marker the server confirmed found it there, so it is on and nothing
 /// more is read; a session whose marker was not confirmed (behind a proxy that numbers its
-/// clients, or after a failed marker lookup) reads it alone, once, last. When that read fails it
-/// is not known, and nothing else changes: the session opens, and reaches the server as its own
-/// id says.
+/// clients, or after a failed marker lookup) reads it alone, once, last. When that read fails, or
+/// answers `NULL`, it is not known, and nothing else changes: the session opens, and reaches the
+/// server as its own id says.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_facts_say_whether_performance_schema_is_on() {
     use datarig_core::engine::EngineFacts;
@@ -760,6 +760,17 @@ async fn the_facts_say_whether_performance_schema_is_on() {
         ((false, true, false), (1, Fact::Known(Topology::Direct), Fact::Known(()))),
         ((false, true, true), (1, Fact::Known(Topology::Direct), Fact::Unknown(Why::NotChecked))),
     ];
+    // An answer of `NULL` (a proxy's) is not known either, and the session opens.
+    let proxy = Proxy::start(&upstream(&url)).await;
+    proxy.offset_ids(0x0100_0000);
+    proxy.fault_start(READ, Fault::Instead("SELECT NULL".into()));
+    let (mut c, before) = Conn::start(&proxy.url(&url), SessionRole::Query, test).await;
+    assert!(!proxy.fault_pending(), "the read met its fault");
+    let f = facts_first(SessionRole::Query, &before);
+    assert_eq!(ps_of(&f), Fact::Unknown(Why::NotChecked), "{f:?}");
+    assert_eq!(f.topology, Fact::Known(Topology::Pooled), "{f:?}");
+    let evs = c.ok(1, "SELECT 1").await;
+    assert!(matches!(evs.last(), Some(DbEvent::Page { .. })), "the session goes on: {evs:?}");
     for ((numbering, lookup_fails, read_fails), (sent, topology, ps)) in rows {
         let what = format!("numbering {numbering}, lookup fails {lookup_fails}, read fails {read_fails}");
         let proxy = Proxy::start(&upstream(&url)).await;
