@@ -1596,6 +1596,16 @@ fn starts_analyzed(w: &W) -> bool {
         || ["SELECT", "VALUES", "WITH", "INSERT", "REPLACE", "UPDATE", "DELETE"].iter().any(|k| w.is(k))
 }
 
+/// Whether `rest` starts a statement `ANALYZE` names: one of [`starts_analyzed`]'s words, or
+/// parentheses around a query (`SELECT`, `WITH`, `VALUES` after the opening ones).
+fn names_statement(rest: &[W]) -> bool {
+    match rest.iter().position(|w| w.kind != Tok::LParen) {
+        Some(0) => rest.first().is_some_and(starts_analyzed),
+        Some(i) => ["SELECT", "WITH", "VALUES"].iter().any(|k| rest[i].is(k)),
+        None => false,
+    }
+}
+
 /// The statement `ws` names when it is `ANALYZE [FORMAT=<v>] <statement>`, else `ws`.
 fn analyzed<'a, 'b>(ws: &'b [W<'a>]) -> &'b [W<'a>] {
     if !ws.first().is_some_and(|w| w.is("ANALYZE")) || !analyzes_statement(ws) {
@@ -1603,7 +1613,7 @@ fn analyzed<'a, 'b>(ws: &'b [W<'a>]) -> &'b [W<'a>] {
     }
     let at = if ws[1].is("FORMAT") { 4 } else { 1 };
     match ws.get(at..) {
-        Some(rest) if rest.first().is_some_and(starts_analyzed) && (at == 1 || format_given(ws)) => rest,
+        Some(rest) if names_statement(rest) && (at == 1 || format_given(ws)) => rest,
         _ => ws,
     }
 }
@@ -1621,7 +1631,7 @@ fn analyze(ws: &[W], judge: Judge) -> Risk {
         1
     };
     match ws.get(at..) {
-        Some(rest) if rest.first().is_some_and(starts_analyzed) => kind(rest, judge),
+        Some(rest) if names_statement(rest) => kind(rest, judge),
         _ => unrecognized(),
     }
 }
