@@ -829,6 +829,8 @@ fn count_query_wraps_a_repeatable_query() {
 
 /// Statements a read-only policy must refuse, whatever is written around their words.
 const NOT_READS: &[&str] = &[
+    "ANALYZE DELETE FROM t",
+    "ANALYZE FORMAT=JSON UPDATE t SET a = 1",
     "DELETE FROM t WHERE id = 1",
     "DELETE FROM t",
     "UPDATE t SET a = 1 WHERE id = 1",
@@ -1037,4 +1039,59 @@ fn analyze_of_a_users_function_asks_and_read_only_refuses_it() {
     assert!(r.confirm(false).is_none() && r.read_only().is_ok());
     // Without ANALYZE nothing runs: no question.
     assert_eq!(risk("EXPLAIN SELECT f(1)").danger, None);
+}
+
+/// MariaDB's `ANALYZE <statement>` (`FORMAT=JSON` too) runs the statement: it is judged as the
+/// statement it runs, in every reading (a MySQL reading may be a MariaDB server's until the
+/// session says). `ANALYZE TABLE` stays maintenance, and `EXPLAIN ANALYZE` is as before.
+#[test]
+fn analyze_of_a_statement_is_judged_as_that_statement() {
+    for mode in [MODE, MARIADB] {
+        for stmt in [
+            "DELETE FROM zz_t",
+            "UPDATE zz_t SET a = 1",
+            "INSERT INTO zz_t VALUES (1)",
+            "REPLACE INTO zz_t VALUES (1)",
+            "SELECT * FROM zz_t",
+            "(SELECT * FROM zz_t)",
+            "WITH c AS (SELECT 1) DELETE FROM zz_t",
+        ] {
+            let bare = classify(stmt, mode);
+            for prefix in ["ANALYZE ", "ANALYZE FORMAT=JSON ", "analyze format = json ", "ANALYZE FORMAT=TRADITIONAL "]
+            {
+                let sql = format!("{prefix}{stmt}");
+                let r = classify(&sql, mode);
+                for writes in [false, true] {
+                    assert_eq!(r.confirm(writes), bare.confirm(writes), "{mode:?} {sql} (writes {writes})");
+                }
+                assert_eq!(r.read_only().is_ok(), bare.read_only().is_ok(), "{mode:?} {sql}");
+                assert_eq!((r.class, r.writes, r.danger), (bare.class, bare.writes, bare.danger), "{mode:?} {sql}");
+                assert!(!r.rolls_back(), "{mode:?} {sql}: nothing undoes it");
+            }
+        }
+        for sql in ["ANALYZE TABLE zz_t", "ANALYZE NO_WRITE_TO_BINLOG TABLE zz_t", "ANALYZE LOCAL TABLE zz_t, zz_u"] {
+            assert_eq!(classify(sql, mode).class, Class::Maintenance, "{mode:?} {sql}");
+        }
+        let explain = classify("EXPLAIN ANALYZE DELETE FROM zz_t", mode);
+        assert!(explain.rolls_back() && explain.danger == Some(Danger::DeleteAll), "{mode:?}");
+    }
+}
+
+/// `ANALYZE` names one statement: after `ANALYZE [FORMAT=<v>]` only a statement starts, so a
+/// long run of the prefix is read at once (not one level per prefix) and is not known: it asks
+/// and a read-only profile refuses it.
+#[test]
+fn analyze_takes_one_statement_only() {
+    let long = format!("{}SELECT 1", "ANALYZE FORMAT=JSON ".repeat(12_000));
+    for sql in [
+        long.as_str(),
+        "ANALYZE ANALYZE DELETE FROM zz_t",
+        "ANALYZE FORMAT=JSON EXPLAIN DELETE FROM zz_t",
+        "ANALYZE FORMAT=JSON",
+    ] {
+        for mode in [MODE, MARIADB] {
+            let r = classify(sql, mode);
+            assert!(r.confirm(false).is_some() && r.read_only().is_err(), "{mode:?} {}", &sql[..sql.len().min(60)]);
+        }
+    }
 }

@@ -62,6 +62,7 @@ mod flows_keychain;
 mod flows_keychain_offer;
 mod flows_layout;
 mod flows_manual_commit;
+mod flows_mariadb_analyze;
 mod flows_menu;
 mod flows_monitor;
 mod flows_mouse;

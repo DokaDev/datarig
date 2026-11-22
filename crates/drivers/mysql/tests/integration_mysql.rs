@@ -8788,3 +8788,54 @@ async fn a_delimiter_script_with_executable_comments_runs_as_written() {
     });
     assert_eq!(got.as_deref(), Some(if maria { "12" } else { "--" }), "{evs:?}");
 }
+
+/// `ANALYZE <statement>`: MariaDB runs the statement (with `FORMAT=JSON` too), and the
+/// classifier judges it as that statement in every reading; MySQL refuses the text. `ANALYZE
+/// TABLE` runs on both.
+#[tokio::test(flavor = "multi_thread")]
+async fn analyze_of_a_statement_runs_it_on_mariadb() {
+    let test = "analyze_of_a_statement_runs_it_on_mariadb";
+    let Some(url) = my_url(test) else { return };
+    let maria = mariadb(&url).await;
+    let t = Table::make(&url, "analyze", &["CREATE TABLE {t} (id INT PRIMARY KEY, v INT)"]).await;
+    let q = t.q();
+    let mut side_c = side(&url).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let mut id = 0;
+    for prefix in ["ANALYZE ", "ANALYZE FORMAT=JSON "] {
+        let stmt = format!("DELETE FROM {q}");
+        let sql = format!("{prefix}{stmt}");
+        for mariadb in [false, true] {
+            let mode = MySqlMode { mariadb, ..MySqlMode::default() };
+            let (r, bare) = (
+                datarig_core::sql::risk::mysql::classify(&sql, mode),
+                datarig_core::sql::risk::mysql::classify(&stmt, mode),
+            );
+            assert_eq!(
+                (r.confirm(false), r.read_only().is_ok()),
+                (bare.confirm(false), bare.read_only().is_ok()),
+                "{sql}"
+            );
+        }
+        side_c.query_drop(format!("DELETE FROM {q}")).await.unwrap();
+        side_c.query_drop(format!("INSERT INTO {q} VALUES (1, 1), (2, 1), (3, 1)")).await.unwrap();
+        id += 1;
+        let evs = c.run(id, &[sql.as_str()]).await;
+        let failed = matches!(evs.last(), Some(DbEvent::Failed { .. }));
+        let left: Vec<(i32, i32)> = side_c.query(format!("SELECT id, v FROM {q} ORDER BY id")).await.unwrap();
+        if maria {
+            assert!(!failed && left.is_empty(), "{sql}: {evs:?} {left:?}");
+        } else {
+            assert!(failed && left.len() == 3, "{sql}: {evs:?} {left:?}");
+        }
+    }
+    let sql = format!("ANALYZE TABLE {q}");
+    assert_eq!(
+        datarig_core::sql::risk::mysql::classify(&sql, MySqlMode::default()).class,
+        datarig_core::sql::risk::Class::Maintenance
+    );
+    id += 1;
+    let evs = c.run(id, &[sql.as_str()]).await;
+    assert!(!matches!(evs.last(), Some(DbEvent::Failed { .. })), "{evs:?}");
+    side_c.disconnect().await.unwrap();
+}
