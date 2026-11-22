@@ -1346,6 +1346,8 @@ fn with_calls(mut risk: Risk, ws: &[W], mode: MySqlMode) -> Risk {
 /// The risk of one statement (its tokens) on a server of `mode`.
 fn statement(ws: &[W], mode: MySqlMode) -> Risk {
     let mut risk = kind(ws, mode);
+    // What `ANALYZE` names is read on its own (its `FORMAT=JSON (` is no call).
+    let ws = analyzed(ws);
     // A locking read anywhere (a subquery of a `SET`, a `SHOW … WHERE`, …) takes row locks; what
     // `EXPLAIN` only plans takes none.
     if risk.class < Class::Write && risk.explain != Explain::Plan && locks(ws) && !routine_body(ws) {
@@ -1459,6 +1461,9 @@ fn kind(ws: &[W], mode: MySqlMode) -> Risk {
         }
         "LOAD" if word(1) == "INDEX" => maintenance(None),
         "ANALYZE" if analyzes_statement(ws) => analyze(ws, mode),
+        // Only `ANALYZE [NO_WRITE_TO_BINLOG | LOCAL] TABLE …` is maintenance; anything else is
+        // not known.
+        "ANALYZE" if !analyzes_table(ws) => unrecognized(),
         "ANALYZE" | "OPTIMIZE" | "CHECK" | "CHECKSUM" | "REPAIR" | "CACHE" => maintenance(None),
         "FLUSH" => {
             let locks = ws.windows(3).any(|w| w[0].is("WITH") && w[1].is("READ") && w[2].is("LOCK"))
@@ -1570,10 +1575,28 @@ fn analyzes_statement(ws: &[W]) -> bool {
     ws.get(1).is_some_and(|w| w.is("FORMAT") || w.is("ANALYZE") || w.is("EXPLAIN") || starts_analyzed(w))
 }
 
+/// `ANALYZE [NO_WRITE_TO_BINLOG | LOCAL] TABLE …`.
+fn analyzes_table(ws: &[W]) -> bool {
+    let at = if ws.get(1).is_some_and(|w| w.is("NO_WRITE_TO_BINLOG") || w.is("LOCAL")) { 2 } else { 1 };
+    ws.get(at).is_some_and(|w| w.is("TABLE") || w.is("TABLES"))
+}
+
 /// The first word of a statement `ANALYZE` names (one: never `ANALYZE` or `EXPLAIN` again).
 fn starts_analyzed(w: &W) -> bool {
     w.kind == Tok::LParen
         || ["SELECT", "VALUES", "WITH", "INSERT", "REPLACE", "UPDATE", "DELETE"].iter().any(|k| w.is(k))
+}
+
+/// The statement `ws` names when it is `ANALYZE [FORMAT=<v>] <statement>`, else `ws`.
+fn analyzed<'a, 'b>(ws: &'b [W<'a>]) -> &'b [W<'a>] {
+    if !ws.first().is_some_and(|w| w.is("ANALYZE")) || !analyzes_statement(ws) {
+        return ws;
+    }
+    let at = if ws[1].is("FORMAT") { 4 } else { 1 };
+    match ws.get(at..) {
+        Some(rest) if rest.first().is_some_and(starts_analyzed) && (at == 1 || ws[2].is_op("=")) => rest,
+        _ => ws,
+    }
 }
 
 /// [`analyzes_statement`]: judged as the statement it runs, which nothing undoes. Read so in
