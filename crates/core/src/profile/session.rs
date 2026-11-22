@@ -654,15 +654,21 @@ pub fn split_statements(dbms: Dbms, text: &str) -> Vec<String> {
 /// Statements of `dbms` as one field shows them: joined by `; `, each without its line comments
 /// (`-- …`, MySQL's `# …`), which would hide the statements after it on the one line, and with
 /// its line breaks as blanks (outside strings they are blanks to the server too; a string that
-/// holds one keeps it).
+/// holds one keeps it). A line comment another kind of database may read otherwise stays, with
+/// the line break that ends it: one that holds an executable comment, and `--` with no blank
+/// after it.
 pub fn join_statements(dbms: Dbms, sql: &[String]) -> String {
     use crate::sql::lexer::{Tok, lex_in};
     let one = |s: &String| {
         let mut out = String::new();
         for t in lex_in(s, dbms.language().dialect()) {
             match t.kind {
+                Tok::LineComment if kept_line_comment(t.text(s)) => {
+                    out.push_str(t.text(s).trim_end_matches(['\n', '\r']));
+                    out.push('\n');
+                }
                 Tok::LineComment | Tok::Whitespace => {
-                    if !out.is_empty() && !out.ends_with(' ') {
+                    if !out.is_empty() && !out.ends_with([' ', '\n']) {
                         out.push(' ');
                     }
                 }
@@ -672,6 +678,13 @@ pub fn join_statements(dbms: Dbms, sql: &[String]) -> String {
         out.trim_end().to_string()
     };
     sql.iter().map(one).collect::<Vec<_>>().join("; ")
+}
+
+/// A line comment the field keeps: one that holds an executable comment, or `--` not followed by
+/// a blank (only PostgreSQL's reading takes that for a comment).
+fn kept_line_comment(c: &str) -> bool {
+    crate::sql::split::is_executable_comment(c)
+        || c.strip_prefix("--").is_some_and(|r| !r.starts_with(char::is_whitespace) && !r.is_empty())
 }
 
 #[cfg(test)]

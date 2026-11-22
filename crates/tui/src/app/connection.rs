@@ -453,7 +453,7 @@ impl App {
             match current {
                 // Checked (and confirmed) before it was queued.
                 Some((profile, binding)) if q.profile == id && profile == Some(id) && binding == q.binding => {
-                    self.run_approved(q.tab, q.statements);
+                    self.run_approved(q.tab, q.statements, q.read_in);
                 }
                 Some(_) => {
                     self.tab_status(q.tab, Notice::new(Msg::QueryQueuedDropped { name: name.clone() }, Level::Warning))

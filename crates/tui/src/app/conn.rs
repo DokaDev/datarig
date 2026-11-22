@@ -56,6 +56,8 @@ pub struct Queued {
     pub profile: ProfileId,
     pub binding: u64,
     pub statements: Vec<String>,
+    /// The dialect the statements were read in.
+    pub read_in: datarig_core::sql::dialect::Dialect,
 }
 
 /// The key constraints of a profile's tables. Not knowing them is never taken for "no keys":

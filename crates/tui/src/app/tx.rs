@@ -616,7 +616,8 @@ impl App {
             target: None,
             sql: sql.clone(),
         };
-        self.ask_before_run_as(id, pid, vec![sql], vec![item], true);
+        let read_in = self.tab_dialect(id);
+        self.ask_before_run_as(id, pid, vec![sql], vec![item], true, read_in);
     }
 }
 

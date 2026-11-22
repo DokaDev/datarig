@@ -314,8 +314,15 @@ impl App {
 
     /// Ask before `statements` run in tab `id` (bound to profile `pid`); `items` are the ones
     /// that ask.
-    pub(super) fn ask_before_run(&mut self, id: TabId, pid: ProfileId, statements: Vec<String>, items: Vec<Dangerous>) {
-        self.ask_before_run_as(id, pid, statements, items, false)
+    pub(super) fn ask_before_run(
+        &mut self,
+        id: TabId,
+        pid: ProfileId,
+        statements: Vec<String>,
+        items: Vec<Dangerous>,
+        read_in: Dialect,
+    ) {
+        self.ask_before_run_as(id, pid, statements, items, false, read_in)
     }
 
     /// [`App::ask_before_run`]; `as_is`: the statements are to run as they are, outside any
@@ -327,6 +334,7 @@ impl App {
         statements: Vec<String>,
         items: Vec<Dangerous>,
         as_is: bool,
+        read_in: Dialect,
     ) {
         let Some((binding, generation)) = self.tabs.get(id).map(|t| (t.binding, t.exec.generation)) else { return };
         self.overlays.close(OverlayKind::Commands);
@@ -337,6 +345,7 @@ impl App {
             profile: pid,
             binding,
             statements,
+            read_in,
             items,
             run_focused: false,
             as_is,
@@ -380,7 +389,7 @@ impl App {
         let same_session = |t: &Tab| !c.as_is || (t.exec.generation == c.generation && t.exec.session.is_some());
         match self.tabs.get(c.tab).map(|t| (t.profile, t.binding, same_session(t))) {
             Some((Some(p), b, true)) if p == c.profile && b == c.binding => {
-                self.run_approved_as(c.tab, c.statements, c.as_is)
+                self.run_approved_as(c.tab, c.statements, c.as_is, c.read_in)
             }
             Some(_) => {
                 self.unstage_run(c.tab);

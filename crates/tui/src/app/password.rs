@@ -695,8 +695,12 @@ impl App {
         }
     }
 
-    /// Put the saved profile in the list (and in the active connection); its index.
+    /// Put the saved profile in the list (and in the active connection); its index. A profile
+    /// whose driver or server changed is disconnected (its sessions are for the old one).
     pub(super) fn put_profile(&mut self, editing: Option<usize>, p: ConnectionConfig) -> usize {
+        let moved = editing
+            .and_then(|i| self.profiles.get(i))
+            .is_some_and(|o| (&o.driver, &o.host, o.port, &o.dsn) != (&p.driver, &p.host, p.port, &p.dsn));
         let idx = match editing {
             Some(i) => {
                 self.profiles[i] = p.clone();
@@ -711,6 +715,9 @@ impl App {
             self.folders.insert(&f);
         }
         self.sync_profile_tabs(p.id);
+        if moved {
+            self.disconnect(p.id, false);
+        }
         idx
     }
 
