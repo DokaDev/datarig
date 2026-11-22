@@ -3,6 +3,26 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.41.7 (2026-11-22)
+
+A patch release with one fix to how statements are judged on MariaDB.
+
+### Fixed
+
+- On MariaDB, `ANALYZE` of a statement is judged as the statement it runs: it asks and is
+  refused as that statement is.
+
+## 0.41.6 (2026-11-22)
+
+A patch release with fixes to how statements are split and sent when the database kind changes.
+
+### Fixed
+
+- Comments are kept in the statement text that is sent in more cases, and statements are split
+  again when the database kind changes: a run in a tab without a connection, and a profile
+  whose driver changed (it is connected again once nothing is open in its tabs). Startup SQL
+  rows that read otherwise for the profile's database ask to be checked before the form saves.
+
 ## 0.41.5 (2026-11-21)
 
 A patch release with one fix to how statements are split before they are sent.
