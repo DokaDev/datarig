@@ -437,6 +437,14 @@ impl App {
             }
             return;
         }
+        // A change of where the profile connects disconnects it: refused while that would end
+        // something of a tab's (the form stays open, with its edits).
+        let moved = editing.and_then(|i| self.profiles.get(i)).is_some_and(|o| moves(o, &form.to_profile()));
+        let pid = form.profile_id();
+        if moved && self.profile_busy(pid) {
+            return self.flash(Notice::new(Label::ProfilesConnectionInUse, Level::Warning));
+        }
+        let Some(form) = self.overlays.form() else { return };
         // A preset environment picked here is written with the profile: other profiles that
         // already name it (while no environment has that name) would take its rules. Asked first.
         let (made_env, id) = (form.made_environment().cloned(), form.profile_id());
@@ -698,9 +706,7 @@ impl App {
     /// Put the saved profile in the list (and in the active connection); its index. A profile
     /// whose driver or server changed is disconnected (its sessions are for the old one).
     pub(super) fn put_profile(&mut self, editing: Option<usize>, p: ConnectionConfig) -> usize {
-        let moved = editing
-            .and_then(|i| self.profiles.get(i))
-            .is_some_and(|o| (&o.driver, &o.host, o.port, &o.dsn) != (&p.driver, &p.host, p.port, &p.dsn));
+        let moved = editing.and_then(|i| self.profiles.get(i)).is_some_and(|o| moves(o, &p));
         let idx = match editing {
             Some(i) => {
                 self.profiles[i] = p.clone();
@@ -719,6 +725,13 @@ impl App {
             self.disconnect(p.id, false);
         }
         idx
+    }
+
+    /// A tab on profile `id` has what a disconnect would end: an open transaction, pending
+    /// changes or a running statement.
+    fn profile_busy(&self, id: ProfileId) -> bool {
+        let mine: Vec<&Tab> = self.tabs.iter().filter(|t| t.profile == Some(id)).collect();
+        mine.iter().any(|t| t.exec.tx_at_risk() || t.exec.running.is_some() || self.pending_in(Some(t.id)) > 0)
     }
 
     /// The tabs on profile `id` follow its driver's language (its driver may have changed).
@@ -848,4 +861,9 @@ pub struct PasswordPrompt {
     /// Where the checkbox was drawn, and the buttons (kept by the renderer, for the mouse).
     pub checkbox: ratatui::layout::Rect,
     pub buttons: overlay::Buttons,
+}
+
+/// Whether profile `o` saved as `p` connects elsewhere: another driver or server.
+fn moves(o: &ConnectionConfig, p: &ConnectionConfig) -> bool {
+    (&o.driver, &o.host, o.port, &o.dsn) != (&p.driver, &p.host, p.port, &p.dsn)
 }
