@@ -361,3 +361,26 @@ async fn a_queued_run_and_the_rest_of_a_cancelled_run_never_run_without_performa
     assert_eq!(t.count().await, 0, "no later statement ran");
     a.disconnect().await.unwrap();
 }
+
+/// With `performance_schema` off the session's marker is never confirmed, so which server session
+/// is its own is not known; the id the server names it by is shown for display only (so the
+/// monitor marks the tab's row), the one its statements run on.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_own_session_is_not_known_but_its_id_is_shown() {
+    use datarig_core::driver::OwnSession;
+    let test = "the_own_session_is_not_known_but_its_id_is_shown";
+    let Some(url) = nops_url(test).await else { return };
+    let _alone = ALONE.lock().await;
+    let mut c = Conn::open(&url, test).await;
+    c.session.send(DbCommand::ServerSession { request: 3 });
+    let evs = c.until(15, |e| matches!(e, DbEvent::ServerSession { request: 3, .. })).await;
+    let Some(DbEvent::ServerSession { own, shown, .. }) = evs.last() else { panic!("{evs:?}") };
+    assert_eq!(*own, OwnSession::NotKnown);
+    let marker = format!("zz_nops_shown_{}", std::process::id());
+    let mut a = side(&url).await;
+    c.send(4, &[&format!("SELECT SLEEP(1) AS {marker}")]);
+    let on = running(&mut a, &marker).await;
+    assert_eq!(*shown, i64::try_from(on).ok(), "the id its statements run on");
+    c.answer(4).await;
+    a.disconnect().await.unwrap();
+}

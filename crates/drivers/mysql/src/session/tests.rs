@@ -1050,6 +1050,7 @@ async fn a_result_answered_while_its_kill_hangs_is_read_to_its_end_then_the_sess
         Tracked::default(),
         None,
         None,
+        false,
     ));
     let call = "CALL shop.zz_rows()";
     commands
@@ -1163,6 +1164,7 @@ async fn held_while_its_kill_hangs(close: bool) {
         Tracked::default(),
         None,
         None,
+        false,
     ));
     let select = "SELECT v FROM shop.zz_rows";
     commands
@@ -1337,6 +1339,7 @@ async fn faked() -> Faked {
         Tracked::default(),
         None,
         None,
+        false,
     ));
     Faked { server, killer, asked, busy, commands, events, session, written, kills }
 }
@@ -2521,4 +2524,33 @@ fn the_own_id_is_read_alone_after_a_failed_marker_lookup() {
     assert_eq!(own_of(7, t(), OwnRead::IdOnly(7)), (7, None, None));
     assert_eq!(own_of(7, t(), OwnRead::IdOnly(9)), (9, None, Some(false)));
     assert_eq!(own_of(7, t(), OwnRead::Unread), (7, None, None));
+}
+
+/// The id shown for display only: when the connection read its id and it is the handshake's
+/// (lower 32 bits) but the marker did not confirm it. It comes only with a session not
+/// confirmed: no marker to stop a statement by (`token` `None`), and facts that do not say the
+/// session reaches the server directly.
+#[test]
+fn the_shown_id_never_confirms_the_session() {
+    let t = || "zz-token".to_string();
+    let big = (1u64 << 32) | 7;
+    for (read, shown) in [
+        (OwnRead::Marked(7, Some(7)), false),
+        (OwnRead::Marked(7, None), true),
+        (OwnRead::Marked(7, Some(8)), true),
+        (OwnRead::Marked(9, None), false),
+        (OwnRead::IdOnly(7), true),
+        (OwnRead::IdOnly(big), true),
+        (OwnRead::IdOnly(9), false),
+        (OwnRead::Unread, false),
+    ] {
+        let (_, token, own) = own_of(7, t(), read);
+        assert_eq!(shown_of(own, read), shown, "{read:?}");
+        if shown {
+            assert_eq!((token, own), (None, None), "{read:?}: never confirmed");
+            let g = Greeting { mariadb: true, handshake: Version::new(11, 4, 13) };
+            let f = crate::engine::facts(&g, &crate::engine::VersionReport::agreeing(&g), own);
+            assert_eq!(f.topology, Fact::Unknown(datarig_core::engine::Why::NotChecked), "{read:?}");
+        }
+    }
 }

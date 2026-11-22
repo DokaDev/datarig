@@ -578,7 +578,7 @@ async fn the_facts_topology_is_the_own_id_check() {
             }
             c.session.send(DbCommand::ServerSession { request: 7 });
             let own = loop {
-                if let DbEvent::ServerSession { request: 7, own } = c.next(15).await {
+                if let DbEvent::ServerSession { request: 7, own, .. } = c.next(15).await {
                     break own;
                 }
             };
@@ -643,8 +643,8 @@ async fn the_facts_topology_is_the_own_id_check() {
 /// CONNECTION_ID() LIMIT 1`, once, on that failure only). The id alone never says the session
 /// reaches the server directly (a proxy may pass the server's id on): straight through, its facts
 /// say not known and asked which server session is its own it answers not known, also when asked
-/// again; behind a proxy that numbers its clients the id says pooled, and the question is
-/// answered at once. Its marker is not confirmed, so a cancel sends no kill: the run ends
+/// again, showing the id for display only (the monitor marks the tab's row by it); behind a
+/// proxy that numbers its clients the id says pooled, and the question is answered at once. Its marker is not confirmed, so a cancel sends no kill: the run ends
 /// cancelled and the session is given up. A connection lost on that read fails the open.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_failed_marker_lookup_still_reads_the_own_id() {
@@ -671,16 +671,18 @@ async fn a_failed_marker_lookup_still_reads_the_own_id() {
             true => (Fact::Known(Topology::Pooled), OwnSession::NotDirect),
         };
         assert_eq!(f.topology, topology, "numbering {numbering}: {f:?}");
+        let mut shown_ids = Vec::new();
         for request in [7, 8] {
             c.session.send(DbCommand::ServerSession { request });
-            let own = loop {
-                if let DbEvent::ServerSession { request: r, own } = c.next(15).await
+            let (own, shown) = loop {
+                if let DbEvent::ServerSession { request: r, own, shown } = c.next(15).await
                     && r == request
                 {
-                    break own;
+                    break (own, shown);
                 }
             };
             assert_eq!(own, answer, "numbering {numbering}, asked {request}");
+            shown_ids.push(shown);
         }
         if numbering {
             assert_eq!(failing.queries().len(), opened.len(), "answered at once, nothing read again");
@@ -688,7 +690,11 @@ async fn a_failed_marker_lookup_still_reads_the_own_id() {
         let marker = format!("zz_seam_own_id_{}_{numbering}", std::process::id());
         let mut a = side(&admin).await;
         c.send(1, &[&format!("SELECT SLEEP(3) AS {marker}")]);
-        running(&mut a, &marker).await;
+        let on = running(&mut a, &marker).await;
+        // The id the server runs the session's statements on, shown for display only when it is
+        // the handshake's (straight through), never behind a proxy that numbers its clients.
+        let want = if numbering { None } else { i64::try_from(on).ok() };
+        assert_eq!(shown_ids, [want, want], "numbering {numbering}");
         c.session.cancel();
         let evs = c.answer(1).await;
         assert!(

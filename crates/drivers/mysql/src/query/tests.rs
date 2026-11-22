@@ -663,3 +663,18 @@ fn a_disagreeing_session_counts_a_mysql8_comment_as_maybe() {
         crate::engine::judge(&g, Some(mysql_async::Value::Bytes(b"11.4.13-MariaDB".to_vec()))).expect("a line");
     assert_eq!(crate::engine::facts(&g, &report, None).judged(), Judged::Own);
 }
+
+/// Which server session is the connection's own, as answered: direct only from a confirmed
+/// marker (`Some(true)`), not direct when its id is not the handshake's; otherwise not known,
+/// with the id shown for display only when the server named the connection by the handshake's
+/// id (the monitor marks the tab's row by it). The shown id never comes with a direct answer.
+#[test]
+fn the_shown_id_is_for_display_only() {
+    use datarig_core::driver::OwnSession;
+    assert_eq!(own_answer_of(Some(true), true, 7), (OwnSession::Direct { id: 7 }, None));
+    assert_eq!(own_answer_of(Some(true), false, 7), (OwnSession::Direct { id: 7 }, None));
+    assert_eq!(own_answer_of(Some(false), true, 9), (OwnSession::NotDirect, None));
+    assert_eq!(own_answer_of(None, true, 7), (OwnSession::NotKnown, Some(7)));
+    assert_eq!(own_answer_of(None, false, 7), (OwnSession::NotKnown, None));
+    assert_eq!(own_answer_of(None, true, u64::MAX), (OwnSession::NotKnown, None), "no id to show");
+}
