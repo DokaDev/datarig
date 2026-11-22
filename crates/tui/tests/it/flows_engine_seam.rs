@@ -1373,6 +1373,17 @@ fn a_read_only_mariadb_profile_says_why_it_refuses_a_mariadb_only_comment() {
     refused_m_comment(&mut h, "read-only");
 }
 
+/// User text holding the bytes `/*M!` is refused where MariaDB may run it wherever they are, in a
+/// string or a quoted name too: the check reads no text.
+#[test]
+fn user_text_holding_mariadb_comment_bytes_is_refused_where_mariadb_may_run_it() {
+    for sql in ["SELECT '/*M!' AS v", "SELECT 1 AS `/*M!`", "SELECT 1 -- /*M!"] {
+        let mut h = two_engines(false, facts_of(Engine::MariaDb), mariadb());
+        run_all(&mut h, sql);
+        refused_m_comment(&mut h, sql);
+    }
+}
+
 /// A run queued before its profile connects, on a profile with the MySQL driver key whose server
 /// turns out to be MariaDB, is refused once the session says so, after the user's yes to its
 /// executable comment before connect: nothing of it is sent.

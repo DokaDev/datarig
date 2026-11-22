@@ -615,6 +615,33 @@ async fn mariadb_only_comment_text_in_a_string_or_a_name_runs() {
     }
 }
 
+/// User text holding the bytes `/*M!` is refused on MariaDB wherever they are, in a string or a
+/// quoted name too (no reading of the text decides it), and nothing of it runs; on MySQL it runs
+/// as before. A count the app writes around a value it quotes itself (an edit's check) is sent
+/// on both.
+#[tokio::test(flavor = "multi_thread")]
+async fn user_text_holding_mariadb_comment_bytes_is_refused_on_mariadb() {
+    let test = "user_text_holding_mariadb_comment_bytes_is_refused_on_mariadb";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = Table::make(&admin, "mcbytes", &["CREATE TABLE {t} (id INT PRIMARY KEY, v TEXT)"]).await;
+    let maria = mariadb(&admin).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let refused =
+        |evs: &[DbEvent]| matches!(evs.last(), Some(DbEvent::Failed { error: DbError::CommentUnsupported, .. }));
+    let insert = format!("INSERT INTO {} (id, v) VALUES (1, '/*M!')", t.q());
+    let evs = c.run(1, &[&insert]).await;
+    assert_eq!(refused(&evs), maria, "{evs:?}");
+    for (id, sql) in [(2, "SELECT '/*M!' AS v"), (3, "SELECT 1 AS `/*M!`")] {
+        let evs = c.run(id, &[sql]).await;
+        assert_eq!(refused(&evs), maria, "{sql}: {evs:?}");
+    }
+    c.ok(4, &format!("INSERT INTO {} (id, v) VALUES (2, CONCAT('/*', 'M!'))", t.q())).await;
+    // An edit's check, as the app writes it around a value it quotes.
+    let check = format!("SELECT COUNT(*) FROM {} WHERE `v` = '/*M!'", t.q());
+    let rows = if maria { 1 } else { 2 };
+    assert_eq!(count(&mut c, 5, check).await.0, Ok(rows), "a count the app writes is sent");
+}
+
 /// A versioned executable comment the server skips (`/*!99999 … */`, a version above any
 /// server's) is a comment to it, whatever its body holds: a `/*M! … */` after it is MariaDB's
 /// code, and MariaDB refuses the text before anything of it is sent. MySQL runs the text as
