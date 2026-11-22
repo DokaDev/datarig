@@ -21,6 +21,8 @@ mod context;
 mod export;
 #[path = "engine_conformance/filter.rs"]
 mod filter;
+#[path = "engine_conformance/golden.rs"]
+mod golden;
 #[path = "engine_conformance/read_only.rs"]
 mod read_only;
 #[path = "engine_conformance/risk.rs"]
