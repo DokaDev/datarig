@@ -8873,6 +8873,54 @@ async fn answer_within(c: &mut Conn, secs: u64, pred: impl Fn(&DbEvent) -> bool)
     tokio::time::timeout(Duration::from_secs(secs), c.wait(pred, 600)).await.ok()
 }
 
+/// A statement with a comment that holds an executable comment is split as written in every
+/// reading. MySQL runs `/*! … */`; MariaDB runs `/*! … */` and refuses text holding `/*M!`
+/// before it is sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn comments_holding_executable_comments_reach_the_server_as_written() {
+    let test = "comments_holding_executable_comments_reach_the_server";
+    let Some(url) = my_url(test) else { return };
+    let maria = mariadb(&url).await;
+    // (written, the row MariaDB answers, the row MySQL answers)
+    let cases: [(&str, &[&str], &[&str]); 4] = [
+        ("SELECT 1 /* a /* b */ /*M! , 2 */", &["1", "2"], &["1"]),
+        ("SELECT 1 /* a /* b */ /*! , 2 */", &["1", "2"], &["1", "2"]),
+        ("SELECT 5--1 /*M! , 2 */", &["6", "2"], &["6"]),
+        ("SELECT 5--1 /*! , 2 */", &["6", "2"], &["6", "2"]),
+    ];
+    let mode = MySqlMode::default();
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let mut id = 0;
+    for (written, on_maria, on_mysql) in cases {
+        for d in [Dialect::MySql(mode), Dialect::MariaDb(mode), Dialect::Postgres] {
+            let sent: Vec<&str> =
+                datarig_core::sql::split::split_in(written, d).iter().map(|s| s.body(written)).collect();
+            assert_eq!(sent, [written], "{d:?}");
+            id += 1;
+            let evs = c.run(id, &sent).await;
+            let row: Option<Vec<String>> = evs.iter().find_map(|e| match e {
+                DbEvent::Page { rows, .. } => {
+                    rows.first().map(|r| r.iter().map(|v| v.clone().unwrap_or_default()).collect())
+                }
+                _ => None,
+            });
+            if maria && written.contains("/*M!") {
+                assert!(
+                    matches!(evs.last(), Some(DbEvent::Failed { error: DbError::CommentUnsupported, .. })),
+                    "{d:?} {written}: {evs:?}"
+                );
+                continue;
+            }
+            let want = if maria { on_maria } else { on_mysql };
+            assert_eq!(
+                row.as_deref(),
+                Some(want.iter().map(|s| s.to_string()).collect::<Vec<_>>().as_slice()),
+                "{d:?} {written} (MariaDB {maria}): {evs:?}"
+            );
+        }
+    }
+}
+
 /// [`off_behind_a_lock`] for a count of a result's rows.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_count_without_a_time_limit_gives_up_behind_a_lock() {

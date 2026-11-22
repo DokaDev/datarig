@@ -1854,8 +1854,8 @@ impl App {
         }
         match leave {
             Leave::Run(t) => {
-                if let Some((id, statements)) = self.pending_leave.take().filter(|p| p.0 == t) {
-                    self.run_in(id, statements);
+                if let Some((id, statements, read_in)) = self.pending_leave.take().filter(|p| p.0 == t) {
+                    self.run_read_in(id, statements, read_in);
                 }
             }
             Leave::Close(t) => self.request_close(t),

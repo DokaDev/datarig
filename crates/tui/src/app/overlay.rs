@@ -339,6 +339,8 @@ pub struct RunConfirm {
     pub profile: ProfileId,
     pub binding: u64,
     pub statements: Vec<String>,
+    /// The dialect the statements were read in.
+    pub read_in: datarig_core::sql::dialect::Dialect,
     /// The statements that ask, in order.
     pub items: Vec<super::safety::Dangerous>,
     /// "Run" has the focus (it starts on "Cancel").

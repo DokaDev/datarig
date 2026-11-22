@@ -470,7 +470,7 @@ impl App {
             let current = self.tabs.get(q.tab).map(|t| (t.profile, t.binding));
             match current {
                 Some((profile, binding)) if q.profile == id && profile == Some(id) && binding == q.binding => {
-                    self.run_approved_as(q.tab, q.statements, false, q.confirmed);
+                    self.run_approved_as(q.tab, q.statements, false, q.confirmed, q.read_in);
                 }
                 Some(_) => {
                     self.tab_status(q.tab, Notice::new(Msg::QueryQueuedDropped { name: name.clone() }, Level::Warning))

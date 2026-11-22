@@ -616,7 +616,8 @@ impl App {
         };
         // The user said yes to what the statement's risk asks for when it was run first.
         let before = self.dangerous(id, pid, std::slice::from_ref(&sql));
-        self.ask_before_run_as(id, pid, vec![sql], vec![item], true);
+        let read_in = self.tab_dialect(id);
+        self.ask_before_run_as(id, pid, vec![sql], vec![item], true, read_in);
         if let Some(c) = self.overlays.run_confirm_mut() {
             c.approved.extend(before);
         }
