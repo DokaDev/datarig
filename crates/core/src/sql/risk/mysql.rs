@@ -100,6 +100,9 @@
 //! for a multi-table one, a `WHERE` and joins that name only other tables' columns
 //! ([`NoWhere::OtherTables`]). `ALTER TABLE … ENGINE = BLACKHOLE` empties the table.
 
+pub use super::mariadb::{
+    MARIADB_CONSTRUCTORS, MARIADB_TABLES, MARIADB_TIGHT_CALLS, MARIADB_WORD_CALLS, NOT_ON_MARIADB,
+};
 use super::repeat::NotRepeatable;
 use super::session_set::{Owner, SessionSet, SetProblem};
 use super::{Class, Danger, Explain, MAX_BYTES, MAX_DEPTH, NoWhere, Risk, THREAD};
@@ -117,15 +120,6 @@ pub fn builtin(name: &str) -> bool {
     static SORTED: std::sync::OnceLock<Vec<&str>> = std::sync::OnceLock::new();
     SORTED.get_or_init(|| BUILTINS.lines().collect()).binary_search(&name).is_ok()
 }
-
-/// The names of [`BUILTINS`] that are no function of MariaDB's own in a version the driver
-/// connects to (10.6 on), upper case, one per line in byte order. MariaDB looks an unqualified
-/// call of one up as a stored function of the current database, so on MariaDB such a call is
-/// an unchecked call, as any function that is not a built-in. They are the names MariaDB 11.4
-/// does not know as functions, and those MariaDB added after 10.6 (`FORMAT_PICO_TIME`,
-/// `JSON_OVERLAPS`, `JSON_PRETTY`, `JSON_SCHEMA_VALID`, `RANDOM_BYTES`). A test runs each on
-/// MariaDB.
-pub const NOT_ON_MARIADB: &str = include_str!("mysql_builtins_not_mariadb.txt");
 
 /// The names of [`BUILTINS`] that MySQL added after the oldest version the driver connects to
 /// (9.0): an older server looks an unqualified call of one up as a stored function of the
@@ -145,19 +139,6 @@ pub fn builtin_in(name: &str, judge: Judge) -> bool {
 fn builtin_on(name: &str, t: &FamilyTables) -> bool {
     builtin(name) && !NEWER_THAN_OLDEST.contains(&name) && !t.not_builtin.lines().any(|n| n == name)
 }
-
-/// MariaDB's geometry constructors of [`NOT_ON_MARIADB`], with the fewest and the most
-/// arguments its grammar reads them with: called with another number of arguments (`POINT()`),
-/// the name is a stored function's there.
-pub const MARIADB_CONSTRUCTORS: &[(&str, usize, usize)] = &[
-    ("GEOMETRYCOLLECTION", 1, usize::MAX),
-    ("LINESTRING", 1, usize::MAX),
-    ("MULTILINESTRING", 1, usize::MAX),
-    ("MULTIPOINT", 1, usize::MAX),
-    ("MULTIPOLYGON", 1, usize::MAX),
-    ("POINT", 2, 2),
-    ("POLYGON", 1, usize::MAX),
-];
 
 /// MySQL's built-ins whose name its grammar reads as the function's only when `(` follows it
 /// right away, upper case, sorted (the manual's "Function Name Parsing and Resolution", 8.0 to
@@ -195,53 +176,6 @@ pub const MYSQL_TIGHT_CALLS: &[&str] = &[
     "SUBSTRING",
     "SUM",
     "SYSDATE",
-    "SYSTEM_USER",
-    "TRIM",
-    "VARIANCE",
-    "VAR_POP",
-    "VAR_SAMP",
-];
-
-/// [`MYSQL_TIGHT_CALLS`] as MariaDB reads them: the same names less `ST_COLLECT` (no function
-/// there) and `SYSDATE` (a blank is fine there), and its window functions.
-pub const MARIADB_TIGHT_CALLS: &[&str] = &[
-    "ADDDATE",
-    "BIT_AND",
-    "BIT_OR",
-    "BIT_XOR",
-    "CAST",
-    "COUNT",
-    "CUME_DIST",
-    "CURDATE",
-    "CURTIME",
-    "DATE_ADD",
-    "DATE_SUB",
-    "DENSE_RANK",
-    "EXTRACT",
-    "FIRST_VALUE",
-    "GROUP_CONCAT",
-    "JSON_ARRAYAGG",
-    "JSON_OBJECTAGG",
-    "LAG",
-    "LEAD",
-    "MAX",
-    "MID",
-    "MIN",
-    "NOW",
-    "NTH_VALUE",
-    "NTILE",
-    "PERCENT_RANK",
-    "POSITION",
-    "RANK",
-    "SESSION_USER",
-    "STD",
-    "STDDEV",
-    "STDDEV_POP",
-    "STDDEV_SAMP",
-    "SUBDATE",
-    "SUBSTR",
-    "SUBSTRING",
-    "SUM",
     "SYSTEM_USER",
     "TRIM",
     "VARIANCE",
@@ -325,53 +259,6 @@ pub const MYSQL_WORD_CALLS: &[&str] = &[
     "YEAR",
 ];
 
-/// [`MYSQL_WORD_CALLS`] as MariaDB reads them.
-pub const MARIADB_WORD_CALLS: &[&str] = &[
-    "ASCII",
-    "AVG",
-    "CHAR",
-    "CHARSET",
-    "CONVERT",
-    "CURRENT_DATE",
-    "CURRENT_ROLE",
-    "CURRENT_TIME",
-    "CURRENT_TIMESTAMP",
-    "CURRENT_USER",
-    "DATE",
-    "DAY",
-    "DEFAULT",
-    "GET_FORMAT",
-    "HOUR",
-    "IF",
-    "INSERT",
-    "INTERVAL",
-    "JSON_TABLE",
-    "LAST_VALUE",
-    "LEFT",
-    "LOCALTIME",
-    "LOCALTIMESTAMP",
-    "MINUTE",
-    "MONTH",
-    "REPEAT",
-    "REPLACE",
-    "RIGHT",
-    "ROW_NUMBER",
-    "SECOND",
-    "SYSDATE",
-    "TIME",
-    "TIMESTAMP",
-    "TIMESTAMPADD",
-    "TIMESTAMPDIFF",
-    "TRUNCATE",
-    "USER",
-    "UTC_DATE",
-    "UTC_TIME",
-    "UTC_TIMESTAMP",
-    "VALUES",
-    "WEIGHT_STRING",
-    "YEAR",
-];
-
 /// Whether `name` (upper case) is a built-in of the server `judge` judges for whose name must
 /// be followed by `(` right away ([`MYSQL_TIGHT_CALLS`], [`MARIADB_TIGHT_CALLS`]).
 pub fn tight_call(name: &str, judge: Judge) -> bool {
@@ -390,20 +277,20 @@ fn word_call(name: &str, judge: Judge) -> bool {
 #[derive(Debug, PartialEq, Eq)]
 pub struct FamilyTables {
     /// The names of [`BUILTINS`] the engine has no function of its own of, one per line.
-    not_builtin: &'static str,
+    pub(super) not_builtin: &'static str,
     /// The engine's built-ins of `not_builtin` it reads by their number of arguments (the
     /// fewest and the most): a call with another number is a stored function's.
-    constructors: &'static [(&'static str, usize, usize)],
+    pub(super) constructors: &'static [(&'static str, usize, usize)],
     /// The built-ins whose name must be followed by `(` right away.
-    tight_calls: &'static [&'static str],
+    pub(super) tight_calls: &'static [&'static str],
     /// The built-ins whose name must not be quoted, besides `tight_calls`.
-    word_calls: &'static [&'static str],
+    pub(super) word_calls: &'static [&'static str],
     /// Words of [`NOT_CALLS`] the engine does not reserve: written before `(`, they name a
     /// function there.
-    unreserved_not_calls: &'static [&'static str],
+    pub(super) unreserved_not_calls: &'static [&'static str],
     /// `JSON_TABLE` is the table function only with its `COLUMNS` clause: without it, the name
     /// is a stored function's.
-    json_table_needs_columns: bool,
+    pub(super) json_table_needs_columns: bool,
 }
 
 /// MySQL's lists.
@@ -414,16 +301,6 @@ pub static MYSQL_TABLES: FamilyTables = FamilyTables {
     word_calls: MYSQL_WORD_CALLS,
     unreserved_not_calls: &[],
     json_table_needs_columns: false,
-};
-
-/// MariaDB's lists.
-pub static MARIADB_TABLES: FamilyTables = FamilyTables {
-    not_builtin: NOT_ON_MARIADB,
-    constructors: MARIADB_CONSTRUCTORS,
-    tight_calls: MARIADB_TIGHT_CALLS,
-    word_calls: MARIADB_WORD_CALLS,
-    unreserved_not_calls: MARIADB_NOT_RESERVED,
-    json_table_needs_columns: true,
 };
 
 static ON_MYSQL: [&FamilyTables; 1] = [&MYSQL_TABLES];
@@ -1314,10 +1191,6 @@ fn name_at(ws: &[W], i: usize) -> Option<(String, usize)> {
 fn find_top(ws: &[W], from: usize, words: &[&str]) -> Option<usize> {
     (from..ws.len()).find(|&i| ws[i].depth == 0 && words.contains(&ws[i].up.as_str()))
 }
-
-/// Words of [`NOT_CALLS`] that MariaDB does not reserve: written before `(`, they name a
-/// function there (a stored one, as no built-in has the name).
-const MARIADB_NOT_RESERVED: &[&str] = &["LATERAL", "OF"];
 
 /// The function calls of `ws`, on the server `judge` judges for.
 fn calls(ws: &[W], judge: Judge) -> Vec<Call> {

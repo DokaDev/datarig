@@ -108,6 +108,7 @@
 
 pub mod allow;
 mod classifier;
+pub mod mariadb;
 pub mod mysql;
 pub mod path_names;
 pub mod repeat;

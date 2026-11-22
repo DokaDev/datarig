@@ -1,4 +1,5 @@
 use super::*;
+use crate::sql::risk::mariadb::MARIADB_NOT_RESERVED;
 use crate::sql::risk::{Classifier, ReadOnlyBlock, TxStep};
 
 include!("corpus.rs");
