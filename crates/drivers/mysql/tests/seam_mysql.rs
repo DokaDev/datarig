@@ -735,6 +735,102 @@ async fn a_failed_marker_lookup_still_reads_the_own_id() {
     assert!(!failing.fault_pending(), "both faults met their statements: {failed:?}");
 }
 
+/// Whether the server's `performance_schema` is on, in a session's facts (the dev servers have
+/// it on): a session whose marker the server confirmed found it there, so it is on and nothing
+/// more is read; a session whose marker was not confirmed (behind a proxy that numbers its
+/// clients, or after a failed marker lookup) reads it alone, once, last. When that read fails, or
+/// answers `NULL`, it is not known, and nothing else changes: the session opens, and reaches the
+/// server as its own id says (not known after a failed marker lookup); a connection lost on it
+/// fails the open. Whether a running statement can be stopped on the server follows the marker:
+/// only a confirmed one says yes.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_facts_say_whether_performance_schema_is_on() {
+    use datarig_core::engine::EngineFacts;
+    let test = "the_facts_say_whether_performance_schema_is_on";
+    let Some((url, _admin)) = urls(test) else { return };
+    const READ: &str = "SELECT @@GLOBAL.performance_schema LIMIT 1";
+    let ps_of = |f: &ServerFacts| match &f.detail {
+        EngineFacts::MySql(my) | EngineFacts::MariaDb(my) => my.performance_schema.clone(),
+        EngineFacts::Postgres(_) => panic!("{f:?}"),
+    };
+    // Whether the session's marker was confirmed, and so whether a running statement can be
+    // stopped on the server: only straight to it.
+    let marker_of = |f: &ServerFacts| match &f.detail {
+        EngineFacts::MySql(my) | EngineFacts::MariaDb(my) => my.marker.clone(),
+        EngineFacts::Postgres(_) => panic!("{f:?}"),
+    };
+    let reads = |p: &Proxy| p.queries().iter().filter(|q| q.as_str() == READ).count();
+    // (numbering, marker lookup fails, the read fails) -> (read sent, topology, performance_schema)
+    let rows = [
+        ((false, false, false), (0, Fact::Known(Topology::Direct), Fact::Known(()))),
+        ((true, false, false), (1, Fact::Known(Topology::Pooled), Fact::Known(()))),
+        ((true, false, true), (1, Fact::Known(Topology::Pooled), Fact::Unknown(Why::NotChecked))),
+        ((false, true, false), (1, Fact::Unknown(Why::NotChecked), Fact::Known(()))),
+        ((false, true, true), (1, Fact::Unknown(Why::NotChecked), Fact::Unknown(Why::NotChecked))),
+    ];
+    // An answer of `NULL` (a proxy's) is not known either, and the session opens.
+    let proxy = Proxy::start(&upstream(&url)).await;
+    proxy.offset_ids(0x0100_0000);
+    proxy.fault_start(READ, Fault::Instead("SELECT NULL".into()));
+    let (mut c, before) = Conn::start(&proxy.url(&url), SessionRole::Query, test).await;
+    assert!(!proxy.fault_pending(), "the read met its fault");
+    let f = facts_first(SessionRole::Query, &before);
+    assert_eq!(ps_of(&f), Fact::Unknown(Why::NotChecked), "{f:?}");
+    assert_eq!(f.topology, Fact::Known(Topology::Pooled), "{f:?}");
+    let evs = c.ok(1, "SELECT 1").await;
+    assert!(matches!(evs.last(), Some(DbEvent::Page { .. })), "the session goes on: {evs:?}");
+    // The connection lost on that read: the open fails.
+    let proxy = Proxy::start(&upstream(&url)).await;
+    proxy.offset_ids(0x0100_0000);
+    proxy.fault_start(READ, Fault::Close);
+    let (tx, mut rx) = unbounded_channel();
+    let tag = format!("seam{}-{test}", std::process::id());
+    let _session = MyDriver.connect(
+        &profile(&proxy.url(&url)),
+        SessionRole::Query,
+        ConnectOptions::new(PAGE, SessionRole::Query, &tag),
+        tx,
+    );
+    let failed = loop {
+        match tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.expect("an answer") {
+            Some(DbEvent::ConnectFailed { error, .. }) => break error,
+            Some(DbEvent::Connected) => panic!("connected though its connection was lost"),
+            Some(_) => {}
+            None => panic!("event channel closed"),
+        }
+    };
+    assert!(!proxy.fault_pending(), "the read met its fault: {failed:?}");
+    for ((numbering, lookup_fails, read_fails), (sent, topology, ps)) in rows {
+        let what = format!("numbering {numbering}, lookup fails {lookup_fails}, read fails {read_fails}");
+        let proxy = Proxy::start(&upstream(&url)).await;
+        if numbering {
+            proxy.offset_ids(0x0100_0000);
+        }
+        for role in [SessionRole::Query, SessionRole::Meta, SessionRole::Monitor] {
+            if lookup_fails {
+                proxy.fault_start("SELECT CONNECTION_ID(), ", Fault::Instead("SELECT zz_seam_no_such_column".into()));
+            }
+            if read_fails {
+                proxy.fault_start(READ, Fault::Instead("SELECT zz_seam_no_such_column".into()));
+            }
+            let before_reads = reads(&proxy);
+            let (mut c, before) = Conn::start(&proxy.url(&url), role, test).await;
+            assert!(!proxy.fault_pending(), "{what} {role:?}: every fault met its statement");
+            let f = facts_first(role, &before);
+            assert_eq!(reads(&proxy) - before_reads, sent, "{what} {role:?}");
+            assert_eq!(f.topology, topology, "{what} {role:?}: {f:?}");
+            assert_eq!(ps_of(&f), ps, "{what} {role:?}: {f:?}");
+            let marker = if numbering || lookup_fails { Fact::No(Why::MarkerUnconfirmed) } else { Fact::Known(()) };
+            assert_eq!(marker_of(&f), marker, "{what} {role:?}: {f:?}");
+            assert_eq!(f.engine().spec().cancel.server_cancel(&f), marker, "{what} {role:?}: {f:?}");
+            if role == SessionRole::Query {
+                let evs = c.ok(1, "SELECT 1").await;
+                assert!(matches!(evs.last(), Some(DbEvent::Page { .. })), "{what}: the session goes on: {evs:?}");
+            }
+        }
+    }
+}
+
 /// A test connection says the server's engine (MariaDB on a MariaDB server) and the version of
 /// its greeting, the number its version line starts with.
 #[tokio::test(flavor = "multi_thread")]

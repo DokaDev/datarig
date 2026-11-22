@@ -25,7 +25,7 @@ pub enum Question {
 /// The facts of a session of column `e`: PostgreSQL 17.2, MySQL 8.4.6, MariaDB 11.4.13 reached
 /// directly, or of the same engine with a version that is not known.
 fn facts(e: Engine) -> ServerFacts {
-    let my = |engine, v| MyFacts { handshake: v, greeting: engine };
+    let my = |engine, v| MyFacts::new(v, engine);
     let (version, detail) = match e {
         Pg => (Fact::Known(Version::new(17, 2, 0)), EngineFacts::Postgres(PgFacts::default())),
         PgVersionUnknown => (Fact::Unknown(Why::VersionUnknown), EngineFacts::Postgres(PgFacts::default())),

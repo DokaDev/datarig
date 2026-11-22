@@ -2547,10 +2547,41 @@ fn the_shown_id_never_confirms_the_session() {
         let (_, token, own) = own_of(7, t(), read);
         assert_eq!(shown_of(own, read), shown, "{read:?}");
         if shown {
+            // No marker to stop a statement by: the server cancel is not offered either.
+            let marker = marker_of(token.as_deref());
+            assert_eq!(marker, Fact::No(datarig_core::engine::Why::MarkerUnconfirmed), "{read:?}");
+            let g = Greeting { mariadb: true, handshake: Version::new(11, 4, 13) };
+            let report = crate::engine::VersionReport::agreeing(&g);
+            let f = crate::engine::opened_facts(&g, &report, own, Fact::Known(()), marker);
+            assert_eq!(
+                f.engine().spec().cancel.server_cancel(&f),
+                Fact::No(datarig_core::engine::Why::MarkerUnconfirmed)
+            );
             assert_eq!((token, own), (None, None), "{read:?}: never confirmed");
             let g = Greeting { mariadb: true, handshake: Version::new(11, 4, 13) };
             let f = crate::engine::facts(&g, &crate::engine::VersionReport::agreeing(&g), own);
             assert_eq!(f.topology, Fact::Unknown(datarig_core::engine::Why::NotChecked), "{read:?}");
         }
+    }
+}
+
+/// Whether `performance_schema` is on, from the server's answer: `1`/`ON` on, `0`/`OFF` off,
+/// anything else or no answer not known.
+#[test]
+fn performance_schema_is_read_from_the_servers_answer() {
+    use datarig_core::engine::{Feature, Why};
+    assert_eq!(PERFORMANCE_SCHEMA_SQL, "SELECT @@GLOBAL.performance_schema LIMIT 1");
+    let off = Fact::No(Why::FeatureOff(Feature::PerformanceSchema));
+    for (answer, want) in [
+        (Some("1"), Fact::Known(())),
+        (Some("ON"), Fact::Known(())),
+        (Some(" on "), Fact::Known(())),
+        (Some("0"), off.clone()),
+        (Some("OFF"), off),
+        (Some(""), Fact::Unknown(Why::NotChecked)),
+        (Some("2"), Fact::Unknown(Why::NotChecked)),
+        (None, Fact::Unknown(Why::NotChecked)),
+    ] {
+        assert_eq!(performance_schema(answer), want, "{answer:?}");
     }
 }

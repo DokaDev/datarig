@@ -181,6 +181,26 @@ pub struct MyFacts {
     /// The engine the server's greeting names, which may differ from the one its `VERSION()`
     /// line names (the engine of the facts) when a proxy wrote the greeting.
     pub greeting: EngineId,
+    /// Whether the server's `performance_schema` is on (`No(FeatureOff(..))` when it is off,
+    /// `Unknown` when it was not read).
+    pub performance_schema: Support,
+    /// Whether the server listed the session's marker on the session's own connection
+    /// (`Known`), so a connection of its own can name the session to stop its statement;
+    /// `No(MarkerUnconfirmed)` when it did not, `Unknown` when it was not read.
+    pub marker: Support,
+}
+
+impl MyFacts {
+    /// The facts of a greeting of `greeting` at `handshake`, `performance_schema` and the marker
+    /// not read.
+    pub fn new(handshake: Version, greeting: EngineId) -> MyFacts {
+        MyFacts {
+            handshake,
+            greeting,
+            performance_schema: Fact::Unknown(Why::NotChecked),
+            marker: Fact::Unknown(Why::NotChecked),
+        }
+    }
 }
 
 /// What a test connection learns of the server: no more than its greeting and version tell.

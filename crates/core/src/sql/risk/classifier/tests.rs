@@ -349,7 +349,7 @@ fn with_sibling_a_step_the_engines_disagree_on_opens() {
             EngineId::MySql => (Version::new(8, 4, 6), "11.4.13-MariaDB", Dialect::MySql(mode)),
             EngineId::MariaDb | EngineId::Postgres => (Version::new(11, 4, 13), "8.4.6", Dialect::MariaDb(mode)),
         };
-        let my = MyFacts { handshake, greeting };
+        let my = MyFacts::new(handshake, greeting);
         let detail = match greeting {
             EngineId::MySql => EngineFacts::MariaDb(my),
             EngineId::MariaDb | EngineId::Postgres => EngineFacts::MySql(my),

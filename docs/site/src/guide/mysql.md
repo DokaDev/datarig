@@ -75,7 +75,11 @@ tab's marker on the id it would stop, and its own marker on its own id, in
 does not make it stop another client's statement. A proxy that passes the marker on and shares
 the server's connections among its clients cannot be told apart this way. Where that cannot be
 confirmed (`performance_schema` off, which is MariaDB's default, or not readable; some proxies and
-load balancers), no cancel is sent, and the tab's connection is closed instead.
+load balancers), no cancel is sent, and the tab's connection is closed instead. When the tab's
+session found `performance_schema` off as it opened, cancelling a statement that runs says so in
+the run's Messages at once: cancelling a statement that is running closes the connection. A
+cancel between two statements of a run only stops the run before its next statement, and the
+connection stays.
 
 A statement that runs as another account (in a `SQL SECURITY DEFINER` routine; stopping it
 needs `CONNECTION_ADMIN`) refuses the cancel. If it sends no rows it runs on to its end whatever

@@ -26,9 +26,9 @@ pub use id::{EngineId, Expected};
 pub use postgres::TX_ROLLBACK_ANSWER_WAIT;
 pub use rules::{Rules, UNBOUND_TAB_DIALECT};
 pub use session::{OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof};
-pub use spec::{EngineSpec, RiskRules, SessionRules, TextRules, Transport, TxRules};
+pub use spec::{CancelRules, EngineSpec, RiskRules, SessionRules, TextRules, Transport, TxRules};
 pub use tx::{CountInTx, DdlLock, TxAsk, TxNote, TxRefusal, TxStatement, TxVerdict};
-pub use why::Why;
+pub use why::{Feature, Why};
 
 use crate::profile::dsn::Scheme;
 use crate::profile::session::Dbms;

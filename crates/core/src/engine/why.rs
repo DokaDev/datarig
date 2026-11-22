@@ -16,4 +16,27 @@ pub enum Why {
     EnginesDisagree,
     /// The engine has no such thing, on any version.
     NotOnEngine,
+    /// The server has it switched off.
+    FeatureOff(Feature),
+    /// The server did not list the session's own marker on its connection, so another
+    /// connection cannot tell it is the session's (a proxy in between, or an account that
+    /// cannot read where the server lists it).
+    MarkerUnconfirmed,
+}
+
+/// A part of a server that may be switched off there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Feature {
+    /// MySQL's and MariaDB's `performance_schema`, where the sessions' connection attributes are
+    /// listed (off by default on MariaDB).
+    PerformanceSchema,
+}
+
+impl Feature {
+    /// Its name as the server writes it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Feature::PerformanceSchema => "performance_schema",
+        }
+    }
 }

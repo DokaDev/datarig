@@ -7,7 +7,9 @@ use crate::engine::Greeting;
 use crate::route::{Route, io_fault};
 use crate::wire::{TlsFailed, Wire};
 use datarig_core::driver::{CancelFailure, DbError, Isolation, SessionRole, SessionValues};
-use datarig_core::engine::{Fact, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, ServerFacts, Version};
+use datarig_core::engine::{
+    Fact, Feature, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, ServerFacts, Support, Version, Why,
+};
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::profile::dsn::{self, Scheme};
@@ -178,6 +180,20 @@ fn own_sql(token: &str) -> String {
 /// [`own_sql`] (its marker lookup reads `performance_schema`, which may be off or not readable).
 pub(crate) const OWN_ID_SQL: &str = "SELECT CONNECTION_ID() LIMIT 1";
 
+/// The statement a session's connection reads whether the server's `performance_schema` is on
+/// with, alone, when its marker was not confirmed there (a marker found there says it is on).
+pub(crate) const PERFORMANCE_SCHEMA_SQL: &str = "SELECT @@GLOBAL.performance_schema LIMIT 1";
+
+/// Whether `performance_schema` is on, from the server's answer to [`PERFORMANCE_SCHEMA_SQL`]
+/// (`None`: no answer): an answer that reads as neither on nor off is not known.
+pub(crate) fn performance_schema(answer: Option<&str>) -> Support {
+    match answer.map(|a| a.trim().to_ascii_uppercase()).as_deref() {
+        Some("1" | "ON") => Fact::Known(()),
+        Some("0" | "OFF") => Fact::No(Why::FeatureOff(Feature::PerformanceSchema)),
+        Some(_) | None => Fact::Unknown(Why::NotChecked),
+    }
+}
+
 /// What a session's connection read of its own id as it opened ([`open`]).
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum OwnRead {
@@ -208,6 +224,15 @@ pub(crate) fn own_of(handshake: u32, token: String, read: OwnRead) -> (u64, Opti
         }
         OwnRead::IdOnly(id) => (id, None, own(false, id)),
         OwnRead::Unread => (u64::from(handshake), None, None),
+    }
+}
+
+/// Whether the session's marker was confirmed on its connection (`token`, [`own_of`]): only then
+/// can a connection of its own stop its statement.
+pub(crate) fn marker_of(token: Option<&str>) -> Support {
+    match token {
+        Some(_) => Fact::Known(()),
+        None => Fact::No(Why::MarkerUnconfirmed),
     }
 }
 
@@ -691,7 +716,8 @@ pub(crate) struct Opened {
 /// server lists the marker in one statement last ([`own_sql`]); a failure of that read leaves
 /// the session unconfirmed ([`Opened::token`]), never fails the open. When the server refused
 /// it, the id is read alone ([`OWN_ID_SQL`]), so a proxy that numbers its clients is still told
-/// apart; a connection lost on that read fails the open.
+/// apart; a connection lost on that read fails the open. When the marker was not confirmed,
+/// whether `performance_schema` is on is read last, alone ([`PERFORMANCE_SCHEMA_SQL`]).
 pub(crate) async fn open(
     route: &Route,
     opts: Opts,
@@ -829,7 +855,21 @@ pub(crate) async fn open(
     };
     let (id, token, own) = own_of(handshake, token, read);
     let shown = shown_of(own, read);
-    let facts = crate::engine::facts(&greeting, &report, own);
+    // The marker confirmed on the session's id was read in `performance_schema`, so it is on;
+    // else it is read alone, and a failed read leaves it not known and nothing else changed.
+    let performance_schema = match token {
+        Some(_) => Fact::Known(()),
+        // Read as a value that may be `NULL` (a proxy may answer so): a plain `String` would not
+        // read one.
+        None => match conn.query_first::<Option<String>, _>(PERFORMANCE_SCHEMA_SQL).await {
+            Ok(answer) => self::performance_schema(answer.flatten().as_deref()),
+            // The connection is gone: the open fails here, not at the session's first statement.
+            Err(e) if e.is_fatal() => return Err((my_error(&e), false)),
+            Err(_) => Fact::Unknown(Why::NotChecked),
+        },
+    };
+    let marker = marker_of(token.as_deref());
+    let facts = crate::engine::opened_facts(&greeting, &report, own, performance_schema, marker);
     Ok(Opened { conn, wire, encryption, greeting, facts, tracked, id, read_only_unconfirmed, token, own, shown })
 }
 

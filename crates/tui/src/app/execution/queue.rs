@@ -2,6 +2,7 @@
 
 use crate::app::runlog::StatementOutcome;
 use crate::app::*;
+use datarig_core::engine::Fact;
 
 impl App {
     /// Cancel the statement running in the active tab (only there).
@@ -45,6 +46,22 @@ impl App {
         if self.tabs.get(id).is_some_and(|t| t.exec.running.is_none_or(|r| r.export)) {
             self.stop_export(id);
         }
+        // A server that cannot stop a running statement is said before the cancel goes on, by
+        // the facts of the tab's own session (none yet while it opens): the run's Messages keep
+        // it, whatever the status line says next. The cancel goes to the session all the same.
+        let closes = self
+            .tabs
+            .get(id)
+            .filter(|t| t.exec.running.as_ref().is_some_and(|r| r.cancelling.is_none()))
+            .and_then(|t| t.exec.current_facts())
+            .and_then(|f| match f.engine().spec().cancel.server_cancel(f) {
+                Fact::No(why) => Some(why),
+                Fact::Known(()) | Fact::Unknown(_) => None,
+            })
+            .map(|why| {
+                let why = self.i18n.msg(&crate::app::engine_why::why_text(&why)).to_string();
+                Notice::new(Msg::QueryCancelClosesConnection { why }, Level::Warning)
+            });
         let now = self.now();
         let Some(t) = self.tabs.get_mut(id) else { return };
         let Some(r) = t.exec.running.as_mut() else { return };
@@ -52,6 +69,9 @@ impl App {
             return;
         }
         r.cancelling = Some(now);
+        if let Some(notice) = closes {
+            t.exec.run.notes.push(notice);
+        }
         if let Some(s) = &t.exec.session {
             s.cancel();
         }
