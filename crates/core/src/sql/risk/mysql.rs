@@ -1458,6 +1458,7 @@ fn kind(ws: &[W], mode: MySqlMode) -> Risk {
             Risk { danger: Some(Danger::FileAccess), ..Risk::writing(Class::Write, target) }
         }
         "LOAD" if word(1) == "INDEX" => maintenance(None),
+        "ANALYZE" if analyzes_statement(ws) => analyze(ws, mode),
         "ANALYZE" | "OPTIMIZE" | "CHECK" | "CHECKSUM" | "REPAIR" | "CACHE" => maintenance(None),
         "FLUSH" => {
             let locks = ws.windows(3).any(|w| w[0].is("WITH") && w[1].is("READ") && w[2].is("LOCK"))
@@ -1559,6 +1560,33 @@ fn with(ws: &[W]) -> Risk {
         Some(i) if starts_query(ws, i) => query(ws),
         Some(i) if ws.get(i).is_some_and(|w| w.is("UPDATE")) => update(ws, i),
         Some(i) if ws.get(i).is_some_and(|w| w.is("DELETE")) => delete(ws, i),
+        _ => unrecognized(),
+    }
+}
+
+/// MariaDB's `ANALYZE [FORMAT=<v>] <statement>` (not `ANALYZE TABLE`): it runs the statement.
+fn analyzes_statement(ws: &[W]) -> bool {
+    ws.get(1).is_some_and(|w| {
+        w.is("FORMAT")
+            || w.kind == Tok::LParen
+            || ["SELECT", "VALUES", "WITH", "INSERT", "REPLACE", "UPDATE", "DELETE"].iter().any(|k| w.is(k))
+    })
+}
+
+/// [`analyzes_statement`]: judged as the statement it runs, which nothing undoes. Read so in
+/// every reading: a MySQL reading may be a MariaDB server's until the session says (MySQL
+/// refuses the text).
+fn analyze(ws: &[W], mode: MySqlMode) -> Risk {
+    let at = if ws[1].is("FORMAT") {
+        if !ws.get(2).is_some_and(|w| w.is_op("=")) {
+            return unrecognized();
+        }
+        4
+    } else {
+        1
+    };
+    match ws.get(at..) {
+        Some(rest) if !rest.is_empty() => kind(rest, mode),
         _ => unrecognized(),
     }
 }
