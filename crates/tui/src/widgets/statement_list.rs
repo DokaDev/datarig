@@ -471,6 +471,39 @@ mod tests {
         }
     }
 
+    /// Rows pasted before the form has a database, or for another kind, are split again when
+    /// the database kind changes, as long as they are as the paste made them.
+    #[test]
+    fn pasted_rows_are_split_again_when_the_database_kind_changes() {
+        for first in [None, Some(Dbms::Postgres)] {
+            for (text, want) in [
+                ("SET @a = 5--1\n/*M! , @b = 2 */", vec!["SET @a = 5--1 /*M! , @b = 2 */"]),
+                ("SET @a = 5--1\nSET @b = 2", vec!["SET @a = 5--1", "SET @b = 2"]),
+                ("SET @a = 1 /* x /* y */;\nSET @b = 2", vec!["SET @a = 1", "SET @b = 2"]),
+                (
+                    "SET @a = 1 /* x /* y */ /*M! , @b = 2 */;\nSET @c = 3",
+                    vec!["SET @a = 1 /* x /* y */ /*M! , @b = 2 */", "SET @c = 3"],
+                ),
+                ("SET @a = 1; SET @b = 5--1", vec!["SET @a = 1", "SET @b = 5--1"]),
+            ] {
+                let mut l = StatementList::new(first, &[]);
+                l.paste(text);
+                l.set_dbms(Some(Dbms::MySql));
+                assert_eq!(l.statements(), want, "{first:?} {text:?}");
+                let mut direct = StatementList::new(Some(Dbms::MySql), &[]);
+                direct.paste(text);
+                assert_eq!(direct.statements(), want, "pasted for MySQL: {text:?}");
+            }
+        }
+        // A row edited since is the user's: it stays as it is.
+        let mut l = StatementList::new(None, &[]);
+        l.paste("SET @a = 1 /* x /* y */;\nSET @b = 2");
+        l.current_mut().insert_str(" ");
+        l.edited();
+        l.set_dbms(Some(Dbms::MySql));
+        assert_eq!(l.statements(), ["SET @a = 1"]);
+    }
+
     /// A line inside an executable comment that starts with `SET` starts no row: the comment is
     /// one piece of its statement.
     #[test]

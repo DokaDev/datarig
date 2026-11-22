@@ -423,3 +423,24 @@ fn the_servers_idle_limit_overrides_the_idle_disconnect() {
     let p = plan(&c, &Policy::default(), Defaults::default(), &[]).unwrap();
     assert_eq!(p.idle, of(Source::Profile, Wait::Limit(secs(3600)), Wait::NoLimit));
 }
+
+/// A line comment another kind of database may read otherwise stays in the field, with the line
+/// break that ends it: one that holds an executable comment, and `--` with no blank after it.
+#[test]
+fn line_comments_another_database_may_read_stay_in_the_field() {
+    for dbms in [Dbms::Postgres, Dbms::MySql] {
+        for one in ["SET @a = 5--1", "SET @a = 1 -- x /*M! , @b = 2 */"] {
+            assert_eq!(join_statements(dbms, &[one.to_string()]), one, "{dbms:?}");
+        }
+        let two = ["SET a.b = 1 -- x /*! y */\n, c.d = 2".to_string(), "SET e.f = 3".to_string()];
+        assert_eq!(join_statements(dbms, &two), "SET a.b = 1 -- x /*! y */\n, c.d = 2; SET e.f = 3", "{dbms:?}");
+    }
+    assert_eq!(
+        join_statements(Dbms::Postgres, &["SET a.b = 5--1\n, c.d = 2".to_string()]),
+        "SET a.b = 5--1\n, c.d = 2"
+    );
+    let my = ["SET @a = 1 # /*M! , @b = 2 */\n, @c = 3".to_string()];
+    assert_eq!(join_statements(Dbms::MySql, &my), "SET @a = 1 # /*M! , @b = 2 */\n, @c = 3");
+    // Other line comments go as before.
+    assert_eq!(join_statements(Dbms::Postgres, &["SET a.b = 1 -- one".to_string()]), "SET a.b = 1");
+}
