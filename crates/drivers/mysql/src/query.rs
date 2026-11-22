@@ -95,8 +95,9 @@
 //! and what the server said of a statement beyond its outcome (`DbEvent::Info`: the id an
 //! `INSERT` generated, warnings, the server's own words, result sets it did not keep).
 
+use crate::engine::{Family, Greeting};
 use crate::link::{Closed, Link, Next};
-use crate::session::{Gate, Killer, Server, Tracked, my_error};
+use crate::session::{Gate, Killer, Tracked, my_error};
 use crate::values::{column_meta, display};
 use datarig_core::driver::{
     CancelFailure, CancelMark, Cell, ColumnMeta, DbCommand, DbError, DbEvent, ESTIMATE_LIMIT, Isolation, Outcome,
@@ -199,8 +200,9 @@ struct Env<'a> {
     failed: &'a AtomicBool,
     page_size: usize,
     read_only: bool,
-    server: Server,
-    /// What the server is, as the session's connection found it (`server` is its greeting).
+    /// The server's greeting.
+    greeting: Greeting,
+    /// What the server is, as the session's connection found it (from the same greeting).
     facts: &'a ServerFacts,
 }
 
@@ -470,7 +472,7 @@ pub(crate) async fn query_loop(
     select_limit: Option<u64>,
     own: Option<bool>,
 ) {
-    let server = Server::of(&facts);
+    let greeting = Greeting::of(&facts);
     let failed = AtomicBool::new(false);
     // Known from the open's own read, else read when first asked.
     let own = own.map_or_else(OnceLock::new, OnceLock::from);
@@ -483,11 +485,11 @@ pub(crate) async fn query_loop(
         failed: &failed,
         page_size: settings.page_size,
         read_only: settings.read_only,
-        server,
+        greeting,
         facts: &facts,
     };
     let dollar_quotes = crate::engine::dollar_quotes(&facts);
-    let dialect = crate::engine::dialect(&server, tracked.mode(dollar_quotes));
+    let dialect = crate::engine::dialect(&greeting, tracked.mode(dollar_quotes));
     let values = tracked.values();
     let isolation = tracked.isolation();
     let autocommit = tracked.autocommit != Some(false);
@@ -901,7 +903,7 @@ async fn not_undone(
     sql: &str,
 ) -> Result<Option<Vec<String>>, Closed> {
     let Some(names) = risk::named(sql, s.judge()) else { return Ok(None) };
-    let ask = not_undone_sql(&names, s.dialect, env.server.mariadb);
+    let ask = not_undone_sql(&names, s.dialect, env.greeting.family());
     env.busy.store(true, Ordering::SeqCst);
     let answer = link.guard(Some(env.killer), conn.query::<String, _>(ask)).await?;
     idle(env, link).await;
@@ -913,18 +915,17 @@ async fn not_undone(
 }
 
 /// The question [`not_undone`] asks about `names` (as `risk::mysql::named` gives them), read
-/// as [`check_sql`] reads them, of a MariaDB server or not.
-fn not_undone_sql(names: &[String], d: Dialect, mariadb: bool) -> String {
+/// as [`check_sql`] reads them, of a server of family `f`.
+pub(crate) fn not_undone_sql(names: &[String], d: Dialect, f: &dyn Family) -> String {
     let cond = name_condition(names, d);
     // The session's account as the privilege tables write a grantee (`'user'@'host'`); a grant
     // that reaches it otherwise (through a role) is not seen, so the table counts as one whose
-    // triggers are not visible. A global grant counts only without partial revokes: with them on,
-    // it may be revoked for the table's schema, which the privilege tables do not show. MariaDB
-    // has no partial revokes (nor the variable): a global grant counts there.
-    let global = if mariadb { "" } else { " AND @@GLOBAL.partial_revokes = 0" };
+    // triggers are not visible. A global grant counts as the server's family says
+    // ([`Family::not_undone_global`]).
+    let global = f.not_undone_global();
     let me =
         "CONCAT(QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', 1)), '@', QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', -1)))";
-    let (bound, hints) = own_read_bounds(mariadb);
+    let (bound, hints) = f.own_read_bounds();
     format!(
         "{bound}SELECT {hints}CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME, ' (', COALESCE(t.ENGINE, t.TABLE_TYPE), ')') \
          FROM information_schema.TABLES t WHERE (t.TABLE_TYPE = 'VIEW' \
@@ -1436,7 +1437,7 @@ async fn after(
         let limit = limit_value(&v);
         s.limit = Limit { current: limit, user: limit };
     }
-    let dialect = crate::engine::dialect(&env.server, s.tracked.mode(crate::engine::dollar_quotes(env.facts)));
+    let dialect = crate::engine::dialect(&env.greeting, s.tracked.mode(crate::engine::dollar_quotes(env.facts)));
     if dialect != s.dialect {
         s.dialect = dialect;
         let _ = env.events.send(DbEvent::Language(crate::engine::derive(env.facts, &s.tracked).language));
@@ -2130,34 +2131,6 @@ fn outcome_of(sql: &str, d: Dialect, affected: u64) -> Outcome {
     if dml { Outcome::Affected(affected) } else { Outcome::Command(tag) }
 }
 
-/// A `SET_VAR` hint for the session's own catalog reads: they give up after 2 s behind a lock
-/// another session holds or waits for, and stop after 10 s (MariaDB reads the hint as a comment:
-/// its reads take the same limits from [`own_read_bounds`]).
-const OWN_READ_HINTS: &str = "/*+ SET_VAR(lock_wait_timeout=2) MAX_EXECUTION_TIME(10000) */";
-
-/// The bounds of a catalog read of the session's own as written around its `SELECT`: MySQL's
-/// hints after it ([`OWN_READ_HINTS`], with the space that follows them), MariaDB's
-/// [`mariadb_bound`] before it with the same limits.
-fn own_read_bounds(mariadb: bool) -> (String, String) {
-    if mariadb { (mariadb_bound(Some(10), 2), String::new()) } else { (String::new(), format!("{OWN_READ_HINTS} ")) }
-}
-
-/// MariaDB's bound of a read of the app's own, written before it (`SET STATEMENT … FOR `; it
-/// reads MySQL's optimizer hints as a comment): it stops after `time_secs` seconds (no time limit
-/// of its own with `None`) and waits at most `lock_secs` seconds for a lock. Neither is ever
-/// longer than the session's own: a lock wait of 0 stays 0, a shorter time limit stays. In the
-/// statement's settings `@@SESSION.x` is the session's value before it.
-fn mariadb_bound(time_secs: Option<u32>, lock_secs: u32) -> String {
-    let lock = format!("lock_wait_timeout = LEAST(@@SESSION.lock_wait_timeout, {lock_secs})");
-    match time_secs {
-        Some(t) => format!(
-            "SET STATEMENT max_statement_time = IF(@@SESSION.max_statement_time = 0, {t}, \
-             LEAST(@@SESSION.max_statement_time, {t})), {lock} FOR "
-        ),
-        None => format!("SET STATEMENT {lock} FOR "),
-    }
-}
-
 /// Ask the server what only it can tell for the allowlist about `sql`, right before the app runs
 /// it again or counts it: whether a name it reads is a view (whose query may call anything) or a
 /// table the server's own. `Ok` with what the session has (its transaction isolation and time
@@ -2174,7 +2147,7 @@ async fn asked_server(
         Ok(names) => names,
         Err(why) => return Ok(Err(DbError::NotRepeatable(why))),
     };
-    let ask = check_sql(&names, s.dialect, &env.server);
+    let ask = check_sql(&names, s.dialect, &env.greeting);
     env.busy.store(true, Ordering::SeqCst);
     type Answer = (Option<String>, Option<String>, Option<String>, Option<String>, Option<String>);
     let answer = match ask.as_slice() {
@@ -2203,7 +2176,7 @@ async fn asked_server(
         Ok(Some((_, Some(view), _, _, _))) => Err(DbError::NotRepeatable(NotRepeatable::NotATable(view))),
         Ok(Some((isolation, None, statement, lock, sort))) => Ok(Asked {
             isolation: isolation.unwrap_or_default(),
-            statement: statement.as_deref().and_then(|v| session_limit(v, env.server.mariadb)),
+            statement: statement.as_deref().and_then(|v| env.greeting.family().session_limit(v)),
             lock: lock.and_then(|v| v.trim().parse().ok()),
             sort_length: sort.and_then(|v| v.trim().parse().ok()),
         }),
@@ -2213,68 +2186,35 @@ async fn asked_server(
 }
 
 /// What the allowlist's question ([`asked_server`]) learnt of the session besides.
-struct Asked {
+pub(crate) struct Asked {
     /// Its transaction isolation, as the server writes it (`REPEATABLE-READ`).
-    isolation: String,
+    pub(crate) isolation: String,
     /// The time limit of its `SELECT`s (`max_execution_time`, MariaDB's `max_statement_time`),
     /// when it has one. The question's own `MAX_EXECUTION_TIME` hint limits the question alone
     /// and leaves this variable as the session has it (unlike `SET_VAR`).
-    statement: Option<Duration>,
+    pub(crate) statement: Option<Duration>,
     /// MariaDB: the session's `lock_wait_timeout` in seconds (0 is not to wait at all).
-    lock: Option<u64>,
+    pub(crate) lock: Option<u64>,
     /// The session's `max_sort_length`: the bytes of a string the server sorts and groups by
     /// (a group count's values at least this long may share a group with others).
-    sort_length: Option<u64>,
-}
-
-/// How long a bounded read of the app's own ([`bounded_select`]) waits for a metadata lock, in
-/// seconds: on MySQL the shortest `lock_wait_timeout` it takes, so never longer than the
-/// session's. MySQL's own value cannot be read on the way: the allowlist's question sets it for
-/// itself (`SET_VAR` in [`OWN_READ_HINTS`]) and so reads its own value, and asking apart would
-/// cost another round trip. MariaDB reads that hint as a comment, so its value is asked with the
-/// question ([`Asked::lock`]) and never made longer.
-const BOUNDED_LOCK_WAIT: u64 = 1;
-
-/// A session's statement time limit as the server writes it (milliseconds; MariaDB: seconds,
-/// with decimals), `None` for none (0) or a value that does not read.
-fn session_limit(v: &str, mariadb: bool) -> Option<Duration> {
-    let d = if mariadb {
-        let secs: f64 = v.trim().parse().ok()?;
-        (secs.is_finite() && secs > 0.0 && secs < 1e9).then(|| Duration::from_secs_f64(secs))?
-    } else {
-        Duration::from_millis(v.trim().parse::<u64>().ok()?)
-    };
-    (!d.is_zero()).then_some(d)
+    pub(crate) sort_length: Option<u64>,
 }
 
 /// `sql`, a `SELECT` of the app's own, stopped by the server after `statement` and given at most
-/// [`BOUNDED_LOCK_WAIT`] to wait for a metadata lock, for this statement alone: MySQL's optimizer
-/// hints after its `SELECT` (on the outermost `SELECT`: one in a derived table is ignored),
-/// MariaDB's `SET STATEMENT … FOR` before it (it reads the hints as a comment). The time limit is
-/// never longer than the one the session has (`asked`), so a shorter limit the user set stays;
-/// the lock wait is the shortest the server takes. `hints` go with MySQL's. With the time limit
-/// that applies; `None` for a text that does not start with `SELECT`.
-fn bounded_select(
+/// `BOUNDED_LOCK_WAIT` (1 s) to wait for a metadata lock, for this statement alone, as the
+/// server's family `f` writes it ([`Family::bounded_select`]). The time limit is never longer
+/// than the one the session has (`asked`), so a shorter limit the user set stays. `hints` go with
+/// MySQL's optimizer hints. With the time limit that applies; `None` for a text that does not
+/// start with `SELECT`.
+pub(crate) fn bounded_select(
     sql: &str,
     statement: Duration,
     asked: &Asked,
-    mariadb: bool,
+    f: &dyn Family,
     hints: &str,
 ) -> Option<(String, Duration)> {
-    let rest = sql.strip_prefix("SELECT ").or_else(|| sql.strip_prefix("SELECT\n"))?;
     let statement = asked.statement.map_or(statement, |s| s.min(statement));
-    if mariadb {
-        // Its limits take fractions, and a lock wait of 0 is the session's choice not to wait: a
-        // value that does not read is taken as that, never as a longer wait.
-        let (secs, lock) = (statement.as_secs_f64(), asked.lock.unwrap_or(0).min(BOUNDED_LOCK_WAIT));
-        let text = format!("SET STATEMENT max_statement_time = {secs}, lock_wait_timeout = {lock} FOR {sql}");
-        return Some((text, statement));
-    }
-    // MySQL's limit is in whole milliseconds, 0 for none.
-    let statement = statement.max(Duration::from_millis(1));
-    let (ms, lock) = (statement.as_millis().min(u128::from(u32::MAX)), BOUNDED_LOCK_WAIT);
-    let text = format!("SELECT /*+ MAX_EXECUTION_TIME({ms}) SET_VAR(lock_wait_timeout={lock}){hints} */ {rest}");
-    Some((text, statement))
+    f.bounded_select(sql, statement, asked.lock, hints)
 }
 
 /// ER_QUERY_TIMEOUT: MySQL stopped a `SELECT` at its `MAX_EXECUTION_TIME`.
@@ -2336,37 +2276,22 @@ fn name_parts(name: &str) -> Vec<String> {
 }
 
 /// The question [`asked_server`] asks for `names` (every name a statement writes, as
-/// `risk::mysql::names` gives them): the session's transaction isolation and the time limit of
-/// a `SELECT`, and the first of them
-/// that is a view or a table of the server's own (`information_schema.TABLES` rows other than
-/// `BASE TABLE` and MariaDB's `SYSTEM VERSIONED`), compared without case; on MariaDB the session's lock wait too ([`Asked::lock`]).
-/// A name may be a table of the current database, a database's table (`db.t`), a column of a
-/// table (`t.c`, `db.t.c`) or an alias: every reading that can name a table is asked about.
-/// MySQL asks in one statement. MariaDB in two: the session's values first, unbounded (it reads
-/// no table), then the lookup bounded by [`mariadb_bound`], inside which `@@SESSION.x` would be
-/// the bound's value, not the session's.
-fn check_sql(names: &[String], d: Dialect, server: &Server) -> Vec<String> {
+/// `risk::mysql::names` gives them) on the server of greeting `g`: the session's transaction
+/// isolation and the time limit of a `SELECT`, and the first of them that is a view or a table of
+/// the server's own (`information_schema.TABLES` rows other than `BASE TABLE` and MariaDB's
+/// `SYSTEM VERSIONED`), compared without case; on MariaDB the session's lock wait too
+/// ([`Asked::lock`]). A name may be a table of the current database, a database's table
+/// (`db.t`), a column of a table (`t.c`, `db.t.c`) or an alias: every reading that can name a
+/// table is asked about. In one statement or more, as the family writes it
+/// ([`Family::check_sql`]).
+pub(crate) fn check_sql(names: &[String], d: Dialect, g: &Greeting) -> Vec<String> {
     let cond = name_condition(names, d);
-    let isolation = server.isolation_var();
     let lookup = format!(
         "(SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME) \
          FROM information_schema.TABLES t WHERE t.TABLE_TYPE NOT IN ('BASE TABLE', 'SYSTEM VERSIONED') \
          AND ({cond}) LIMIT 1)"
     );
-    if server.mariadb {
-        let (bound, _) = own_read_bounds(true);
-        return vec![
-            format!(
-                "SELECT @@SESSION.{isolation}, @@SESSION.max_statement_time, @@SESSION.lock_wait_timeout, \
-                 @@SESSION.max_sort_length"
-            ),
-            format!("{bound}SELECT {lookup}"),
-        ];
-    }
-    vec![format!(
-        "SELECT {OWN_READ_HINTS} @@SESSION.{isolation}, {lookup}, @@SESSION.max_execution_time, NULL, \
-         @@SESSION.max_sort_length"
-    )]
+    g.family().check_sql(g.isolation_var(), &lookup)
 }
 
 /// The rows of `information_schema.TABLES t` that `names` may name, without case: a bare name a
@@ -2663,7 +2588,7 @@ async fn count(
         Err(why) => return Ok((Err(why), false)),
     };
     let snapshot = in_snapshot(s, &asked);
-    let bounded = limit.and_then(|l| bounded_select(sql, l, &asked, env.server.mariadb, ""));
+    let bounded = limit.and_then(|l| bounded_select(sql, l, &asked, env.greeting.family(), ""));
     let (text, applied) = match &bounded {
         Some((text, applied)) => (text.as_str(), Some(*applied)),
         None => (sql, None),
@@ -2801,15 +2726,15 @@ async fn read_own_as(
 /// For this statement alone, no row limit of the session's: the one paging leaves there
 /// (`sql_select_limit`, a page and one row more) caps what the planner expects too. A `LIMIT` the
 /// statement writes still counts.
-const ALL_ROWS: &str = " SET_VAR(sql_select_limit=18446744073709551615)";
+pub(crate) const ALL_ROWS: &str = " SET_VAR(sql_select_limit=18446744073709551615)";
 
 /// The planner's estimate of the rows of `sql` (the app's read of a table, on the allowlist,
 /// checked again here): after the allowlist's question, its `EXPLAIN FORMAT=TREE` (never
 /// `ANALYZE`), read as a count is ([`read_own`]), stopped after [`ESTIMATE_LIMIT`] and waiting at
-/// most [`BOUNDED_LOCK_WAIT`] seconds for a metadata lock. Only while no transaction is open on the
-/// session ([`open_before`]): the metadata locks planning takes would last until the user's
-/// ends. Not on a server without the tree format (MariaDB, MySQL before 8.0.16): nothing is
-/// sent.
+/// most `BOUNDED_LOCK_WAIT` (1 s) for a metadata lock, as MySQL bounds it
+/// ([`bounded_select`]). Only while no transaction is open on the session ([`open_before`]): the
+/// metadata locks planning takes would last until the user's ends. Not on a server without the
+/// tree format (MariaDB, MySQL before 8.0.16): nothing is sent.
 async fn estimate(
     conn: &mut Conn,
     link: &mut Link,
@@ -2833,7 +2758,8 @@ async fn estimate(
         Ok(asked) => asked,
         Err(why) => return Ok(Err(why)),
     };
-    let Some((bounded, applied)) = bounded_select(sql, ESTIMATE_LIMIT, &asked, false, ALL_ROWS) else {
+    let Some((bounded, applied)) = bounded_select(sql, ESTIMATE_LIMIT, &asked, crate::engine::mysql_family(), ALL_ROWS)
+    else {
         return Ok(Err(DbError::NotSupported));
     };
     let text = format.explain_sql(&bounded, false);
@@ -2865,7 +2791,7 @@ async fn check_repeat(
 }
 
 mod apply;
-mod export;
+pub(crate) mod export;
 mod group;
 
 #[cfg(test)]

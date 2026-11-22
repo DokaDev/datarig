@@ -57,7 +57,7 @@ pub(super) async fn group_count(
         Err(why) => return Ok((Err(why), false)),
     };
     let snapshot = in_snapshot(s, &asked);
-    let bounded = limit.and_then(|l| bounded_select(sql, l, &asked, env.server.mariadb, ""));
+    let bounded = limit.and_then(|l| bounded_select(sql, l, &asked, env.greeting.family(), ""));
     let (text, applied) = match &bounded {
         Some((text, applied)) => (text.as_str(), Some(*applied)),
         None => (sql, None),

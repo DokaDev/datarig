@@ -36,7 +36,7 @@
 //! the string literals' escapes undone (`'it''s'` reads `'it's'`), so the text is not SQL when a
 //! literal holds a quote or a backslash. The trigger's DDL comes from `SHOW CREATE TRIGGER`.
 
-use crate::session::Server;
+use crate::engine::{Family, Greeting};
 use datarig_core::driver::DbError;
 use datarig_core::driver::structure::{
     CheckConstraint, Collation, ColumnFill, FkAction, ForeignKey, Index, KeyConstraint, RelationKind, StructureColumn,
@@ -125,35 +125,16 @@ const GRANTEE: &str = "CONCAT('''', LEFT(CURRENT_USER(), CHAR_LENGTH(CURRENT_USE
      - CHAR_LENGTH(SUBSTRING_INDEX(CURRENT_USER(), '@', -1)) - 1), \
      '''@''', SUBSTRING_INDEX(CURRENT_USER(), '@', -1), '''')";
 
-/// The checks' subquery of MySQL 8.0.16 and later (`ENFORCED`; a check's name is the
-/// database's).
-const MYSQL_CHECKS: &str = "(SELECT JSON_ARRAYAGG(JSON_OBJECT('name', tc.CONSTRAINT_NAME,
-      'clause', cc.CHECK_CLAUSE, 'enforced', tc.ENFORCED))
-    FROM information_schema.TABLE_CONSTRAINTS tc JOIN information_schema.CHECK_CONSTRAINTS cc
-      ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
-    WHERE tc.TABLE_SCHEMA = {schema} AND tc.TABLE_NAME = {table} AND tc.CONSTRAINT_TYPE = 'CHECK')";
-
-/// MariaDB's (a check's name is the table's; every check is enforced).
-const MARIADB_CHECKS: &str = "(SELECT JSON_ARRAYAGG(JSON_OBJECT('name', cc.CONSTRAINT_NAME,
-      'clause', cc.CHECK_CLAUSE, 'enforced', 'YES'))
-    FROM information_schema.CHECK_CONSTRAINTS cc
-    WHERE cc.CONSTRAINT_SCHEMA = {schema} AND cc.TABLE_NAME = {table})";
-
-/// The statement for `schema.table` on `server`, the names written as `d` reads literals.
-pub(crate) fn statement(server: Server, d: Dialect, schema: &str, table: &str) -> String {
-    let functional = !server.mariadb && server.version >= (8, 0, 13);
-    let checks = match server.mariadb {
-        true => MARIADB_CHECKS,
-        false if server.version >= (8, 0, 16) => MYSQL_CHECKS,
-        false => "NULL",
-    };
+/// The statement for `schema.table` on the server of greeting `g` (what it reads, by the
+/// greeting's version), the names written as `d` reads literals.
+pub(crate) fn statement(g: Greeting, d: Dialect, schema: &str, table: &str) -> String {
+    let shape = g.family().structure(g.handshake);
     let names = [("schema", d.quote_literal(schema)), ("table", d.quote_literal(table))];
     let names = names.each_ref().map(|(k, v)| (*k, v.as_str()));
     // The checks' subquery names the table too; it is filled first, as a value of the
     // statement is never read again for places.
-    let checks = super::fill(checks, &names);
-    // `partial_revokes` is MySQL's from 8.0.16; MariaDB has none.
-    let partial = if !server.mariadb && server.version >= (8, 0, 16) { "@@GLOBAL.partial_revokes" } else { "0" };
+    let checks = super::fill(shape.checks, &names);
+    let partial = shape.partial_revokes;
     let escape = d.quote_literal("\\");
     let named = super::fill(SCHEMA_NAMED, &[("partial", partial), ("escape", &escape), names[0]]);
     let granted = super::fill(
@@ -164,8 +145,8 @@ pub(crate) fn statement(server: Server, d: Dialect, schema: &str, table: &str) -
     super::fill(
         SQL,
         &[
-            ("expression", if functional { "x.EXPRESSION" } else { "NULL" }),
-            ("visible", if server.mariadb { "NULL" } else { "x.IS_VISIBLE" }),
+            ("expression", shape.expression),
+            ("visible", shape.visible),
             ("checks", &checks),
             ("columns_granted", &granted),
             ("grantee", GRANTEE),
@@ -179,14 +160,14 @@ pub(crate) fn statement(server: Server, d: Dialect, schema: &str, table: &str) -
 /// server lists no such table (or view) to the user.
 pub(crate) async fn load_structure(
     conn: &mut Conn,
-    server: Server,
+    g: Greeting,
     d: Dialect,
     schema: &str,
     table: &str,
 ) -> Result<TableStructure, DbError> {
-    let rows: Vec<String> = super::rows_of(conn, statement(server, d, schema, table)).await?;
+    let rows: Vec<String> = super::rows_of(conn, statement(g, d, schema, table)).await?;
     match rows.first() {
-        Some(json) => parse(json, server.mariadb, d, schema, table),
+        Some(json) => parse(json, g.family(), d, schema, table),
         None => Err(DbError::NotFound),
     }
 }
@@ -290,17 +271,23 @@ struct RawTrigger {
     order: u32,
 }
 
-/// The document the statement built, as the model (see [`model`]).
-fn parse(json: &str, mariadb: bool, d: Dialect, schema: &str, table: &str) -> Result<TableStructure, DbError> {
+/// The document the statement built on a server of family `f`, as the model (see [`model`]).
+fn parse(json: &str, f: &dyn Family, d: Dialect, schema: &str, table: &str) -> Result<TableStructure, DbError> {
     let raw: Raw = serde_json::from_str(json).map_err(|e| DbError::Server(format!("table structure: {e}").into()))?;
-    model(raw, mariadb, d, schema, table)
+    model(raw, f, d, schema, table)
 }
 
 /// The structure the statement's document describes, of `schema.table`. Lists are in the
 /// server's order: columns by position, key parts by their place in the key, the rest by name.
 /// A kind of table the explorer does not list is not supported; a trigger or a foreign key rule
 /// the model has no words for fails the read (it is not left out).
-pub(crate) fn model(raw: Raw, mariadb: bool, d: Dialect, schema: &str, table: &str) -> Result<TableStructure, DbError> {
+pub(crate) fn model(
+    raw: Raw,
+    f: &dyn Family,
+    d: Dialect,
+    schema: &str,
+    table: &str,
+) -> Result<TableStructure, DbError> {
     let kind = match raw.kind.as_str() {
         "BASE TABLE" | "SYSTEM VERSIONED" => RelationKind::Table,
         "VIEW" => RelationKind::View,
@@ -309,7 +296,7 @@ pub(crate) fn model(raw: Raw, mariadb: bool, d: Dialect, schema: &str, table: &s
     let mut s = TableStructure::new(kind);
     s.estimates = false;
     // MySQL's expressions are kept escaped once (see the module's documentation).
-    let sql = |text: String| if mariadb { text } else { unescaped(&text) };
+    let sql = |text: String| if f.escapes_sql_text() { unescaped(&text) } else { text };
     let mut columns = raw.columns.unwrap_or_default();
     columns.sort_by_key(|c| c.position);
     s.columns = columns
@@ -320,7 +307,7 @@ pub(crate) fn model(raw: Raw, mariadb: bool, d: Dialect, schema: &str, table: &s
             if generated {
                 c.default = c.default.map(sql);
             }
-            column(c, mariadb, d)
+            column(c, f, d)
         })
         .collect();
     let qualified = format!("{}.{}", d.quote_ident(schema), d.quote_ident(table));
@@ -518,7 +505,7 @@ pub(crate) fn model(raw: Raw, mariadb: bool, d: Dialect, schema: &str, table: &s
 }
 
 /// Column `c`: how it is filled (generated, `AUTO_INCREMENT`, its default) from `EXTRA`.
-fn column(c: RawColumn, mariadb: bool, d: Dialect) -> StructureColumn {
+fn column(c: RawColumn, f: &dyn Family, d: Dialect) -> StructureColumn {
     let extra = c.extra.unwrap_or_default();
     let has = |word: &str| super::extra_words(&extra).any(|w| w.eq_ignore_ascii_case(word));
     // MySQL puts some expressions in parentheses (`(`qty` * 2)`), others not: the model has
@@ -534,7 +521,7 @@ fn column(c: RawColumn, mariadb: bool, d: Dialect) -> StructureColumn {
         ColumnFill::Default
     };
     let default = match fill {
-        ColumnFill::Default => default_text(c.default, &c.data_type, &extra, mariadb, d),
+        ColumnFill::Default => default_text(c.default, &c.data_type, &extra, f, d),
         _ => None,
     };
     let collation = c.collation.map(|name| Collation { deterministic: byte_wise(&name), name, charset: c.charset });
@@ -565,11 +552,17 @@ fn byte_wise(name: &str) -> bool {
 /// number (or a bit or hexadecimal value, written as such); an expression (`DEFAULT_GENERATED`)
 /// is written in its parentheses, but `CURRENT_TIMESTAMP`, which a temporal column takes bare.
 /// MariaDB's is already SQL (`'text'`, `current_timestamp()`, `NULL` for none).
-fn default_text(value: Option<String>, data_type: &str, extra: &str, mariadb: bool, d: Dialect) -> Option<String> {
+pub(crate) fn default_text(
+    value: Option<String>,
+    data_type: &str,
+    extra: &str,
+    f: &dyn Family,
+    d: Dialect,
+) -> Option<String> {
     let current = |v: &str| v.to_ascii_uppercase().starts_with("CURRENT_TIMESTAMP");
     let value = match value {
         None => None,
-        Some(v) if mariadb => (!v.eq_ignore_ascii_case("NULL")).then_some(v),
+        Some(v) if !f.escapes_sql_text() => (!v.eq_ignore_ascii_case("NULL")).then_some(v),
         Some(v) if super::extra_words(extra).any(|w| w == "DEFAULT_GENERATED") && !current(&v) => {
             Some(format!("({v})"))
         }

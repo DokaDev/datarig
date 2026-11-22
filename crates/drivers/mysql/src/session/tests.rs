@@ -1,12 +1,13 @@
 use super::*;
 use crate::route::Route;
+use datarig_core::engine::Version;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::Dialect;
 use datarig_core::transport::{DialerRef, TcpDialer};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-const MYSQL_84: Server = Server { version: (8, 4, 6), mariadb: false };
+const MYSQL_84: Greeting = Greeting { mariadb: false, handshake: Version::new(8, 4, 6) };
 
 /// The facts of a session on MySQL 8.4.6 (`MYSQL_84`), its own id not read.
 fn facts_84() -> Arc<datarig_core::engine::ServerFacts> {
@@ -16,16 +17,13 @@ fn facts_84() -> Arc<datarig_core::engine::ServerFacts> {
 }
 
 /// How a session on `server` reads dollar quotes when nothing is in between: its facts' answer.
-fn dollar_quotes(server: &Server) -> DollarQuotes {
-    let (major, minor, patch) = server.version;
-    let handshake = datarig_core::engine::Version::new(major, minor, patch);
-    let g = crate::engine::Greeting { mariadb: server.mariadb, handshake };
-    crate::engine::dollar_quotes(&crate::engine::facts(&g, &crate::engine::VersionReport::agreeing(&g), None))
+fn dollar_quotes(g: &Greeting) -> DollarQuotes {
+    crate::engine::dollar_quotes(&crate::engine::facts(g, &crate::engine::VersionReport::agreeing(g), None))
 }
 
 #[test]
 fn versions_before_mysql_8_and_mariadb_10_6_are_refused_with_their_name() {
-    let refused = |version, mariadb| Server { version, mariadb }.check().err();
+    let refused = |(a, b, c), mariadb| Greeting { mariadb, handshake: Version::new(a, b, c) }.check().err();
     assert_eq!(
         refused((5, 7, 44), false),
         Some(DbError::VersionUnsupported { server: "MySQL 5.7.44".into(), needed: "MySQL 8.0".into() })
@@ -119,11 +117,11 @@ fn one_set_sets_the_session_up_by_role() {
         "{}",
         init_sql(&MYSQL_84, &meta)
     );
-    let maria = Server { version: (10, 11, 6), mariadb: true };
+    let maria = Greeting { mariadb: true, handshake: Version::new(10, 11, 6) };
     let sql = init_sql(&maria, &meta);
     assert!(sql.contains("'sql_mode,tx_read_only,sql_select_limit,time_zone,"), "{sql}");
     assert!(sql.contains(",tx_isolation', ") && sql.contains("SESSION tx_isolation = @@SESSION.tx_isolation"), "{sql}");
-    let maria_11 = Server { version: (11, 4, 2), mariadb: true };
+    let maria_11 = Greeting { mariadb: true, handshake: Version::new(11, 4, 2) };
     let newer = init_sql(&maria_11, &meta);
     assert!(newer.contains("SESSION transaction_isolation = @@SESSION.transaction_isolation"), "{newer}");
     assert!(
@@ -132,7 +130,7 @@ fn one_set_sets_the_session_up_by_role() {
         ),
         "{sql}"
     );
-    let maria = Server { version: (11, 4, 2), mariadb: true };
+    let maria = Greeting { mariadb: true, handshake: Version::new(11, 4, 2) };
     assert!(init_sql(&maria, &ro).ends_with(", SESSION transaction_read_only = ON"));
 }
 
@@ -159,9 +157,9 @@ fn the_mode_follows_the_sql_mode_the_version_and_the_server() {
     assert!(tracked("STRICT_TRANS_TABLES,NO_BACKSLASH_ESCAPES").mode(dollar_quotes(&MYSQL_84)).no_backslash_escapes);
     // A flag is matched whole.
     assert!(!tracked("NO_ANSI_QUOTES_X").mode(dollar_quotes(&MYSQL_84)).ansi_quotes);
-    let mysql80 = Server { version: (8, 0, 45), mariadb: false };
+    let mysql80 = Greeting { mariadb: false, handshake: Version::new(8, 0, 45) };
     assert_eq!(tracked("").mode(dollar_quotes(&mysql80)).dollar_quotes, DollarQuotes::NotRead);
-    let maria_server = Server { version: (11, 4, 2), mariadb: true };
+    let maria_server = Greeting { mariadb: true, handshake: Version::new(11, 4, 2) };
     let maria = tracked("").mode(dollar_quotes(&maria_server));
     assert_eq!(maria.dollar_quotes, DollarQuotes::NotRead);
     // Which server it is: the read check counts only the functions MariaDB provides as built-ins.
@@ -627,8 +625,8 @@ fn the_open_transaction_keeps_its_level() {
 #[test]
 fn isolation_names_by_server() {
     assert_eq!(MYSQL_84.isolation_var(), "transaction_isolation");
-    assert_eq!(Server { version: (10, 11, 6), mariadb: true }.isolation_var(), "tx_isolation");
-    assert_eq!(Server { version: (11, 1, 0), mariadb: true }.isolation_var(), "transaction_isolation");
+    assert_eq!(Greeting { mariadb: true, handshake: Version::new(10, 11, 6) }.isolation_var(), "tx_isolation");
+    assert_eq!(Greeting { mariadb: true, handshake: Version::new(11, 1, 0) }.isolation_var(), "transaction_isolation");
 }
 
 /// Which levels a server's names stand for.
@@ -2179,10 +2177,13 @@ fn the_read_only_question_names_each_servers_variables() {
          CAST(@@GLOBAL.innodb_read_only AS CHAR)"
     );
     assert_eq!(
-        ask_read_only(&Server { version: (10, 11, 6), mariadb: true }),
+        ask_read_only(&Greeting { mariadb: true, handshake: Version::new(10, 11, 6) }),
         "SELECT CAST(@@SESSION.tx_read_only AS CHAR), NULL, CAST(@@GLOBAL.innodb_read_only AS CHAR)"
     );
-    assert!(ask_read_only(&Server { version: (11, 4, 2), mariadb: true }).contains("@@SESSION.transaction_read_only"));
+    assert!(
+        ask_read_only(&Greeting { mariadb: true, handshake: Version::new(11, 4, 2) })
+            .contains("@@SESSION.transaction_read_only")
+    );
 }
 
 /// The refusal says what the server reported and what it answered.
@@ -2194,7 +2195,7 @@ fn a_session_not_made_read_only_says_what_the_server_said() {
         "the server did not make the session read-only (reported transaction_read_only: NO; \
          asked: transaction_read_only 0, super_read_only 0, innodb_read_only 0)"
     );
-    let maria = Server { version: (10, 11, 6), mariadb: true };
+    let maria = Greeting { mariadb: true, handshake: Version::new(10, 11, 6) };
     assert_eq!(
         not_read_only(&maria, None, &(Some("0".to_string()), None, None)),
         "the server did not make the session read-only (reported tx_read_only: none; \
