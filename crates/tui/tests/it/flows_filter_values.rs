@@ -1511,3 +1511,21 @@ fn a_ticked_value_holding_mariadb_comment_characters_runs_and_counts_on_mariadb(
     h.keys("#");
     assert_eq!(counts(&mut h).len(), 1, "the count is sent: {:?}", h.app.tab().status);
 }
+
+/// On MariaDB a condition the user typed in the dialog's `WHERE` field that holds the characters
+/// `/*M!` is not counted under: the count of another column is not sent, as a run of it would not
+/// be.
+#[test]
+fn a_typed_condition_holding_mariadb_comment_characters_is_not_counted_under_on_mariadb() {
+    let columns = vec![col("id", "int", ValueKind::Integer), col("status", "varchar", ValueKind::Text)];
+    let rows = vec![vec![Some("1".into()), Some("paid".into())]];
+    let mut h = maria_table(columns, rows);
+    dialog_on(&mut h, 0);
+    h.keys("Q");
+    h.keys("Q");
+    h.type_text("LENGTH(status) > LENGTH('/*M!')");
+    h.key(KeyCode::Esc);
+    assert!(draft(&h).contains("/*M!"), "{}", draft(&h));
+    h.keys("#");
+    assert!(counts(&mut h).is_empty(), "nothing sent: {:?}", h.app.status);
+}
