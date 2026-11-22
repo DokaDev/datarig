@@ -1566,11 +1566,14 @@ fn with(ws: &[W]) -> Risk {
 
 /// MariaDB's `ANALYZE [FORMAT=<v>] <statement>` (not `ANALYZE TABLE`): it runs the statement.
 fn analyzes_statement(ws: &[W]) -> bool {
-    ws.get(1).is_some_and(|w| {
-        w.is("FORMAT")
-            || w.kind == Tok::LParen
-            || ["SELECT", "VALUES", "WITH", "INSERT", "REPLACE", "UPDATE", "DELETE"].iter().any(|k| w.is(k))
-    })
+    // `ANALYZE` (or `EXPLAIN`) again is no statement it names: read as not known.
+    ws.get(1).is_some_and(|w| w.is("FORMAT") || w.is("ANALYZE") || w.is("EXPLAIN") || starts_analyzed(w))
+}
+
+/// The first word of a statement `ANALYZE` names (one: never `ANALYZE` or `EXPLAIN` again).
+fn starts_analyzed(w: &W) -> bool {
+    w.kind == Tok::LParen
+        || ["SELECT", "VALUES", "WITH", "INSERT", "REPLACE", "UPDATE", "DELETE"].iter().any(|k| w.is(k))
 }
 
 /// [`analyzes_statement`]: judged as the statement it runs, which nothing undoes. Read so in
@@ -1586,7 +1589,7 @@ fn analyze(ws: &[W], mode: MySqlMode) -> Risk {
         1
     };
     match ws.get(at..) {
-        Some(rest) if !rest.is_empty() => kind(rest, mode),
+        Some(rest) if rest.first().is_some_and(starts_analyzed) => kind(rest, mode),
         _ => unrecognized(),
     }
 }
