@@ -834,6 +834,8 @@ fn count_query_wraps_a_repeatable_query() {
 
 /// Statements a read-only policy must refuse, whatever is written around their words.
 const NOT_READS: &[&str] = &[
+    "ANALYZE DELETE FROM t",
+    "ANALYZE FORMAT=JSON UPDATE t SET a = 1",
     "DELETE FROM t WHERE id = 1",
     "DELETE FROM t",
     "UPDATE t SET a = 1 WHERE id = 1",
@@ -1218,4 +1220,84 @@ fn each_call_comes_once_looked_up_when_either_engine_looks_it_up() {
     assert_eq!(called(sql, both), Some(vec![("COALESCE".to_string(), true), ("NOW".to_string(), false)]));
     assert_eq!(called(sql, MARIADB), Some(vec![("COALESCE".to_string(), false), ("NOW".to_string(), false)]));
     assert_eq!(called(sql, MYSQL), Some(vec![("COALESCE".to_string(), true), ("NOW".to_string(), false)]));
+}
+
+/// MariaDB's `ANALYZE <statement>` (`FORMAT=JSON` too) runs the statement: it is judged as the
+/// statement it runs, in every reading and judged on one engine or both (a MySQL reading may be
+/// a MariaDB server's until the session says). `ANALYZE TABLE` stays maintenance, and `EXPLAIN
+/// ANALYZE` is as before.
+#[test]
+fn analyze_of_a_statement_is_judged_as_that_statement() {
+    for judge in [MYSQL, MARIADB, MYSQL.with_sibling(), MARIADB.with_sibling()] {
+        for stmt in [
+            "DELETE FROM zz_t",
+            "UPDATE zz_t SET a = 1",
+            "INSERT INTO zz_t VALUES (1)",
+            "REPLACE INTO zz_t VALUES (1)",
+            "SELECT * FROM zz_t",
+            "(SELECT * FROM zz_t)",
+            "WITH c AS (SELECT 1) DELETE FROM zz_t",
+        ] {
+            let bare = classify(stmt, judge);
+            for prefix in ["ANALYZE ", "ANALYZE FORMAT=JSON ", "analyze format = json ", "ANALYZE FORMAT=TRADITIONAL "]
+            {
+                let sql = format!("{prefix}{stmt}");
+                let r = classify(&sql, judge);
+                for writes in [false, true] {
+                    assert_eq!(r.confirm(writes), bare.confirm(writes), "{judge:?} {sql} (writes {writes})");
+                }
+                assert_eq!(r.read_only().is_ok(), bare.read_only().is_ok(), "{judge:?} {sql}");
+                assert_eq!((r.class, r.writes, r.danger), (bare.class, bare.writes, bare.danger), "{judge:?} {sql}");
+                assert!(!r.rolls_back(), "{judge:?} {sql}: nothing undoes it");
+            }
+        }
+        for sql in ["ANALYZE TABLE zz_t", "ANALYZE NO_WRITE_TO_BINLOG TABLE zz_t", "ANALYZE LOCAL TABLE zz_t, zz_u"] {
+            assert_eq!(classify(sql, judge).class, Class::Maintenance, "{judge:?} {sql}");
+        }
+        let explain = classify("EXPLAIN ANALYZE DELETE FROM zz_t", judge);
+        assert!(explain.rolls_back() && explain.danger == Some(Danger::DeleteAll), "{judge:?}");
+    }
+}
+
+/// `ANALYZE` names one statement: after `ANALYZE [FORMAT=<v>]` only a statement starts, so a
+/// long run of the prefix is read at once (not one level per prefix) and is not known: it asks
+/// and a read-only profile refuses it. So is any `ANALYZE` that is neither of a statement nor of
+/// tables.
+#[test]
+fn analyze_takes_one_statement_only() {
+    let long = format!("{}SELECT 1", "ANALYZE FORMAT=JSON ".repeat(12_000));
+    for sql in [
+        long.as_str(),
+        "ANALYZE ANALYZE DELETE FROM zz_t",
+        "ANALYZE FORMAT=JSON EXPLAIN DELETE FROM zz_t",
+        "ANALYZE FORMAT=JSON",
+        "ANALYZE FORMAT JSON SELECT 1",
+        "ANALYZE zz_t",
+    ] {
+        for judge in [MYSQL, MARIADB, MYSQL.with_sibling(), MARIADB.with_sibling()] {
+            let r = classify(sql, judge);
+            assert!(r.confirm(false).is_some() && r.read_only().is_err(), "{judge:?} {}", &sql[..sql.len().min(60)]);
+        }
+    }
+}
+
+/// The calls of the statement `ANALYZE` names are read on that statement alone: a plain read
+/// after `ANALYZE FORMAT=JSON` runs on a read-only profile, as the read does (`FORMAT=JSON (` is
+/// no call), and a call that is no built-in is still seen.
+#[test]
+fn the_statement_analyze_names_is_read_on_its_own() {
+    for judge in [MYSQL, MARIADB] {
+        for (sql, bare) in [
+            ("ANALYZE FORMAT=JSON (SELECT 1)", "(SELECT 1)"),
+            ("ANALYZE FORMAT=JSON WITH c AS (SELECT 1) SELECT * FROM c", "WITH c AS (SELECT 1) SELECT * FROM c"),
+            ("ANALYZE SELECT zz_f(1)", "SELECT zz_f(1)"),
+        ] {
+            let (r, b) = (classify(sql, judge), classify(bare, judge));
+            assert_eq!(
+                (r.class, r.read_only().is_ok(), r.confirm(false)),
+                (b.class, b.read_only().is_ok(), b.confirm(false)),
+                "{judge:?} {sql}"
+            );
+        }
+    }
 }
