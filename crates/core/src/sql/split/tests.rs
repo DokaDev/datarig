@@ -190,7 +190,7 @@ fn executable_comments_are_kept_when_splitting() {
     let ansi = MySqlMode { ansi_quotes: true, ..MySqlMode::default() };
     for d in [Dialect::MySql(mode), Dialect::MariaDb(mode), Dialect::MariaDb(ansi), Dialect::Postgres] {
         for (src, want) in [
-            ("UPDATE t SET v=0 /*M! , w=1 */;", vec!["UPDATE t SET v=0 /*M! , w=1 */"]),
+            ("SELECT 0 /*M! , 1 */;", vec!["SELECT 0 /*M! , 1 */"]),
             ("SELECT a FROM t /*M! , b */", vec!["SELECT a FROM t /*M! , b */"]),
             ("SELECT a FROM t /*M!100500 , b */ ;", vec!["SELECT a FROM t /*M!100500 , b */"]),
             ("SELECT 1 /*M! , 2 */", vec!["SELECT 1 /*M! , 2 */"]),
@@ -198,15 +198,15 @@ fn executable_comments_are_kept_when_splitting() {
             ("/*M!100500 SET @a=1 */", vec!["/*M!100500 SET @a=1 */"]),
             ("/*M! SET @a=1 */ SELECT 1;", vec!["/*M! SET @a=1 */ SELECT 1"]),
             ("/*M!100500 SET @a=1 */ SELECT 1", vec!["/*M!100500 SET @a=1 */ SELECT 1"]),
-            ("UPDATE t SET v=0 /*! , w=1 */;", vec!["UPDATE t SET v=0 /*! , w=1 */"]),
+            ("SELECT 0 /*! , 1 */;", vec!["SELECT 0 /*! , 1 */"]),
             ("SELECT 1 /*!80000 , 2 */", vec!["SELECT 1 /*!80000 , 2 */"]),
             ("/*! SET @a=1 */;", vec!["/*! SET @a=1 */"]),
             ("/*!80000 SET @a=1 */", vec!["/*!80000 SET @a=1 */"]),
             ("/*! SET @a=1 */ SELECT 1;", vec!["/*! SET @a=1 */ SELECT 1"]),
             ("/*!80000 SET @a=1 */ SELECT 1", vec!["/*!80000 SET @a=1 */ SELECT 1"]),
             (
-                "UPDATE t SET v=0 /* why */ /*M! , w=1 */ -- note\n; SELECT 2 /*M! , 3 */",
-                vec!["UPDATE t SET v=0 /* why */ /*M! , w=1 */", "SELECT 2 /*M! , 3 */"],
+                "SELECT 0 /* why */ /*M! , 1 */ -- note\n; SELECT 2 /*M! , 3 */",
+                vec!["SELECT 0 /* why */ /*M! , 1 */", "SELECT 2 /*M! , 3 */"],
             ),
             (" /* a */ /*M! SET @a=1 */ ; /*M! SET @b=2 */", vec!["/*M! SET @a=1 */", "/*M! SET @b=2 */"]),
             // Blanks and plain comments around a statement are trimmed as before.
@@ -252,8 +252,8 @@ fn executable_comments_before_a_client_command_keep_the_statements_apart() {
 #[test]
 fn comments_holding_executable_comments_are_kept() {
     for (src, want) in [
-        ("UPDATE t SET v=0 /* outer /* inner */ /*M! x */", "UPDATE t SET v=0 /* outer /* inner */ /*M! x */"),
-        ("UPDATE t SET v=0 /* outer /* inner */ /*! x */ */;", "UPDATE t SET v=0 /* outer /* inner */ /*! x */ */"),
+        ("SELECT 0 /* outer /* inner */ /*M! , 1 */", "SELECT 0 /* outer /* inner */ /*M! , 1 */"),
+        ("SELECT 0 /* outer /* inner */ /*! , 1 */ */;", "SELECT 0 /* outer /* inner */ /*! , 1 */ */"),
         ("/* a /*M! x */ */ SELECT 1;", "/* a /*M! x */ */ SELECT 1"),
         ("/* a /* b */ */ SELECT 1 /* c */;", "SELECT 1"),
     ] {
@@ -270,9 +270,7 @@ fn line_comments_holding_executable_comments_are_kept() {
     use crate::sql::dialect::MySqlMode;
     let mode = MySqlMode::default();
     for d in [Dialect::Postgres, Dialect::MySql(mode), Dialect::MariaDb(mode)] {
-        for src in
-            ["UPDATE t SET v=0--1 /*M! , w=1 */", "UPDATE t SET v=0 -- note /*! , w=1 */", "SELECT 1 -- a\n/*M! , 2 */"]
-        {
+        for src in ["SELECT 0--1 /*M! , 1 */", "SELECT 0 -- note /*! , 1 */", "SELECT 1 -- a\n/*M! , 2 */"] {
             assert_eq!(bodies_in(src, d), [src], "{d:?}: {src:?}");
         }
     }

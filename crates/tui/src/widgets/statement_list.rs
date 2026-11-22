@@ -475,6 +475,29 @@ mod tests {
         }
     }
 
+    /// Text pasted before the form's database is MySQL or MariaDB (none yet, or PostgreSQL)
+    /// keeps every comment that holds an executable comment, nested or a line comment, in its
+    /// rows: once the database is MySQL or MariaDB, those rows are what that server would run
+    /// and are checked as such (a start-up statement may not hold an executable comment), never
+    /// a shorter text the other reading cut.
+    #[test]
+    fn a_paste_before_the_database_is_known_keeps_executable_comments() {
+        for first in [None, Some(Dbms::Postgres)] {
+            for (text, kept) in [
+                ("SET @a = 1 /* x /* y */ /*M! , @b = 2 */;\nSET @c = 3", "/*M! , @b = 2 */"),
+                ("SET @a = 1 /* x /* y */ /*! , @b = 2 */\n", "/*! , @b = 2 */"),
+                ("SET @a = 1 --1 /*M! , @b = 2 */\nSET @c = 3", "--1 /*M! , @b = 2 */"),
+            ] {
+                let mut l = StatementList::new(first, &[]);
+                l.paste(text);
+                assert!(l.statements().iter().any(|s| s.contains(kept)), "{first:?} {text:?}: {:?}", l.statements());
+                l.set_dbms(Some(Dbms::MySql));
+                assert!(l.statements().iter().any(|s| s.contains(kept)), "{first:?} {text:?}: {:?}", l.statements());
+                assert!(l.problem().is_some(), "{first:?} {text:?}: {:?}", l.statements());
+            }
+        }
+    }
+
     /// A line inside an executable comment that starts with `SET` starts no row: the comment is
     /// one piece of its statement.
     #[test]

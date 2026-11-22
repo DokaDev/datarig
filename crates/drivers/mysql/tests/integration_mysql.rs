@@ -589,6 +589,27 @@ async fn mariadb_only_comments_are_refused_on_mariadb_and_comments_on_mysql() {
     assert_eq!(page_of(&evs).0.len(), 2, "{evs:?}");
 }
 
+/// Startup SQL is text the user wrote: on MariaDB a start-up statement holding the characters
+/// `/*M!` fails the connection before it is sent, with its place among the statements; on MySQL
+/// it runs as before.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_startup_statement_holding_mariadb_comment_characters_fails_on_mariadb() {
+    let test = "a_startup_statement_holding_mariadb_comment_characters_fails_on_mariadb";
+    let Some((url, admin)) = urls(test) else { return };
+    let maria = mariadb(&admin).await;
+    let got = starting(&url, SessionRole::Query, test, false, &["SET @zz_st_a = 1", "SET @zz_st_b = '/*M!'"]).await;
+    match (maria, got) {
+        (true, Err(DbError::SessionSql { index, error, .. })) => {
+            assert_eq!((index, *error), (1, DbError::CommentUnsupported));
+        }
+        (false, Ok((mut c, _))) => {
+            let evs = c.run(1, &["SELECT @zz_st_b"]).await;
+            assert_eq!(page_of(&evs).1[0][0].as_deref(), Some("/*M!"), "{evs:?}");
+        }
+        (maria, got) => panic!("MariaDB {maria}: {:?}", got.err()),
+    }
+}
+
 /// User text holding the bytes `/*M!` is refused on MariaDB wherever they are, in a string or a
 /// quoted name too (no reading of the text decides it), and nothing of it runs; on MySQL it runs
 /// as before. A count the app writes around a value it quotes itself (an edit's check) is sent

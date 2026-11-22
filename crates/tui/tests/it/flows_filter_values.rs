@@ -1459,3 +1459,55 @@ fn a_between_bound_with_a_line_feed_stays_when_the_other_is_edited() {
         vec![vec!["SELECT * FROM `shop`.`users` WHERE (at BETWEEN _utf8mb4 X'610A62' AND 'xy')".to_string()]]
     );
 }
+
+/// `shop.users` of `columns` open on a MariaDB session (its zone `+00:00`), `rows` loaded, the
+/// grid focused, nothing sent since.
+fn maria_table(columns: Vec<ColumnMeta>, rows: Vec<Vec<Option<String>>>) -> Harness {
+    let driver = FakeDriver::default();
+    driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut p = datarig_core::profile::ConnectionConfig::test_db();
+    (p.name, p.driver) = ("local-maria".into(), "mysql".into());
+    let cfg = datarig_core::config::Config { connections: vec![p], ..Default::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    h.db(DbEvent::Language(Language::Sql(Dialect::MariaDb(MySqlMode::default()))));
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["shop".into()])));
+    open_users(&mut h);
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Language(Language::Sql(Dialect::MariaDb(MySqlMode::default()))));
+    h.tab_db(index, DbEvent::Connected);
+    zone(&mut h, "+00:00");
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(index, DbEvent::Page { id, columns: Some(columns), rows, more: false, elapsed: Duration::from_millis(2) });
+    h.sent();
+    h.key(KeyCode::Tab);
+    h
+}
+
+/// On MariaDB a value the app writes itself is never refused for holding the characters `/*M!`
+/// (only text the user typed is): a ticked value runs as the table's condition, and a count of
+/// another column under it is sent.
+#[test]
+fn a_ticked_value_holding_mariadb_comment_characters_runs_and_counts_on_mariadb() {
+    let columns = vec![col("id", "int", ValueKind::Integer), col("status", "varchar", ValueKind::Text)];
+    let rows = [("1", "/*M!"), ("2", "/*M!"), ("3", "paid")]
+        .iter()
+        .map(|(i, s)| vec![Some(i.to_string()), Some(s.to_string())])
+        .collect();
+    let mut h = maria_table(columns.clone(), rows);
+    dialog_on(&mut h, 1);
+    to_values(&mut h, 0);
+    h.key(KeyCode::Char(' '));
+    assert!(draft(&h).starts_with("status = "), "{}", draft(&h));
+    h.key(KeyCode::Enter);
+    let sent = runs(&mut h);
+    assert_eq!(sent.len(), 1, "the condition runs: {:?}", h.app.tab().status);
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    let rows = vec![vec![Some("1".into()), Some("/*M!".into())], vec![Some("2".into()), Some("/*M!".into())]];
+    h.tab_db(index, DbEvent::Page { id, columns: Some(columns), rows, more: false, elapsed: Duration::from_millis(2) });
+    h.sent();
+    dialog_on(&mut h, 0);
+    h.keys("#");
+    assert_eq!(counts(&mut h).len(), 1, "the count is sent: {:?}", h.app.tab().status);
+}
