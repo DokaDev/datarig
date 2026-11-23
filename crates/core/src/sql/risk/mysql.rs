@@ -1416,8 +1416,8 @@ const BEFORE_TABLE: &[&str] = &["JOIN", "TABLE", "INTO", "DESCRIBE", "DESC", "SE
 
 /// Whether the name whose last part is at `last` names an object, not a value: a table right
 /// after `FROM` (not a period's bound), `JOIN`, `TABLE`, `INTO`, `DESCRIBE`, `SEQUENCE`, `VIEW`,
-/// after the statement's own `UPDATE`, `INSERT`, `REPLACE`, `DELETE` or `EXPLAIN`, after `IN`
-/// of a `SHOW`, or the sequence the built-in `LASTVAL(…)` and `PREVIOUS VALUE FOR` read.
+/// after the statement's own `UPDATE`, `INSERT`, `REPLACE`, `DELETE` or `EXPLAIN`, after a
+/// `SHOW`'s own `IN`, or the sequence the built-in `LASTVAL(…)` and `PREVIOUS VALUE FOR` read.
 /// Anywhere else (a list of tables after a comma, `STRAIGHT_JOIN`, which is also an option of
 /// `SELECT`, …) it is no object: when unsure, a value.
 fn names_object(ws: &[W], last: usize) -> bool {
@@ -1441,7 +1441,9 @@ fn names_object(ws: &[W], last: usize) -> bool {
     BEFORE_TABLE.iter().any(|b| w.is(b))
         || (w.is("FROM") && !period && table_from(ws, before))
         || (matches!(w.up.as_str(), "UPDATE" | "INSERT" | "REPLACE" | "DELETE" | "EXPLAIN") && before == 0)
-        || (w.is("IN") && ws[0].is("SHOW"))
+        // `SHOW COLUMNS IN t`: at the statement's own level only (a condition's `IN` takes
+        // parentheses there; `POSITION(… IN …)` takes a value).
+        || (w.is("IN") && w.depth == 0 && ws[0].is("SHOW"))
         || (w.is("FOR") && before >= 2 && ws[before - 1].is("VALUE") && ws[before - 2].is("PREVIOUS"))
 }
 
