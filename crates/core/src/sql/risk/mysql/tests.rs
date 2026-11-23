@@ -1378,3 +1378,59 @@ fn a_format_that_is_no_name_keeps_the_whole_text_read() {
         assert_eq!((wrapped.class, wrapped.read_only().is_ok()), (bare.class, bare.read_only().is_ok()), "{judge:?}");
     }
 }
+
+/// On MariaDB (and judged on both engines), a statement that advances a sequence (`NEXT VALUE
+/// FOR`, `NEXTVAL(…)`, `SETVAL(…)`, `s.nextval`) is a write: a read-only profile refuses it and
+/// it is never run again, wherever the form stands, also under `ANALYZE` and `EXPLAIN ANALYZE`.
+#[test]
+fn sequence_advancing_forms_are_writes_on_mariadb() {
+    for judge in [MARIADB, MARIADB.with_sibling(), MYSQL.with_sibling()] {
+        for sql in [
+            "SELECT NEXT VALUE FOR zz_s",
+            "SELECT next value for zz_s",
+            "SELECT NEXTVAL(zz_s)",
+            "SELECT SETVAL(zz_s, 5)",
+            "SELECT zz_s.nextval",
+            "SELECT * FROM zz_t WHERE id = NEXT VALUE FOR zz_s",
+            "SELECT (SELECT NEXTVAL(zz_s))",
+            "SELECT * FROM zz_t WHERE id IN (SELECT zz_s.nextval)",
+            "INSERT INTO zz_t SELECT NEXT VALUE FOR zz_s",
+            "ANALYZE SELECT NEXT VALUE FOR zz_s",
+            "ANALYZE FORMAT=JSON SELECT NEXTVAL(zz_s)",
+            "EXPLAIN ANALYZE SELECT NEXT VALUE FOR zz_s",
+        ] {
+            let r = classify(sql, judge);
+            assert!(r.writes && r.class >= Class::Write, "{judge:?} {sql}: {r:?}");
+            assert!(r.read_only().is_err(), "{judge:?} {sql}");
+            assert!(repeatable(sql, judge).is_err(), "{judge:?} {sql}");
+        }
+    }
+}
+
+/// What reads a sequence's state (`LASTVAL(…)`, `PREVIOUS VALUE FOR`, `s.currval`, `s.lastval`)
+/// stays as it was on MariaDB, and MySQL judged on its own engine reads `t.nextval` and the like
+/// as columns, as before. No sequence form makes a write inside a routine or view body, a DDL
+/// statement or a plan-only `EXPLAIN`.
+#[test]
+fn sequence_readers_and_other_places_stay_as_they_were() {
+    for sql in ["SELECT LASTVAL(zz_s)", "SELECT PREVIOUS VALUE FOR zz_s", "SELECT zz_s.currval", "SELECT zz_s.lastval"]
+    {
+        for judge in [MARIADB, MARIADB.with_sibling()] {
+            assert!(!classify(sql, judge).writes, "{judge:?} {sql}");
+        }
+    }
+    for sql in ["SELECT t.nextval, t.currval, t.lastval FROM t", "SELECT NEXTVAL(zz_s)", "SELECT SETVAL(zz_s, 5)"] {
+        let r = classify(sql, MYSQL);
+        assert!(!r.writes, "MySQL {sql}: {r:?}");
+    }
+    assert!(classify("SELECT t.nextval FROM t", MYSQL).read_only().is_ok());
+    for sql in [
+        "CREATE VIEW v AS SELECT NEXT VALUE FOR zz_s",
+        "CREATE TABLE zz_t (id INT DEFAULT NEXTVAL(zz_s))",
+        "EXPLAIN SELECT NEXT VALUE FOR zz_s",
+        "CREATE PROCEDURE p() SELECT NEXT VALUE FOR zz_s",
+    ] {
+        let (maria, mysql) = (classify(sql, MARIADB), classify(sql, MYSQL));
+        assert_eq!((maria.class, maria.writes), (mysql.class, mysql.writes), "{sql}");
+    }
+}

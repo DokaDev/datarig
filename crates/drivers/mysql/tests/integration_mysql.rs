@@ -8983,3 +8983,40 @@ async fn analyze_of_a_statement_runs_it_on_mariadb() {
     assert!(!matches!(evs.last(), Some(DbEvent::Failed { .. })), "{evs:?}");
     side_c.disconnect().await.unwrap();
 }
+
+/// On MariaDB a statement that takes a sequence's next value is a change: a read-only session
+/// refuses it before sending it (the sequence keeps its value), and it is never run again for
+/// a later page. MySQL has no sequences.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sequence_value_is_never_taken_again_or_on_a_read_only_profile() {
+    let test = "a_sequence_value_is_never_taken_again_or_on_a_read_only_profile";
+    let Some((url, admin)) = urls(test) else { return };
+    if !mariadb(&url).await {
+        return only_on_mariadb(test);
+    }
+    let seq = format!("zz_it_seq_{}", std::process::id());
+    let _drop = Cleanup { url: admin.clone(), sql: format!("DROP SEQUENCE IF EXISTS shop.{seq}") };
+    let mut a = side(&admin).await;
+    a.query_drop(format!("CREATE SEQUENCE shop.{seq}")).await.unwrap();
+    let sql = format!("SELECT NEXT VALUE FOR shop.{seq}");
+    let mut ro = Conn::open(&url, SessionRole::Query, true, test).await;
+    let evs = ro.run(1, &[sql.as_str()]).await;
+    assert!(matches!(evs.last(), Some(DbEvent::Failed { error: DbError::ReadWriteRefused, .. })), "{evs:?}");
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    c.session.send(DbCommand::CheckRepeat { id: 2, sql: sql.clone() });
+    let got = c.wait(|e| matches!(e, DbEvent::RepeatChecked { .. }), 30).await;
+    assert!(
+        matches!(
+            got,
+            DbEvent::RepeatChecked {
+                result: Err(DbError::NotRepeatable(datarig_core::sql::risk::repeat::NotRepeatable::Writes)),
+                ..
+            }
+        ),
+        "{got:?}"
+    );
+    // Never taken by the refused run: the next value is the first.
+    let first: Option<i64> = a.query_first(sql.as_str()).await.unwrap();
+    assert_eq!(first, Some(1));
+    a.disconnect().await.unwrap();
+}
