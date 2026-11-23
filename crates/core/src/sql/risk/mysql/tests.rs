@@ -1052,7 +1052,7 @@ fn analyze_of_a_users_function_asks_and_read_only_refuses_it() {
 /// Each engine's judge reads its own lists, the ones each engine always had: MySQL's has every
 /// built-in, its own tight and word calls and reserves `LATERAL` and `OF`; MariaDB's lacks the
 /// built-ins it does not provide, reads its constructors by their arguments, has its own tight
-/// and word calls, reserves neither word and needs `JSON_TABLE`'s columns.
+/// and word calls, reserves neither word, needs `JSON_TABLE`'s columns and has sequences.
 #[test]
 fn each_engine_reads_its_own_tables() {
     let mysql = FamilyTables {
@@ -1062,6 +1062,7 @@ fn each_engine_reads_its_own_tables() {
         word_calls: MYSQL_WORD_CALLS,
         unreserved_not_calls: &[],
         json_table_needs_columns: false,
+        sequences: false,
     };
     let mariadb = FamilyTables {
         not_builtin: NOT_ON_MARIADB,
@@ -1070,6 +1071,7 @@ fn each_engine_reads_its_own_tables() {
         word_calls: MARIADB_WORD_CALLS,
         unreserved_not_calls: MARIADB_NOT_RESERVED,
         json_table_needs_columns: true,
+        sequences: true,
     };
     assert_eq!(MYSQL_TABLES, mysql);
     assert_eq!(MARIADB_TABLES, mariadb);
@@ -1377,4 +1379,240 @@ fn a_format_that_is_no_name_keeps_the_whole_text_read() {
         let (wrapped, bare) = (classify("ANALYZE (SELECT 1) SELECT 2", judge), classify("(SELECT 1) SELECT 2", judge));
         assert_eq!((wrapped.class, wrapped.read_only().is_ok()), (bare.class, bare.read_only().is_ok()), "{judge:?}");
     }
+}
+
+/// On MariaDB (and judged on both engines), a statement that advances a sequence (`NEXT VALUE
+/// FOR`, `NEXTVAL(…)`, `SETVAL(…)`, `s.nextval`) is a write: a read-only profile refuses it and
+/// it is never run again, wherever the form stands, also under `ANALYZE` and `EXPLAIN ANALYZE`.
+#[test]
+fn sequence_advancing_forms_are_writes_on_mariadb() {
+    for judge in [MARIADB, MARIADB.with_sibling(), MYSQL.with_sibling()] {
+        for sql in [
+            "SELECT NEXT VALUE FOR zz_s",
+            "SELECT next value for zz_s",
+            "SELECT NEXTVAL(zz_s)",
+            "SELECT SETVAL(zz_s, 5)",
+            "SELECT zz_s.nextval",
+            "SELECT * FROM zz_t WHERE id = NEXT VALUE FOR zz_s",
+            "SELECT (SELECT NEXTVAL(zz_s))",
+            "SELECT * FROM zz_t WHERE id IN (SELECT zz_s.nextval)",
+            "INSERT INTO zz_t SELECT NEXT VALUE FOR zz_s",
+            "ANALYZE SELECT NEXT VALUE FOR zz_s",
+            "ANALYZE FORMAT=JSON SELECT NEXTVAL(zz_s)",
+            "EXPLAIN ANALYZE SELECT NEXT VALUE FOR zz_s",
+        ] {
+            let r = classify(sql, judge);
+            assert!(r.writes && r.class >= Class::Write, "{judge:?} {sql}: {r:?}");
+            assert!(r.read_only().is_err(), "{judge:?} {sql}");
+            assert!(repeatable(sql, judge).is_err(), "{judge:?} {sql}");
+        }
+    }
+}
+
+/// What reads a sequence's state (`LASTVAL(…)`, `PREVIOUS VALUE FOR`, `s.currval`, `s.lastval`)
+/// stays as it was on MariaDB, and MySQL judged on its own engine reads `t.nextval` and the like
+/// as columns, as before. No sequence form makes a write inside a routine or view body, a DDL
+/// statement or a plan-only `EXPLAIN`.
+#[test]
+fn sequence_readers_and_other_places_stay_as_they_were() {
+    for sql in ["SELECT LASTVAL(zz_s)", "SELECT PREVIOUS VALUE FOR zz_s", "SELECT zz_s.currval", "SELECT zz_s.lastval"]
+    {
+        for judge in [MARIADB, MARIADB.with_sibling()] {
+            assert!(!classify(sql, judge).writes, "{judge:?} {sql}");
+        }
+    }
+    for sql in ["SELECT t.nextval, t.currval, t.lastval FROM t", "SELECT NEXTVAL(zz_s)", "SELECT SETVAL(zz_s, 5)"] {
+        let r = classify(sql, MYSQL);
+        assert!(!r.writes, "MySQL {sql}: {r:?}");
+    }
+    assert!(classify("SELECT t.nextval FROM t", MYSQL).read_only().is_ok());
+    for sql in [
+        "CREATE VIEW v AS SELECT NEXT VALUE FOR zz_s",
+        "CREATE TABLE zz_t (id INT DEFAULT NEXTVAL(zz_s))",
+        "EXPLAIN SELECT NEXT VALUE FOR zz_s",
+        "CREATE PROCEDURE p() SELECT NEXT VALUE FOR zz_s",
+    ] {
+        let (maria, mysql) = (classify(sql, MARIADB), classify(sql, MYSQL));
+        assert_eq!((maria.class, maria.writes), (mysql.class, mysql.writes), "{sql}");
+    }
+}
+
+/// Every advancing form is a write wherever it stands (a common table expression, `SET`, `DO`,
+/// under `ANALYZE` with and without a format), however its sequence's name is written (quoted,
+/// with its database, under `ANSI_QUOTES`); `NEXTVAL(…)` and `SETVAL(…)` are refused on a
+/// read-only profile as the write they are, not as an unknown function, and open the
+/// transaction.
+#[test]
+fn sequence_advancing_forms_are_writes_however_written() {
+    let ansi = MySqlMode { ansi_quotes: true, ..MODE };
+    let forms = ["NEXT VALUE FOR zz_s", "NEXTVAL(zz_s)", "SETVAL(zz_s, 5)", "zz_s.nextval"];
+    let mut texts: Vec<(String, Judge)> = Vec::new();
+    for judge in [MARIADB, MARIADB.with_sibling(), MYSQL.with_sibling()] {
+        for form in forms {
+            for sql in [
+                format!("WITH c AS (SELECT {form}) SELECT * FROM c"),
+                format!("SET @x = {form}"),
+                format!("DO {form}"),
+                format!("ANALYZE SELECT {form}"),
+                format!("ANALYZE FORMAT=JSON SELECT {form}"),
+                format!("SELECT * FROM zz_t, (SELECT {form}) AS x"),
+            ] {
+                texts.push((sql, judge));
+            }
+        }
+        for sql in [
+            "SELECT `zz_s`.`nextval`",
+            "SELECT `db`.`zz_s`.`nextval`",
+            "SELECT db.zz_s.nextval",
+            "SELECT `zz_s`.`NextVal`",
+            "ANALYZE SELECT `zz_s`.`nextval`",
+            "SELECT * FROM zz_t WHERE id = `zz_s`.nextval",
+        ] {
+            texts.push((sql.to_string(), judge));
+        }
+        texts.push(("SELECT \"db\".\"zz_s\".\"nextval\"".to_string(), Judge { mode: ansi, ..judge }));
+        texts.push(("SELECT \"zz_s\".\"nextval\"".to_string(), Judge { mode: ansi, ..judge }));
+    }
+    for (sql, judge) in &texts {
+        let r = classify(sql, *judge);
+        assert!(r.writes && r.class >= Class::Write, "{judge:?} {sql}: {r:?}");
+        assert!(r.read_only().is_err(), "{judge:?} {sql}");
+        assert!(repeatable(sql, *judge).is_err(), "{judge:?} {sql}");
+    }
+    // On MariaDB they are the write. Judged on both engines the MySQL reading (a stored function
+    // of that name) also counts, and refuses as well.
+    for sql in ["SELECT NEXTVAL(zz_s)", "SELECT SETVAL(zz_s, 5)", "SELECT * FROM zz_t WHERE id < nextval(zz_s)"] {
+        let r = classify(sql, MARIADB);
+        assert_eq!(r.read_only(), Err(ReadOnlyBlock::Class(Class::Write)), "{sql}: {r:?}");
+        assert_eq!(r.unchecked_call, None, "{sql}");
+        let explained = classify(&format!("EXPLAIN ANALYZE {sql}"), MARIADB);
+        assert_eq!(explained.danger, None, "EXPLAIN ANALYZE {sql}: {explained:?}");
+        assert!(explained.writes, "EXPLAIN ANALYZE {sql}");
+        for judge in [MARIADB.with_sibling(), MYSQL.with_sibling()] {
+            let r = classify(sql, judge);
+            assert!(r.writes && r.read_only().is_err(), "{judge:?} {sql}");
+        }
+    }
+    for judged in [Judged::Own, Judged::WithSibling] {
+        for sql in ["SELECT NEXT VALUE FOR zz_s", "SELECT zz_s.nextval", "SELECT NEXTVAL(zz_s)"] {
+            assert_eq!(Classifier::MariaDb(MODE, judged).tx_step(sql), TxStep::Opens, "{judged:?} {sql}");
+        }
+    }
+}
+
+/// A table, a common table expression or a sequence that is named `nextval` or `setval` is no
+/// sequence's next value: reading it is judged as reading any other name is, on MariaDB and on
+/// both engines.
+#[test]
+fn objects_named_like_the_sequence_forms_stay_as_any_name() {
+    let ansi = MySqlMode { ansi_quotes: true, ..MODE };
+    for judge in [MARIADB, MARIADB.with_sibling(), MYSQL.with_sibling(), Judge { mode: ansi, ..MARIADB }] {
+        for (sql, plain) in [
+            ("SELECT * FROM shop.nextval", "SELECT * FROM shop.zz_t"),
+            ("SELECT * FROM `shop`.`nextval`", "SELECT * FROM `shop`.`zz_t`"),
+            ("SELECT * FROM shop.nextval WHERE id = 1", "SELECT * FROM shop.zz_t WHERE id = 1"),
+            (
+                "SELECT COUNT(*) FROM `shop`.`nextval` WHERE `id` <=> 1",
+                "SELECT COUNT(*) FROM `shop`.`zz_t` WHERE `id` <=> 1",
+            ),
+            ("SELECT * FROM a JOIN shop.nextval ON 1", "SELECT * FROM a JOIN shop.zz_t ON 1"),
+            ("SELECT (SELECT 1 FROM shop.nextval)", "SELECT (SELECT 1 FROM shop.zz_t)"),
+            ("SELECT shop.nextval.id FROM shop.nextval", "SELECT shop.zz_t.id FROM shop.zz_t"),
+            ("TABLE shop.nextval", "TABLE shop.zz_t"),
+            ("SELECT LASTVAL(shop.nextval)", "SELECT LASTVAL(shop.zz_t)"),
+            ("SELECT PREVIOUS VALUE FOR shop.nextval", "SELECT PREVIOUS VALUE FOR shop.zz_t"),
+            (
+                "WITH nextval (id) AS (SELECT 1) SELECT * FROM nextval",
+                "WITH zz_c (id) AS (SELECT 1) SELECT * FROM zz_c",
+            ),
+            ("WITH setval (id) AS (SELECT 1) SELECT * FROM setval", "WITH zz_c (id) AS (SELECT 1) SELECT * FROM zz_c"),
+            ("SELECT 1 FROM shop.nextval FOR UPDATE", "SELECT 1 FROM shop.zz_t FOR UPDATE"),
+            ("SHOW CREATE SEQUENCE shop.nextval", "SHOW CREATE SEQUENCE shop.zz_t"),
+            ("SHOW CREATE TABLE shop.nextval", "SHOW CREATE TABLE shop.zz_t"),
+            ("SHOW CREATE VIEW shop.nextval", "SHOW CREATE VIEW shop.zz_t"),
+            ("SHOW COLUMNS IN shop.nextval", "SHOW COLUMNS IN shop.zz_t"),
+            ("EXPLAIN shop.nextval", "EXPLAIN shop.zz_t"),
+            ("UPDATE shop.nextval SET a = 1", "UPDATE shop.zz_t SET a = 1"),
+            ("INSERT INTO shop.nextval VALUES (1)", "INSERT INTO shop.zz_t VALUES (1)"),
+            ("DELETE FROM shop.nextval WHERE id = 1", "DELETE FROM shop.zz_t WHERE id = 1"),
+        ] {
+            let (r, p) = (classify(sql, judge), classify(plain, judge));
+            assert_eq!(
+                (r.class, r.writes, r.read_only().is_ok(), repeatable(sql, judge).is_ok()),
+                (p.class, p.writes, p.read_only().is_ok(), repeatable(plain, judge).is_ok()),
+                "{judge:?} {sql}"
+            );
+        }
+        // In an expression the suffix still advances it, also next to a table of that name, and
+        // where a word reads a name that is no table's (`EXTRACT(… FROM …)`, an upsert's
+        // assignment).
+        for sql in [
+            "SELECT shop.nextval FROM shop.nextval",
+            "SELECT EXTRACT(DAY FROM zz_s.nextval)",
+            "SELECT * FROM a WHERE x IN (1, zz_s.nextval)",
+            "SELECT * FROM a JOIN b ON a.id = b.id, c WHERE c.id = zz_s.nextval",
+            "INSERT INTO zz_t (a) VALUES (1) ON DUPLICATE KEY UPDATE a = 2, b = zz_s.nextval",
+            // `STRAIGHT_JOIN` is also an option of `SELECT`, `tables` may be a column's name.
+            "SELECT STRAIGHT_JOIN zz_s.nextval",
+            "SELECT STRAIGHT_JOIN a, zz_s.nextval FROM t",
+            "SELECT t.tables, zz_s.nextval FROM t",
+            "SELECT * FROM t WHERE t.x = 1 AND t.y = zz_s.nextval",
+            // The bounds of a period are values (system versioning, `FOR PORTION OF`), and a
+            // stored function named `lastval` takes a value.
+            "SELECT * FROM t FOR SYSTEM_TIME FROM zz_s.nextval TO '2030-01-01'",
+            "SHOW COLUMNS FROM t WHERE POSITION('a' IN zz_s.nextval) > 0",
+            "SELECT app.lastval(zz_s.nextval)",
+            "SELECT `app`.LASTVAL(zz_s.nextval)",
+            "SELECT `lastval`(zz_s.nextval)",
+            "CALL lastval(zz_s.nextval)",
+            "SET STATEMENT max_statement_time = 1 FOR CALL lastval(zz_s.nextval)",
+            // Accepted limit (when unsure, a write): a table of that name only in a list of
+            // tables after a comma, after `STRAIGHT_JOIN` or first in parentheses.
+            "SELECT * FROM a, shop.nextval",
+            "SELECT * FROM a STRAIGHT_JOIN shop.nextval",
+            "SELECT * FROM (shop.nextval JOIN a ON 1)",
+        ] {
+            assert!(classify(sql, judge).writes, "{judge:?} {sql}");
+        }
+    }
+}
+
+/// An event's body is stored, not run: no sequence form in it makes the statement a write.
+#[test]
+fn an_events_body_takes_no_sequence_value() {
+    let sql = "CREATE EVENT e ON SCHEDULE EVERY 1 DAY DO SELECT NEXT VALUE FOR zz_s";
+    let (maria, mysql) = (classify(sql, MARIADB), classify(sql, MYSQL));
+    assert_eq!((maria.class, maria.writes), (mysql.class, mysql.writes));
+}
+
+/// Where no write stands in for it (a plan-only `EXPLAIN`), or where the name may be a stored
+/// function's (quoted, or with a blank before its `(`), `NEXTVAL(…)` and `SETVAL(…)` stay calls
+/// a read-only profile refuses by name on MariaDB, as before.
+#[test]
+fn sequence_calls_keep_their_refusal_where_no_write_stands_in() {
+    for sql in ["EXPLAIN SELECT NEXTVAL(zz_s)", "EXPLAIN SELECT SETVAL(zz_s, 5)"] {
+        let r = classify(sql, MARIADB);
+        assert!(!r.writes, "{sql}: {r:?}");
+        assert!(matches!(r.read_only(), Err(ReadOnlyBlock::UnknownFunction(_))), "{sql}: {r:?}");
+    }
+    for sql in ["SELECT `nextval`(zz_s)", "SELECT `SETVAL`(zz_s, 5)", "SELECT NEXTVAL (zz_s)"] {
+        let r = classify(sql, MARIADB);
+        assert!(r.writes, "{sql}: {r:?}");
+        assert!(r.unchecked_call.is_some(), "{sql}: {r:?}");
+    }
+}
+
+/// The bound of a period is a value also where the statement is a write anyway (`FOR PORTION
+/// OF`): the name in it advances the sequence, read on the statement's words.
+#[test]
+fn a_period_bound_takes_a_sequence_value() {
+    for sql in [
+        "DELETE FROM t FOR PORTION OF p FROM zz_s.nextval TO 9",
+        "UPDATE t FOR PORTION OF p FROM zz_s.nextval TO 9 SET a = 1",
+    ] {
+        let (ws, _) = words(sql, MARIADB).unwrap_or_else(|_| panic!("{sql}"));
+        assert!(advances_sequence(&ws, MARIADB), "{sql}");
+    }
+    let (ws, _) = words("DELETE FROM shop.nextval WHERE id = 1", MARIADB).unwrap_or_else(|_| panic!());
+    assert!(!advances_sequence(&ws, MARIADB));
 }

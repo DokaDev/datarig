@@ -291,6 +291,9 @@ pub struct FamilyTables {
     /// `JSON_TABLE` is the table function only with its `COLUMNS` clause: without it, the name
     /// is a stored function's.
     pub(super) json_table_needs_columns: bool,
+    /// The engine has sequences: `NEXT VALUE FOR`, `NEXTVAL(…)`, `SETVAL(…)` and `s.nextval`
+    /// advance one, so a statement with one is a change ([`advances_sequence`]).
+    pub(super) sequences: bool,
 }
 
 /// MySQL's lists.
@@ -301,6 +304,7 @@ pub static MYSQL_TABLES: FamilyTables = FamilyTables {
     word_calls: MYSQL_WORD_CALLS,
     unreserved_not_calls: &[],
     json_table_needs_columns: false,
+    sequences: false,
 };
 
 static ON_MYSQL: [&FamilyTables; 1] = [&MYSQL_TABLES];
@@ -1333,7 +1337,7 @@ fn with_calls(mut risk: Risk, ws: &[W], judge: Judge) -> Risk {
                 None
             };
             risk.danger = risk.danger.or(danger);
-        } else if !schema {
+        } else if !schema && (risk.explain == Explain::Plan || !sequence_write(&c, judge)) {
             risk.runs_code = true;
             risk.unchecked_call = risk.unchecked_call.or(Some(c.written));
             // `EXPLAIN ANALYZE` runs it: what it writes where the rollback does not reach (a
@@ -1357,8 +1361,103 @@ fn statement(ws: &[W], judge: Judge) -> Risk {
         risk.class = Class::Write;
     }
     let risk = if routine_body(ws) { risk } else { with_calls(risk, ws, judge) };
+    // On an engine with sequences, taking a sequence's next value changes it (nothing undoes
+    // it); not in a stored body, a DDL statement or a plan the server only makes.
+    let risk = if risk.class != Class::Ddl
+        && risk.explain != Explain::Plan
+        && !routine_body(ws)
+        && judge.tables().any(|t| t.sequences)
+        && advances_sequence(ws, judge)
+    {
+        Risk { writes: true, class: risk.class.max(Class::Write), ..risk }
+    } else {
+        risk
+    };
     let harmless = matches!(risk.class, Class::Read | Class::Session | Class::Tx);
     if harmless && has_write_word(ws) { unrecognized() } else { risk }
+}
+
+/// Whether `ws` takes a sequence's next value or sets it: `NEXT VALUE FOR`, a call of
+/// `NEXTVAL` or `SETVAL` ([`calls`]: not a common table expression's column list), or a name
+/// ending in `.nextval` in an expression, quoted or not (MariaDB reads the last part of the
+/// name unquoted). Reading its state (`LASTVAL`, `PREVIOUS VALUE FOR`, `s.currval`,
+/// `s.lastval`) does not change it, nor does an object named `nextval` ([`names_object`]).
+fn advances_sequence(ws: &[W], judge: Judge) -> bool {
+    ws.windows(3).any(|w| w[0].is("NEXT") && w[1].is("VALUE") && w[2].is("FOR"))
+        || calls(ws, judge).iter().any(|c| sequence_call(&c.name))
+        || (1..ws.len()).any(|i| {
+            ws[i - 1].kind == Tok::Dot
+                && is_named(&ws[i], "NEXTVAL")
+                && !ws.get(i + 1).is_some_and(|w| matches!(w.kind, Tok::Dot | Tok::LParen))
+                && !names_object(ws, i)
+        })
+}
+
+/// On an engine with sequences, `NEXTVAL(…)` or `SETVAL(…)` written as the server reads its own
+/// function (no database, no quotes, nothing before its `(`) is no unknown function: it makes
+/// the statement a write ([`advances_sequence`]) wherever that applies (not in a plan-only
+/// `EXPLAIN`, where it stays a call).
+fn sequence_write(c: &Call, judge: Judge) -> bool {
+    sequence_call(&c.name) && !c.qualified && !c.quoted && c.gap == Gap::None && judge.tables().any(|t| t.sequences)
+}
+
+/// A call that advances or sets a sequence on MariaDB (name upper case).
+fn sequence_call(name: &str) -> bool {
+    name == "NEXTVAL" || name == "SETVAL"
+}
+
+/// Whether `w` is the name `name` (upper case), quoted or not.
+fn is_named(w: &W, name: &str) -> bool {
+    if w.kind == Tok::QuotedIdent { unquote(w.text).eq_ignore_ascii_case(name) } else { w.is(name) }
+}
+
+/// Words after which a (qualified) name is a table's: what [`names_object`] reads.
+const BEFORE_TABLE: &[&str] = &["JOIN", "TABLE", "INTO", "DESCRIBE", "DESC", "SEQUENCE", "VIEW"];
+
+/// Whether the name whose last part is at `last` names an object, not a value: a table right
+/// after `FROM` (not a period's bound), `JOIN`, `TABLE`, `INTO`, `DESCRIBE`, `SEQUENCE`, `VIEW`,
+/// after the statement's own `UPDATE`, `INSERT`, `REPLACE`, `DELETE` or `EXPLAIN`, after a
+/// `SHOW`'s own `IN`, or the sequence the built-in `LASTVAL(…)` and `PREVIOUS VALUE FOR` read.
+/// Anywhere else (a list of tables after a comma, `STRAIGHT_JOIN`, which is also an option of
+/// `SELECT`, …) it is no object: when unsure, a value.
+fn names_object(ws: &[W], last: usize) -> bool {
+    let mut first = last;
+    while first >= 2 && ws[first - 1].kind == Tok::Dot && ws[first - 2].is_name() {
+        first -= 2;
+    }
+    let Some(before) = first.checked_sub(1) else { return false };
+    let w = &ws[before];
+    // A word written after a dot is a name (`t.from`), no keyword.
+    if before >= 1 && ws[before - 1].kind == Tok::Dot {
+        return false;
+    }
+    if w.kind == Tok::LParen {
+        // The built-in only: unquoted, without a database, not the procedure of a `CALL`.
+        return before >= 1
+            && ws[before - 1].is("LASTVAL")
+            && !(before >= 2 && (ws[before - 2].kind == Tok::Dot || ws[before - 2].is("CALL")));
+    }
+    // A period's bounds are values: `FOR SYSTEM_TIME FROM … TO …`, `FOR PORTION OF p FROM … TO …`.
+    let period = before >= 1
+        && (ws[before - 1].is("SYSTEM_TIME") || (before >= 2 && ws[before - 2].is("OF") && ws[before - 1].is_name()));
+    BEFORE_TABLE.iter().any(|b| w.is(b))
+        || (w.is("FROM") && !period && table_from(ws, before))
+        || (matches!(w.up.as_str(), "UPDATE" | "INSERT" | "REPLACE" | "DELETE" | "EXPLAIN") && before == 0)
+        // `SHOW COLUMNS IN t`: at the statement's own level only (a condition's `IN` takes
+        // parentheses there; `POSITION(… IN …)` takes a value).
+        || (w.is("IN") && w.depth == 0 && ws[0].is("SHOW"))
+        || (w.is("FOR") && before >= 2 && ws[before - 1].is("VALUE") && ws[before - 2].is("PREVIOUS"))
+}
+
+/// Whether the `FROM` at `at` reads tables: at the statement's own level, or directly in a
+/// query in parentheses; not inside a function's parentheses (`EXTRACT(DAY FROM x)`).
+fn table_from(ws: &[W], at: usize) -> bool {
+    let depth = ws[at].depth;
+    if depth == 0 {
+        return true;
+    }
+    let open = (0..at).rev().find(|&j| ws[j].depth < depth);
+    open.is_some_and(|o| ws.get(o + 1).is_some_and(|w| w.is("SELECT") || w.is("WITH")))
 }
 
 /// Whether `ws` creates or changes a routine, a trigger, an event or a view: the body is stored,

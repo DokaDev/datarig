@@ -1,6 +1,7 @@
 use super::*;
 use crate::sql::dialect::Language;
 use crate::sql::dialect::{DollarQuotes, MySqlMode};
+use crate::sql::risk::mysql::Judged;
 use crate::sql::risk::{Class, Classifier, Danger};
 
 const MY: Dialect = Dialect::MySql(MySqlMode {
@@ -2299,4 +2300,43 @@ fn the_filter_bar_refuses_what_either_engine_refuses() {
     }
     let plain = "id > 1";
     assert_eq!(check_filter(plain, &users(), &target(maria), &maria_classifier, true), check(maria, plain, true));
+}
+
+/// A sequence's next value on MariaDB, judged on its own engine or on both, is refused in a
+/// filter by the name of the call, as it always was, on every profile; a refused call in a
+/// filter that is no read for another reason keeps that reason (MySQL's `FOR SHARE` written
+/// as two quoted names reads as a lock); a filter on a table named `nextval` is a filter like
+/// any other.
+#[test]
+fn a_sequence_call_in_a_filter_keeps_its_reason_and_a_table_named_nextval_is_filtered() {
+    let Dialect::MySql(mode) = MY else { unreachable!() };
+    let maria = Dialect::MariaDb(mode);
+    for judged in [Judged::Own, Judged::WithSibling] {
+        for (d, classifier) in [(maria, Classifier::MariaDb(mode, judged)), (MY, Classifier::MySql(mode, judged))] {
+            for read_only in [false, true] {
+                for (text, name) in [("id < NEXTVAL(s)", "NEXTVAL"), ("SETVAL(s, 5) > 0", "SETVAL")] {
+                    let r = check_filter(text, &users(), &target(d), &classifier, read_only);
+                    assert_eq!(
+                        r,
+                        Err(BarRefusal::RefusedCalls(vec![name.into()])),
+                        "{judged:?} {d:?} {text} {read_only}"
+                    );
+                }
+            }
+        }
+    }
+    let text = "EXISTS (SELECT `for` `share` FROM t) AND ROW_COUNT() = 0";
+    assert_eq!(check(MY, text, false), Err(BarRefusal::NotRead { class: Class::Write, danger: None }));
+    // A sequence call where something else already makes it no read keeps that reason.
+    let text = "EXISTS (SELECT `for` `share` FROM t) AND NEXTVAL(s) = 0";
+    for d in [MY, maria] {
+        assert_eq!(check(d, text, false), Err(BarRefusal::NotRead { class: Class::Write, danger: None }), "{d:?}");
+    }
+    let nextval = TableName { database: None, schema: "shop".into(), name: "nextval".into() };
+    for judged in [Judged::Own, Judged::WithSibling] {
+        for read_only in [false, true] {
+            let r = check_filter("id > 0", &nextval, &target(maria), &Classifier::MariaDb(mode, judged), read_only);
+            assert_eq!(r, Ok(FilterVerdict::Clear), "{judged:?} {read_only}");
+        }
+    }
 }

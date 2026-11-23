@@ -206,3 +206,20 @@ fn the_counts_of_rows_found_by_values_are_on_the_allowlist_of_a_count() {
         assert_eq!(crate::sql::risk::mysql::repeatable(&sql, Judge::mysql(MySqlMode::default())), Ok(()), "{sql}");
     }
 }
+
+/// A table named `nextval` (a sequence's next value on MariaDB only after a name in an
+/// expression) is edited as any other: its check, count and update are planned.
+#[test]
+fn a_table_named_nextval_is_edited_as_any_other() {
+    let mut t = target(Identity::Key { primary: true, columns: vec![0] });
+    t.table = crate::edit::TableRef { schema: "shop".into(), name: "nextval".into() };
+    let mut b = EditBatch::new();
+    b.set(&[(4, 1)], &text("x"), orig);
+    let steps = run(&MY, &t, &b, &[], &[]);
+    assert!(steps[0].starts_with("SELECT 1 FROM `shop`.`nextval` WHERE "), "{steps:?}");
+    assert!(steps[1].starts_with("UPDATE `shop`.`nextval` SET "), "{steps:?}");
+    let mut t = target(Identity::Values { columns: vec![0, 1, 2, 3, 4], duplicates: Duplicates::Refuse });
+    t.table = crate::edit::TableRef { schema: "shop".into(), name: "nextval".into() };
+    let steps = run(&MY, &t, &b, &[(4, 1)], &[]);
+    assert!(steps.iter().any(|s| s.starts_with("UPDATE `shop`.`nextval` SET ")), "{steps:?}");
+}

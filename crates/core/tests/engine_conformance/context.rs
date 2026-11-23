@@ -263,7 +263,61 @@ pub fn cases() -> Vec<Case<&'static str>> {
                 ),
                 (
                     MariaDb,
-                    "run None | read-only UnknownFunction(\"NEXTVAL\") | read-only allowing my_function UnknownFunction(\"NEXTVAL\") | hint None | re-run UserFunction | filter refused RefusedCalls([\"NEXTVAL\"]) | read-only filter refused RefusedCalls([\"NEXTVAL\"])",
+                    "run None | read-only Class(Write) | read-only allowing my_function Class(Write) | hint None | re-run Writes | filter refused RefusedCalls([\"NEXTVAL\"]) | read-only filter refused RefusedCalls([\"NEXTVAL\"])",
+                ),
+            ],
+        },
+        Case {
+            name: "next value for",
+            input: "NEXT VALUE FOR sq",
+            expect: &[
+                (
+                    Pg,
+                    "run Some(Danger(Unparsed)) | read-only Unparsed | read-only allowing my_function Unparsed | hint None | re-run Unreadable | filter refused NotRead { class: Unknown, danger: Some(Unparsed) } | read-only filter refused NotRead { class: Unknown, danger: Some(Unparsed) }",
+                ),
+                (
+                    MySql,
+                    "run None | read-only ok | read-only allowing my_function ok | hint None | re-run ok | filter refused Shape { problem: Sequence, at: Some(0..4) } | read-only filter refused Shape { problem: Sequence, at: Some(0..4) }",
+                ),
+                (
+                    MariaDb,
+                    "run None | read-only Class(Write) | read-only allowing my_function Class(Write) | hint None | re-run Writes | filter refused Shape { problem: Sequence, at: Some(0..4) } | read-only filter refused Shape { problem: Sequence, at: Some(0..4) }",
+                ),
+            ],
+        },
+        Case {
+            name: "setval",
+            input: "SETVAL(sq, 5)",
+            expect: &[
+                (
+                    Pg,
+                    "run None | read-only ok | read-only allowing my_function ok | hint None | re-run Volatile(\"setval\") | filter refused RefusedCalls([\"setval\"]) | read-only filter refused RefusedCalls([\"setval\"])",
+                ),
+                (
+                    MySql,
+                    "run None | read-only UnknownFunction(\"SETVAL\") | read-only allowing my_function UnknownFunction(\"SETVAL\") | hint None | re-run UserFunction | filter refused RefusedCalls([\"SETVAL\"]) | read-only filter refused RefusedCalls([\"SETVAL\"])",
+                ),
+                (
+                    MariaDb,
+                    "run None | read-only Class(Write) | read-only allowing my_function Class(Write) | hint None | re-run Writes | filter refused RefusedCalls([\"SETVAL\"]) | read-only filter refused RefusedCalls([\"SETVAL\"])",
+                ),
+            ],
+        },
+        Case {
+            name: "dot nextval",
+            input: "sq.nextval",
+            expect: &[
+                (
+                    Pg,
+                    "run None | read-only ok | read-only allowing my_function ok | hint None | re-run Volatile(\"nextval\") | filter refused RefusedCalls([\"nextval\"]) | read-only filter refused RefusedCalls([\"nextval\"])",
+                ),
+                (
+                    MySql,
+                    "run None | read-only ok | read-only allowing my_function ok | hint None | re-run ok | filter refused Shape { problem: Sequence, at: Some(3..10) } | read-only filter refused Shape { problem: Sequence, at: Some(3..10) }",
+                ),
+                (
+                    MariaDb,
+                    "run None | read-only Class(Write) | read-only allowing my_function Class(Write) | hint None | re-run Writes | filter refused Shape { problem: Sequence, at: Some(3..10) } | read-only filter refused Shape { problem: Sequence, at: Some(3..10) }",
                 ),
             ],
         },
