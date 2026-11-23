@@ -1527,6 +1527,11 @@ fn objects_named_like_the_sequence_forms_stay_as_any_name() {
             ),
             ("WITH setval (id) AS (SELECT 1) SELECT * FROM setval", "WITH zz_c (id) AS (SELECT 1) SELECT * FROM zz_c"),
             ("SELECT 1 FROM shop.nextval FOR UPDATE", "SELECT 1 FROM shop.zz_t FOR UPDATE"),
+            ("SHOW CREATE SEQUENCE shop.nextval", "SHOW CREATE SEQUENCE shop.zz_t"),
+            ("SHOW CREATE TABLE shop.nextval", "SHOW CREATE TABLE shop.zz_t"),
+            ("SHOW CREATE VIEW shop.nextval", "SHOW CREATE VIEW shop.zz_t"),
+            ("SHOW COLUMNS IN shop.nextval", "SHOW COLUMNS IN shop.zz_t"),
+            ("EXPLAIN shop.nextval", "EXPLAIN shop.zz_t"),
             ("UPDATE shop.nextval SET a = 1", "UPDATE shop.zz_t SET a = 1"),
             ("INSERT INTO shop.nextval VALUES (1)", "INSERT INTO shop.zz_t VALUES (1)"),
             ("DELETE FROM shop.nextval WHERE id = 1", "DELETE FROM shop.zz_t WHERE id = 1"),
@@ -1552,6 +1557,12 @@ fn objects_named_like_the_sequence_forms_stay_as_any_name() {
             "SELECT STRAIGHT_JOIN a, zz_s.nextval FROM t",
             "SELECT t.tables, zz_s.nextval FROM t",
             "SELECT * FROM t WHERE t.x = 1 AND t.y = zz_s.nextval",
+            // The bounds of a period are values (system versioning, `FOR PORTION OF`), and a
+            // stored function named `lastval` takes a value.
+            "SELECT * FROM t FOR SYSTEM_TIME FROM zz_s.nextval TO '2030-01-01'",
+            "DELETE FROM t FOR PORTION OF p FROM zz_s.nextval TO 9",
+            "SELECT app.lastval(zz_s.nextval)",
+            "SELECT `app`.LASTVAL(zz_s.nextval)",
             // Accepted limit (when unsure, a write): a table of that name only in a list of
             // tables after a comma, after `STRAIGHT_JOIN` or first in parentheses.
             "SELECT * FROM a, shop.nextval",
