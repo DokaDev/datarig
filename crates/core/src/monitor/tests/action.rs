@@ -149,6 +149,11 @@ fn mysql_cancel_asks_a_line_only_for_a_plain_read() {
         "not a statement at all",
         "/*! SELECT 1 */",
         "CALL shop.nightly()",
+        // The monitor does not know which engine of the family the server is: a statement
+        // that takes a sequence's next value on MariaDB is no plain read.
+        "SELECT NEXT VALUE FOR zz_s",
+        "SELECT zz_s.nextval",
+        "SELECT NEXTVAL(zz_s)",
     ] {
         let row = my_row(&list, 18986, text, false);
         assert_eq!(decide(&my, &row, false, ActionKind::Cancel), half, "{text}");

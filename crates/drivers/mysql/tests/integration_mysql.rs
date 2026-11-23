@@ -9018,5 +9018,36 @@ async fn a_sequence_value_is_never_taken_again_or_on_a_read_only_profile() {
     // Never taken by the refused run: the next value is the first.
     let first: Option<i64> = a.query_first(sql.as_str()).await.unwrap();
     assert_eq!(first, Some(1));
+    // A paged result that takes a value per row: its first page runs as the user sent it, its
+    // next page is never run again, and the sequence moves no further.
+    let t = numbers(&admin, "seqpage", 1200).await;
+    let paged = format!("SELECT NEXT VALUE FOR shop.{seq} AS n FROM {} ORDER BY id", t.q());
+    let evs = c.run(3, &[paged.as_str()]).await;
+    assert_eq!(page_of(&evs).1.len(), PAGE);
+    let state = format!("SELECT next_not_cached_value FROM shop.{seq}");
+    let before: Option<i64> = a.query_first(state.as_str()).await.unwrap();
+    match resumed(&mut c, 4, &paged, PAGE as u64).await.pop() {
+        Some(DbEvent::Failed { error: DbError::NotRepeatable(r), .. }) => {
+            assert_eq!(r, datarig_core::sql::risk::repeat::NotRepeatable::Writes)
+        }
+        other => panic!("{other:?}"),
+    }
+    let after: Option<i64> = a.query_first(state.as_str()).await.unwrap();
+    assert_eq!(after, before);
+    // A table named `nextval` is read and paged as any other.
+    let db = format!("zz_it_seqdb_{}", std::process::id());
+    let _drop_db = Cleanup { url: admin.clone(), sql: format!("DROP DATABASE IF EXISTS {db}") };
+    a.query_drop(format!("CREATE DATABASE {db}")).await.unwrap();
+    a.query_drop(format!("CREATE TABLE {db}.nextval (id INT PRIMARY KEY) SELECT id FROM {}", t.q())).await.unwrap();
+    // Read by the administrator, who reads every database (no grant is left behind).
+    let named = format!("SELECT id FROM {db}.nextval ORDER BY id");
+    let mut ro = Conn::open(&admin, SessionRole::Query, true, test).await;
+    let mut c = Conn::open(&admin, SessionRole::Query, false, test).await;
+    for (id, conn) in [(5, &mut ro), (6, &mut c)] {
+        let evs = conn.run(id, &[named.as_str()]).await;
+        assert_eq!(page_of(&evs).1.len(), PAGE, "{evs:?}");
+    }
+    let evs = resumed(&mut c, 7, &named, PAGE as u64).await;
+    assert_eq!(first_cells(page_of(&evs).1).first().cloned(), Some(Some("501".into())));
     a.disconnect().await.unwrap();
 }
