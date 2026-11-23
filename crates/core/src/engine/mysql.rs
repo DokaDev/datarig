@@ -1,7 +1,8 @@
 //! MySQL's row of the registry.
 
 use super::mysql_family::{
-    FamilyCancel, FamilySession, FamilyText, FamilyTx, family_classifier, family_filter_calls, family_read_only_calls,
+    FamilyCancel, FamilySession, FamilyText, FamilyTx, FamilyValues, family_classifier, family_filter_calls,
+    family_read_only_calls,
 };
 use super::{EngineId, EngineSpec, FilterCalls, MYSQL_FAMILY, RiskRules, Support, Transport};
 use crate::driver::Hierarchy;
@@ -25,6 +26,7 @@ pub static SPEC: EngineSpec = EngineSpec {
     tx: &FamilyTx,
     session: &FamilySession,
     cancel: &FamilyCancel,
+    values: &FamilyValues,
 };
 
 /// How MySQL's statements are judged: the family's classifier of the text's dialect

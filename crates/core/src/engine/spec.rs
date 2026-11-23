@@ -1,7 +1,8 @@
 //! What is fixed per engine, known without a connection: one [`EngineSpec`] per engine.
 
 use super::{CountInTx, EngineId, OpenVerdict, ReadOnlyProof, ServerFacts, Support, TxStatement, TxVerdict};
-use crate::driver::{Hierarchy, SessionRole};
+use crate::driver::{Hierarchy, SessionRole, ValueKind};
+use crate::edit::{Invalid, TableColumn};
 use crate::profile::dsn::Scheme;
 use crate::sql::dialect::{Dialect, DollarQuotes};
 use crate::sql::risk::Classifier;
@@ -46,6 +47,8 @@ pub struct EngineSpec {
     pub session: &'static dyn SessionRules,
     /// Whether a statement can be stopped on its server.
     pub cancel: &'static dyn CancelRules,
+    /// How its values are typed and shown.
+    pub values: &'static dyn ValueRules,
 }
 
 /// How an engine's text is read on a server.
@@ -122,4 +125,52 @@ pub trait SessionRules: Sync {
 pub trait CancelRules: Sync {
     /// Whether the server of `f` can stop a running statement of the session's.
     fn server_cancel(&self, f: &ServerFacts) -> Support;
+}
+
+/// How an engine's values are typed and shown.
+pub trait ValueRules: Sync {
+    /// Whether a value typed into a cell is a value of its column's type.
+    fn input(&self) -> &'static dyn InputRules;
+
+    /// Whether a value of `kind` is shown in the time zone of the session that read it, without
+    /// an offset: its text is the same instant only in that zone.
+    fn shown_in_session_zone(&self, kind: ValueKind) -> bool;
+
+    /// What the text of a bytes value starts with in a result, before its hexadecimal digits.
+    fn bytes_shown_prefix(&self) -> &'static str;
+}
+
+/// Whether a value typed into a cell is a value of its column's type, in the form the result
+/// shows that type's values in, for the kinds whose check differs by engine. Each check reads
+/// the column's type name itself.
+pub trait InputRules: Sync {
+    /// A whole number, in the range of the column's type when the type is known.
+    fn integer(&self, c: &TableColumn, s: &str) -> Result<(), Invalid>;
+
+    /// A decimal number, with as many digits as the column's type holds.
+    fn decimal(&self, c: &TableColumn, s: &str) -> Result<(), Invalid>;
+
+    /// A floating-point number the column's type holds exactly as typed.
+    fn float(&self, c: &TableColumn, s: &str) -> Result<(), Invalid>;
+
+    /// A date as the result shows it.
+    fn date(&self, s: &str) -> Result<(), Invalid>;
+
+    /// A date and time as the result shows it; `zoned` for a type with a time zone.
+    fn timestamp(&self, c: &TableColumn, zoned: bool, s: &str) -> Result<(), Invalid>;
+
+    /// Bytes as the result shows them.
+    fn bytes(&self, s: &str) -> Result<(), Invalid>;
+
+    /// Bits as the result shows them, as many as the column's type takes.
+    fn bits(&self, c: &TableColumn, s: &str) -> Result<(), Invalid>;
+
+    /// Text the column's type holds as typed.
+    fn text(&self, c: &TableColumn, s: &str) -> Result<(), Invalid>;
+
+    /// A value of a kind not otherwise checked.
+    fn other(&self, c: &TableColumn, s: &str) -> Result<(), Invalid>;
+
+    /// A span of time.
+    fn interval(&self, c: &TableColumn, s: &str) -> Result<(), Invalid>;
 }

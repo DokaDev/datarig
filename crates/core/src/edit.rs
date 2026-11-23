@@ -20,7 +20,7 @@
 //! cells is read as rows of values by [`paste::parse`].
 
 mod batch;
-mod input;
+pub(crate) mod input;
 pub mod paste;
 mod plan;
 mod shown;
@@ -40,7 +40,7 @@ pub use target::{
     source,
 };
 
-#[cfg(test)]
+// Test-only: the file says so itself (`#![cfg(test)]`), so the engine seam scan skips it.
 mod fake;
 #[cfg(test)]
 mod tests;

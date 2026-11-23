@@ -112,11 +112,11 @@ pub(crate) fn admit(
     let cols = [export::SqlColumn { name: &m.name, type_name: &m.type_name, kind: m.kind, auto_increment: false }];
     let cells = export::sql_cells(d, &cols, from.read_in, server_zone).map_err(NotAdmitted::NotWhole)?;
     let cell = cells.cell(0, v).map_err(NotAdmitted::NotWhole)?;
-    let mysql = matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_));
+    let values = d.engine().spec().values;
     let refused = |why| NotAdmitted::NotWhole(export::Refused { column: m.name.clone(), why });
     // A MySQL TIMESTAMP is shown in the session's zone: the session reads it back the same only
     // in the zone it was read in.
-    if mysql && m.kind == ValueKind::TimestampTz {
+    if values.shown_in_session_zone(m.kind) {
         let read = match from.read_in {
             ReadIn::Values(s) => Some(&s.time_zone),
             _ => None,
@@ -129,10 +129,10 @@ pub(crate) fn admit(
         ValueKind::Integer | ValueKind::Decimal | ValueKind::Float => Value::Number(v.to_string()),
         // With the offset of the zone it was read in (as a copy as SQL writes it): the same
         // instant in any session's zone, as the filter is run again from the history.
-        ValueKind::TimestampTz if mysql => Value::Text(cell.into_owned()),
+        ValueKind::TimestampTz if values.shown_in_session_zone(m.kind) => Value::Text(cell.into_owned()),
         ValueKind::Bytes => {
-            let bytes = hex_bytes(v, if mysql { "0x" } else { "\\x" })
-                .ok_or_else(|| refused(export::NotWhole::NotShownWhole))?;
+            let bytes =
+                hex_bytes(v, values.bytes_shown_prefix()).ok_or_else(|| refused(export::NotWhole::NotShownWhole))?;
             if bytes.len() > MAX_BYTES {
                 return Err(NotAdmitted::TooBig);
             }

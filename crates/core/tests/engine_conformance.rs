@@ -363,3 +363,40 @@ fn every_case_names_every_engine() {
     ];
     assert_eq!(gaps(&named("twice", &twice)), ["twice: case `same` is listed twice"]);
 }
+
+/// What each engine's value rules answer besides the typed value checks: which kinds are shown in
+/// the time zone of the session that read them (the family's `TIMESTAMP` only), and what a
+/// bytes value's text starts with.
+#[test]
+fn value_rules_on_every_engine() {
+    use datarig_core::driver::{ArrayElement, ValueKind};
+    use datarig_core::engine::EngineId;
+    let kinds = [
+        ValueKind::Text,
+        ValueKind::Integer,
+        ValueKind::Decimal,
+        ValueKind::Float,
+        ValueKind::Bool,
+        ValueKind::Json,
+        ValueKind::Bytes,
+        ValueKind::Bit,
+        ValueKind::Date,
+        ValueKind::Time,
+        ValueKind::Timestamp,
+        ValueKind::TimestampTz,
+        ValueKind::Interval,
+        ValueKind::Array(ArrayElement::Text),
+        ValueKind::Other,
+    ];
+    for id in EngineId::ALL {
+        let values = id.spec().values;
+        let (zoned, prefix): (&[ValueKind], &str) = match id {
+            EngineId::Postgres => (&[], "\\x"),
+            EngineId::MySql | EngineId::MariaDb => (&[ValueKind::TimestampTz], "0x"),
+        };
+        for kind in kinds {
+            assert_eq!(values.shown_in_session_zone(kind), zoned.contains(&kind), "{id:?} {kind:?}");
+        }
+        assert_eq!(values.bytes_shown_prefix(), prefix, "{id:?}");
+    }
+}

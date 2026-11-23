@@ -291,6 +291,18 @@ impl Dialect {
         }
     }
 
+    /// The dialect a column default `sql` the driver wrote in this dialect is read in: MySQL's
+    /// and MariaDB's expression default (the driver puts it in parentheses) is the server's own
+    /// text, in its default mode ([`Dialect::printed`]); a literal one the driver wrote in the
+    /// session's mode. PostgreSQL's is read as it is.
+    pub fn default_reading(self, sql: &str) -> Self {
+        match self {
+            Self::Postgres => self,
+            Self::MySql(_) | Self::MariaDb(_) if sql.trim_start().starts_with('(') => self.printed(),
+            Self::MySql(_) | Self::MariaDb(_) => self,
+        }
+    }
+
     /// The same engine's dialect read in sql mode `mode` (PostgreSQL has no such mode: itself).
     pub fn with_mode(self, mode: MySqlMode) -> Self {
         match self {

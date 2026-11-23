@@ -2,14 +2,17 @@
 //! the rules the two engines share.
 
 use super::{
-    CancelRules, CountInTx, EngineFacts, EngineId, Fact, FilterCalls, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof,
-    ServerFacts, SessionRules, Support, TextRules, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, Version,
-    Why,
+    CancelRules, CountInTx, EngineFacts, EngineId, Fact, FilterCalls, InputRules, OpenVerdict, READ_ONLY_NOT_PROVEN,
+    ReadOnlyProof, ServerFacts, SessionRules, Support, TextRules, TxAsk, TxNote, TxRefusal, TxRules, TxStatement,
+    TxVerdict, ValueRules, Version, Why,
 };
-use crate::driver::SessionRole;
+use crate::driver::{SessionRole, ValueKind};
+use crate::edit::input::{self, TypeName};
+use crate::edit::{Invalid, TableColumn};
 use crate::sql::dialect::{Dialect, DollarQuotes, Language};
 use crate::sql::risk::mysql::Judged;
 use crate::sql::risk::{Class, Classifier, Danger};
+use std::ops::RangeInclusive;
 use std::time::Duration;
 
 /// Whether a server's version line (`VERSION()`, `@@version`, a greeting's version text) names
@@ -289,4 +292,167 @@ pub(super) fn family_read_only_calls() -> Support {
 /// See [`family_read_only_calls`].
 pub(super) fn family_filter_calls() -> FilterCalls {
     FilterCalls { allowed: MYSQL_FILTER_CALLS, refused: MYSQL_REFUSED_CALLS }
+}
+
+/// How MySQL's and MariaDB's values are typed and shown.
+pub(super) struct FamilyValues;
+
+impl ValueRules for FamilyValues {
+    fn input(&self) -> &'static dyn InputRules {
+        &FamilyInput
+    }
+
+    /// A `TIMESTAMP`: shown in the session's time zone, without an offset.
+    fn shown_in_session_zone(&self, kind: ValueKind) -> bool {
+        kind == ValueKind::TimestampTz
+    }
+
+    /// `0x`.
+    fn bytes_shown_prefix(&self) -> &'static str {
+        "0x"
+    }
+}
+
+/// MySQL's and MariaDB's checks of a typed value.
+struct FamilyInput;
+
+/// The digits of a year the family shows.
+const FAMILY_YEAR_DIGITS: RangeInclusive<usize> = 4..=4;
+
+/// The digits of a second the family keeps when the type says none.
+const FAMILY_FRACTION_DIGITS: u32 = 0;
+
+impl InputRules for FamilyInput {
+    /// Integer widths and `UNSIGNED`; a `YEAR` is 1901 to 2155 or 0 (two-digit years and years
+    /// before 1901 are read as other years).
+    fn integer(&self, c: &TableColumn, s: &str) -> Result<(), Invalid> {
+        let ty = TypeName::read(&c.column.type_name);
+        let type_name = &c.column.type_name;
+        let digits = input::whole_digits(s)?;
+        let bits = match ty.name.as_str() {
+            "tinyint" | "bool" | "boolean" => 8,
+            "smallint" => 16,
+            "mediumint" => 24,
+            "int" | "integer" => 32,
+            "bigint" => 64,
+            "year" => {
+                let year = (digits.len() <= 10).then(|| s.parse::<i64>().ok()).flatten();
+                let fits = year.is_some_and(|y| y == 0 || (1901..=2155).contains(&y));
+                return fits.then_some(()).ok_or_else(|| input::out_of_range(type_name));
+            }
+            _ => 0,
+        };
+        let range: Option<(i128, i128)> = (bits > 0)
+            .then(|| if ty.unsigned { (0, (1 << bits) - 1) } else { (-(1 << (bits - 1)), (1 << (bits - 1)) - 1) });
+        input::whole_in(s, digits, range, type_name)
+    }
+
+    /// `DECIMAL` and its other names; an unsigned one takes no negative number but zero.
+    fn decimal(&self, c: &TableColumn, s: &str) -> Result<(), Invalid> {
+        let ty = TypeName::read(&c.column.type_name);
+        if !matches!(ty.name.as_str(), "decimal" | "numeric" | "dec" | "fixed") {
+            return Ok(());
+        }
+        let (negative, int, frac) = input::plain_decimal(s).ok_or(Invalid::NotNumber)?;
+        if ty.unsigned && negative && !(int.bytes().chain(frac.bytes()).all(|b| b == b'0')) {
+            return Err(input::out_of_range(&c.column.type_name));
+        }
+        input::decimal_digits(&ty, int, frac)
+    }
+
+    /// `FLOAT(p)` is single precision up to 24 bits; a type this code does not know is taken as
+    /// the narrower one. `FLOAT(M,D)` and `DOUBLE(M,D)` keep `D` digits after the point, and
+    /// take the text the server shows for a value too (its digits there, of the binary value);
+    /// an unsigned one no negative number.
+    fn float(&self, c: &TableColumn, s: &str) -> Result<(), Invalid> {
+        let ty = TypeName::read(&c.column.type_name);
+        let type_name = &c.column.type_name;
+        input::float_form(s)?;
+        let single = match (ty.name.as_str(), &ty.args[..]) {
+            ("float", [p]) => *p <= 24,
+            ("double" | "double precision" | "real", _) => false,
+            _ => true,
+        };
+        let (value, stored) = input::float_read(s, single, type_name)?;
+        let typed = input::digits_of(s);
+        if ty.unsigned && value < 0.0 {
+            return Err(input::out_of_range(type_name));
+        }
+        let rounded = |stored: String| Invalid::Rounded { type_name: type_name.to_string(), stored };
+        let Some((_, digits, exp)) = &typed else { return Err(rounded(input::plain_float(&stored))) };
+        let exact = typed == input::digits_of(&stored);
+        let &[m, d] = &ty.args[..] else {
+            return if exact { Ok(()) } else { Err(rounded(input::plain_float(&stored))) };
+        };
+        // Shown with `D` digits after the point, as many as the binary value has there (0.1 in
+        // a `DOUBLE(30,20)` is `0.10000000000000000555`): the text read back is taken when it
+        // is what the server shows for the number it is read as.
+        let shown = format!("{value:.*}", d as usize);
+        let after = (digits.len() as i64 - 1 - exp).max(0);
+        if after > i64::from(d) || !(exact || typed == input::digits_of(&shown)) {
+            return Err(rounded(shown));
+        }
+        if (exp + 1).max(0) > i64::from(m.saturating_sub(d)) {
+            return Err(input::out_of_range(type_name));
+        }
+        Ok(())
+    }
+
+    /// Also the zero date and a zero month or day, which the server takes or refuses by its
+    /// mode.
+    fn date(&self, s: &str) -> Result<(), Invalid> {
+        input::ymd(s, false, FAMILY_YEAR_DIGITS, true).then_some(()).ok_or(Invalid::NotDate)
+    }
+
+    /// Without an offset, with or without a time zone: a `TIMESTAMP` is shown in the session's
+    /// time zone.
+    fn timestamp(&self, c: &TableColumn, _: bool, s: &str) -> Result<(), Invalid> {
+        let ty = TypeName::read(&c.column.type_name);
+        let (date, rest) = s.split_once(' ').ok_or(Invalid::NotTimestamp)?;
+        let (time, offset) = input::split_offset(rest);
+        if offset.is_some() || !input::ymd(date, false, FAMILY_YEAR_DIGITS, true) {
+            return Err(Invalid::NotTimestamp);
+        }
+        input::hms(time, input::fraction_digits(&ty, FAMILY_FRACTION_DIGITS), false).ok_or(Invalid::NotTimestamp)?
+    }
+
+    /// `0x` and upper-case hexadecimal digits in pairs (other text would be written as a
+    /// string of that text).
+    fn bytes(&self, s: &str) -> Result<(), Invalid> {
+        let hex = s.strip_prefix("0x").filter(|h| h.bytes().all(|b| matches!(b, b'0'..=b'9' | b'A'..=b'F')));
+        hex.is_some_and(|h| h.len() % 2 == 0).then_some(()).ok_or(Invalid::NotBytes { mysql: true })
+    }
+
+    /// `b'…'`, no more significant digits than `bit(n)` has.
+    fn bits(&self, c: &TableColumn, s: &str) -> Result<(), Invalid> {
+        let ty = TypeName::read(&c.column.type_name);
+        let digits =
+            s.strip_prefix("b'").and_then(|r| r.strip_suffix('\'')).filter(|d| !d.is_empty() && input::binary(d));
+        let digits = digits.ok_or(Invalid::NotBits { mysql: true })?;
+        match ty.args[..] {
+            [n] if digits.trim_start_matches('0').len() > n as usize => {
+                Err(Invalid::BitCount { count: n, exact: false })
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// For `CHAR`, which drops trailing spaces when it reads a value back, without them.
+    fn text(&self, c: &TableColumn, s: &str) -> Result<(), Invalid> {
+        let ty = TypeName::read(&c.column.type_name);
+        if input::fixed_text(&ty) && s.ends_with(' ') {
+            return Err(Invalid::TrailingSpaces);
+        }
+        input::text_length(&ty, s)
+    }
+
+    /// Left to the server.
+    fn other(&self, _: &TableColumn, _: &str) -> Result<(), Invalid> {
+        Ok(())
+    }
+
+    /// A `TIME`, in the forms the server reads exactly.
+    fn interval(&self, c: &TableColumn, s: &str) -> Result<(), Invalid> {
+        input::mysql_time(&TypeName::read(&c.column.type_name), s)
+    }
 }
