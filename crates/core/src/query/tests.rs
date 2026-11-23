@@ -2327,6 +2327,11 @@ fn a_sequence_call_in_a_filter_keeps_its_reason_and_a_table_named_nextval_is_fil
     }
     let text = "EXISTS (SELECT `for` `share` FROM t) AND ROW_COUNT() = 0";
     assert_eq!(check(MY, text, false), Err(BarRefusal::NotRead { class: Class::Write, danger: None }));
+    // A sequence call where something else already makes it no read keeps that reason.
+    let text = "EXISTS (SELECT `for` `share` FROM t) AND NEXTVAL(s) = 0";
+    for d in [MY, maria] {
+        assert_eq!(check(d, text, false), Err(BarRefusal::NotRead { class: Class::Write, danger: None }), "{d:?}");
+    }
     let nextval = TableName { database: None, schema: "shop".into(), name: "nextval".into() };
     for judged in [Judged::Own, Judged::WithSibling] {
         for read_only in [false, true] {

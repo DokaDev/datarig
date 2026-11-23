@@ -8995,9 +8995,10 @@ async fn a_sequence_value_is_never_taken_again_or_on_a_read_only_profile() {
         return only_on_mariadb(test);
     }
     let seq = format!("zz_it_seq_{}", std::process::id());
-    let _drop = Cleanup { url: admin.clone(), sql: format!("DROP SEQUENCE IF EXISTS shop.{seq}") };
     let mut a = side(&admin).await;
-    a.query_drop(format!("CREATE SEQUENCE shop.{seq}")).await.unwrap();
+    // No cache: the sequence's state shows every value taken. Dropped only once made here.
+    a.query_drop(format!("CREATE SEQUENCE shop.{seq} NOCACHE")).await.unwrap();
+    let _drop = Cleanup { url: admin.clone(), sql: format!("DROP SEQUENCE IF EXISTS shop.{seq}") };
     let sql = format!("SELECT NEXT VALUE FOR shop.{seq}");
     let mut ro = Conn::open(&url, SessionRole::Query, true, test).await;
     let evs = ro.run(1, &[sql.as_str()]).await;
@@ -9036,8 +9037,8 @@ async fn a_sequence_value_is_never_taken_again_or_on_a_read_only_profile() {
     assert_eq!(after, before);
     // A table named `nextval` is read and paged as any other.
     let db = format!("zz_it_seqdb_{}", std::process::id());
-    let _drop_db = Cleanup { url: admin.clone(), sql: format!("DROP DATABASE IF EXISTS {db}") };
     a.query_drop(format!("CREATE DATABASE {db}")).await.unwrap();
+    let _drop_db = Cleanup { url: admin.clone(), sql: format!("DROP DATABASE IF EXISTS {db}") };
     a.query_drop(format!("CREATE TABLE {db}.nextval (id INT PRIMARY KEY) SELECT id FROM {}", t.q())).await.unwrap();
     // Read by the administrator, who reads every database (no grant is left behind).
     let named = format!("SELECT id FROM {db}.nextval ORDER BY id");

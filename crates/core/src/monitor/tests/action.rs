@@ -158,6 +158,9 @@ fn mysql_cancel_asks_a_line_only_for_a_plain_read() {
         let row = my_row(&list, 18986, text, false);
         assert_eq!(decide(&my, &row, false, ActionKind::Cancel), half, "{text}");
     }
+    // A read with a MySQL built-in that MariaDB lacks is still a plain read on the monitor.
+    let read = my_row(&list, 18986, "SELECT BIN_TO_UUID(id) FROM zz_mon_t WHERE id = 1", false);
+    assert_eq!(decide(&my, &read, false, ActionKind::Cancel), LINE);
     // A read the list holds only the start of cannot be judged.
     let cut = by_id(&list, 18993);
     assert!(cut.query.as_ref().unwrap().shortened);

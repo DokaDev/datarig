@@ -1516,10 +1516,6 @@ fn objects_named_like_the_sequence_forms_stay_as_any_name() {
                 "SELECT COUNT(*) FROM `shop`.`zz_t` WHERE `id` <=> 1",
             ),
             ("SELECT * FROM a JOIN shop.nextval ON 1", "SELECT * FROM a JOIN shop.zz_t ON 1"),
-            ("SELECT * FROM a STRAIGHT_JOIN shop.nextval", "SELECT * FROM a STRAIGHT_JOIN shop.zz_t"),
-            ("SELECT * FROM a, shop.nextval", "SELECT * FROM a, shop.zz_t"),
-            ("SELECT * FROM a AS x, shop.nextval AS y", "SELECT * FROM a AS x, shop.zz_t AS y"),
-            ("SELECT * FROM a JOIN b USING (id), shop.nextval", "SELECT * FROM a JOIN b USING (id), shop.zz_t"),
             ("SELECT (SELECT 1 FROM shop.nextval)", "SELECT (SELECT 1 FROM shop.zz_t)"),
             ("SELECT shop.nextval.id FROM shop.nextval", "SELECT shop.zz_t.id FROM shop.zz_t"),
             ("TABLE shop.nextval", "TABLE shop.zz_t"),
@@ -1551,6 +1547,16 @@ fn objects_named_like_the_sequence_forms_stay_as_any_name() {
             "SELECT * FROM a WHERE x IN (1, zz_s.nextval)",
             "SELECT * FROM a JOIN b ON a.id = b.id, c WHERE c.id = zz_s.nextval",
             "INSERT INTO zz_t (a) VALUES (1) ON DUPLICATE KEY UPDATE a = 2, b = zz_s.nextval",
+            // `STRAIGHT_JOIN` is also an option of `SELECT`, `tables` may be a column's name.
+            "SELECT STRAIGHT_JOIN zz_s.nextval",
+            "SELECT STRAIGHT_JOIN a, zz_s.nextval FROM t",
+            "SELECT t.tables, zz_s.nextval FROM t",
+            "SELECT * FROM t WHERE t.x = 1 AND t.y = zz_s.nextval",
+            // Accepted limit (when unsure, a write): a table of that name only in a list of
+            // tables after a comma, after `STRAIGHT_JOIN` or first in parentheses.
+            "SELECT * FROM a, shop.nextval",
+            "SELECT * FROM a STRAIGHT_JOIN shop.nextval",
+            "SELECT * FROM (shop.nextval JOIN a ON 1)",
         ] {
             assert!(classify(sql, judge).writes, "{judge:?} {sql}");
         }
@@ -1563,4 +1569,21 @@ fn an_events_body_takes_no_sequence_value() {
     let sql = "CREATE EVENT e ON SCHEDULE EVERY 1 DAY DO SELECT NEXT VALUE FOR zz_s";
     let (maria, mysql) = (classify(sql, MARIADB), classify(sql, MYSQL));
     assert_eq!((maria.class, maria.writes), (mysql.class, mysql.writes));
+}
+
+/// Where no write stands in for it (a plan-only `EXPLAIN`), or where the name may be a stored
+/// function's (quoted, or with a blank before its `(`), `NEXTVAL(…)` and `SETVAL(…)` stay calls
+/// a read-only profile refuses by name on MariaDB, as before.
+#[test]
+fn sequence_calls_keep_their_refusal_where_no_write_stands_in() {
+    for sql in ["EXPLAIN SELECT NEXTVAL(zz_s)", "EXPLAIN SELECT SETVAL(zz_s, 5)"] {
+        let r = classify(sql, MARIADB);
+        assert!(!r.writes, "{sql}: {r:?}");
+        assert!(matches!(r.read_only(), Err(ReadOnlyBlock::UnknownFunction(_))), "{sql}: {r:?}");
+    }
+    for sql in ["SELECT `nextval`(zz_s)", "SELECT `SETVAL`(zz_s, 5)", "SELECT NEXTVAL (zz_s)"] {
+        let r = classify(sql, MARIADB);
+        assert!(r.writes, "{sql}: {r:?}");
+        assert!(r.unchecked_call.is_some(), "{sql}: {r:?}");
+    }
 }
