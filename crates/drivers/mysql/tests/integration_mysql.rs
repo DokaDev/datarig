@@ -216,6 +216,24 @@ async fn side(url: &str) -> mysql_async::Conn {
     let opts = mysql_async::OptsBuilder::from_opts(opts).prefer_socket(false);
     mysql_async::Conn::new(opts).await.expect("the side connection opens")
 }
+/// Runs the drop `sql` on a connection of its own to `url` (the server that made the object), on
+/// a thread of its own (the test's runtime may be shutting down), and writes a warning on stderr
+/// when it fails, also when the connection does not open.
+fn drop_or_warn(url: &str, sql: &str) {
+    let (url, owned) = (url.to_string(), sql.to_string());
+    let done = std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+        rt.block_on(async move {
+            let mut c = side(&url).await;
+            c.query_drop(owned).await.map_err(|e| e.to_string())?;
+            c.disconnect().await.map_err(|e| e.to_string())
+        })
+    })
+    .join();
+    if !matches!(done, Ok(Ok(()))) {
+        let _ = writeln!(std::io::stderr(), "warning: {sql}: {done:?}");
+    }
+}
 
 /// Whether the server is MariaDB, from its own version line (asked once per process).
 async fn mariadb(url: &str) -> bool {
@@ -862,6 +880,7 @@ async fn order_keys_of_a_table_named_with_braces() {
     let quoted = format!("shop.`{}`", name.replace('`', "``"));
     let _guard = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {quoted}") };
     let mut c = side(&admin).await;
+    c.query_drop(format!("DROP TABLE IF EXISTS {quoted}")).await.unwrap();
     c.query_drop(format!("CREATE TABLE {quoted} (id INT PRIMARY KEY, v INT NOT NULL UNIQUE)")).await.unwrap();
     c.disconnect().await.unwrap();
     let mut m = Conn::start(&url, SessionRole::Meta, false, "bracenames");
@@ -998,7 +1017,7 @@ async fn the_table_keys_read_opens_no_other_table() {
     let test = "the_table_keys_read_opens_no_other_table";
     let Some((url, admin)) = urls(test) else { return };
     let alone = WHOLE_SERVER_CATALOG.lock().await;
-    let db = format!("zz_it_keysother_{}", std::process::id());
+    let db = run_database("keysother");
     let _db = Cleanup { url: admin.clone(), sql: format!("DROP DATABASE IF EXISTS {db}") };
     let account = Account::make(&admin, "keysother", "BY 'pw'").await.unwrap();
     let mut side_admin = side(&admin).await;
@@ -1298,30 +1317,28 @@ impl Account {
 
 impl Drop for Account {
     fn drop(&mut self) {
-        let (admin, name) = (self.admin.clone(), self.name.clone());
-        // Dropped on a thread of its own: the test's runtime may be shutting down.
-        let _ = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-            rt.block_on(async {
-                let mut c = side(&admin).await;
-                let _ = c.query_drop(format!("DROP USER IF EXISTS '{name}'@'%'")).await;
-                let _ = c.disconnect().await;
-            });
-        })
-        .join();
+        drop_or_warn(&self.admin, &format!("DROP USER IF EXISTS '{}'@'%'", self.name));
     }
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn caching_sha2_logs_in_on_a_plain_connection_first_and_cached() {
     let Some((url, admin)) = urls("caching_sha2_logs_in_on_a_plain_connection_first_and_cached") else { return };
-    let made = Account::make(&admin, "sha2", "WITH caching_sha2_password BY 'pw'").await;
     if mariadb(&admin).await {
-        assert!(made.is_err(), "MariaDB has no caching_sha2_password");
+        // MariaDB has no caching_sha2_password: its own form of the statement (`BY` after a
+        // plugin is a syntax error there) is refused with the error naming the plugin (1524,
+        // ER_PLUGIN_IS_NOT_LOADED), and any other error fails.
+        let made = Account::make(&admin, "sha2", "WITH caching_sha2_password AS 'pw'").await;
+        assert!(
+            matches!(&made, Err(mysql_async::Error::Server(e))
+                if e.code == 1524 && e.message.contains("caching_sha2_password")),
+            "{:?}",
+            made.as_ref().err()
+        );
         not_on_mariadb("caching_sha2_logs_in_on_a_plain_connection_first_and_cached", NO_SHA2);
         return;
     }
-    let account = made.unwrap();
+    let account = Account::make(&admin, "sha2", "WITH caching_sha2_password BY 'pw'").await.unwrap();
     // A new account is not in the server's cache: the first login sends the password, which
     // over a plain connection (TLS off, as by default here) goes encrypted with the server's
     // public key, and over TLS inside TLS (this machine); the second is answered from the cache.
@@ -1461,16 +1478,7 @@ impl Table {
 
 impl Drop for Table {
     fn drop(&mut self) {
-        let (url, name) = (self.url.clone(), self.name.clone());
-        let _ = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-            rt.block_on(async {
-                let mut c = side(&url).await;
-                let _ = c.query_drop(format!("DROP TABLE IF EXISTS shop.{name}")).await;
-                let _ = c.disconnect().await;
-            });
-        })
-        .join();
+        drop_or_warn(&self.url, &format!("DROP TABLE IF EXISTS shop.{}", self.name));
     }
 }
 
@@ -1483,17 +1491,15 @@ struct Cleanup {
 
 impl Drop for Cleanup {
     fn drop(&mut self) {
-        let (url, sql) = (self.url.clone(), self.sql.clone());
-        let _ = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-            rt.block_on(async {
-                let mut c = side(&url).await;
-                let _ = c.query_drop(sql).await;
-                let _ = c.disconnect().await;
-            });
-        })
-        .join();
+        drop_or_warn(&self.url, &self.sql);
     }
+}
+/// A database of this run's own, `zz_it_<what>_<pid>_<n>` (`n` counts the names made in this
+/// process): no earlier run or other test has one of that name, so it is made with no drop
+/// before it and dropped only when the test ends.
+fn run_database(what: &str) -> String {
+    static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    format!("zz_it_{what}_{}_{}", std::process::id(), MADE.fetch_add(1, std::sync::atomic::Ordering::SeqCst))
 }
 
 /// Ends test `test`'s own sessions (`KILL` of the connections whose program name carries its
@@ -2373,7 +2379,9 @@ async fn the_users_transaction_follows_the_servers_flags() {
         ["block false", "tx false", "block true", "tx true"]
     );
     // DDL commits it implicitly.
+    side(&admin).await.query_drop(format!("DROP TABLE IF EXISTS {}_x", t.q())).await.unwrap();
     let evs = c.run(5, &[&format!("CREATE TABLE {}_x (a INT)", t.q())]).await;
+    let _x = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {}_x", t.q()) };
     assert_eq!(tx_events(&evs), ["block false", "tx false"]);
     c.ok(6, &format!("DROP TABLE {}_x", t.q())).await;
     // The row of the first transaction was committed by the second BEGIN.
@@ -2656,6 +2664,7 @@ async fn a_cancel_taken_by_a_long_rollback_keeps_the_session_and_its_transaction
     // Dropped first: nothing of the test's keeps running past it.
     let _end = EndSessions { admin: admin.clone(), test };
     let mut a = side(&admin).await;
+    a.query_drop(format!("DROP TABLE IF EXISTS {t}")).await.unwrap();
     a.query_drop(format!("CREATE TABLE {t} (id INT PRIMARY KEY AUTO_INCREMENT, v INT, pad CHAR(100), KEY (v))"))
         .await
         .unwrap();
@@ -3144,25 +3153,28 @@ async fn explain_analyze_of_a_write_a_rollback_cannot_undo_is_refused() {
 /// (whose code may write where the rollback does not reach) is refused like a MyISAM one.
 #[tokio::test(flavor = "multi_thread")]
 async fn explain_analyze_checks_keyword_names_and_triggers() {
-    let Some((url, admin)) = urls("explain_analyze_keyword_trigger") else { return };
-    let _last = Cleanup { url: admin.clone(), sql: "DROP TABLE IF EXISTS shop.`last`".to_string() };
+    let Some((_, admin)) = urls("explain_analyze_keyword_trigger") else { return };
     let t = numbers(&admin, "trig", 3).await;
     let trig = format!("zz_it_trig_{}", std::process::id());
     let _trig = Cleanup { url: admin.clone(), sql: format!("DROP TRIGGER IF EXISTS shop.{trig}") };
+    // `last` in a database of this run's own, the table going with it.
+    let db = run_database("lastdb");
     let mut a = side(&admin).await;
-    a.query_drop("DROP TABLE IF EXISTS shop.`last`").await.unwrap();
-    a.query_drop("CREATE TABLE shop.`last` (id INT PRIMARY KEY) ENGINE=MyISAM").await.unwrap();
-    a.query_drop("INSERT INTO shop.`last` VALUES (1), (2)").await.unwrap();
+    a.query_drop(format!("CREATE DATABASE {db}")).await.unwrap();
+    let _db = Cleanup { url: admin.clone(), sql: format!("DROP DATABASE IF EXISTS {db}") };
+    a.query_drop(format!("CREATE TABLE {db}.`last` (id INT PRIMARY KEY) ENGINE=MyISAM")).await.unwrap();
+    a.query_drop(format!("INSERT INTO {db}.`last` VALUES (1), (2)")).await.unwrap();
     a.query_drop(format!("CREATE TRIGGER shop.{trig} BEFORE DELETE ON {} FOR EACH ROW SET @zz_it_trig = 1", t.q()))
         .await
         .unwrap();
     a.disconnect().await.unwrap();
-    let mut c = Conn::open(&url, SessionRole::Query, false, "kwtrig").await;
-    c.ok(1, "USE shop").await;
+    // The administrator reads every database: no grant is needed, none is left behind.
+    let mut c = Conn::open(&admin, SessionRole::Query, false, "kwtrig").await;
+    c.ok(1, &format!("USE {db}")).await;
     let evs = c.run(2, &["EXPLAIN ANALYZE DELETE x FROM last x JOIN last y ON y.id = x.id WHERE x.id > 1"]).await;
     match evs.last() {
         Some(DbEvent::Failed { error: DbError::NotUndoable(tables), .. }) => {
-            assert_eq!(tables, &["shop.last (MyISAM)"])
+            assert_eq!(tables, &[format!("{db}.last (MyISAM)")])
         }
         other => panic!("{other:?}"),
     }
@@ -3180,7 +3192,8 @@ async fn explain_analyze_checks_keyword_names_and_triggers() {
     let both = format!("EXPLAIN ANALYZE DELETE x FROM {q} x JOIN last y ON y.id = x.id", q = t.q());
     match c.run(5, &[&both]).await.last() {
         Some(DbEvent::Failed { error: DbError::NotUndoable(tables), .. }) => {
-            assert_eq!(tables, &["shop.last (MyISAM)".to_string(), format!("shop.{} (trigger)", t.name)]);
+            // In name order.
+            assert_eq!(tables, &[format!("shop.{} (trigger)", t.name), format!("{db}.last (MyISAM)")]);
         }
         other => panic!("{other:?}"),
     }
@@ -3194,7 +3207,7 @@ async fn explain_analyze_without_seeing_triggers_is_refused() {
     let t = numbers(&admin, "notrig", 3).await;
     // MariaDB has no `caching_sha2_password`: its own plugin there.
     let identified = if mariadb(&admin).await { "BY 'pw'" } else { "WITH caching_sha2_password BY 'pw'" };
-    let account = Account::make(&admin, "notrig", identified).await.unwrap();
+    let account = Account::make(&admin, "notrig_explain", identified).await.unwrap();
     let mut a = side(&admin).await;
     a.query_drop(format!("GRANT DELETE ON {} TO '{}'@'%'", t.q(), account.name)).await.unwrap();
     a.disconnect().await.unwrap();
@@ -3354,8 +3367,8 @@ async fn a_procedures_further_result_sets_are_read_and_said() {
     let Some((url, admin)) = urls("a_procedures_further_result_sets") else { return };
     let name = format!("zz_it_proc_{}", std::process::id());
     let mut a = side(&admin).await;
-    a.query_drop(format!("DROP PROCEDURE IF EXISTS shop.{name}")).await.unwrap();
     a.query_drop(format!("CREATE PROCEDURE shop.{name}() BEGIN SELECT 1 AS a; SELECT 2 AS b; END")).await.unwrap();
+    let _p = Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{name}") };
     let mut c = Conn::open(&url, SessionRole::Query, false, "proc").await;
     let evs = c.run(1, &[&format!("CALL shop.{name}()")]).await;
     a.query_drop(format!("DROP PROCEDURE shop.{name}")).await.unwrap();
@@ -3489,7 +3502,6 @@ async fn a_read_only_session_refuses_and_never_stays_writable() {
     let t = Table::make(&admin, "ro", &["CREATE TABLE {t} (id INT PRIMARY KEY)"]).await;
     let proc_name = format!("zz_it_ro_off_{}", std::process::id());
     let mut a = side(&admin).await;
-    a.query_drop(format!("DROP PROCEDURE IF EXISTS shop.{proc_name}")).await.unwrap();
     let _gone = Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{proc_name}") };
     a.query_drop(format!(
         "CREATE PROCEDURE shop.{proc_name}() BEGIN SET SESSION transaction_read_only = OFF; \
@@ -3740,6 +3752,8 @@ async fn the_metadata_session_reads_a_tables_structure() {
         ("KEY ix_fn ((upper(name))),", "utf8mb4_0900_bin", " NOT ENFORCED")
     };
     for sql in [
+        format!("DROP TABLE IF EXISTS shop.{child}"),
+        format!("DROP TABLE IF EXISTS datarig.{parent}"),
         format!(
             "CREATE TABLE datarig.{parent} (a INT NOT NULL, b VARCHAR(10){} NOT NULL, PRIMARY KEY (a, b))",
             referenced_collation(&mut a).await
@@ -3899,6 +3913,7 @@ async fn the_metadata_session_reads_a_tables_structure() {
     let mut a = side(&admin).await;
     let copy = format!("zz_it_copy_{pid}");
     let _copy = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS shop.{copy}") };
+    a.query_drop(format!("DROP TABLE IF EXISTS shop.{copy}")).await.unwrap();
     a.query_drop(format!(
         "CREATE TABLE shop.{copy} (id BIGINT UNSIGNED NOT NULL, name VARCHAR(100) NOT NULL, qty INT, price DECIMAL(10,2), body TEXT)"
     ))
@@ -3925,7 +3940,7 @@ async fn the_metadata_session_reads_a_tables_structure() {
     assert_eq!(structure_of(&mut m, &format!("zz_it_none_{pid}")).await, Err(DbError::NotFound));
 
     // A user who may read the table but not see its triggers.
-    let account = Account::make(&admin, "notrig", "BY 'pw'").await.unwrap();
+    let account = Account::make(&admin, "notrig_struct", "BY 'pw'").await.unwrap();
     let mut n = Conn::start(&as_user(&url, &account.name, "pw"), SessionRole::Meta, false, "structure_notrig");
     n.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
     let hidden = structure_of(&mut n, &child).await.unwrap();
@@ -3984,7 +3999,7 @@ async fn a_structure_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
     //    and on MariaDB a session of theirs opens every table its account may see when it
     //    reads the catalog.
     let alone = WHOLE_SERVER_CATALOG.lock().await;
-    let db = format!("zz_it_structopen_{}", std::process::id());
+    let db = run_database("structopen");
     let _db = Cleanup { url: admin.clone(), sql: format!("DROP DATABASE IF EXISTS {db}") };
     let account = Account::make(&admin, "structopen", "BY 'pw'").await.unwrap();
     for sql in [
@@ -4286,6 +4301,7 @@ async fn a_table_granted_column_by_column_has_its_columns_unknown() {
     if lower == 0 {
         let upper = format!("shop.{}", t.name.to_uppercase());
         let _upper = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {upper}") };
+        a.query_drop(format!("DROP TABLE IF EXISTS {upper}")).await.unwrap();
         a.query_drop(format!("CREATE TABLE {upper} (id INT)")).await.unwrap();
         a.query_drop(format!("GRANT SELECT ON {upper} TO '{name}'@'%'")).await.unwrap();
         let s = structure_of(&mut m, &t.name).await.unwrap();
@@ -4295,6 +4311,7 @@ async fn a_table_granted_column_by_column_has_its_columns_unknown() {
     // user who may read `mysql`, are not this user's.
     let twin = name.to_uppercase();
     let _twin = Cleanup { url: admin.clone(), sql: format!("DROP USER IF EXISTS '{twin}'@'%'") };
+    a.query_drop(format!("DROP USER IF EXISTS '{twin}'@'%'")).await.unwrap();
     a.query_drop(format!("CREATE USER '{twin}'@'%' IDENTIFIED BY 'pw'")).await.unwrap();
     a.query_drop(format!("GRANT SELECT ON {} TO '{twin}'@'%'", t.q())).await.unwrap();
     a.query_drop(format!("GRANT SELECT ON mysql.* TO '{name}'@'%'")).await.unwrap();
@@ -4349,7 +4366,7 @@ async fn names_with_braces_are_read_like_any_other() {
     let Some((_, admin)) = urls(test) else { return };
     // Its metadata session reads the catalog of every database.
     let _alone = WHOLE_SERVER_CATALOG.lock().await;
-    let database = format!("zz_it_{{table}}{{name}}_{}", std::process::id());
+    let database = run_database("{table}{name}");
     let table = "t {schema} o'k";
     let _drop = Cleanup { url: admin.clone(), sql: format!("DROP DATABASE IF EXISTS `{database}`") };
     let mut c = side(&admin).await;
@@ -4423,6 +4440,7 @@ async fn the_metadata_session_shows_the_servers_ddl() {
     }
     let at = if my { String::new() } else { "shop.".to_string() };
     for sql in [
+        format!("DROP TABLE IF EXISTS shop.{b}c, shop.{b}"),
         format!(
             "CREATE TABLE shop.{b} (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, \
              name VARCHAR(40) NOT NULL DEFAULT 'a;b' COMMENT 'it''s; \"quoted\"', \
@@ -4912,6 +4930,8 @@ async fn a_ddl_opened_in_a_console_of_either_mode_makes_the_same_object() {
     let mut a = side(&admin).await;
     let my = is_mariadb(&mut a).await;
     for sql in [
+        // The copies the consoles make below.
+        format!("DROP TABLE IF EXISTS shop.{n}e, shop.{n}n"),
         format!(r"CREATE VIEW datarig.{view} AS SELECT id, 'a\\b''c' AS x FROM shop.{n}"),
         format!(
             r"CREATE DEFINER = {DEFINER} FUNCTION shop.{func}() RETURNS VARCHAR(40) DETERMINISTIC
@@ -5004,6 +5024,7 @@ async fn another_databases_ddl_runs_in_that_database() {
     ]
     .map(|w| Cleanup { url: admin.clone(), sql: format!("DROP {w}") });
     let mut a = side(&admin).await;
+    a.query_drop(format!("DROP TABLE IF EXISTS datarig.{tc}, datarig.{n}")).await.unwrap();
     a.query_drop(format!("CREATE TABLE datarig.{n} (id INT PRIMARY KEY, v VARCHAR(9) DEFAULT 'x')")).await.unwrap();
     a.query_drop(format!("CREATE VIEW datarig.{view} AS SELECT id, v FROM datarig.{n}")).await.unwrap();
     a.disconnect().await.unwrap();
@@ -5081,6 +5102,8 @@ async fn the_metadata_session_reads_the_key_metadata() {
     let parent = format!("zz_it_kparent_{pid}");
     let _parent = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS datarig.{parent}") };
     let mut a = side(&admin).await;
+    // The table that references it first (`Table::make`'s name for `keys`).
+    a.query_drop(format!("DROP TABLE IF EXISTS shop.zz_it_keys_{pid}, datarig.{parent}")).await.unwrap();
     let collation = referenced_collation(&mut a).await;
     a.query_drop(format!(
         "CREATE TABLE datarig.{parent} (a INT NOT NULL, b VARCHAR(10){collation} NOT NULL, PRIMARY KEY (a, b))"
@@ -5533,6 +5556,7 @@ async fn a_foreign_key_named_primary_is_no_primary_key() {
         let name = format!("shop.zz_it_fkp_child_{}", std::process::id());
         let _child = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {name}") };
         let mut a = side(&admin).await;
+        a.query_drop(format!("DROP TABLE IF EXISTS {name}")).await.unwrap();
         let made = a
             .query_drop(format!(
                 "CREATE TABLE {name} (x INT, v INT, KEY ix (x), CONSTRAINT `PRIMARY` FOREIGN KEY (x) REFERENCES {} (a))",
@@ -5880,6 +5904,7 @@ async fn manual_commit_failures_and_implicit_commits() {
         Table::make(&admin, "mfail", &["CREATE TABLE {t} (id INT PRIMARY KEY)", "INSERT INTO {t} VALUES (1)"]).await;
     let _x = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {}_x", t.q()) };
     let mut a = side(&admin).await;
+    a.query_drop(format!("DROP TABLE IF EXISTS {}_x", t.q())).await.unwrap();
     let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
     let id = only_session(&mut a, SessionRole::Query, test).await;
     let q = t.q();
@@ -6414,9 +6439,12 @@ async fn xs(admin: &str, table: &str) -> Vec<i64> {
 async fn a_cancel_of_a_queued_run_stops_that_run_and_no_later_one() {
     let test = "a_cancel_of_a_queued_run_stops_that_run_and_no_later_one";
     let Some((_, admin)) = urls(test) else { return };
-    let t = format!("shop.zz_cancelq_{}", std::process::id());
+    let t = format!("shop.zz_it_cancelq_{}", std::process::id());
     let _t = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {t}") };
-    side(&admin).await.query_drop(format!("CREATE TABLE {t} (x int PRIMARY KEY)")).await.unwrap();
+    let mut a = side(&admin).await;
+    a.query_drop(format!("DROP TABLE IF EXISTS {t}")).await.unwrap();
+    a.query_drop(format!("CREATE TABLE {t} (x int PRIMARY KEY)")).await.unwrap();
+    a.disconnect().await.unwrap();
     let mut c = Conn::start(&admin, SessionRole::Query, false, test);
     c.session.send(execute(1, &format!("INSERT INTO {t} VALUES (1)")));
     c.session.cancel();
@@ -6432,9 +6460,12 @@ async fn a_cancel_of_a_queued_run_stops_that_run_and_no_later_one() {
 async fn a_count_asked_again_after_a_cancel_is_not_cancelled() {
     let test = "a_count_asked_again_after_a_cancel_is_not_cancelled";
     let Some((_, admin)) = urls(test) else { return };
-    let t = format!("shop.zz_cancelc_{}", std::process::id());
+    let t = format!("shop.zz_it_cancelc_{}", std::process::id());
     let _t = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {t}") };
-    side(&admin).await.query_drop(format!("CREATE TABLE {t} (x int PRIMARY KEY)")).await.unwrap();
+    let mut a = side(&admin).await;
+    a.query_drop(format!("DROP TABLE IF EXISTS {t}")).await.unwrap();
+    a.query_drop(format!("CREATE TABLE {t} (x int PRIMARY KEY)")).await.unwrap();
+    a.disconnect().await.unwrap();
     let sql = format!("SELECT count(*) FROM {t}");
     let mut c = Conn::start(&admin, SessionRole::Query, false, test);
     c.session.send(DbCommand::Count { id: 7, sql: sql.clone(), limit: None });
@@ -6452,9 +6483,12 @@ async fn a_count_asked_again_after_a_cancel_is_not_cancelled() {
 async fn a_cancel_of_a_queued_run_leaves_the_run_before_it() {
     let test = "a_cancel_of_a_queued_run_leaves_the_run_before_it";
     let Some((_, admin)) = urls(test) else { return };
-    let t = format!("shop.zz_cancelb_{}", std::process::id());
+    let t = format!("shop.zz_it_cancelb_{}", std::process::id());
     let _t = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {t}") };
-    side(&admin).await.query_drop(format!("CREATE TABLE {t} (x int PRIMARY KEY)")).await.unwrap();
+    let mut a = side(&admin).await;
+    a.query_drop(format!("DROP TABLE IF EXISTS {t}")).await.unwrap();
+    a.query_drop(format!("CREATE TABLE {t} (x int PRIMARY KEY)")).await.unwrap();
+    a.disconnect().await.unwrap();
     let mut c = Conn::start(&admin, SessionRole::Query, false, test);
     c.session.send(execute(1, &format!("INSERT INTO {t} VALUES (1)")));
     c.session.send(execute(2, &format!("INSERT INTO {t} VALUES (2)")));
@@ -6626,7 +6660,7 @@ async fn a_shorter_lock_wait_of_the_sessions_own_stays_a_bounded_reads_limit() {
     let test = "a_shorter_lock_wait_of_the_sessions_own_stays_a_bounded_reads_limit";
     let Some((url, admin)) = urls(test) else { return };
     let _end = EndSessions { admin: admin.clone(), test };
-    let t = numbers(&admin, "lockwait", 50).await;
+    let t = numbers(&admin, "lockwait_own", 50).await;
     let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
     let rows = format!("SELECT * FROM {} WHERE (id > 10)", t.q());
     let counted = format!("SELECT COUNT(*) FROM (\n{rows}\n) AS datarig_count");
@@ -8996,7 +9030,8 @@ async fn a_sequence_value_is_never_taken_again_or_on_a_read_only_profile() {
     }
     let seq = format!("zz_it_seq_{}", std::process::id());
     let mut a = side(&admin).await;
-    // No cache: the sequence's state shows every value taken. Dropped only once made here.
+    // No cache: the sequence's state shows every value taken.
+    a.query_drop(format!("DROP SEQUENCE IF EXISTS shop.{seq}")).await.unwrap();
     a.query_drop(format!("CREATE SEQUENCE shop.{seq} NOCACHE")).await.unwrap();
     let _drop = Cleanup { url: admin.clone(), sql: format!("DROP SEQUENCE IF EXISTS shop.{seq}") };
     let sql = format!("SELECT NEXT VALUE FOR shop.{seq}");
@@ -9036,7 +9071,7 @@ async fn a_sequence_value_is_never_taken_again_or_on_a_read_only_profile() {
     let after: Option<i64> = a.query_first(state.as_str()).await.unwrap();
     assert_eq!(after, before);
     // A table named `nextval` is read and paged as any other.
-    let db = format!("zz_it_seqdb_{}", std::process::id());
+    let db = run_database("seqdb");
     a.query_drop(format!("CREATE DATABASE {db}")).await.unwrap();
     let _drop_db = Cleanup { url: admin.clone(), sql: format!("DROP DATABASE IF EXISTS {db}") };
     a.query_drop(format!("CREATE TABLE {db}.nextval (id INT PRIMARY KEY) SELECT id FROM {}", t.q())).await.unwrap();

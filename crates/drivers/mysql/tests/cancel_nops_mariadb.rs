@@ -76,6 +76,24 @@ async fn side(url: &str) -> mysql_async::Conn {
     let opts = mysql_async::OptsBuilder::from_opts(opts).prefer_socket(false);
     mysql_async::Conn::new(opts).await.expect("the side connection opens")
 }
+/// Runs the drop `sql` on a connection of its own to `url` (the server that made the object), on
+/// a thread of its own (the test's runtime may be shutting down), and writes a warning on stderr
+/// when it fails, also when the connection does not open.
+fn drop_or_warn(url: &str, sql: &str) {
+    let (url, owned) = (url.to_string(), sql.to_string());
+    let done = std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+        rt.block_on(async move {
+            let mut c = side(&url).await;
+            c.query_drop(owned).await.map_err(|e| e.to_string())?;
+            c.disconnect().await.map_err(|e| e.to_string())
+        })
+    })
+    .join();
+    if !matches!(done, Ok(Ok(()))) {
+        let _ = writeln!(std::io::stderr(), "warning: {sql}: {done:?}");
+    }
+}
 
 /// The `KILL` statements the server ran since it started, and the connections it took.
 async fn kills_and_connections(a: &mut mysql_async::Conn) -> (u64, u64) {
@@ -154,16 +172,7 @@ impl Table {
 
 impl Drop for Table {
     fn drop(&mut self) {
-        let (url, name) = (self.url.clone(), self.name.clone());
-        let _ = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-            rt.block_on(async {
-                let mut c = side(&url).await;
-                let _ = c.query_drop(format!("DROP TABLE IF EXISTS shop.{name}")).await;
-                let _ = c.disconnect().await;
-            });
-        })
-        .join();
+        drop_or_warn(&self.url, &format!("DROP TABLE IF EXISTS shop.{}", self.name));
     }
 }
 
