@@ -129,6 +129,7 @@ pub static MARIADB_TABLES: FamilyTables = FamilyTables {
     word_calls: MARIADB_WORD_CALLS,
     unreserved_not_calls: MARIADB_NOT_RESERVED,
     json_table_needs_columns: true,
+    sequences: true,
 };
 
 /// Words of [`NOT_CALLS`](super::mysql::NOT_CALLS) that MariaDB does not reserve: written before `(`, they name a

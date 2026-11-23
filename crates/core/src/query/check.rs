@@ -243,9 +243,6 @@ pub fn check_filter(
             calls
         }
     };
-    if risk.class != Class::Read || risk.danger.is_some() || risk.read_write {
-        return Err(BarRefusal::NotRead { class: risk.class, danger: risk.danger });
-    }
     let written = |keep: fn(&Call) -> bool| -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for c in calls.iter().filter(|c| keep(c)) {
@@ -255,9 +252,14 @@ pub fn check_filter(
         }
         out
     };
+    // A call the filter refuses is said by name, also when it makes the statement a change
+    // (a sequence's next value on MariaDB).
     let refused = written(|c| c.refused);
-    if !refused.is_empty() {
+    if !refused.is_empty() && risk.danger.is_none() && !risk.read_write {
         return Err(BarRefusal::RefusedCalls(refused));
+    }
+    if risk.class != Class::Read || risk.danger.is_some() || risk.read_write {
+        return Err(BarRefusal::NotRead { class: risk.class, danger: risk.danger });
     }
     let unchecked = written(|c| !c.allowed);
     if read_only {

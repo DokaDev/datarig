@@ -291,6 +291,9 @@ pub struct FamilyTables {
     /// `JSON_TABLE` is the table function only with its `COLUMNS` clause: without it, the name
     /// is a stored function's.
     pub(super) json_table_needs_columns: bool,
+    /// The engine has sequences: `NEXT VALUE FOR`, `NEXTVAL(…)`, `SETVAL(…)` and `s.nextval`
+    /// advance one, so a statement with one is a change ([`advances_sequence`]).
+    pub(super) sequences: bool,
 }
 
 /// MySQL's lists.
@@ -301,6 +304,7 @@ pub static MYSQL_TABLES: FamilyTables = FamilyTables {
     word_calls: MYSQL_WORD_CALLS,
     unreserved_not_calls: &[],
     json_table_needs_columns: false,
+    sequences: false,
 };
 
 static ON_MYSQL: [&FamilyTables; 1] = [&MYSQL_TABLES];
@@ -1357,8 +1361,29 @@ fn statement(ws: &[W], judge: Judge) -> Risk {
         risk.class = Class::Write;
     }
     let risk = if routine_body(ws) { risk } else { with_calls(risk, ws, judge) };
+    // On an engine with sequences, taking a sequence's next value changes it (nothing undoes
+    // it); not in a stored body, a DDL statement or a plan the server only makes.
+    let risk = if risk.class != Class::Ddl
+        && risk.explain != Explain::Plan
+        && !routine_body(ws)
+        && judge.tables().any(|t| t.sequences)
+        && advances_sequence(ws)
+    {
+        Risk { writes: true, class: risk.class.max(Class::Write), ..risk }
+    } else {
+        risk
+    };
     let harmless = matches!(risk.class, Class::Read | Class::Session | Class::Tx);
     if harmless && has_write_word(ws) { unrecognized() } else { risk }
+}
+
+/// Whether `ws` takes a sequence's next value or sets it: `NEXT VALUE FOR`, a call of
+/// `NEXTVAL` or `SETVAL`, or `s.nextval`. Reading its state (`LASTVAL`, `PREVIOUS VALUE FOR`,
+/// `s.currval`, `s.lastval`) does not change it.
+fn advances_sequence(ws: &[W]) -> bool {
+    ws.windows(3).any(|w| w[0].is("NEXT") && w[1].is("VALUE") && w[2].is("FOR"))
+        || ws.windows(2).any(|w| (w[0].is("NEXTVAL") || w[0].is("SETVAL")) && w[1].kind == Tok::LParen)
+        || ws.windows(2).any(|w| w[0].kind == Tok::Dot && w[1].is("NEXTVAL"))
 }
 
 /// Whether `ws` creates or changes a routine, a trigger, an event or a view: the body is stored,

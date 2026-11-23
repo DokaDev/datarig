@@ -1052,7 +1052,7 @@ fn analyze_of_a_users_function_asks_and_read_only_refuses_it() {
 /// Each engine's judge reads its own lists, the ones each engine always had: MySQL's has every
 /// built-in, its own tight and word calls and reserves `LATERAL` and `OF`; MariaDB's lacks the
 /// built-ins it does not provide, reads its constructors by their arguments, has its own tight
-/// and word calls, reserves neither word and needs `JSON_TABLE`'s columns.
+/// and word calls, reserves neither word, needs `JSON_TABLE`'s columns and has sequences.
 #[test]
 fn each_engine_reads_its_own_tables() {
     let mysql = FamilyTables {
@@ -1062,6 +1062,7 @@ fn each_engine_reads_its_own_tables() {
         word_calls: MYSQL_WORD_CALLS,
         unreserved_not_calls: &[],
         json_table_needs_columns: false,
+        sequences: false,
     };
     let mariadb = FamilyTables {
         not_builtin: NOT_ON_MARIADB,
@@ -1070,6 +1071,7 @@ fn each_engine_reads_its_own_tables() {
         word_calls: MARIADB_WORD_CALLS,
         unreserved_not_calls: MARIADB_NOT_RESERVED,
         json_table_needs_columns: true,
+        sequences: true,
     };
     assert_eq!(MYSQL_TABLES, mysql);
     assert_eq!(MARIADB_TABLES, mariadb);

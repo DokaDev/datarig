@@ -263,7 +263,7 @@ pub fn cases() -> Vec<Case<&'static str>> {
                 ),
                 (
                     MariaDb,
-                    "run None | read-only UnknownFunction(\"NEXTVAL\") | read-only allowing my_function UnknownFunction(\"NEXTVAL\") | hint None | re-run UserFunction | filter refused RefusedCalls([\"NEXTVAL\"]) | read-only filter refused RefusedCalls([\"NEXTVAL\"])",
+                    "run None | read-only UnknownFunction(\"NEXTVAL\") | read-only allowing my_function UnknownFunction(\"NEXTVAL\") | hint None | re-run Writes | filter refused RefusedCalls([\"NEXTVAL\"]) | read-only filter refused RefusedCalls([\"NEXTVAL\"])",
                 ),
             ],
         },
