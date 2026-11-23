@@ -1,0 +1,687 @@
+input Pg "integer": ok
+input MySql "integer": ok
+input MariaDb "integer": ok
+input Pg "integer with a point": NotWholeNumber
+input MySql "integer with a point": NotWholeNumber
+input MariaDb "integer with a point": NotWholeNumber
+input Pg "tinyint out of range": ok
+input MySql "tinyint out of range": OutOfRange { type_name: "tinyint" }
+input MariaDb "tinyint out of range": OutOfRange { type_name: "tinyint" }
+input Pg "smallint out of range": OutOfRange { type_name: "smallint" }
+input MySql "smallint out of range": OutOfRange { type_name: "smallint" }
+input MariaDb "smallint out of range": OutOfRange { type_name: "smallint" }
+input Pg "negative unsigned": ok
+input MySql "negative unsigned": OutOfRange { type_name: "int(11) unsigned" }
+input MariaDb "negative unsigned": OutOfRange { type_name: "int(11) unsigned" }
+input Pg "decimal too many digits": TooManyDigits { precision: 5, scale: 2 }
+input MySql "decimal too many digits": TooManyDigits { precision: 5, scale: 2 }
+input MariaDb "decimal too many digits": TooManyDigits { precision: 5, scale: 2 }
+input Pg "decimal": ok
+input MySql "decimal": ok
+input MariaDb "decimal": ok
+input Pg "real": ok
+input MySql "real": ok
+input MariaDb "real": ok
+input Pg "float": ok
+input MySql "float": ok
+input MariaDb "float": ok
+input Pg "double": ok
+input MySql "double": ok
+input MariaDb "double": ok
+input Pg "bool": ok
+input MySql "bool": ok
+input MariaDb "bool": ok
+input Pg "bool as a number": NotBool
+input MySql "bool as a number": NotBool
+input MariaDb "bool as a number": NotBool
+input Pg "day not in the calendar": NotDate
+input MySql "day not in the calendar": NotDate
+input MariaDb "day not in the calendar": NotDate
+input Pg "zero date": NotDate
+input MySql "zero date": ok
+input MariaDb "zero date": ok
+input Pg "timestamp": ok
+input MySql "timestamp": ok
+input MariaDb "timestamp": ok
+input Pg "timestamp with an offset": ok
+input MySql "timestamp with an offset": NotTimestamp
+input MariaDb "timestamp with an offset": NotTimestamp
+input Pg "zoned timestamp without an offset": NotTimestamp
+input MySql "zoned timestamp without an offset": ok
+input MariaDb "zoned timestamp without an offset": ok
+input Pg "timestamp too precise": TooPrecise { digits: 3 }
+input MySql "timestamp too precise": TooPrecise { digits: 3 }
+input MariaDb "timestamp too precise": TooPrecise { digits: 3 }
+input Pg "time past a day": ok
+input MySql "time past a day": ok
+input MariaDb "time past a day": ok
+input Pg "time of day": NotTime
+input MySql "time of day": NotTime
+input MariaDb "time of day": NotTime
+input Pg "postgres bytes": ok
+input MySql "postgres bytes": NotBytes { mysql: true }
+input MariaDb "postgres bytes": NotBytes { mysql: true }
+input Pg "mysql bytes": NotBytes { mysql: false }
+input MySql "mysql bytes": ok
+input MariaDb "mysql bytes": ok
+input Pg "bits": ok
+input MySql "bits": NotBits { mysql: true }
+input MariaDb "bits": NotBits { mysql: true }
+input Pg "mysql bits": NotBits { mysql: false }
+input MySql "mysql bits": ok
+input MariaDb "mysql bits": ok
+input Pg "text too long": TooLong { max: 3 }
+input MySql "text too long": TooLong { max: 3 }
+input MariaDb "text too long": TooLong { max: 3 }
+input Pg "char with trailing spaces": ok
+input MySql "char with trailing spaces": TrailingSpaces
+input MariaDb "char with trailing spaces": TrailingSpaces
+input Pg "uuid": NotUuid
+input MySql "uuid": ok
+input MariaDb "uuid": ok
+input Pg "enum label": NotLabel
+input MySql "enum label": NotLabel
+input MariaDb "enum label": NotLabel
+input Pg "json": ok
+input MySql "json": ok
+input MariaDb "json": ok
+cells Pg "float": 0.1
+cells MySql "float": refused Refused { column: "f", why: Float }
+cells MariaDb "float": refused Refused { column: "f", why: Float }
+cells Pg "double": 0.1
+cells MySql "double": 0.1
+cells MariaDb "double": 0.1
+cells Pg "timestamp in a fixed offset": '2026-11-18 10:00:00' | '0000-00-00 00:00:00'
+cells MySql "timestamp in a fixed offset": '2026-11-18 10:00:00+05:30' | '0000-00-00 00:00:00'
+cells MariaDb "timestamp in a fixed offset": '2026-11-18 10:00:00+05:30' | '0000-00-00 00:00:00'
+cells Pg "timestamp in utc": '2026-11-18 10:00:00'
+cells MySql "timestamp in utc": '2026-11-18 10:00:00+00:00'
+cells MariaDb "timestamp in utc": '2026-11-18 10:00:00+00:00'
+cells Pg "timestamp in the server's zone": '2026-11-18 10:00:00'
+cells MySql "timestamp in the server's zone": '2026-11-18 10:00:00-03:00'
+cells MariaDb "timestamp in the server's zone": '2026-11-18 10:00:00-03:00'
+cells Pg "timestamp in a zone with daylight saving": '2026-11-18 10:00:00'
+cells MySql "timestamp in a zone with daylight saving": refused Refused { column: "at", why: TimeZone("Europe/Berlin") }
+cells MariaDb "timestamp in a zone with daylight saving": refused Refused { column: "at", why: TimeZone("Europe/Berlin") }
+cells Pg "timestamp read in unknown values": '2026-11-18 10:00:00'
+cells MySql "timestamp read in unknown values": refused Refused { column: "at", why: SessionUnknown }
+cells MariaDb "timestamp read in unknown values": refused Refused { column: "at", why: SessionUnknown }
+cells Pg "timestamp read in changed values": '2026-11-18 10:00:00'
+cells MySql "timestamp read in changed values": refused Refused { column: "at", why: SessionChanged }
+cells MariaDb "timestamp read in changed values": refused Refused { column: "at", why: SessionChanged }
+cells Pg "text in utf8mb4": 'it''s'
+cells MySql "text in utf8mb4": 'it''s'
+cells MariaDb "text in utf8mb4": 'it''s'
+cells Pg "text in latin1": 'x'
+cells MySql "text in latin1": Charset("latin1")
+cells MariaDb "text in latin1": Charset("latin1")
+cells Pg "text read in unknown values": 'x'
+cells MySql "text read in unknown values": SessionUnknown
+cells MariaDb "text read in unknown values": SessionUnknown
+cells Pg "text read in changed values": 'x'
+cells MySql "text read in changed values": SessionChanged
+cells MariaDb "text read in changed values": SessionChanged
+cells Pg "bytes": '0x0A' | E'\\x0a'
+cells MySql "bytes": X'0A' | NotShownWhole
+cells MariaDb "bytes": X'0A' | NotShownWhole
+cells Pg "auto_increment": 0 | 5
+cells MySql "auto_increment": AutoIncrementZero | 5
+cells MariaDb "auto_increment": AutoIncrementZero | 5
+cells Pg "auto_increment read in unknown values": 0
+cells MySql "auto_increment read in unknown values": AutoIncrementZero
+cells MariaDb "auto_increment read in unknown values": AutoIncrementZero
+cells Pg "auto_increment text": '0'
+cells MySql "auto_increment text": AutoIncrementZero
+cells MariaDb "auto_increment text": AutoIncrementZero
+cells Pg "null": NULL
+cells MySql "null": NULL
+cells MariaDb "null": NULL
+cells Pg "negative zero": '-0' | '-0.0' | 0 | NULL
+cells MySql "negative zero": '-0' | '-0.0' | 0 | NULL
+cells MariaDb "negative zero": '-0' | '-0.0' | 0 | NULL
+cells Pg "bits": 'b''101''' | '101' | NULL
+cells MySql "bits": b'101' | NotShownWhole | NULL
+cells MariaDb "bits": b'101' | NotShownWhole | NULL
+cells Pg "postgres bytes": E'\\x0a'
+cells MySql "postgres bytes": NotShownWhole
+cells MariaDb "postgres bytes": NotShownWhole
+cells Pg "bool": true | '1'
+cells MySql "bool": true | '1'
+cells MariaDb "bool": true | '1'
+keyset Pg "number key": SELECT * FROM "shop"."orders" ORDER BY "id" LIMIT 10000 | SELECT * FROM "shop"."orders" WHERE "id" OPERATOR(pg_catalog.>) 42 ORDER BY "id" LIMIT 10000
+keyset MySql "number key": SELECT * FROM `shop`.`orders` ORDER BY `id` LIMIT 10000 | SELECT * FROM `shop`.`orders` WHERE `id` > 42 ORDER BY `id` LIMIT 10000
+keyset MariaDb "number key": SELECT * FROM `shop`.`orders` ORDER BY `id` LIMIT 10000 | SELECT * FROM `shop`.`orders` WHERE `id` > 42 ORDER BY `id` LIMIT 10000
+keyset Pg "two column key": SELECT * FROM "shop"."lines" ORDER BY "order_id", "code" LIMIT 10000 | SELECT * FROM "shop"."lines" WHERE ("order_id", "code") OPERATOR(pg_catalog.>) (7, 'it''s') ORDER BY "order_id", "code" LIMIT 10000
+keyset MySql "two column key": SELECT * FROM `shop`.`lines` ORDER BY `order_id`, `code` LIMIT 10000 | SELECT * FROM `shop`.`lines` WHERE `order_id` > 7 OR (`order_id` = 7 AND (`code` > 'it''s')) ORDER BY `order_id`, `code` LIMIT 10000
+keyset MariaDb "two column key": SELECT * FROM `shop`.`lines` ORDER BY `order_id`, `code` LIMIT 10000 | SELECT * FROM `shop`.`lines` WHERE `order_id` > 7 OR (`order_id` = 7 AND (`code` > 'it''s')) ORDER BY `order_id`, `code` LIMIT 10000
+keyset Pg "names that need quotes": SELECT * FROM "My Schema"."a`b""c" ORDER BY "Key" LIMIT 10000 | SELECT * FROM "My Schema"."a`b""c" WHERE "Key" OPERATOR(pg_catalog.>) 1 ORDER BY "Key" LIMIT 10000
+keyset MySql "names that need quotes": SELECT * FROM `My Schema`.`a``b"c` ORDER BY `Key` LIMIT 10000 | SELECT * FROM `My Schema`.`a``b"c` WHERE `Key` > 1 ORDER BY `Key` LIMIT 10000
+keyset MariaDb "names that need quotes": SELECT * FROM `My Schema`.`a``b"c` ORDER BY `Key` LIMIT 10000 | SELECT * FROM `My Schema`.`a``b"c` WHERE `Key` > 1 ORDER BY `Key` LIMIT 10000
+keyset Pg "text key with a backslash": SELECT * FROM "s"."t" ORDER BY "code" LIMIT 10000 | SELECT * FROM "s"."t" WHERE "code" OPERATOR(pg_catalog.>) E'a\\b' ORDER BY "code" LIMIT 10000
+keyset MySql "text key with a backslash": SELECT * FROM `s`.`t` ORDER BY `code` LIMIT 10000 | SELECT * FROM `s`.`t` WHERE `code` > _utf8mb4 X'615C62' ORDER BY `code` LIMIT 10000
+keyset MariaDb "text key with a backslash": SELECT * FROM `s`.`t` ORDER BY `code` LIMIT 10000 | SELECT * FROM `s`.`t` WHERE `code` > _utf8mb4 X'615C62' ORDER BY `code` LIMIT 10000
+keyset Pg "bytes key": SELECT * FROM "s"."t" ORDER BY "b" LIMIT 10000 | SELECT * FROM "s"."t" WHERE "b" OPERATOR(pg_catalog.>) '0x0A' ORDER BY "b" LIMIT 10000
+keyset MySql "bytes key": SELECT * FROM `s`.`t` ORDER BY `b` LIMIT 10000 | SELECT * FROM `s`.`t` WHERE `b` > X'0A' ORDER BY `b` LIMIT 10000
+keyset MariaDb "bytes key": SELECT * FROM `s`.`t` ORDER BY `b` LIMIT 10000 | SELECT * FROM `s`.`t` WHERE `b` > X'0A' ORDER BY `b` LIMIT 10000
+keyset Pg "null key value": SELECT * FROM "s"."t" ORDER BY "id" LIMIT 10000 | no next chunk
+keyset MySql "null key value": SELECT * FROM `s`.`t` ORDER BY `id` LIMIT 10000 | no next chunk
+keyset MariaDb "null key value": SELECT * FROM `s`.`t` ORDER BY `id` LIMIT 10000 | no next chunk
+keyset Pg "zoned timestamp key": SELECT * FROM "s"."t" ORDER BY "at" LIMIT 10000 | SELECT * FROM "s"."t" WHERE "at" OPERATOR(pg_catalog.>) '2026-11-18 10:00:00' ORDER BY "at" LIMIT 10000
+keyset MySql "zoned timestamp key": not keyset Kind("at")
+keyset MariaDb "zoned timestamp key": not keyset Kind("at")
+keyset Pg "enum key": SELECT * FROM "s"."t" ORDER BY "e" LIMIT 10000 | SELECT * FROM "s"."t" WHERE "e" OPERATOR(pg_catalog.>) 'a' ORDER BY "e" LIMIT 10000
+keyset MySql "enum key": not keyset Kind("e")
+keyset MariaDb "enum key": not keyset Kind("e")
+keyset Pg "float key": not keyset Kind("f")
+keyset MySql "float key": not keyset Kind("f")
+keyset MariaDb "float key": not keyset Kind("f")
+default Pg "'ACTIVE'::character varying" not null true: Value("ACTIVE")
+default Pg "'ACTIVE'::character varying" not null false: Value("ACTIVE")
+default Pg "'it''s'::text" not null true: Value("it's")
+default Pg "'it''s'::text" not null false: Value("it's")
+default Pg "'{}'::jsonb" not null true: Value("{}")
+default Pg "'{}'::jsonb" not null false: Value("{}")
+default Pg "'{a,b}'::text[]" not null true: Value("{a,b}")
+default Pg "'{a,b}'::text[]" not null false: Value("{a,b}")
+default Pg "'2020-01-01'::date" not null true: Value("2020-01-01")
+default Pg "'2020-01-01'::date" not null false: Value("2020-01-01")
+default Pg "0" not null true: Value("0")
+default Pg "0" not null false: Value("0")
+default Pg "1.5" not null true: Value("1.5")
+default Pg "1.5" not null false: Value("1.5")
+default Pg "(-1)" not null true: Value("-1")
+default Pg "(-1)" not null false: Value("-1")
+default Pg "'-1'::integer" not null true: Value("-1")
+default Pg "'-1'::integer" not null false: Value("-1")
+default Pg "(0)::numeric" not null true: Value("0")
+default Pg "(0)::numeric" not null false: Value("0")
+default Pg "(-1)::numeric" not null true: Value("-1")
+default Pg "(-1)::numeric" not null false: Value("-1")
+default Pg "('x'::text)::character varying" not null true: Value("x")
+default Pg "('x'::text)::character varying" not null false: Value("x")
+default Pg "(0) + 1" not null true: Expression("(0) + 1")
+default Pg "(0) + 1" not null false: Expression("(0) + 1")
+default Pg "('now'::text)::date" not null true: Expression("('now'::text)::date")
+default Pg "('now'::text)::date" not null false: Expression("('now'::text)::date")
+default Pg "'now'::timestamp with time zone" not null true: Expression("'now'::timestamp with time zone")
+default Pg "'now'::timestamp with time zone" not null false: Expression("'now'::timestamp with time zone")
+default Pg "'infinity'::date" not null true: Expression("'infinity'::date")
+default Pg "'infinity'::date" not null false: Expression("'infinity'::date")
+default Pg "'now'::text" not null true: Value("now")
+default Pg "'now'::text" not null false: Value("now")
+default Pg "'today'::character varying" not null true: Value("today")
+default Pg "'today'::character varying" not null false: Value("today")
+default Pg "true" not null true: Value("true")
+default Pg "true" not null false: Value("true")
+default Pg "NULL::character varying" not null true: Null
+default Pg "NULL::character varying" not null false: Null
+default Pg "now()" not null true: Expression("now()")
+default Pg "now()" not null false: Expression("now()")
+default Pg "CURRENT_TIMESTAMP" not null true: Expression("CURRENT_TIMESTAMP")
+default Pg "CURRENT_TIMESTAMP" not null false: Expression("CURRENT_TIMESTAMP")
+default Pg "('a'::text || 'b'::text)" not null true: Expression("'a'::text || 'b'::text")
+default Pg "('a'::text || 'b'::text)" not null false: Expression("'a'::text || 'b'::text")
+default Pg "gen_random_uuid()" not null true: Expression("gen_random_uuid()")
+default Pg "gen_random_uuid()" not null false: Expression("gen_random_uuid()")
+default Pg "nextval('shop.users_id_seq'::regclass)" not null true: Generated
+default Pg "nextval('shop.users_id_seq'::regclass)" not null false: Generated
+default Pg "NEXTVAL('s'::regclass)" not null true: Generated
+default Pg "NEXTVAL('s'::regclass)" not null false: Generated
+default Pg "'ACTIVE'" not null true: Value("ACTIVE")
+default Pg "'ACTIVE'" not null false: Value("ACTIVE")
+default Pg "'it\\'s'" not null true: Expression("'it\\'s'")
+default Pg "'it\\'s'" not null false: Expression("'it\\'s'")
+default Pg "1.50" not null true: Value("1.50")
+default Pg "1.50" not null false: Value("1.50")
+default Pg "CURRENT_TIMESTAMP(3)" not null true: Expression("CURRENT_TIMESTAMP(3)")
+default Pg "CURRENT_TIMESTAMP(3)" not null false: Expression("CURRENT_TIMESTAMP(3)")
+default Pg "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP" not null true: Expression("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
+default Pg "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP" not null false: Expression("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
+default Pg "NULL ON UPDATE CURRENT_TIMESTAMP" not null true: Expression("NULL ON UPDATE CURRENT_TIMESTAMP")
+default Pg "NULL ON UPDATE CURRENT_TIMESTAMP" not null false: Expression("NULL ON UPDATE CURRENT_TIMESTAMP")
+default Pg "(rand())" not null true: Expression("rand()")
+default Pg "(rand())" not null false: Expression("rand()")
+default Pg "(1.5)" not null true: Value("1.5")
+default Pg "(1.5)" not null false: Value("1.5")
+default Pg "'a'::text" not null true: Value("a")
+default Pg "'a'::text" not null false: Value("a")
+default Pg "'a ON UPDATE b'" not null true: Value("a ON UPDATE b")
+default Pg "'a ON UPDATE b'" not null false: Value("a ON UPDATE b")
+default Pg "'a ON UPDATE b' ON UPDATE CURRENT_TIMESTAMP" not null true: Expression("'a ON UPDATE b' ON UPDATE CURRENT_TIMESTAMP")
+default Pg "'a ON UPDATE b' ON UPDATE CURRENT_TIMESTAMP" not null false: Expression("'a ON UPDATE b' ON UPDATE CURRENT_TIMESTAMP")
+default Pg "(_utf8mb4'')" not null true: Expression("_utf8mb4''")
+default Pg "(_utf8mb4'')" not null false: Expression("_utf8mb4''")
+default Pg "(_utf8mb4'it\\'s')" not null true: Expression("(_utf8mb4'it\\'s')")
+default Pg "(_utf8mb4'it\\'s')" not null false: Expression("(_utf8mb4'it\\'s')")
+default Pg "'a\\\\b'" not null true: Value("a\\\\b")
+default Pg "'a\\\\b'" not null false: Value("a\\\\b")
+default Pg "'a\\b'" not null true: Value("a\\b")
+default Pg "'a\\b'" not null false: Value("a\\b")
+default Pg "('a\\\\b')" not null true: Value("a\\\\b")
+default Pg "('a\\\\b')" not null false: Value("a\\\\b")
+default Pg "\"x\"" not null true: Expression("\"x\"")
+default Pg "\"x\"" not null false: Expression("\"x\"")
+default Pg "'x'" not null true: Value("x")
+default Pg "'x'" not null false: Value("x")
+default Pg "(nextval(s))" not null true: Expression("nextval(s)")
+default Pg "(nextval(s))" not null false: Expression("nextval(s)")
+default Pg none Default not null true: Needed
+default Pg none Default not null false: Null
+default Pg none IdentityAlways not null true: Generated
+default Pg none IdentityAlways not null false: Generated
+default Pg none IdentityByDefault not null true: Generated
+default Pg none IdentityByDefault not null false: Generated
+default Pg none AutoIncrement not null true: Generated
+default Pg none AutoIncrement not null false: Generated
+default Pg none Stored("a + 1") not null true: Generated
+default Pg none Stored("a + 1") not null false: Generated
+default Pg none Virtual("a + 1") not null true: Generated
+default Pg none Virtual("a + 1") not null false: Generated
+default MySql "'ACTIVE'::character varying" not null true: Expression("'ACTIVE'::character varying")
+default MySql "'ACTIVE'::character varying" not null false: Expression("'ACTIVE'::character varying")
+default MySql "'it''s'::text" not null true: Expression("'it''s'::text")
+default MySql "'it''s'::text" not null false: Expression("'it''s'::text")
+default MySql "'{}'::jsonb" not null true: Expression("'{}'::jsonb")
+default MySql "'{}'::jsonb" not null false: Expression("'{}'::jsonb")
+default MySql "'{a,b}'::text[]" not null true: Expression("'{a,b}'::text[]")
+default MySql "'{a,b}'::text[]" not null false: Expression("'{a,b}'::text[]")
+default MySql "'2020-01-01'::date" not null true: Expression("'2020-01-01'::date")
+default MySql "'2020-01-01'::date" not null false: Expression("'2020-01-01'::date")
+default MySql "0" not null true: Value("0")
+default MySql "0" not null false: Value("0")
+default MySql "1.5" not null true: Value("1.5")
+default MySql "1.5" not null false: Value("1.5")
+default MySql "(-1)" not null true: Value("-1")
+default MySql "(-1)" not null false: Value("-1")
+default MySql "'-1'::integer" not null true: Expression("'-1'::integer")
+default MySql "'-1'::integer" not null false: Expression("'-1'::integer")
+default MySql "(0)::numeric" not null true: Expression("(0)::numeric")
+default MySql "(0)::numeric" not null false: Expression("(0)::numeric")
+default MySql "(-1)::numeric" not null true: Expression("(-1)::numeric")
+default MySql "(-1)::numeric" not null false: Expression("(-1)::numeric")
+default MySql "('x'::text)::character varying" not null true: Expression("('x'::text)::character varying")
+default MySql "('x'::text)::character varying" not null false: Expression("('x'::text)::character varying")
+default MySql "(0) + 1" not null true: Expression("(0) + 1")
+default MySql "(0) + 1" not null false: Expression("(0) + 1")
+default MySql "('now'::text)::date" not null true: Expression("('now'::text)::date")
+default MySql "('now'::text)::date" not null false: Expression("('now'::text)::date")
+default MySql "'now'::timestamp with time zone" not null true: Expression("'now'::timestamp with time zone")
+default MySql "'now'::timestamp with time zone" not null false: Expression("'now'::timestamp with time zone")
+default MySql "'infinity'::date" not null true: Expression("'infinity'::date")
+default MySql "'infinity'::date" not null false: Expression("'infinity'::date")
+default MySql "'now'::text" not null true: Expression("'now'::text")
+default MySql "'now'::text" not null false: Expression("'now'::text")
+default MySql "'today'::character varying" not null true: Expression("'today'::character varying")
+default MySql "'today'::character varying" not null false: Expression("'today'::character varying")
+default MySql "true" not null true: Value("true")
+default MySql "true" not null false: Value("true")
+default MySql "NULL::character varying" not null true: Expression("NULL::character varying")
+default MySql "NULL::character varying" not null false: Expression("NULL::character varying")
+default MySql "now()" not null true: Expression("now()")
+default MySql "now()" not null false: Expression("now()")
+default MySql "CURRENT_TIMESTAMP" not null true: Expression("CURRENT_TIMESTAMP")
+default MySql "CURRENT_TIMESTAMP" not null false: Expression("CURRENT_TIMESTAMP")
+default MySql "('a'::text || 'b'::text)" not null true: Expression("'a'::text || 'b'::text")
+default MySql "('a'::text || 'b'::text)" not null false: Expression("'a'::text || 'b'::text")
+default MySql "gen_random_uuid()" not null true: Expression("gen_random_uuid()")
+default MySql "gen_random_uuid()" not null false: Expression("gen_random_uuid()")
+default MySql "nextval('shop.users_id_seq'::regclass)" not null true: Expression("nextval('shop.users_id_seq'::regclass)")
+default MySql "nextval('shop.users_id_seq'::regclass)" not null false: Expression("nextval('shop.users_id_seq'::regclass)")
+default MySql "NEXTVAL('s'::regclass)" not null true: Expression("NEXTVAL('s'::regclass)")
+default MySql "NEXTVAL('s'::regclass)" not null false: Expression("NEXTVAL('s'::regclass)")
+default MySql "'ACTIVE'" not null true: Value("ACTIVE")
+default MySql "'ACTIVE'" not null false: Value("ACTIVE")
+default MySql "'it\\'s'" not null true: Value("it's")
+default MySql "'it\\'s'" not null false: Value("it's")
+default MySql "1.50" not null true: Value("1.50")
+default MySql "1.50" not null false: Value("1.50")
+default MySql "CURRENT_TIMESTAMP(3)" not null true: Expression("CURRENT_TIMESTAMP(3)")
+default MySql "CURRENT_TIMESTAMP(3)" not null false: Expression("CURRENT_TIMESTAMP(3)")
+default MySql "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP" not null true: Expression("CURRENT_TIMESTAMP")
+default MySql "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP" not null false: Expression("CURRENT_TIMESTAMP")
+default MySql "NULL ON UPDATE CURRENT_TIMESTAMP" not null true: Null
+default MySql "NULL ON UPDATE CURRENT_TIMESTAMP" not null false: Null
+default MySql "(rand())" not null true: Expression("rand()")
+default MySql "(rand())" not null false: Expression("rand()")
+default MySql "(1.5)" not null true: Value("1.5")
+default MySql "(1.5)" not null false: Value("1.5")
+default MySql "'a'::text" not null true: Expression("'a'::text")
+default MySql "'a'::text" not null false: Expression("'a'::text")
+default MySql "'a ON UPDATE b'" not null true: Value("a ON UPDATE b")
+default MySql "'a ON UPDATE b'" not null false: Value("a ON UPDATE b")
+default MySql "'a ON UPDATE b' ON UPDATE CURRENT_TIMESTAMP" not null true: Value("a ON UPDATE b")
+default MySql "'a ON UPDATE b' ON UPDATE CURRENT_TIMESTAMP" not null false: Value("a ON UPDATE b")
+default MySql "(_utf8mb4'')" not null true: Value("")
+default MySql "(_utf8mb4'')" not null false: Value("")
+default MySql "(_utf8mb4'it\\'s')" not null true: Value("it's")
+default MySql "(_utf8mb4'it\\'s')" not null false: Value("it's")
+default MySql "'a\\\\b'" not null true: Value("a\\b")
+default MySql "'a\\\\b'" not null false: Value("a\\b")
+default MySql "'a\\b'" not null true: Value("a\u{8}")
+default MySql "'a\\b'" not null false: Value("a\u{8}")
+default MySql "('a\\\\b')" not null true: Value("a\\b")
+default MySql "('a\\\\b')" not null false: Value("a\\b")
+default MySql "\"x\"" not null true: Value("x")
+default MySql "\"x\"" not null false: Value("x")
+default MySql "'x'" not null true: Value("x")
+default MySql "'x'" not null false: Value("x")
+default MySql "(nextval(s))" not null true: Expression("nextval(s)")
+default MySql "(nextval(s))" not null false: Expression("nextval(s)")
+default MySql none Default not null true: Needed
+default MySql none Default not null false: Null
+default MySql none IdentityAlways not null true: Generated
+default MySql none IdentityAlways not null false: Generated
+default MySql none IdentityByDefault not null true: Generated
+default MySql none IdentityByDefault not null false: Generated
+default MySql none AutoIncrement not null true: Generated
+default MySql none AutoIncrement not null false: Generated
+default MySql none Stored("a + 1") not null true: Generated
+default MySql none Stored("a + 1") not null false: Generated
+default MySql none Virtual("a + 1") not null true: Generated
+default MySql none Virtual("a + 1") not null false: Generated
+default MariaDb "'ACTIVE'::character varying" not null true: Expression("'ACTIVE'::character varying")
+default MariaDb "'ACTIVE'::character varying" not null false: Expression("'ACTIVE'::character varying")
+default MariaDb "'it''s'::text" not null true: Expression("'it''s'::text")
+default MariaDb "'it''s'::text" not null false: Expression("'it''s'::text")
+default MariaDb "'{}'::jsonb" not null true: Expression("'{}'::jsonb")
+default MariaDb "'{}'::jsonb" not null false: Expression("'{}'::jsonb")
+default MariaDb "'{a,b}'::text[]" not null true: Expression("'{a,b}'::text[]")
+default MariaDb "'{a,b}'::text[]" not null false: Expression("'{a,b}'::text[]")
+default MariaDb "'2020-01-01'::date" not null true: Expression("'2020-01-01'::date")
+default MariaDb "'2020-01-01'::date" not null false: Expression("'2020-01-01'::date")
+default MariaDb "0" not null true: Value("0")
+default MariaDb "0" not null false: Value("0")
+default MariaDb "1.5" not null true: Value("1.5")
+default MariaDb "1.5" not null false: Value("1.5")
+default MariaDb "(-1)" not null true: Value("-1")
+default MariaDb "(-1)" not null false: Value("-1")
+default MariaDb "'-1'::integer" not null true: Expression("'-1'::integer")
+default MariaDb "'-1'::integer" not null false: Expression("'-1'::integer")
+default MariaDb "(0)::numeric" not null true: Expression("(0)::numeric")
+default MariaDb "(0)::numeric" not null false: Expression("(0)::numeric")
+default MariaDb "(-1)::numeric" not null true: Expression("(-1)::numeric")
+default MariaDb "(-1)::numeric" not null false: Expression("(-1)::numeric")
+default MariaDb "('x'::text)::character varying" not null true: Expression("('x'::text)::character varying")
+default MariaDb "('x'::text)::character varying" not null false: Expression("('x'::text)::character varying")
+default MariaDb "(0) + 1" not null true: Expression("(0) + 1")
+default MariaDb "(0) + 1" not null false: Expression("(0) + 1")
+default MariaDb "('now'::text)::date" not null true: Expression("('now'::text)::date")
+default MariaDb "('now'::text)::date" not null false: Expression("('now'::text)::date")
+default MariaDb "'now'::timestamp with time zone" not null true: Expression("'now'::timestamp with time zone")
+default MariaDb "'now'::timestamp with time zone" not null false: Expression("'now'::timestamp with time zone")
+default MariaDb "'infinity'::date" not null true: Expression("'infinity'::date")
+default MariaDb "'infinity'::date" not null false: Expression("'infinity'::date")
+default MariaDb "'now'::text" not null true: Expression("'now'::text")
+default MariaDb "'now'::text" not null false: Expression("'now'::text")
+default MariaDb "'today'::character varying" not null true: Expression("'today'::character varying")
+default MariaDb "'today'::character varying" not null false: Expression("'today'::character varying")
+default MariaDb "true" not null true: Value("true")
+default MariaDb "true" not null false: Value("true")
+default MariaDb "NULL::character varying" not null true: Expression("NULL::character varying")
+default MariaDb "NULL::character varying" not null false: Expression("NULL::character varying")
+default MariaDb "now()" not null true: Expression("now()")
+default MariaDb "now()" not null false: Expression("now()")
+default MariaDb "CURRENT_TIMESTAMP" not null true: Expression("CURRENT_TIMESTAMP")
+default MariaDb "CURRENT_TIMESTAMP" not null false: Expression("CURRENT_TIMESTAMP")
+default MariaDb "('a'::text || 'b'::text)" not null true: Expression("'a'::text || 'b'::text")
+default MariaDb "('a'::text || 'b'::text)" not null false: Expression("'a'::text || 'b'::text")
+default MariaDb "gen_random_uuid()" not null true: Expression("gen_random_uuid()")
+default MariaDb "gen_random_uuid()" not null false: Expression("gen_random_uuid()")
+default MariaDb "nextval('shop.users_id_seq'::regclass)" not null true: Expression("nextval('shop.users_id_seq'::regclass)")
+default MariaDb "nextval('shop.users_id_seq'::regclass)" not null false: Expression("nextval('shop.users_id_seq'::regclass)")
+default MariaDb "NEXTVAL('s'::regclass)" not null true: Expression("NEXTVAL('s'::regclass)")
+default MariaDb "NEXTVAL('s'::regclass)" not null false: Expression("NEXTVAL('s'::regclass)")
+default MariaDb "'ACTIVE'" not null true: Value("ACTIVE")
+default MariaDb "'ACTIVE'" not null false: Value("ACTIVE")
+default MariaDb "'it\\'s'" not null true: Value("it's")
+default MariaDb "'it\\'s'" not null false: Value("it's")
+default MariaDb "1.50" not null true: Value("1.50")
+default MariaDb "1.50" not null false: Value("1.50")
+default MariaDb "CURRENT_TIMESTAMP(3)" not null true: Expression("CURRENT_TIMESTAMP(3)")
+default MariaDb "CURRENT_TIMESTAMP(3)" not null false: Expression("CURRENT_TIMESTAMP(3)")
+default MariaDb "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP" not null true: Expression("CURRENT_TIMESTAMP")
+default MariaDb "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP" not null false: Expression("CURRENT_TIMESTAMP")
+default MariaDb "NULL ON UPDATE CURRENT_TIMESTAMP" not null true: Null
+default MariaDb "NULL ON UPDATE CURRENT_TIMESTAMP" not null false: Null
+default MariaDb "(rand())" not null true: Expression("rand()")
+default MariaDb "(rand())" not null false: Expression("rand()")
+default MariaDb "(1.5)" not null true: Value("1.5")
+default MariaDb "(1.5)" not null false: Value("1.5")
+default MariaDb "'a'::text" not null true: Expression("'a'::text")
+default MariaDb "'a'::text" not null false: Expression("'a'::text")
+default MariaDb "'a ON UPDATE b'" not null true: Value("a ON UPDATE b")
+default MariaDb "'a ON UPDATE b'" not null false: Value("a ON UPDATE b")
+default MariaDb "'a ON UPDATE b' ON UPDATE CURRENT_TIMESTAMP" not null true: Value("a ON UPDATE b")
+default MariaDb "'a ON UPDATE b' ON UPDATE CURRENT_TIMESTAMP" not null false: Value("a ON UPDATE b")
+default MariaDb "(_utf8mb4'')" not null true: Value("")
+default MariaDb "(_utf8mb4'')" not null false: Value("")
+default MariaDb "(_utf8mb4'it\\'s')" not null true: Value("it's")
+default MariaDb "(_utf8mb4'it\\'s')" not null false: Value("it's")
+default MariaDb "'a\\\\b'" not null true: Value("a\\b")
+default MariaDb "'a\\\\b'" not null false: Value("a\\b")
+default MariaDb "'a\\b'" not null true: Value("a\u{8}")
+default MariaDb "'a\\b'" not null false: Value("a\u{8}")
+default MariaDb "('a\\\\b')" not null true: Value("a\\b")
+default MariaDb "('a\\\\b')" not null false: Value("a\\b")
+default MariaDb "\"x\"" not null true: Value("x")
+default MariaDb "\"x\"" not null false: Value("x")
+default MariaDb "'x'" not null true: Value("x")
+default MariaDb "'x'" not null false: Value("x")
+default MariaDb "(nextval(s))" not null true: Expression("nextval(s)")
+default MariaDb "(nextval(s))" not null false: Expression("nextval(s)")
+default MariaDb none Default not null true: Needed
+default MariaDb none Default not null false: Null
+default MariaDb none IdentityAlways not null true: Generated
+default MariaDb none IdentityAlways not null false: Generated
+default MariaDb none IdentityByDefault not null true: Generated
+default MariaDb none IdentityByDefault not null false: Generated
+default MariaDb none AutoIncrement not null true: Generated
+default MariaDb none AutoIncrement not null false: Generated
+default MariaDb none Stored("a + 1") not null true: Generated
+default MariaDb none Stored("a + 1") not null false: Generated
+default MariaDb none Virtual("a + 1") not null true: Generated
+default MariaDb none Virtual("a + 1") not null false: Generated
+default NoBackslashEscapes "'ACTIVE'::character varying" not null true: Expression("'ACTIVE'::character varying")
+default NoBackslashEscapes "'ACTIVE'::character varying" not null false: Expression("'ACTIVE'::character varying")
+default NoBackslashEscapes "'it''s'::text" not null true: Expression("'it''s'::text")
+default NoBackslashEscapes "'it''s'::text" not null false: Expression("'it''s'::text")
+default NoBackslashEscapes "'{}'::jsonb" not null true: Expression("'{}'::jsonb")
+default NoBackslashEscapes "'{}'::jsonb" not null false: Expression("'{}'::jsonb")
+default NoBackslashEscapes "'{a,b}'::text[]" not null true: Expression("'{a,b}'::text[]")
+default NoBackslashEscapes "'{a,b}'::text[]" not null false: Expression("'{a,b}'::text[]")
+default NoBackslashEscapes "'2020-01-01'::date" not null true: Expression("'2020-01-01'::date")
+default NoBackslashEscapes "'2020-01-01'::date" not null false: Expression("'2020-01-01'::date")
+default NoBackslashEscapes "0" not null true: Value("0")
+default NoBackslashEscapes "0" not null false: Value("0")
+default NoBackslashEscapes "1.5" not null true: Value("1.5")
+default NoBackslashEscapes "1.5" not null false: Value("1.5")
+default NoBackslashEscapes "(-1)" not null true: Value("-1")
+default NoBackslashEscapes "(-1)" not null false: Value("-1")
+default NoBackslashEscapes "'-1'::integer" not null true: Expression("'-1'::integer")
+default NoBackslashEscapes "'-1'::integer" not null false: Expression("'-1'::integer")
+default NoBackslashEscapes "(0)::numeric" not null true: Expression("(0)::numeric")
+default NoBackslashEscapes "(0)::numeric" not null false: Expression("(0)::numeric")
+default NoBackslashEscapes "(-1)::numeric" not null true: Expression("(-1)::numeric")
+default NoBackslashEscapes "(-1)::numeric" not null false: Expression("(-1)::numeric")
+default NoBackslashEscapes "('x'::text)::character varying" not null true: Expression("('x'::text)::character varying")
+default NoBackslashEscapes "('x'::text)::character varying" not null false: Expression("('x'::text)::character varying")
+default NoBackslashEscapes "(0) + 1" not null true: Expression("(0) + 1")
+default NoBackslashEscapes "(0) + 1" not null false: Expression("(0) + 1")
+default NoBackslashEscapes "('now'::text)::date" not null true: Expression("('now'::text)::date")
+default NoBackslashEscapes "('now'::text)::date" not null false: Expression("('now'::text)::date")
+default NoBackslashEscapes "'now'::timestamp with time zone" not null true: Expression("'now'::timestamp with time zone")
+default NoBackslashEscapes "'now'::timestamp with time zone" not null false: Expression("'now'::timestamp with time zone")
+default NoBackslashEscapes "'infinity'::date" not null true: Expression("'infinity'::date")
+default NoBackslashEscapes "'infinity'::date" not null false: Expression("'infinity'::date")
+default NoBackslashEscapes "'now'::text" not null true: Expression("'now'::text")
+default NoBackslashEscapes "'now'::text" not null false: Expression("'now'::text")
+default NoBackslashEscapes "'today'::character varying" not null true: Expression("'today'::character varying")
+default NoBackslashEscapes "'today'::character varying" not null false: Expression("'today'::character varying")
+default NoBackslashEscapes "true" not null true: Value("true")
+default NoBackslashEscapes "true" not null false: Value("true")
+default NoBackslashEscapes "NULL::character varying" not null true: Expression("NULL::character varying")
+default NoBackslashEscapes "NULL::character varying" not null false: Expression("NULL::character varying")
+default NoBackslashEscapes "now()" not null true: Expression("now()")
+default NoBackslashEscapes "now()" not null false: Expression("now()")
+default NoBackslashEscapes "CURRENT_TIMESTAMP" not null true: Expression("CURRENT_TIMESTAMP")
+default NoBackslashEscapes "CURRENT_TIMESTAMP" not null false: Expression("CURRENT_TIMESTAMP")
+default NoBackslashEscapes "('a'::text || 'b'::text)" not null true: Expression("'a'::text || 'b'::text")
+default NoBackslashEscapes "('a'::text || 'b'::text)" not null false: Expression("'a'::text || 'b'::text")
+default NoBackslashEscapes "gen_random_uuid()" not null true: Expression("gen_random_uuid()")
+default NoBackslashEscapes "gen_random_uuid()" not null false: Expression("gen_random_uuid()")
+default NoBackslashEscapes "nextval('shop.users_id_seq'::regclass)" not null true: Expression("nextval('shop.users_id_seq'::regclass)")
+default NoBackslashEscapes "nextval('shop.users_id_seq'::regclass)" not null false: Expression("nextval('shop.users_id_seq'::regclass)")
+default NoBackslashEscapes "NEXTVAL('s'::regclass)" not null true: Expression("NEXTVAL('s'::regclass)")
+default NoBackslashEscapes "NEXTVAL('s'::regclass)" not null false: Expression("NEXTVAL('s'::regclass)")
+default NoBackslashEscapes "'ACTIVE'" not null true: Value("ACTIVE")
+default NoBackslashEscapes "'ACTIVE'" not null false: Value("ACTIVE")
+default NoBackslashEscapes "'it\\'s'" not null true: Expression("'it\\'s'")
+default NoBackslashEscapes "'it\\'s'" not null false: Expression("'it\\'s'")
+default NoBackslashEscapes "1.50" not null true: Value("1.50")
+default NoBackslashEscapes "1.50" not null false: Value("1.50")
+default NoBackslashEscapes "CURRENT_TIMESTAMP(3)" not null true: Expression("CURRENT_TIMESTAMP(3)")
+default NoBackslashEscapes "CURRENT_TIMESTAMP(3)" not null false: Expression("CURRENT_TIMESTAMP(3)")
+default NoBackslashEscapes "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP" not null true: Expression("CURRENT_TIMESTAMP")
+default NoBackslashEscapes "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP" not null false: Expression("CURRENT_TIMESTAMP")
+default NoBackslashEscapes "NULL ON UPDATE CURRENT_TIMESTAMP" not null true: Null
+default NoBackslashEscapes "NULL ON UPDATE CURRENT_TIMESTAMP" not null false: Null
+default NoBackslashEscapes "(rand())" not null true: Expression("rand()")
+default NoBackslashEscapes "(rand())" not null false: Expression("rand()")
+default NoBackslashEscapes "(1.5)" not null true: Value("1.5")
+default NoBackslashEscapes "(1.5)" not null false: Value("1.5")
+default NoBackslashEscapes "'a'::text" not null true: Expression("'a'::text")
+default NoBackslashEscapes "'a'::text" not null false: Expression("'a'::text")
+default NoBackslashEscapes "'a ON UPDATE b'" not null true: Value("a ON UPDATE b")
+default NoBackslashEscapes "'a ON UPDATE b'" not null false: Value("a ON UPDATE b")
+default NoBackslashEscapes "'a ON UPDATE b' ON UPDATE CURRENT_TIMESTAMP" not null true: Value("a ON UPDATE b")
+default NoBackslashEscapes "'a ON UPDATE b' ON UPDATE CURRENT_TIMESTAMP" not null false: Value("a ON UPDATE b")
+default NoBackslashEscapes "(_utf8mb4'')" not null true: Value("")
+default NoBackslashEscapes "(_utf8mb4'')" not null false: Value("")
+default NoBackslashEscapes "(_utf8mb4'it\\'s')" not null true: Value("it's")
+default NoBackslashEscapes "(_utf8mb4'it\\'s')" not null false: Value("it's")
+default NoBackslashEscapes "'a\\\\b'" not null true: Value("a\\\\b")
+default NoBackslashEscapes "'a\\\\b'" not null false: Value("a\\\\b")
+default NoBackslashEscapes "'a\\b'" not null true: Value("a\\b")
+default NoBackslashEscapes "'a\\b'" not null false: Value("a\\b")
+default NoBackslashEscapes "('a\\\\b')" not null true: Value("a\\b")
+default NoBackslashEscapes "('a\\\\b')" not null false: Value("a\\b")
+default NoBackslashEscapes "\"x\"" not null true: Value("x")
+default NoBackslashEscapes "\"x\"" not null false: Value("x")
+default NoBackslashEscapes "'x'" not null true: Value("x")
+default NoBackslashEscapes "'x'" not null false: Value("x")
+default NoBackslashEscapes "(nextval(s))" not null true: Expression("nextval(s)")
+default NoBackslashEscapes "(nextval(s))" not null false: Expression("nextval(s)")
+default NoBackslashEscapes none Default not null true: Needed
+default NoBackslashEscapes none Default not null false: Null
+default NoBackslashEscapes none IdentityAlways not null true: Generated
+default NoBackslashEscapes none IdentityAlways not null false: Generated
+default NoBackslashEscapes none IdentityByDefault not null true: Generated
+default NoBackslashEscapes none IdentityByDefault not null false: Generated
+default NoBackslashEscapes none AutoIncrement not null true: Generated
+default NoBackslashEscapes none AutoIncrement not null false: Generated
+default NoBackslashEscapes none Stored("a + 1") not null true: Generated
+default NoBackslashEscapes none Stored("a + 1") not null false: Generated
+default NoBackslashEscapes none Virtual("a + 1") not null true: Generated
+default NoBackslashEscapes none Virtual("a + 1") not null false: Generated
+default AnsiQuotes "'ACTIVE'::character varying" not null true: Expression("'ACTIVE'::character varying")
+default AnsiQuotes "'ACTIVE'::character varying" not null false: Expression("'ACTIVE'::character varying")
+default AnsiQuotes "'it''s'::text" not null true: Expression("'it''s'::text")
+default AnsiQuotes "'it''s'::text" not null false: Expression("'it''s'::text")
+default AnsiQuotes "'{}'::jsonb" not null true: Expression("'{}'::jsonb")
+default AnsiQuotes "'{}'::jsonb" not null false: Expression("'{}'::jsonb")
+default AnsiQuotes "'{a,b}'::text[]" not null true: Expression("'{a,b}'::text[]")
+default AnsiQuotes "'{a,b}'::text[]" not null false: Expression("'{a,b}'::text[]")
+default AnsiQuotes "'2020-01-01'::date" not null true: Expression("'2020-01-01'::date")
+default AnsiQuotes "'2020-01-01'::date" not null false: Expression("'2020-01-01'::date")
+default AnsiQuotes "0" not null true: Value("0")
+default AnsiQuotes "0" not null false: Value("0")
+default AnsiQuotes "1.5" not null true: Value("1.5")
+default AnsiQuotes "1.5" not null false: Value("1.5")
+default AnsiQuotes "(-1)" not null true: Value("-1")
+default AnsiQuotes "(-1)" not null false: Value("-1")
+default AnsiQuotes "'-1'::integer" not null true: Expression("'-1'::integer")
+default AnsiQuotes "'-1'::integer" not null false: Expression("'-1'::integer")
+default AnsiQuotes "(0)::numeric" not null true: Expression("(0)::numeric")
+default AnsiQuotes "(0)::numeric" not null false: Expression("(0)::numeric")
+default AnsiQuotes "(-1)::numeric" not null true: Expression("(-1)::numeric")
+default AnsiQuotes "(-1)::numeric" not null false: Expression("(-1)::numeric")
+default AnsiQuotes "('x'::text)::character varying" not null true: Expression("('x'::text)::character varying")
+default AnsiQuotes "('x'::text)::character varying" not null false: Expression("('x'::text)::character varying")
+default AnsiQuotes "(0) + 1" not null true: Expression("(0) + 1")
+default AnsiQuotes "(0) + 1" not null false: Expression("(0) + 1")
+default AnsiQuotes "('now'::text)::date" not null true: Expression("('now'::text)::date")
+default AnsiQuotes "('now'::text)::date" not null false: Expression("('now'::text)::date")
+default AnsiQuotes "'now'::timestamp with time zone" not null true: Expression("'now'::timestamp with time zone")
+default AnsiQuotes "'now'::timestamp with time zone" not null false: Expression("'now'::timestamp with time zone")
+default AnsiQuotes "'infinity'::date" not null true: Expression("'infinity'::date")
+default AnsiQuotes "'infinity'::date" not null false: Expression("'infinity'::date")
+default AnsiQuotes "'now'::text" not null true: Expression("'now'::text")
+default AnsiQuotes "'now'::text" not null false: Expression("'now'::text")
+default AnsiQuotes "'today'::character varying" not null true: Expression("'today'::character varying")
+default AnsiQuotes "'today'::character varying" not null false: Expression("'today'::character varying")
+default AnsiQuotes "true" not null true: Value("true")
+default AnsiQuotes "true" not null false: Value("true")
+default AnsiQuotes "NULL::character varying" not null true: Expression("NULL::character varying")
+default AnsiQuotes "NULL::character varying" not null false: Expression("NULL::character varying")
+default AnsiQuotes "now()" not null true: Expression("now()")
+default AnsiQuotes "now()" not null false: Expression("now()")
+default AnsiQuotes "CURRENT_TIMESTAMP" not null true: Expression("CURRENT_TIMESTAMP")
+default AnsiQuotes "CURRENT_TIMESTAMP" not null false: Expression("CURRENT_TIMESTAMP")
+default AnsiQuotes "('a'::text || 'b'::text)" not null true: Expression("'a'::text || 'b'::text")
+default AnsiQuotes "('a'::text || 'b'::text)" not null false: Expression("'a'::text || 'b'::text")
+default AnsiQuotes "gen_random_uuid()" not null true: Expression("gen_random_uuid()")
+default AnsiQuotes "gen_random_uuid()" not null false: Expression("gen_random_uuid()")
+default AnsiQuotes "nextval('shop.users_id_seq'::regclass)" not null true: Expression("nextval('shop.users_id_seq'::regclass)")
+default AnsiQuotes "nextval('shop.users_id_seq'::regclass)" not null false: Expression("nextval('shop.users_id_seq'::regclass)")
+default AnsiQuotes "NEXTVAL('s'::regclass)" not null true: Expression("NEXTVAL('s'::regclass)")
+default AnsiQuotes "NEXTVAL('s'::regclass)" not null false: Expression("NEXTVAL('s'::regclass)")
+default AnsiQuotes "'ACTIVE'" not null true: Value("ACTIVE")
+default AnsiQuotes "'ACTIVE'" not null false: Value("ACTIVE")
+default AnsiQuotes "'it\\'s'" not null true: Value("it's")
+default AnsiQuotes "'it\\'s'" not null false: Value("it's")
+default AnsiQuotes "1.50" not null true: Value("1.50")
+default AnsiQuotes "1.50" not null false: Value("1.50")
+default AnsiQuotes "CURRENT_TIMESTAMP(3)" not null true: Expression("CURRENT_TIMESTAMP(3)")
+default AnsiQuotes "CURRENT_TIMESTAMP(3)" not null false: Expression("CURRENT_TIMESTAMP(3)")
+default AnsiQuotes "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP" not null true: Expression("CURRENT_TIMESTAMP")
+default AnsiQuotes "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP" not null false: Expression("CURRENT_TIMESTAMP")
+default AnsiQuotes "NULL ON UPDATE CURRENT_TIMESTAMP" not null true: Null
+default AnsiQuotes "NULL ON UPDATE CURRENT_TIMESTAMP" not null false: Null
+default AnsiQuotes "(rand())" not null true: Expression("rand()")
+default AnsiQuotes "(rand())" not null false: Expression("rand()")
+default AnsiQuotes "(1.5)" not null true: Value("1.5")
+default AnsiQuotes "(1.5)" not null false: Value("1.5")
+default AnsiQuotes "'a'::text" not null true: Expression("'a'::text")
+default AnsiQuotes "'a'::text" not null false: Expression("'a'::text")
+default AnsiQuotes "'a ON UPDATE b'" not null true: Value("a ON UPDATE b")
+default AnsiQuotes "'a ON UPDATE b'" not null false: Value("a ON UPDATE b")
+default AnsiQuotes "'a ON UPDATE b' ON UPDATE CURRENT_TIMESTAMP" not null true: Value("a ON UPDATE b")
+default AnsiQuotes "'a ON UPDATE b' ON UPDATE CURRENT_TIMESTAMP" not null false: Value("a ON UPDATE b")
+default AnsiQuotes "(_utf8mb4'')" not null true: Value("")
+default AnsiQuotes "(_utf8mb4'')" not null false: Value("")
+default AnsiQuotes "(_utf8mb4'it\\'s')" not null true: Value("it's")
+default AnsiQuotes "(_utf8mb4'it\\'s')" not null false: Value("it's")
+default AnsiQuotes "'a\\\\b'" not null true: Value("a\\b")
+default AnsiQuotes "'a\\\\b'" not null false: Value("a\\b")
+default AnsiQuotes "'a\\b'" not null true: Value("a\u{8}")
+default AnsiQuotes "'a\\b'" not null false: Value("a\u{8}")
+default AnsiQuotes "('a\\\\b')" not null true: Value("a\\b")
+default AnsiQuotes "('a\\\\b')" not null false: Value("a\\b")
+default AnsiQuotes "\"x\"" not null true: Expression("\"x\"")
+default AnsiQuotes "\"x\"" not null false: Expression("\"x\"")
+default AnsiQuotes "'x'" not null true: Value("x")
+default AnsiQuotes "'x'" not null false: Value("x")
+default AnsiQuotes "(nextval(s))" not null true: Expression("nextval(s)")
+default AnsiQuotes "(nextval(s))" not null false: Expression("nextval(s)")
+default AnsiQuotes none Default not null true: Needed
+default AnsiQuotes none Default not null false: Null
+default AnsiQuotes none IdentityAlways not null true: Generated
+default AnsiQuotes none IdentityAlways not null false: Generated
+default AnsiQuotes none IdentityByDefault not null true: Generated
+default AnsiQuotes none IdentityByDefault not null false: Generated
+default AnsiQuotes none AutoIncrement not null true: Generated
+default AnsiQuotes none AutoIncrement not null false: Generated
+default AnsiQuotes none Stored("a + 1") not null true: Generated
+default AnsiQuotes none Stored("a + 1") not null false: Generated
+default AnsiQuotes none Virtual("a + 1") not null true: Generated
+default AnsiQuotes none Virtual("a + 1") not null false: Generated

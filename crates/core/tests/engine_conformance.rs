@@ -23,6 +23,8 @@ mod export;
 mod filter;
 #[path = "engine_conformance/golden.rs"]
 mod golden;
+#[path = "engine_conformance/golden/values.rs"]
+mod golden_values;
 #[path = "engine_conformance/read_only.rs"]
 mod read_only;
 #[path = "engine_conformance/risk.rs"]
