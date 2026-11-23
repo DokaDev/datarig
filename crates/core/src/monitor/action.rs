@@ -301,12 +301,16 @@ fn maintenance(text: &str) -> bool {
 
 /// The MySQL classifier calls the whole text a read with no effect beyond it: no function that
 /// is not a built-in, nothing that runs code, no danger, no `EXPLAIN ANALYZE`. The text is a
-/// family server's (its `performance_schema`); which engine it is is not known here, so it is
-/// judged on both engines' lists ([`Judge::with_sibling`]: on MariaDB a sequence's next value is
-/// a change). The session's sql mode is not known either; the classifier also reads the text as
-/// the other modes would and keeps the worse reading.
+/// family server's (its `performance_schema`), judged on MySQL's lists; which engine it is is
+/// not known here, so a text either engine's lists call a write (on MariaDB a sequence's next
+/// value) is no plain read either. The session's sql mode is not known; the classifier also reads the text as the
+/// other modes would and keeps the worse reading.
 fn plain_read(text: &str) -> bool {
-    let risk = crate::sql::risk::mysql::classify(text, Judge::mysql(MySqlMode::default()).with_sibling());
+    let mode = MySqlMode::default();
+    if crate::sql::risk::mysql::classify(text, Judge::mysql(mode).with_sibling()).writes {
+        return false;
+    }
+    let risk = crate::sql::risk::mysql::classify(text, Judge::mysql(mode));
     risk.class == Class::Read
         && risk.danger.is_none()
         && !risk.writes

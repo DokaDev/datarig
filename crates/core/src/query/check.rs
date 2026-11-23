@@ -253,10 +253,15 @@ pub fn check_filter(
         out
     };
     let refused = written(|c| c.refused);
-    // A sequence's next value on MariaDB makes the statement a change; the filter still says
-    // the call by name, as it always did. Any other refused call comes after the reason below.
-    let sequence = refused.iter().any(|n| n == "NEXTVAL" || n == "SETVAL");
-    if sequence && risk.danger.is_none() && !risk.read_write {
+    // A sequence's next value on MariaDB makes the statement a change; when nothing else makes
+    // it no read (as MySQL's lists, which have no sequences, read it), the filter still says the
+    // call by name, as it always did. Any other refused call comes after the reason below.
+    let no_read = |r: &risk::Risk| r.class != Class::Read || r.danger.is_some() || r.read_write;
+    if let Some(judge) = risk::mysql::Judge::of(target.dialect)
+        && refused.iter().any(|n| n == "NEXTVAL" || n == "SETVAL")
+        && no_read(&risk)
+        && !no_read(&risk::mysql::classify(&sql, risk::mysql::Judge::mysql(judge.mode)))
+    {
         return Err(BarRefusal::RefusedCalls(refused));
     }
     if risk.class != Class::Read || risk.danger.is_some() || risk.read_write {

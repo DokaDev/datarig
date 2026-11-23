@@ -1337,7 +1337,7 @@ fn with_calls(mut risk: Risk, ws: &[W], judge: Judge) -> Risk {
                 None
             };
             risk.danger = risk.danger.or(danger);
-        } else if !schema && !sequence_write(&c, judge) {
+        } else if !schema && (risk.explain == Explain::Plan || !sequence_write(&c, judge)) {
             risk.runs_code = true;
             risk.unchecked_call = risk.unchecked_call.or(Some(c.written));
             // `EXPLAIN ANALYZE` runs it: what it writes where the rollback does not reach (a
@@ -1393,10 +1393,12 @@ fn advances_sequence(ws: &[W], judge: Judge) -> bool {
         })
 }
 
-/// On an engine with sequences, an unqualified `NEXTVAL(…)` or `SETVAL(…)` is no unknown
-/// function: it makes the statement a write ([`advances_sequence`]).
+/// On an engine with sequences, `NEXTVAL(…)` or `SETVAL(…)` written as the server reads its own
+/// function (no database, no quotes, nothing before its `(`) is no unknown function: it makes
+/// the statement a write ([`advances_sequence`]) wherever that applies (not in a plan-only
+/// `EXPLAIN`, where it stays a call).
 fn sequence_write(c: &Call, judge: Judge) -> bool {
-    sequence_call(&c.name) && !c.qualified && judge.tables().any(|t| t.sequences)
+    sequence_call(&c.name) && !c.qualified && !c.quoted && c.gap == Gap::None && judge.tables().any(|t| t.sequences)
 }
 
 /// A call that advances or sets a sequence on MariaDB (name upper case).
@@ -1410,39 +1412,13 @@ fn is_named(w: &W, name: &str) -> bool {
 }
 
 /// Words after which a (qualified) name is a table's: what [`names_object`] reads.
-const BEFORE_TABLE: &[&str] = &["JOIN", "STRAIGHT_JOIN", "TABLE", "TABLES", "INTO", "USING", "DESCRIBE", "DESC"];
+const BEFORE_TABLE: &[&str] = &["JOIN", "TABLE", "INTO", "DESCRIBE", "DESC"];
 
-/// Words that end a list of tables read back from a comma ([`names_object`]): what comes after
-/// one is an expression or a clause.
-const ENDS_TABLES: &[&str] = &[
-    "AND",
-    "BY",
-    "CASE",
-    "DO",
-    "ELSE",
-    "HAVING",
-    "IN",
-    "INTO",
-    "IS",
-    "LIKE",
-    "LIMIT",
-    "NOT",
-    "ON",
-    "OR",
-    "RETURNING",
-    "SELECT",
-    "SET",
-    "THEN",
-    "VALUE",
-    "VALUES",
-    "WHEN",
-    "WHERE",
-    "XOR",
-];
-
-/// Whether the name whose last part is at `last` names an object, not a value: a table (after
-/// `FROM`, `JOIN`, `TABLE`, `INTO`, `UPDATE`, … or in a list of tables after a comma) or the
-/// sequence `LASTVAL(…)` and `PREVIOUS VALUE FOR` read. When unsure, it is no object.
+/// Whether the name whose last part is at `last` names an object, not a value: a table right
+/// after `FROM`, `JOIN`, `TABLE`, `INTO`, `DESCRIBE`, or after the statement's own `UPDATE`,
+/// `INSERT`, `REPLACE` or `DELETE`, or the sequence `LASTVAL(…)` and `PREVIOUS VALUE FOR` read.
+/// Anywhere else (a list of tables after a comma, `STRAIGHT_JOIN`, which is also an option of
+/// `SELECT`, …) it is no object: when unsure, a value.
 fn names_object(ws: &[W], last: usize) -> bool {
     let mut first = last;
     while first >= 2 && ws[first - 1].kind == Tok::Dot && ws[first - 2].is_name() {
@@ -1450,45 +1426,17 @@ fn names_object(ws: &[W], last: usize) -> bool {
     }
     let Some(before) = first.checked_sub(1) else { return false };
     let w = &ws[before];
-    if w.kind == Tok::Comma {
-        return in_table_list(ws, before);
+    // A word written after a dot is a name (`t.from`), no keyword.
+    if before >= 1 && ws[before - 1].kind == Tok::Dot {
+        return false;
     }
     if w.kind == Tok::LParen {
-        return before.checked_sub(1).is_some_and(|f| is_named(&ws[f], "LASTVAL"));
+        return before >= 1 && is_named(&ws[before - 1], "LASTVAL");
     }
     BEFORE_TABLE.iter().any(|b| w.is(b))
         || (w.is("FROM") && table_from(ws, before))
-        || (w.is("UPDATE") && !before.checked_sub(1).is_some_and(|k| ws[k].is("KEY")))
-        || (matches!(w.up.as_str(), "INSERT" | "REPLACE" | "DELETE") && before == 0)
+        || (matches!(w.up.as_str(), "UPDATE" | "INSERT" | "REPLACE" | "DELETE") && before == 0)
         || (w.is("FOR") && before >= 2 && ws[before - 1].is("VALUE") && ws[before - 2].is("PREVIOUS"))
-}
-
-/// Whether the comma at `comma` separates tables: read back at its depth, a word that starts a
-/// list of tables comes before anything of an expression or another clause.
-fn in_table_list(ws: &[W], comma: usize) -> bool {
-    let depth = ws[comma].depth;
-    for j in (0..comma).rev() {
-        let w = &ws[j];
-        if w.depth < depth {
-            return false;
-        }
-        if w.depth > depth {
-            continue;
-        }
-        if matches!(w.kind, Tok::Op | Tok::Str | Tok::Number | Tok::Variable | Tok::Param)
-            || ENDS_TABLES.iter().any(|e| w.is(e))
-        {
-            return false;
-        }
-        if ["JOIN", "STRAIGHT_JOIN", "TABLES", "USING"].iter().any(|b| w.is(b))
-            || (w.is("FROM") && table_from(ws, j))
-            || (w.is("UPDATE") && j == 0)
-            || (w.is("DELETE") && j == 0)
-        {
-            return true;
-        }
-    }
-    false
 }
 
 /// Whether the `FROM` at `at` reads tables: at the statement's own level, or directly in a
