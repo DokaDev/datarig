@@ -1349,6 +1349,8 @@ fn with_calls(mut risk: Risk, ws: &[W], judge: Judge) -> Risk {
 /// The risk of one statement (its tokens) on the server `judge` judges for.
 fn statement(ws: &[W], judge: Judge) -> Risk {
     let mut risk = kind(ws, judge);
+    // What `ANALYZE` names is read on its own (its `FORMAT=JSON (` is no call).
+    let ws = analyzed(ws);
     // A locking read anywhere (a subquery of a `SET`, a `SHOW … WHERE`, …) takes row locks; what
     // `EXPLAIN` only plans takes none.
     if risk.class < Class::Write && risk.explain != Explain::Plan && locks(ws) && !routine_body(ws) {
@@ -1461,6 +1463,10 @@ fn kind(ws: &[W], judge: Judge) -> Risk {
             Risk { danger: Some(Danger::FileAccess), ..Risk::writing(Class::Write, target) }
         }
         "LOAD" if word(1) == "INDEX" => maintenance(None),
+        "ANALYZE" if analyzes_statement(ws) => analyze(ws, judge),
+        // Only `ANALYZE [NO_WRITE_TO_BINLOG | LOCAL] TABLE …` is maintenance; anything else is
+        // not known.
+        "ANALYZE" if !analyzes_table(ws) => unrecognized(),
         "ANALYZE" | "OPTIMIZE" | "CHECK" | "CHECKSUM" | "REPAIR" | "CACHE" => maintenance(None),
         "FLUSH" => {
             let locks = ws.windows(3).any(|w| w[0].is("WITH") && w[1].is("READ") && w[2].is("LOCK"))
@@ -1562,6 +1568,70 @@ fn with(ws: &[W]) -> Risk {
         Some(i) if starts_query(ws, i) => query(ws),
         Some(i) if ws.get(i).is_some_and(|w| w.is("UPDATE")) => update(ws, i),
         Some(i) if ws.get(i).is_some_and(|w| w.is("DELETE")) => delete(ws, i),
+        _ => unrecognized(),
+    }
+}
+
+/// MariaDB's `ANALYZE [FORMAT=<v>] <statement>` (not `ANALYZE TABLE`): it runs the statement.
+fn analyzes_statement(ws: &[W]) -> bool {
+    // `ANALYZE` (or `EXPLAIN`) again is no statement it names: read as not known.
+    ws.get(1).is_some_and(|w| w.is("FORMAT") || w.is("ANALYZE") || w.is("EXPLAIN") || starts_analyzed(w))
+}
+
+/// `ANALYZE [NO_WRITE_TO_BINLOG | LOCAL] TABLE …`.
+fn analyzes_table(ws: &[W]) -> bool {
+    let at = if ws.get(1).is_some_and(|w| w.is("NO_WRITE_TO_BINLOG") || w.is("LOCAL")) { 2 } else { 1 };
+    ws.get(at).is_some_and(|w| w.is("TABLE") || w.is("TABLES"))
+}
+
+/// `ANALYZE FORMAT = <v>` with a name or a quoted string as `<v>` (the server refuses
+/// anything else).
+fn format_given(ws: &[W]) -> bool {
+    ws.get(2).is_some_and(|w| w.is_op("=")) && ws.get(3).is_some_and(|w| w.is_name() || w.kind == Tok::Str)
+}
+
+/// The first word of a statement `ANALYZE` names (one: never `ANALYZE` or `EXPLAIN` again).
+fn starts_analyzed(w: &W) -> bool {
+    w.kind == Tok::LParen
+        || ["SELECT", "VALUES", "WITH", "INSERT", "REPLACE", "UPDATE", "DELETE"].iter().any(|k| w.is(k))
+}
+
+/// Whether `rest` starts a statement `ANALYZE` names: one of [`starts_analyzed`]'s words, or
+/// parentheses around a query (`SELECT`, `WITH`, `VALUES` after the opening ones).
+fn names_statement(rest: &[W]) -> bool {
+    match rest.iter().position(|w| w.kind != Tok::LParen) {
+        Some(0) => rest.first().is_some_and(starts_analyzed),
+        Some(i) => ["SELECT", "WITH", "VALUES"].iter().any(|k| rest[i].is(k)),
+        None => false,
+    }
+}
+
+/// The statement `ws` names when it is `ANALYZE [FORMAT=<v>] <statement>`, else `ws`.
+fn analyzed<'a, 'b>(ws: &'b [W<'a>]) -> &'b [W<'a>] {
+    if !ws.first().is_some_and(|w| w.is("ANALYZE")) || !analyzes_statement(ws) {
+        return ws;
+    }
+    let at = if ws[1].is("FORMAT") { 4 } else { 1 };
+    match ws.get(at..) {
+        Some(rest) if names_statement(rest) && (at == 1 || format_given(ws)) => rest,
+        _ => ws,
+    }
+}
+
+/// [`analyzes_statement`]: judged as the statement it runs, which nothing undoes. Read so in
+/// every reading: a MySQL reading may be a MariaDB server's until the session says (MySQL
+/// refuses the text).
+fn analyze(ws: &[W], judge: Judge) -> Risk {
+    let at = if ws[1].is("FORMAT") {
+        if !format_given(ws) {
+            return unrecognized();
+        }
+        4
+    } else {
+        1
+    };
+    match ws.get(at..) {
+        Some(rest) if names_statement(rest) => kind(rest, judge),
         _ => unrecognized(),
     }
 }
