@@ -1412,11 +1412,12 @@ fn is_named(w: &W, name: &str) -> bool {
 }
 
 /// Words after which a (qualified) name is a table's: what [`names_object`] reads.
-const BEFORE_TABLE: &[&str] = &["JOIN", "TABLE", "INTO", "DESCRIBE", "DESC"];
+const BEFORE_TABLE: &[&str] = &["JOIN", "TABLE", "INTO", "DESCRIBE", "DESC", "SEQUENCE", "VIEW"];
 
 /// Whether the name whose last part is at `last` names an object, not a value: a table right
-/// after `FROM`, `JOIN`, `TABLE`, `INTO`, `DESCRIBE`, or after the statement's own `UPDATE`,
-/// `INSERT`, `REPLACE` or `DELETE`, or the sequence `LASTVAL(…)` and `PREVIOUS VALUE FOR` read.
+/// after `FROM` (not a period's bound), `JOIN`, `TABLE`, `INTO`, `DESCRIBE`, `SEQUENCE`, `VIEW`,
+/// after the statement's own `UPDATE`, `INSERT`, `REPLACE`, `DELETE` or `EXPLAIN`, after `IN`
+/// of a `SHOW`, or the sequence the built-in `LASTVAL(…)` and `PREVIOUS VALUE FOR` read.
 /// Anywhere else (a list of tables after a comma, `STRAIGHT_JOIN`, which is also an option of
 /// `SELECT`, …) it is no object: when unsure, a value.
 fn names_object(ws: &[W], last: usize) -> bool {
@@ -1431,11 +1432,16 @@ fn names_object(ws: &[W], last: usize) -> bool {
         return false;
     }
     if w.kind == Tok::LParen {
-        return before >= 1 && is_named(&ws[before - 1], "LASTVAL");
+        // The built-in only: unquoted, without a database.
+        return before >= 1 && ws[before - 1].is("LASTVAL") && !(before >= 2 && ws[before - 2].kind == Tok::Dot);
     }
+    // A period's bounds are values: `FOR SYSTEM_TIME FROM … TO …`, `FOR PORTION OF p FROM … TO …`.
+    let period = before >= 1
+        && (ws[before - 1].is("SYSTEM_TIME") || (before >= 2 && ws[before - 2].is("OF") && ws[before - 1].is_name()));
     BEFORE_TABLE.iter().any(|b| w.is(b))
-        || (w.is("FROM") && table_from(ws, before))
-        || (matches!(w.up.as_str(), "UPDATE" | "INSERT" | "REPLACE" | "DELETE") && before == 0)
+        || (w.is("FROM") && !period && table_from(ws, before))
+        || (matches!(w.up.as_str(), "UPDATE" | "INSERT" | "REPLACE" | "DELETE" | "EXPLAIN") && before == 0)
+        || (w.is("IN") && ws[0].is("SHOW"))
         || (w.is("FOR") && before >= 2 && ws[before - 1].is("VALUE") && ws[before - 2].is("PREVIOUS"))
 }
 
