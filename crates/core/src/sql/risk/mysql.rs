@@ -1337,7 +1337,7 @@ fn with_calls(mut risk: Risk, ws: &[W], judge: Judge) -> Risk {
                 None
             };
             risk.danger = risk.danger.or(danger);
-        } else if !schema {
+        } else if !schema && !sequence_write(&c, judge) {
             risk.runs_code = true;
             risk.unchecked_call = risk.unchecked_call.or(Some(c.written));
             // `EXPLAIN ANALYZE` runs it: what it writes where the rollback does not reach (a
@@ -1367,7 +1367,7 @@ fn statement(ws: &[W], judge: Judge) -> Risk {
         && risk.explain != Explain::Plan
         && !routine_body(ws)
         && judge.tables().any(|t| t.sequences)
-        && advances_sequence(ws)
+        && advances_sequence(ws, judge)
     {
         Risk { writes: true, class: risk.class.max(Class::Write), ..risk }
     } else {
@@ -1378,12 +1378,128 @@ fn statement(ws: &[W], judge: Judge) -> Risk {
 }
 
 /// Whether `ws` takes a sequence's next value or sets it: `NEXT VALUE FOR`, a call of
-/// `NEXTVAL` or `SETVAL`, or `s.nextval`. Reading its state (`LASTVAL`, `PREVIOUS VALUE FOR`,
-/// `s.currval`, `s.lastval`) does not change it.
-fn advances_sequence(ws: &[W]) -> bool {
+/// `NEXTVAL` or `SETVAL` ([`calls`]: not a common table expression's column list), or a name
+/// ending in `.nextval` in an expression, quoted or not (MariaDB reads the last part of the
+/// name unquoted). Reading its state (`LASTVAL`, `PREVIOUS VALUE FOR`, `s.currval`,
+/// `s.lastval`) does not change it, nor does an object named `nextval` ([`names_object`]).
+fn advances_sequence(ws: &[W], judge: Judge) -> bool {
     ws.windows(3).any(|w| w[0].is("NEXT") && w[1].is("VALUE") && w[2].is("FOR"))
-        || ws.windows(2).any(|w| (w[0].is("NEXTVAL") || w[0].is("SETVAL")) && w[1].kind == Tok::LParen)
-        || ws.windows(2).any(|w| w[0].kind == Tok::Dot && w[1].is("NEXTVAL"))
+        || calls(ws, judge).iter().any(|c| sequence_call(&c.name))
+        || (1..ws.len()).any(|i| {
+            ws[i - 1].kind == Tok::Dot
+                && is_named(&ws[i], "NEXTVAL")
+                && !ws.get(i + 1).is_some_and(|w| matches!(w.kind, Tok::Dot | Tok::LParen))
+                && !names_object(ws, i)
+        })
+}
+
+/// On an engine with sequences, an unqualified `NEXTVAL(…)` or `SETVAL(…)` is no unknown
+/// function: it makes the statement a write ([`advances_sequence`]).
+fn sequence_write(c: &Call, judge: Judge) -> bool {
+    sequence_call(&c.name) && !c.qualified && judge.tables().any(|t| t.sequences)
+}
+
+/// A call that advances or sets a sequence on MariaDB (name upper case).
+fn sequence_call(name: &str) -> bool {
+    name == "NEXTVAL" || name == "SETVAL"
+}
+
+/// Whether `w` is the name `name` (upper case), quoted or not.
+fn is_named(w: &W, name: &str) -> bool {
+    if w.kind == Tok::QuotedIdent { unquote(w.text).eq_ignore_ascii_case(name) } else { w.is(name) }
+}
+
+/// Words after which a (qualified) name is a table's: what [`names_object`] reads.
+const BEFORE_TABLE: &[&str] = &["JOIN", "STRAIGHT_JOIN", "TABLE", "TABLES", "INTO", "USING", "DESCRIBE", "DESC"];
+
+/// Words that end a list of tables read back from a comma ([`names_object`]): what comes after
+/// one is an expression or a clause.
+const ENDS_TABLES: &[&str] = &[
+    "AND",
+    "BY",
+    "CASE",
+    "DO",
+    "ELSE",
+    "HAVING",
+    "IN",
+    "INTO",
+    "IS",
+    "LIKE",
+    "LIMIT",
+    "NOT",
+    "ON",
+    "OR",
+    "RETURNING",
+    "SELECT",
+    "SET",
+    "THEN",
+    "VALUE",
+    "VALUES",
+    "WHEN",
+    "WHERE",
+    "XOR",
+];
+
+/// Whether the name whose last part is at `last` names an object, not a value: a table (after
+/// `FROM`, `JOIN`, `TABLE`, `INTO`, `UPDATE`, … or in a list of tables after a comma) or the
+/// sequence `LASTVAL(…)` and `PREVIOUS VALUE FOR` read. When unsure, it is no object.
+fn names_object(ws: &[W], last: usize) -> bool {
+    let mut first = last;
+    while first >= 2 && ws[first - 1].kind == Tok::Dot && ws[first - 2].is_name() {
+        first -= 2;
+    }
+    let Some(before) = first.checked_sub(1) else { return false };
+    let w = &ws[before];
+    if w.kind == Tok::Comma {
+        return in_table_list(ws, before);
+    }
+    if w.kind == Tok::LParen {
+        return before.checked_sub(1).is_some_and(|f| is_named(&ws[f], "LASTVAL"));
+    }
+    BEFORE_TABLE.iter().any(|b| w.is(b))
+        || (w.is("FROM") && table_from(ws, before))
+        || (w.is("UPDATE") && !before.checked_sub(1).is_some_and(|k| ws[k].is("KEY")))
+        || (matches!(w.up.as_str(), "INSERT" | "REPLACE" | "DELETE") && before == 0)
+        || (w.is("FOR") && before >= 2 && ws[before - 1].is("VALUE") && ws[before - 2].is("PREVIOUS"))
+}
+
+/// Whether the comma at `comma` separates tables: read back at its depth, a word that starts a
+/// list of tables comes before anything of an expression or another clause.
+fn in_table_list(ws: &[W], comma: usize) -> bool {
+    let depth = ws[comma].depth;
+    for j in (0..comma).rev() {
+        let w = &ws[j];
+        if w.depth < depth {
+            return false;
+        }
+        if w.depth > depth {
+            continue;
+        }
+        if matches!(w.kind, Tok::Op | Tok::Str | Tok::Number | Tok::Variable | Tok::Param)
+            || ENDS_TABLES.iter().any(|e| w.is(e))
+        {
+            return false;
+        }
+        if ["JOIN", "STRAIGHT_JOIN", "TABLES", "USING"].iter().any(|b| w.is(b))
+            || (w.is("FROM") && table_from(ws, j))
+            || (w.is("UPDATE") && j == 0)
+            || (w.is("DELETE") && j == 0)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the `FROM` at `at` reads tables: at the statement's own level, or directly in a
+/// query in parentheses; not inside a function's parentheses (`EXTRACT(DAY FROM x)`).
+fn table_from(ws: &[W], at: usize) -> bool {
+    let depth = ws[at].depth;
+    if depth == 0 {
+        return true;
+    }
+    let open = (0..at).rev().find(|&j| ws[j].depth < depth);
+    open.is_some_and(|o| ws.get(o + 1).is_some_and(|w| w.is("SELECT") || w.is("WITH")))
 }
 
 /// Whether `ws` creates or changes a routine, a trigger, an event or a view: the body is stored,

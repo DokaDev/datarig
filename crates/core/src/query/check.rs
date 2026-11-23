@@ -252,14 +252,18 @@ pub fn check_filter(
         }
         out
     };
-    // A call the filter refuses is said by name, also when it makes the statement a change
-    // (a sequence's next value on MariaDB).
     let refused = written(|c| c.refused);
-    if !refused.is_empty() && risk.danger.is_none() && !risk.read_write {
+    // A sequence's next value on MariaDB makes the statement a change; the filter still says
+    // the call by name, as it always did. Any other refused call comes after the reason below.
+    let sequence = refused.iter().any(|n| n == "NEXTVAL" || n == "SETVAL");
+    if sequence && risk.danger.is_none() && !risk.read_write {
         return Err(BarRefusal::RefusedCalls(refused));
     }
     if risk.class != Class::Read || risk.danger.is_some() || risk.read_write {
         return Err(BarRefusal::NotRead { class: risk.class, danger: risk.danger });
+    }
+    if !refused.is_empty() {
+        return Err(BarRefusal::RefusedCalls(refused));
     }
     let unchecked = written(|c| !c.allowed);
     if read_only {
