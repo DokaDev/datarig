@@ -1565,6 +1565,7 @@ fn objects_named_like_the_sequence_forms_stay_as_any_name() {
             "SELECT `app`.LASTVAL(zz_s.nextval)",
             "SELECT `lastval`(zz_s.nextval)",
             "CALL lastval(zz_s.nextval)",
+            "SET STATEMENT max_statement_time = 1 FOR CALL lastval(zz_s.nextval)",
             // Accepted limit (when unsure, a write): a table of that name only in a list of
             // tables after a comma, after `STRAIGHT_JOIN` or first in parentheses.
             "SELECT * FROM a, shop.nextval",
