@@ -1090,6 +1090,9 @@ async fn text_without_an_opener_runs_as_today_when_the_reports_disagree() {
     let t = Table::make(&admin, "dq", &["CREATE TABLE {t} (id INT PRIMARY KEY, v VARCHAR(20))"]).await;
     let proc = format!("{}_p", t.name);
     let _proc = Dropped { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{proc}") };
+    let mut a = side(&admin).await;
+    a.query_drop(format!("DROP PROCEDURE IF EXISTS shop.{proc}")).await.unwrap();
+    a.disconnect().await.unwrap();
     let text = format!(
         "DELIMITER ;;\nCREATE PROCEDURE shop.{proc}() BEGIN SELECT 1; SELECT 'a;b'; END ;;\n\
          CREATE TRIGGER shop.{}_bi BEFORE INSERT ON {} FOR EACH ROW BEGIN SET NEW.v = 'x;'; END ;;\nDELIMITER ;\n",

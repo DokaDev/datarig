@@ -398,6 +398,7 @@ async fn an_export_never_writes_through_a_function() {
     let f = format!("shop.zz_it_export_fn_{}", std::process::id());
     let _drop = FunctionGuard(admin.clone(), f.clone());
     let mut a = side(&admin).await;
+    a.query_drop(format!("DROP FUNCTION IF EXISTS {f}")).await.unwrap();
     a.query_drop(format!(
         "CREATE FUNCTION {f}(x INT) RETURNS INT DETERMINISTIC MODIFIES SQL DATA \
          BEGIN INSERT INTO {} VALUES (x + 1000, 'w'); RETURN x; END",

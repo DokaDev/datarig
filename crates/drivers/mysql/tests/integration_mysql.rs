@@ -2116,6 +2116,7 @@ async fn a_capped_read_is_never_read_past_its_cap() {
     let p = format!("zz_it_fix2call_{}", std::process::id());
     let _p = Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{p}") };
     let mut a = side(&admin).await;
+    a.query_drop(format!("DROP PROCEDURE IF EXISTS shop.{p}")).await.unwrap();
     a.query_drop(format!(
         "CREATE PROCEDURE shop.{p}() SQL SECURITY INVOKER SELECT id, REPEAT('x', 2000) AS v, SLEEP(0.005) AS s FROM {}",
         t.q()
@@ -2550,6 +2551,7 @@ async fn endless_definer_procedure(admin: &str, name: &str) -> (String, Cleanup)
     let p = format!("zz_it_{name}_{}", std::process::id());
     let cleanup = Cleanup { url: admin.to_string(), sql: format!("DROP PROCEDURE IF EXISTS shop.{p}") };
     let mut a = side(admin).await;
+    a.query_drop(format!("DROP PROCEDURE IF EXISTS shop.{p}")).await.unwrap();
     a.query_drop(format!(
         "CREATE PROCEDURE shop.{p}() SQL SECURITY DEFINER SELECT a.id FROM shop.events a JOIN shop.events b ON b.id >= a.id"
     ))
@@ -2733,6 +2735,7 @@ async fn counts_and_questions_never_run_another_accounts_code() {
     // Dropped first: nothing of the test's keeps running past it.
     let _end = EndSessions { admin: admin.clone(), test };
     let mut a = side(&admin).await;
+    a.query_drop(format!("DROP FUNCTION IF EXISTS shop.{f}")).await.unwrap();
     a.query_drop(format!(
         "CREATE FUNCTION shop.{f}(x INT) RETURNS INT DETERMINISTIC SQL SECURITY DEFINER RETURN SLEEP(1) + x"
     ))
@@ -2775,6 +2778,7 @@ async fn a_refused_cancel_of_a_silent_statement_keeps_the_session_and_says_why()
     let p = format!("zz_it_silent_{}", std::process::id());
     let _p = Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{p}") };
     let mut a = side(&admin).await;
+    a.query_drop(format!("DROP PROCEDURE IF EXISTS shop.{p}")).await.unwrap();
     a.query_drop(format!(
         "CREATE PROCEDURE shop.{p}() SQL SECURITY DEFINER \
          SELECT COUNT(*) FROM shop.events a JOIN shop.events b ON a.id < b.id"
@@ -2834,6 +2838,7 @@ async fn a_refused_cancel_of_a_held_result_that_went_silent_keeps_the_session() 
     let p = format!("zz_it_heldsilent_{}", std::process::id());
     let _p = Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{p}") };
     let mut a = side(&admin).await;
+    a.query_drop(format!("DROP PROCEDURE IF EXISTS shop.{p}")).await.unwrap();
     a.query_drop(format!(
         "CREATE PROCEDURE shop.{p}() SQL SECURITY DEFINER BEGIN \
          SELECT id FROM shop.events ORDER BY id LIMIT 600; \
@@ -3262,6 +3267,7 @@ async fn a_read_only_session_does_not_analyze_a_call_of_a_users_function() {
     let f = format!("zz_it_fnw_{}", std::process::id());
     let _f = Cleanup { url: admin.clone(), sql: format!("DROP FUNCTION IF EXISTS shop.{f}") };
     let mut a = side(&admin).await;
+    a.query_drop(format!("DROP FUNCTION IF EXISTS shop.{f}")).await.unwrap();
     a.query_drop(format!(
         "CREATE FUNCTION shop.{f}(x INT) RETURNS INT DETERMINISTIC MODIFIES SQL DATA \
          BEGIN INSERT INTO {} () VALUES (); RETURN x; END",
@@ -3367,6 +3373,7 @@ async fn a_procedures_further_result_sets_are_read_and_said() {
     let Some((url, admin)) = urls("a_procedures_further_result_sets") else { return };
     let name = format!("zz_it_proc_{}", std::process::id());
     let mut a = side(&admin).await;
+    a.query_drop(format!("DROP PROCEDURE IF EXISTS shop.{name}")).await.unwrap();
     a.query_drop(format!("CREATE PROCEDURE shop.{name}() BEGIN SELECT 1 AS a; SELECT 2 AS b; END")).await.unwrap();
     let _p = Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{name}") };
     let mut c = Conn::open(&url, SessionRole::Query, false, "proc").await;
@@ -3503,6 +3510,7 @@ async fn a_read_only_session_refuses_and_never_stays_writable() {
     let proc_name = format!("zz_it_ro_off_{}", std::process::id());
     let mut a = side(&admin).await;
     let _gone = Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{proc_name}") };
+    a.query_drop(format!("DROP PROCEDURE IF EXISTS shop.{proc_name}")).await.unwrap();
     a.query_drop(format!(
         "CREATE PROCEDURE shop.{proc_name}() BEGIN SET SESSION transaction_read_only = OFF; \
          INSERT INTO {} VALUES (1); SET SESSION transaction_read_only = ON; END",
@@ -3752,7 +3760,8 @@ async fn the_metadata_session_reads_a_tables_structure() {
         ("KEY ix_fn ((upper(name))),", "utf8mb4_0900_bin", " NOT ENFORCED")
     };
     for sql in [
-        format!("DROP TABLE IF EXISTS shop.{child}"),
+        // The tables that reference it first: the child and the copy made below.
+        format!("DROP TABLE IF EXISTS shop.{child}, shop.zz_it_copy_{pid}"),
         format!("DROP TABLE IF EXISTS datarig.{parent}"),
         format!(
             "CREATE TABLE datarig.{parent} (a INT NOT NULL, b VARCHAR(10){} NOT NULL, PRIMARY KEY (a, b))",
@@ -4441,6 +4450,11 @@ async fn the_metadata_session_shows_the_servers_ddl() {
     let at = if my { String::new() } else { "shop.".to_string() };
     for sql in [
         format!("DROP TABLE IF EXISTS shop.{b}c, shop.{b}"),
+        format!("DROP PROCEDURE IF EXISTS shop.{b}"),
+        format!("DROP PROCEDURE IF EXISTS shop.{b}_p"),
+        format!("DROP PROCEDURE IF EXISTS shop.{b}_pc"),
+        format!("DROP PROCEDURE IF EXISTS shop.{b}_h"),
+        format!("DROP FUNCTION IF EXISTS shop.{b}_f"),
         format!(
             "CREATE TABLE shop.{b} (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, \
              name VARCHAR(40) NOT NULL DEFAULT 'a;b' COMMENT 'it''s; \"quoted\"', \
@@ -4700,6 +4714,7 @@ async fn a_ddl_the_user_may_not_see_says_why() {
     a.query_drop(format!("CREATE TRIGGER shop.{trigger} BEFORE INSERT ON {} FOR EACH ROW SET NEW.id = NEW.id", t.q()))
         .await
         .unwrap();
+    a.query_drop(format!("DROP PROCEDURE IF EXISTS shop.{proc}")).await.unwrap();
     a.query_drop(format!("CREATE PROCEDURE shop.{proc}() SELECT 1")).await.unwrap();
     let account = Account::make(&admin, "ddlpriv", "BY 'pw'").await.unwrap();
     a.query_drop(format!("GRANT EXECUTE ON PROCEDURE shop.{proc} TO '{}'@'%'", account.name)).await.unwrap();
@@ -4730,6 +4745,11 @@ async fn a_body_ending_in_a_comment_runs_again() {
     let _procs = [proc.clone(), format!("{proc}c")]
         .map(|p| Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{p}") });
     // The query session sends the text as it is, comments too.
+    let mut a = side(&admin).await;
+    for p in [&proc, &format!("{proc}c")] {
+        a.query_drop(format!("DROP PROCEDURE IF EXISTS shop.{p}")).await.unwrap();
+    }
+    a.disconnect().await.unwrap();
     let mut q = Conn::open(&in_database(&admin, "shop"), SessionRole::Query, false, test).await;
     let my = mariadb(&url).await;
     let made_trigger = format!(
@@ -4771,6 +4791,11 @@ async fn a_routines_own_sql_mode_is_said_when_it_differs() {
         (format!("zz_it_ddlmode_{}", std::process::id()), format!("zz_it_ddlmode_{}_d", std::process::id()));
     let _procs = [odd.clone(), plain.clone()]
         .map(|p| Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{p}") });
+    let mut a = side(&admin).await;
+    for p in [&odd, &plain] {
+        a.query_drop(format!("DROP PROCEDURE IF EXISTS shop.{p}")).await.unwrap();
+    }
+    a.disconnect().await.unwrap();
     let mut q = Conn::open(&in_database(&admin, "shop"), SessionRole::Query, false, test).await;
     q.ok(1, &format!("CREATE DEFINER = {DEFINER} PROCEDURE {plain}() SELECT 'a\\\\b'")).await;
     q.ok(2, "SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, ',NO_BACKSLASH_ESCAPES')").await;
@@ -4797,6 +4822,7 @@ async fn a_kind_word_picks_one_object_of_a_shared_name() {
     let t = Table::make(&admin, "ddlkind", &["CREATE TABLE {t} (id INT PRIMARY KEY)"]).await;
     let _proc = Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{}", t.name) };
     let mut a = side(&admin).await;
+    a.query_drop(format!("DROP PROCEDURE IF EXISTS {}", t.q())).await.unwrap();
     a.query_drop(format!("CREATE DEFINER = {DEFINER} PROCEDURE {}() SELECT 1", t.q())).await.unwrap();
     a.disconnect().await.unwrap();
     let mut m = Conn::start(&url, SessionRole::Meta, false, test);
@@ -4932,6 +4958,9 @@ async fn a_ddl_opened_in_a_console_of_either_mode_makes_the_same_object() {
     for sql in [
         // The copies the consoles make below.
         format!("DROP TABLE IF EXISTS shop.{n}e, shop.{n}n"),
+        format!("DROP FUNCTION IF EXISTS shop.{func}"),
+        format!("DROP FUNCTION IF EXISTS shop.{func}e"),
+        format!("DROP FUNCTION IF EXISTS shop.{func}n"),
         format!(r"CREATE VIEW datarig.{view} AS SELECT id, 'a\\b''c' AS x FROM shop.{n}"),
         format!(
             r"CREATE DEFINER = {DEFINER} FUNCTION shop.{func}() RETURNS VARCHAR(40) DETERMINISTIC
@@ -5550,6 +5579,10 @@ async fn a_foreign_key_named_primary_is_no_primary_key() {
     use datarig_core::driver::keys::{KeyMarks, NotUpdatable, update_source};
     let test = "a_foreign_key_named_primary_is_no_primary_key";
     let Some((url, admin)) = urls(test) else { return };
+    // The table that references it first (both branches make it under this name).
+    let mut a = side(&admin).await;
+    a.query_drop(format!("DROP TABLE IF EXISTS shop.zz_it_fkp_child_{}", std::process::id())).await.unwrap();
+    a.disconnect().await.unwrap();
     let parent = Table::make(&admin, "fkp_parent", &["CREATE TABLE {t} (a INT PRIMARY KEY)"]).await;
     if mariadb(&admin).await {
         // No constraint may be named `PRIMARY` there: the case cannot be made.
@@ -5622,6 +5655,10 @@ async fn what_server_code_changes_in_the_session_is_followed() {
     let _f = Cleanup { url: admin.clone(), sql: format!("DROP FUNCTION IF EXISTS shop.{f}") };
     let mut a = side(&admin).await;
     for sql in [
+        format!("DROP PROCEDURE IF EXISTS shop.{tz}"),
+        format!("DROP PROCEDURE IF EXISTS shop.{names}"),
+        format!("DROP PROCEDURE IF EXISTS shop.{mode}"),
+        format!("DROP FUNCTION IF EXISTS shop.{f}"),
         format!(
             "CREATE PROCEDURE shop.{tz}() BEGIN SET time_zone = '+09:00'; SELECT NOW() AS now, @@time_zone AS zone; END"
         ),
@@ -5690,6 +5727,7 @@ async fn a_stopped_procedure_leaves_the_values_not_known() {
     // Dropped first: nothing of the test's keeps running past it.
     let _end = EndSessions { admin: admin.clone(), test };
     let mut a = side(&admin).await;
+    a.query_drop(format!("DROP PROCEDURE IF EXISTS shop.{p}")).await.unwrap();
     a.query_drop(format!(
         "CREATE PROCEDURE shop.{p}() SQL SECURITY INVOKER BEGIN SET time_zone = '+09:00'; \
          SELECT a.id, a.v FROM {} a CROSS JOIN {} b LIMIT 2000000; END",
@@ -7067,6 +7105,7 @@ async fn an_interrupted_start_of_a_reads_transaction_is_cancelled_only_if_asked_
     let procedure = format!("zz_it_stop_{}", std::process::id());
     let _procedure = Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{procedure}") };
     let mut a = side(&admin).await;
+    a.query_drop(format!("DROP PROCEDURE IF EXISTS shop.{procedure}")).await.unwrap();
     a.query_drop(format!(
         "CREATE PROCEDURE shop.{procedure}() SIGNAL SQLSTATE '70100' SET MYSQL_ERRNO = 1317, \
          MESSAGE_TEXT = 'Query execution was interrupted'"
@@ -7734,6 +7773,10 @@ async fn a_group_count_shows_values_as_their_columns_attributes_write_them() {
 async fn the_keys_read_says_the_tables_columns() {
     let test = "the_keys_read_says_the_tables_columns";
     let Some((url, admin)) = urls(test) else { return };
+    // The table that references it first.
+    let mut a = side(&admin).await;
+    a.query_drop(format!("DROP TABLE IF EXISTS shop.zz_it_colchild_{}", std::process::id())).await.unwrap();
+    a.disconnect().await.unwrap();
     let parent = Table::make(&admin, "colparent", &["CREATE TABLE {t} (id BIGINT UNSIGNED PRIMARY KEY)"]).await;
     let child = Table::make(
         &admin,
@@ -8303,6 +8346,7 @@ async fn a_select_that_runs_code_is_never_cut_at_a_page() {
     let f = format!("zz_it_fnpage_{}", std::process::id());
     let _f = Cleanup { url: admin.clone(), sql: format!("DROP FUNCTION IF EXISTS shop.{f}") };
     let mut a = side(&admin).await;
+    a.query_drop(format!("DROP FUNCTION IF EXISTS shop.{f}")).await.unwrap();
     a.query_drop(format!(
         "CREATE FUNCTION shop.{f}(x INT) RETURNS INT DETERMINISTIC MODIFIES SQL DATA \
          BEGIN INSERT INTO {} () VALUES (); RETURN x; END",

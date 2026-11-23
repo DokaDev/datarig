@@ -222,6 +222,7 @@ async fn a_cancel_refused_for_a_moment_is_tried_again() {
     // Dropped first: nothing of the test's keeps running past it.
     let _end = EndSessions { admin: admin.clone(), test };
     let mut a = side(&admin).await;
+    a.query_drop(format!("DROP FUNCTION IF EXISTS shop.{f}")).await.unwrap();
     a.query_drop(format!(
         "CREATE FUNCTION shop.{f}(x INT) RETURNS INT DETERMINISTIC SQL SECURITY DEFINER RETURN x + 1"
     ))
