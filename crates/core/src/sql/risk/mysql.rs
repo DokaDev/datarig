@@ -1432,8 +1432,10 @@ fn names_object(ws: &[W], last: usize) -> bool {
         return false;
     }
     if w.kind == Tok::LParen {
-        // The built-in only: unquoted, without a database.
-        return before >= 1 && ws[before - 1].is("LASTVAL") && !(before >= 2 && ws[before - 2].kind == Tok::Dot);
+        // The built-in only: unquoted, without a database, not the procedure of a `CALL`.
+        return before >= 1
+            && ws[before - 1].is("LASTVAL")
+            && !(before >= 2 && (ws[before - 2].kind == Tok::Dot || (before == 2 && ws[0].is("CALL"))));
     }
     // A period's bounds are values: `FOR SYSTEM_TIME FROM … TO …`, `FOR PORTION OF p FROM … TO …`.
     let period = before >= 1
