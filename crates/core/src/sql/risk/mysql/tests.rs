@@ -1560,9 +1560,10 @@ fn objects_named_like_the_sequence_forms_stay_as_any_name() {
             // The bounds of a period are values (system versioning, `FOR PORTION OF`), and a
             // stored function named `lastval` takes a value.
             "SELECT * FROM t FOR SYSTEM_TIME FROM zz_s.nextval TO '2030-01-01'",
-            "DELETE FROM t FOR PORTION OF p FROM zz_s.nextval TO 9",
+            "SHOW COLUMNS FROM t WHERE POSITION('a' IN zz_s.nextval) > 0",
             "SELECT app.lastval(zz_s.nextval)",
             "SELECT `app`.LASTVAL(zz_s.nextval)",
+            "SELECT `lastval`(zz_s.nextval)",
             // Accepted limit (when unsure, a write): a table of that name only in a list of
             // tables after a comma, after `STRAIGHT_JOIN` or first in parentheses.
             "SELECT * FROM a, shop.nextval",
@@ -1597,4 +1598,19 @@ fn sequence_calls_keep_their_refusal_where_no_write_stands_in() {
         assert!(r.writes, "{sql}: {r:?}");
         assert!(r.unchecked_call.is_some(), "{sql}: {r:?}");
     }
+}
+
+/// The bound of a period is a value also where the statement is a write anyway (`FOR PORTION
+/// OF`): the name in it advances the sequence, read on the statement's words.
+#[test]
+fn a_period_bound_takes_a_sequence_value() {
+    for sql in [
+        "DELETE FROM t FOR PORTION OF p FROM zz_s.nextval TO 9",
+        "UPDATE t FOR PORTION OF p FROM zz_s.nextval TO 9 SET a = 1",
+    ] {
+        let (ws, _) = words(sql, MARIADB).unwrap_or_else(|_| panic!("{sql}"));
+        assert!(advances_sequence(&ws, MARIADB), "{sql}");
+    }
+    let (ws, _) = words("DELETE FROM shop.nextval WHERE id = 1", MARIADB).unwrap_or_else(|_| panic!());
+    assert!(!advances_sequence(&ws, MARIADB));
 }
