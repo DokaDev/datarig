@@ -12,8 +12,14 @@ use crate::driver::ddl::{
     TriggerMode,
 };
 use crate::driver::structure::{ColumnFill, RelationKind};
-use crate::export::quote_literal;
+use crate::sql::dialect::Dialect;
 use crate::sql::ident::sql_ident;
+
+/// A PostgreSQL string literal (`'` doubled; `E'…'` with the backslash doubled too when it holds
+/// one, so that it reads the same whatever `standard_conforming_strings` is).
+fn quote_literal(s: &str) -> String {
+    Dialect::Postgres.quote_literal(s)
+}
 
 /// The first line of every DDL text.
 pub const HEADER: &str = "-- Reconstructed by datarig from the catalog (not pg_dump)";

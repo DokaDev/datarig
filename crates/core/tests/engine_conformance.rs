@@ -400,3 +400,79 @@ fn value_rules_on_every_engine() {
         assert_eq!(values.bytes_shown_prefix(), prefix, "{id:?}");
     }
 }
+
+/// What each engine's export rules answer: the kind of a key column of each kind, with text read
+/// whole in the session and without (`-`: not a key), the condition past a key of one and of two
+/// columns, whether a session's text is read whole, and whether the server drops a slow reader.
+#[test]
+fn export_rules_on_every_engine() {
+    use datarig_core::driver::{ArrayElement, ColumnMeta, SessionValues, ValueKind};
+    use datarig_core::engine::{EngineId, Fact};
+    use datarig_core::export::Kind;
+    // Type name, kind, then PostgreSQL's answer and the MySQL family's without and with text
+    // read whole.
+    let keys: &[(&str, ValueKind, &str, &str, &str)] = &[
+        ("int", ValueKind::Integer, "Number", "Number", "Number"),
+        ("numeric", ValueKind::Decimal, "Number", "Number", "Number"),
+        ("money", ValueKind::Decimal, "-", "-", "-"),
+        ("double", ValueKind::Float, "-", "-", "-"),
+        ("text", ValueKind::Text, "Text", "-", "Text"),
+        ("enum", ValueKind::Text, "Text", "-", "-"),
+        ("SET", ValueKind::Text, "Text", "-", "-"),
+        ("json", ValueKind::Json, "-", "-", "-"),
+        ("bytea", ValueKind::Bytes, "Bytes", "Bytes", "Bytes"),
+        ("bit", ValueKind::Bit, "-", "-", "-"),
+        ("date", ValueKind::Date, "Text", "Text", "Text"),
+        ("time", ValueKind::Time, "-", "-", "-"),
+        ("timestamp", ValueKind::Timestamp, "Text", "Text", "Text"),
+        ("timestamptz", ValueKind::TimestampTz, "Text", "-", "-"),
+        ("interval", ValueKind::Interval, "-", "-", "-"),
+        ("bool", ValueKind::Bool, "Bool", "Bool", "Bool"),
+        ("int4[]", ValueKind::Array(ArrayElement::Number), "-", "-", "-"),
+        ("uuid", ValueKind::Other, "Text", "-", "-"),
+        ("inet", ValueKind::Other, "-", "-", "-"),
+    ];
+    let s = |v: &[&str]| v.iter().map(|v| v.to_string()).collect::<Vec<String>>();
+    // Key columns (quoted), the last row's literals and the key's kinds.
+    let one = (s(&["k"]), s(&["1"]), vec![Kind::Number]);
+    let two = (s(&["k", "t"]), s(&["1", "'x'"]), vec![Kind::Number, Kind::Text]);
+    let bytes_as_text = (s(&["b"]), s(&["'\\x01'"]), vec![Kind::Bytes]);
+    let bytes = (s(&["b"]), s(&["X'01'"]), vec![Kind::Bytes]);
+    let charset = |cs: &str| SessionValues { time_zone: "+00:00".into(), charset: cs.into() };
+    let sessions =
+        [None, Some(charset("utf8mb4")), Some(charset("UTF8MB4")), Some(charset("utf8mb3")), Some(charset("latin1"))];
+    for id in EngineId::ALL {
+        let Fact::Known(rules) = id.spec().export else { panic!("{id:?}: tables are read for an export") };
+        let pg = match id {
+            EngineId::Postgres => true,
+            EngineId::MySql | EngineId::MariaDb => false,
+        };
+        for (type_name, kind, pg_kind, off, on) in keys {
+            let c = ColumnMeta::new("c".into(), type_name.to_string(), *kind, None);
+            for (text_ok, family) in [(false, off), (true, on)] {
+                let want = if pg { pg_kind } else { family };
+                let got = rules.key_kind(&c, text_ok).map_or("-".to_string(), |k| format!("{k:?}"));
+                assert_eq!(got, *want, "{id:?} {type_name} text_ok {text_ok}");
+            }
+        }
+        let after = |(n, v, k): &(Vec<String>, Vec<String>, Vec<Kind>)| rules.after(n, v, k);
+        let (one_want, two_want, bytes_as_text_want, bytes_want) = if pg {
+            (
+                Some("k OPERATOR(pg_catalog.>) 1"),
+                Some("(k, t) OPERATOR(pg_catalog.>) (1, 'x')"),
+                Some("b OPERATOR(pg_catalog.>) '\\x01'"),
+                Some("b OPERATOR(pg_catalog.>) X'01'"),
+            )
+        } else {
+            (Some("k > 1"), Some("k > 1 OR (k = 1 AND (t > 'x'))"), None, Some("b > X'01'"))
+        };
+        assert_eq!(after(&one).as_deref(), one_want, "{id:?}");
+        assert_eq!(after(&two).as_deref(), two_want, "{id:?}");
+        assert_eq!(after(&bytes_as_text).as_deref(), bytes_as_text_want, "{id:?}");
+        assert_eq!(after(&bytes).as_deref(), bytes_want, "{id:?}");
+        let whole: Vec<bool> = sessions.iter().map(|s| rules.text_read_whole(s.as_ref())).collect();
+        let want = if pg { [true; 5] } else { [false, true, true, false, false] };
+        assert_eq!(whole, want, "{id:?}");
+        assert_eq!(rules.drops_slow_readers(), !pg, "{id:?}");
+    }
+}

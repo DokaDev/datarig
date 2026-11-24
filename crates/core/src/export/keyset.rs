@@ -20,7 +20,8 @@
 
 use super::{Kind, sql_value};
 use crate::driver::structure::TableStructure;
-use crate::driver::{Cell, ColumnMeta, ValueKind};
+use crate::driver::{Cell, ColumnMeta};
+use crate::engine::Fact;
 use crate::sql::dialect::Dialect;
 
 /// How long a chunk waits for a lock (an `ALTER TABLE` in the way) before it gives up, in
@@ -54,28 +55,16 @@ pub enum NotKeyset {
     Kind(String),
 }
 
-/// The kind of key column `c` as a keyset literal is written, or why it cannot be one.
-/// `text_ok`: text read in this session is the text (MySQL: `utf8mb4` results; always on
-/// PostgreSQL).
+/// The kind of key column `c` as a keyset literal is written, or why it cannot be one, by the
+/// export rules of dialect `d`'s engine ([`ExportRules::key_kind`]; refused on an engine whose
+/// tables are not read so). `text_ok`: text read in this session is the text (MySQL: `utf8mb4`
+/// results; always on PostgreSQL).
+///
+/// [`ExportRules::key_kind`]: crate::engine::ExportRules::key_kind
 pub fn key_kind(d: Dialect, c: &ColumnMeta, text_ok: bool) -> Result<Kind, NotKeyset> {
-    let pg = d == Dialect::Postgres;
-    let refused = || NotKeyset::Kind(c.name.clone());
-    match c.kind {
-        ValueKind::Integer => Ok(Kind::Number),
-        ValueKind::Decimal if c.type_name != "money" => Ok(Kind::Number),
-        // MySQL's ENUM and SET sort by their members' numbers, not as their text compares.
-        ValueKind::Text
-            if !pg && (c.type_name.eq_ignore_ascii_case("enum") || c.type_name.eq_ignore_ascii_case("set")) =>
-        {
-            Err(refused())
-        }
-        ValueKind::Text if pg || text_ok => Ok(Kind::Text),
-        ValueKind::Date | ValueKind::Timestamp => Ok(Kind::Text),
-        ValueKind::TimestampTz if pg => Ok(Kind::Text),
-        ValueKind::Bool => Ok(Kind::Bool),
-        ValueKind::Bytes => Ok(Kind::Bytes),
-        ValueKind::Other if pg && c.type_name == "uuid" => Ok(Kind::Text),
-        _ => Err(refused()),
+    match d.engine().spec().export {
+        Fact::Known(rules) => rules.key_kind(c, text_ok),
+        Fact::No(_) | Fact::Unknown(_) => Err(NotKeyset::Kind(c.name.clone())),
     }
 }
 
@@ -175,36 +164,27 @@ impl Keyset {
     /// (bytes not in the driver's form).
     pub fn after(&self, last: &[Cell]) -> Option<String> {
         let d = self.dialect;
+        let Fact::Known(rules) = d.engine().spec().export else { return None };
         let mut names = Vec::with_capacity(self.key.len());
         let mut values = Vec::with_capacity(self.key.len());
+        let mut kinds = Vec::with_capacity(self.key.len());
         for k in &self.key {
             let v = last.get(k.index)?.as_deref()?;
             // Text the driver could not read as UTF-8 (replaced characters) is not the key.
             if v.contains('\u{FFFD}') {
                 return None;
             }
-            let lit = sql_value(d, k.kind, Some(v));
-            // Bytes the MySQL driver did not show as `0x…` would be compared as their text.
-            if k.kind == Kind::Bytes && matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)) && !lit.starts_with("X'") {
-                return None;
-            }
             names.push(d.force_quote_ident(&k.name));
-            values.push(lit);
+            values.push(sql_value(d, k.kind, Some(v)));
+            kinds.push(k.kind);
         }
-        let cond = match d {
-            // Named with its schema: a `search_path` of the user's may list its own `>` first.
-            Dialect::Postgres if names.len() == 1 => format!("{} OPERATOR(pg_catalog.>) {}", names[0], values[0]),
-            // A row comparison: the btree of the key reads from it on.
-            Dialect::Postgres => format!("({}) OPERATOR(pg_catalog.>) ({})", names.join(", "), values.join(", ")),
-            // MySQL does not read an index range for a row comparison: the same written out.
-            Dialect::MySql(_) | Dialect::MariaDb(_) => expanded(&names, &values),
-        };
+        let cond = rules.after(&names, &values, &kinds)?;
         Some(format!("{} WHERE {cond}{}", self.select(), self.order()))
     }
 }
 
 /// `(k1, k2, …) > (v1, v2, …)` written out: `k1 > v1 OR (k1 = v1 AND (k2 > v2 OR …))`.
-fn expanded(names: &[String], values: &[String]) -> String {
+pub(crate) fn expanded(names: &[String], values: &[String]) -> String {
     match (names, values) {
         ([n], [v]) => format!("{n} > {v}"),
         ([n, ns @ ..], [v, vs @ ..]) => format!("{n} > {v} OR ({n} = {v} AND ({}))", expanded(ns, vs)),

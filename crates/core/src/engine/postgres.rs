@@ -1,13 +1,15 @@
 //! PostgreSQL's row of the registry.
 
 use super::{
-    CancelRules, CountInTx, DdlLock, EngineId, EngineSpec, Fact, FilterCalls, InputRules, OpenVerdict,
+    CancelRules, CountInTx, DdlLock, EngineId, EngineSpec, ExportRules, Fact, FilterCalls, InputRules, OpenVerdict,
     READ_ONLY_NOT_PROVEN, ReadOnlyProof, RiskRules, ServerFacts, SessionRules, Support, TextRules, Transport, TxAsk,
     TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, ValueRules,
 };
-use crate::driver::{Hierarchy, SessionRole, ValueKind};
+use crate::driver::{ColumnMeta, Hierarchy, ReadIn, SessionRole, SessionValues, ValueKind};
 use crate::edit::input::{self, TypeName};
 use crate::edit::{BitsForm, BytesForm, Invalid, TableColumn};
+use crate::export::keyset::NotKeyset;
+use crate::export::{self, Kind, Refused, Rule, SqlCells, SqlColumn};
 use crate::profile::dsn::Scheme;
 use crate::sql::dialect::{Dialect, DollarQuotes, Language};
 use crate::sql::risk::mysql::Judged;
@@ -31,6 +33,7 @@ pub static SPEC: EngineSpec = EngineSpec {
     session: &PgSession,
     cancel: &PgCancel,
     values: &PgValues,
+    export: Fact::Known(&PgExport),
 };
 
 /// How PostgreSQL's text is read.
@@ -401,6 +404,66 @@ impl ValueRules for PgValues {
     /// `\x`.
     fn bytes_shown_prefix(&self) -> &'static str {
         "\\x"
+    }
+
+    /// Any other value as a string literal, which PostgreSQL reads in the column's type: bytes
+    /// (`\x…`) and bits too.
+    fn literal(&self, kind: Kind, v: Option<&str>) -> String {
+        match v {
+            None => "NULL".to_string(),
+            Some(v) if export::bare(kind, v) => v.to_string(),
+            Some(v) => Dialect::Postgres.quote_literal(v),
+        }
+    }
+
+    /// Every value as it is.
+    fn sql_cells(&self, columns: &[SqlColumn], _: &ReadIn, _: Option<&str>) -> Result<SqlCells, Refused> {
+        let names = columns.iter().map(|c| c.name.to_string()).collect();
+        Ok(SqlCells { names, rules: vec![Rule::Plain; columns.len()] })
+    }
+
+    /// `OVERRIDING SYSTEM VALUE`: the server refuses a value for a `GENERATED ALWAYS` identity
+    /// without it.
+    fn insert_overriding(&self, overriding: bool) -> &'static str {
+        if overriding { " OVERRIDING SYSTEM VALUE" } else { "" }
+    }
+}
+
+/// How PostgreSQL's tables are read for an export.
+struct PgExport;
+
+impl ExportRules for PgExport {
+    /// Whole and decimal numbers (not `money`), text, dates and times (with a time zone too),
+    /// booleans, bytes and `uuid`.
+    fn key_kind(&self, c: &ColumnMeta, _: bool) -> Result<Kind, NotKeyset> {
+        match c.kind {
+            ValueKind::Integer => Ok(Kind::Number),
+            ValueKind::Decimal if c.type_name != "money" => Ok(Kind::Number),
+            ValueKind::Text | ValueKind::Date | ValueKind::Timestamp | ValueKind::TimestampTz => Ok(Kind::Text),
+            ValueKind::Bool => Ok(Kind::Bool),
+            ValueKind::Bytes => Ok(Kind::Bytes),
+            ValueKind::Other if c.type_name == "uuid" => Ok(Kind::Text),
+            _ => Err(NotKeyset::Kind(c.name.clone())),
+        }
+    }
+
+    /// The operator named with its schema (a `search_path` of the user's may list its own `>`
+    /// first); a row comparison for several columns, which the btree of the key reads from on.
+    fn after(&self, names: &[String], values: &[String], _: &[Kind]) -> Option<String> {
+        Some(match (names, values) {
+            ([n], [v]) => format!("{n} OPERATOR(pg_catalog.>) {v}"),
+            _ => format!("({}) OPERATOR(pg_catalog.>) ({})", names.join(", "), values.join(", ")),
+        })
+    }
+
+    /// Always.
+    fn text_read_whole(&self, _: Option<&SessionValues>) -> bool {
+        true
+    }
+
+    /// Never.
+    fn drops_slow_readers(&self) -> bool {
+        false
     }
 }
 

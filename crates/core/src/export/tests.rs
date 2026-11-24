@@ -93,9 +93,6 @@ fn markdown_escapes_pipes_and_line_breaks() {
 
 #[test]
 fn sql_quotes_identifiers_and_literals() {
-    assert_eq!(quote_ident("Order \"Items\""), "\"Order \"\"Items\"\"\"");
-    assert_eq!(quote_literal("it's"), "'it''s'");
-    assert_eq!(quote_literal("back\\slash"), "E'back\\\\slash'", "whatever standard_conforming_strings is");
     for n in ["0", "12", "-3", "1.5", ".5", "5.", "1e10", "-2.5E-3"] {
         assert!(sql_number(n), "{n}");
     }
@@ -506,6 +503,21 @@ fn only_whole_values_are_written_as_sql() {
     assert_eq!(auto.cell(0, "7").unwrap(), "7");
     let pg = sql_cells(PG, &cols, &crate::driver::ReadIn::Unknown, None).unwrap();
     assert_eq!(pg.cell(1, "anything").unwrap(), "anything");
+}
+
+/// A value of a column past the last one the rules were made for is refused, with no column to
+/// name, on every engine; no column refuses every value there either.
+#[test]
+fn a_cell_past_the_last_column_is_refused() {
+    use crate::driver::ValueKind as V;
+    let cols = [sqlc("t", "varchar", V::Text), sqlc("n", "int", V::Integer)];
+    let past = Err(Refused { column: String::new(), why: NotWhole::NotShownWhole });
+    for d in [PG, MY] {
+        let cells = sql_cells(d, &cols, &session("+00:00", "utf8mb4"), None).unwrap();
+        assert_eq!(cells.cell(1, "7").unwrap(), "7", "{d:?}");
+        assert_eq!(cells.cell(2, "7"), past, "{d:?}");
+        assert_eq!(cells.column_refused(2), None, "{d:?}");
+    }
 }
 
 #[test]
