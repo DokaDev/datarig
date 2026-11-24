@@ -1509,3 +1509,28 @@ impl FileSystem for FakeFs {
         RealFileSystem.create_dir(path)
     }
 }
+
+/// What a MySQL-family session says first: what its server is, MariaDB with `maria` (its
+/// language MariaDB's) else MySQL, at `version` (`None`: a version line that did not parse).
+pub fn server_said(maria: bool, version: Option<(u16, u16, u16)>) -> Vec<DbEvent> {
+    use datarig_core::engine::{EngineFacts, EngineId, Fact, MyFacts, ServerFacts, Topology, Version, Why};
+    let (major, minor, patch) = version.unwrap_or((8, 0, 36));
+    let handshake = Version::new(major, minor, patch);
+    let (detail, language) = match maria {
+        true => (
+            EngineFacts::MariaDb(MyFacts::new(handshake, EngineId::MariaDb)),
+            Some(Dialect::MariaDb(datarig_core::sql::dialect::MySqlMode::default())),
+        ),
+        false => (EngineFacts::MySql(MyFacts::new(handshake, EngineId::MySql)), None),
+    };
+    let facts = ServerFacts {
+        version: version.map_or(Fact::Unknown(Why::VersionUnknown), |_| Fact::Known(handshake)),
+        version_text: None,
+        provider: Fact::Unknown(Why::NotChecked),
+        topology: Fact::Known(Topology::Direct),
+        detail,
+    };
+    let mut said: Vec<DbEvent> = language.map(|d| DbEvent::Language(Language::Sql(d))).into_iter().collect();
+    said.push(DbEvent::Server(std::sync::Arc::new(facts)));
+    said
+}

@@ -1432,6 +1432,64 @@ fn a_mysql_timestamp_copied_is_pasted_only_into_a_result_read_in_the_same_zone()
     assert_eq!(edits(&h).batch.value(0, 2), Some(&Value::Text("2024-10-27 02:30:00".into())));
 }
 
+/// A `TIMESTAMP` copied with `y` is pasted with `g p` into a result read in the same zone as
+/// before on every server of the family, whether it reads an offset after a time or not:
+/// MariaDB, MySQL 8.0.18 and a MySQL whose version is not known give what a session that said
+/// nothing of its server gives.
+#[test]
+fn a_copied_timestamp_still_pastes_into_a_result_of_the_same_zone_on_every_family_server() {
+    use datarig_core::driver::{ColumnOrigin, SessionValues};
+    // `y` on the TIMESTAMP and `g p` into the same rows read again, the session saying `said`
+    // before the rows: what was said, and the value pasted.
+    let flow = |said: fn() -> Vec<DbEvent>| {
+        let mut h = mysql_profile();
+        h.db(DbEvent::SessionValues(SessionValues { time_zone: "+09:00".into(), charset: "utf8mb4".into() }));
+        let col = |name: &str, ty: &str, kind: ValueKind| {
+            let origin = ColumnOrigin::Named { schema: "shop".into(), table: "users".into(), column: name.into() };
+            ColumnMeta::new(name.into(), ty.into(), kind, Some(origin))
+        };
+        let read = |h: &mut Harness, value: &str| {
+            h.app.run(vec!["SELECT id, email, nickname FROM shop.users".to_string()]);
+            for ev in said() {
+                h.db(ev);
+            }
+            let columns = vec![
+                col("id", "bigint", ValueKind::Integer),
+                col("email", "varchar", ValueKind::Text),
+                col("nickname", "timestamp", ValueKind::TimestampTz),
+            ];
+            let id = h.app.tab().exec.query_id;
+            let rows = vec![vec![s("1"), s("a@x"), s(value)]];
+            h.db(DbEvent::Page { id, columns: Some(columns), rows, more: false, elapsed: Duration::ZERO });
+            h.app.focus = Focus::Results;
+            h.sent();
+            h.app.transient = None;
+        };
+        read(&mut h, "2024-10-27 02:30:00");
+        h.keys("lly");
+        let copied = said_text(&mut h);
+        read(&mut h, "2024-01-01 00:00:00");
+        h.keys("llgp");
+        structure(&mut h, Ok(mysql_users_structure()));
+        (copied, said_text(&mut h), edits(&h).batch.value(0, 2).cloned())
+    };
+    let pasted = Some(Value::Text("2024-10-27 02:30:00".into()));
+    let mysql_said_nothing = flow(Vec::new);
+    assert_eq!(mysql_said_nothing.2, pasted);
+    assert!(!mysql_said_nothing.0.starts_with("Not kept"), "{mysql_said_nothing:?}");
+    for (server, said) in [
+        ("MySQL 8.0.18", (|| server_said(false, Some((8, 0, 18)))) as fn() -> Vec<DbEvent>),
+        ("MySQL of a version not known", || server_said(false, None)),
+    ] {
+        assert_eq!(flow(said), mysql_said_nothing, "{server}");
+    }
+    // MariaDB as a MariaDB session that said nothing of its server.
+    let maria = || server_said(true, Some((11, 4, 13)));
+    let language_only =
+        || server_said(true, Some((11, 4, 13))).into_iter().filter(|ev| matches!(ev, DbEvent::Language(_))).collect();
+    assert_eq!(flow(maria), flow(language_only), "MariaDB 11.4");
+}
+
 /// What the app said last, in words.
 fn said_text(h: &mut Harness) -> String {
     said(h).map(|m| h.app.i18n.msg(&m).to_string()).unwrap_or_default()

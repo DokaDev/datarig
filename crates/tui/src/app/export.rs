@@ -379,8 +379,14 @@ struct Spec {
     /// How SQL formats write each picked value (MySQL's rules).
     cells: Option<SqlCells>,
     sql: Option<SqlTarget>,
+    /// Whether the server whose rules the SQL formats write by reads a time zone offset after a
+    /// time ([`SqlCells::literal`]).
+    offsets: datarig_core::engine::Support,
     /// The source's column names (every column): a stream whose columns differ is refused.
     source: Vec<String>,
+    /// The source's columns' kinds and type names (every column): an SQL format, whose values
+    /// were judged by them, refuses a stream whose columns differ in either.
+    source_types: Vec<(ValueKind, String)>,
 }
 
 #[derive(Clone, Debug)]
@@ -771,7 +777,7 @@ impl App {
             let snapshot = if db { None } else { Some(rs.rows.snapshot(b.rows.clone())) };
             (Intent::of(t), read_in, snapshot, pending)
         };
-        let spec = match self.export_spec(&b.cols, &req, &read_in) {
+        let spec = match self.export_spec(&b.cols, &req, &read_in, db) {
             Ok(s) => s,
             Err(n) => return self.flash(n),
         };
@@ -1680,18 +1686,36 @@ impl App {
     /// How the SQL formats, and every format, write the columns `cols` of the active tab's
     /// result; why not, as a notice.
     /// Why `req` cannot write the columns `cols` of the active tab's result read as `read_in`
-    /// ([`App::export_spec`]'s refusal).
-    pub(super) fn export_refused(&self, cols: &[usize], req: &ExportRequest, read_in: &ReadIn) -> Option<Notice> {
-        self.export_spec(cols, req, read_in).err()
+    /// (`db`: read again) ([`App::export_spec`]'s refusal).
+    pub(super) fn export_refused(
+        &self,
+        cols: &[usize],
+        req: &ExportRequest,
+        read_in: &ReadIn,
+        db: bool,
+    ) -> Option<Notice> {
+        self.export_spec(cols, req, read_in, db).err()
     }
 
-    fn export_spec(&self, cols: &[usize], req: &ExportRequest, read_in: &ReadIn) -> Result<Spec, Notice> {
+    /// `db`: the rows are read again on the tab's session, in its dialect and by what its server
+    /// reads now; else the rows held are written by the rules of the engine that read them, and
+    /// refused for SQL once the tab is on another engine.
+    fn export_spec(&self, cols: &[usize], req: &ExportRequest, read_in: &ReadIn, db: bool) -> Result<Spec, Notice> {
         let t = self.tab();
         let Results::Rows(rs) = &t.results else { return Err(Notice::new(Label::ExportNothing, Level::Warning)) };
         if req.format == ExportFormat::Xlsx && cols.len() > xlsx::MAX_COLUMNS {
             return Err(Notice::new(Msg::ExportTooWide { count: cols.len() as u64 }, Level::Warning));
         }
         let d = self.tab_dialect(t.id);
+        let as_sql = matches!(req.format, ExportFormat::SqlInsert | ExportFormat::SqlUpdate);
+        if as_sql && !db && rs.read_as.engine() != d.engine() {
+            return Err(self.not_whole(&Refused { column: String::new(), why: core_export::NotWhole::ReadElsewhere }));
+        }
+        let offsets = match (db, t.exec.current_facts()) {
+            (false, _) => rs.offsets.clone(),
+            (true, Some(f)) => d.engine().spec().values.zoned_literal(f),
+            (true, None) => Fact::Unknown(datarig_core::engine::Why::NotChecked),
+        };
         let metas: Vec<&ColumnMeta> = cols.iter().map(|&c| &rs.columns[c].meta).collect();
         let columns: Vec<(String, Kind)> = metas.iter().map(|m| (m.name.clone(), Kind::of_column(m))).collect();
         let keys = self.tab_keys(t).catalog();
@@ -1708,7 +1732,8 @@ impl App {
                     }
                 })
                 .collect();
-            core_export::sql_cells(d, &cs, read_in, keys.and_then(|k| k.server_zone()))
+            let judged = if db { d } else { rs.read_as };
+            core_export::sql_cells(judged, &cs, read_in, keys.and_then(|k| k.server_zone()))
         };
         let origins: Vec<_> = metas.iter().map(|m| m.origin.clone()).collect();
         let names: Vec<&str> = metas.iter().map(|m| m.name.as_str()).collect();
@@ -1752,7 +1777,9 @@ impl App {
             pick: cols.to_vec(),
             cells,
             sql,
+            offsets,
             source: rs.columns.iter().map(|c| c.meta.name.clone()).collect(),
+            source_types: rs.columns.iter().map(|c| (c.meta.kind, c.meta.type_name.clone())).collect(),
         })
     }
 }
@@ -2213,8 +2240,7 @@ fn db_rows<S: RowSink>(
         };
         match next {
             Next::Batch(Some(ExportBatch::Columns(cols))) => {
-                let same = cols.len() == spec.source.len() && cols.iter().zip(&spec.source).all(|(c, n)| c.name == *n);
-                if !same {
+                if !same_columns(spec, &cols) {
                     // Dropping the receiver stops the statement.
                     return Stopped::Failed(Failure::SchemaChanged);
                 }
@@ -2244,7 +2270,11 @@ fn db_rows<S: RowSink>(
                                 return Stopped::Failed(f);
                             }
                         }
-                        Some(ExportBatch::Columns(_)) => {}
+                        Some(ExportBatch::Columns(cols)) => {
+                            if !same_columns(spec, &cols) {
+                                return Stopped::Failed(Failure::SchemaChanged);
+                            }
+                        }
                         None if rows.is_some() => rows = None,
                         None => {
                             queued.pop_front();
@@ -2261,8 +2291,18 @@ fn db_rows<S: RowSink>(
     }
 }
 
+/// Whether the columns `cols` of a statement read again are the source's: the same names, and
+/// for an SQL format the same kinds and type names too.
+fn same_columns(spec: &Spec, cols: &[ColumnMeta]) -> bool {
+    let names = cols.len() == spec.source.len() && cols.iter().zip(&spec.source).all(|(c, n)| c.name == *n);
+    names
+        && (spec.sql.is_none()
+            || cols.iter().zip(&spec.source_types).all(|(c, (kind, ty))| c.kind == *kind && c.type_name == *ty))
+}
+
 /// Write `rows` of the source as `spec` says: the picked columns, SQL's values as its rules
-/// write them (a value that is not written whole fails the export, with its column).
+/// write them (a value that is not written whole fails the export, with its column; a value
+/// written into the SQL text as what the server reads, [`SqlCells::literal`]).
 fn write_rows<S: RowSink>(
     w: &mut S,
     spec: &Spec,
@@ -2279,6 +2319,7 @@ fn write_rows<S: RowSink>(
             .map(|(i, &c)| {
                 let v = r.get(c).and_then(|v| v.as_deref());
                 match (&spec.cells, v) {
+                    (Some(cells), Some(v)) if written(spec, i) => cells.literal(i, v, &spec.offsets).map(Some),
                     (Some(cells), Some(v)) => cells.cell(i, v).map(Some),
                     (_, v) => Ok(v.map(Cow::Borrowed)),
                 }
@@ -2292,6 +2333,16 @@ fn write_rows<S: RowSink>(
         w.rows(&[out]).map_err(io)?;
     }
     Ok(())
+}
+
+/// Whether picked column `i` is written into the SQL text of `spec`: an `INSERT`'s written
+/// columns, an `UPDATE`'s set and key columns.
+fn written(spec: &Spec, i: usize) -> bool {
+    match &spec.sql {
+        Some(SqlTarget::Insert { written, .. }) => written.iter().any(|w| w.0 == i),
+        Some(SqlTarget::Update { set, keys, .. }) => set.iter().chain(keys).any(|c| c.0 == i),
+        None => false,
+    }
 }
 
 #[cfg(test)]

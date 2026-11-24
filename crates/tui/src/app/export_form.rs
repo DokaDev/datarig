@@ -487,10 +487,11 @@ impl App {
             default_path: false,
             overwrite: false,
         };
-        let refused = self.export_refused(&b.cols, &req, &read_in)?;
+        let refused = self.export_refused(&b.cols, &req, &read_in, db)?;
         Some(match refused.msg {
             Msg::CopyInsertRefused { reason } | Msg::CopyUpdateRefused { reason } => reason,
             Msg::CopySqlNotWhole { column, reason } => format!("{column}: {reason}"),
+            Msg::CopySqlRefused { reason } => reason,
             m => self.i18n.msg(&m).to_string(),
         })
     }

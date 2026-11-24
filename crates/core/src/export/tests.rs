@@ -588,3 +588,93 @@ fn text_read_in_utf8mb3_is_refused() {
     let cells = sql_cells(MY, &cols, &session("+00:00", "utf8mb3"), None).unwrap();
     assert_eq!(cells.cell(0, "a?"), Err(Refused { column: "t".into(), why: NotWhole::Charset("utf8mb3".into()) }));
 }
+
+/// The facts of a server of `detail` whose version is `version`.
+fn facts(
+    version: crate::engine::Fact<crate::engine::Version>,
+    detail: crate::engine::EngineFacts,
+) -> crate::engine::ServerFacts {
+    use crate::engine::{Fact, ServerFacts, Topology, Why};
+    ServerFacts {
+        version,
+        version_text: None,
+        provider: Fact::Unknown(Why::NotChecked),
+        topology: Fact::Known(Topology::Direct),
+        detail,
+    }
+}
+
+/// A MySQL server of `version` (its greeting's number the same, or 8.0.36 when it is not known).
+fn mysql_at(version: crate::engine::Fact<crate::engine::Version>) -> crate::engine::ServerFacts {
+    use crate::engine::{EngineFacts, EngineId, Fact, MyFacts, Version};
+    let handshake = match &version {
+        Fact::Known(v) => *v,
+        Fact::No(_) | Fact::Unknown(_) => Version::new(8, 0, 36),
+    };
+    facts(version, EngineFacts::MySql(MyFacts::new(handshake, EngineId::MySql)))
+}
+
+/// A `TIMESTAMP` is written into SQL with its offset only where the server that read it reads
+/// one: MySQL from 8.0.19; not MySQL 8.0.18, not MariaDB, not a server whose version is not
+/// known. NULL and a zero date pass everywhere, every other column is written as `cell` writes
+/// it, and `cell` itself still writes the offset (the filter and the edit checks use it).
+#[test]
+fn a_timestamp_literal_needs_a_server_that_reads_its_offset() {
+    use crate::driver::ValueKind as V;
+    use crate::engine::{EngineFacts, EngineId, Fact, MyFacts, PgFacts, Version, Why};
+    let [pg, my, maria] = every_engine();
+    let answer = |d: Dialect, f: &crate::engine::ServerFacts| d.engine().spec().values.zoned_literal(f);
+    let v = |major, minor, patch| Fact::Known(Version::new(major, minor, patch));
+    assert_eq!(answer(my, &mysql_at(v(8, 0, 19))), Fact::Known(()));
+    assert_eq!(answer(my, &mysql_at(v(8, 4, 6))), Fact::Known(()));
+    let old = Fact::No(Why::VersionTooOld { needed: Version::new(8, 0, 19) });
+    assert_eq!(answer(my, &mysql_at(v(8, 0, 18))), old);
+    let mariadb = facts(v(11, 4, 13), EngineFacts::MariaDb(MyFacts::new(Version::new(11, 4, 13), EngineId::MariaDb)));
+    assert_eq!(answer(maria, &mariadb), Fact::No(Why::NotOnEngine));
+    assert_eq!(answer(my, &mariadb), Fact::No(Why::NotOnEngine), "MySQL's rules on a MariaDB server");
+    let postgres = facts(v(17, 2, 0), EngineFacts::Postgres(PgFacts::default()));
+    assert_eq!(answer(pg, &postgres), Fact::Known(()));
+
+    let cols = [sqlc("at", "timestamp", V::TimestampTz), sqlc("t", "varchar", V::Text)];
+    let cells = sql_cells(MY, &cols, &session("+02:00", "utf8mb4"), None).unwrap();
+    let at = "2024-01-01 10:00:00";
+    assert_eq!(cells.literal(0, at, &Fact::Known(())).unwrap(), "2024-01-01 10:00:00+02:00");
+    assert_eq!(cells.cell(0, at).unwrap(), "2024-01-01 10:00:00+02:00", "cell is unchanged");
+    let unknown = Fact::Unknown(Why::NotChecked);
+    for refused in [old.clone(), Fact::No(Why::NotOnEngine), unknown.clone()] {
+        let why = match &refused {
+            Fact::No(w) | Fact::Unknown(w) => w.clone(),
+            Fact::Known(()) => unreachable!(),
+        };
+        assert_eq!(
+            cells.literal(0, at, &refused),
+            Err(Refused { column: "at".into(), why: NotWhole::NoOffsetLiteral(why) }),
+            "{refused:?}"
+        );
+        assert_eq!(cells.literal(0, "0000-00-00 00:00:00", &refused).unwrap(), "0000-00-00 00:00:00");
+        assert_eq!(cells.literal(1, "x", &refused).unwrap(), "x", "not a TIMESTAMP");
+    }
+    // A refusal of the whole column comes first, as with `cell`.
+    let latin1 = sql_cells(MY, &cols, &session("+00:00", "latin1"), None).unwrap();
+    assert_eq!(latin1.literal(1, "x", &unknown), latin1.cell(1, "x"));
+    // PostgreSQL's values are written as they are, whatever the answer.
+    let pg_cells = sql_cells(PG, &cols, &crate::driver::ReadIn::Unknown, None).unwrap();
+    assert_eq!(pg_cells.literal(0, "2024-01-01 10:00:00+02", &unknown).unwrap(), "2024-01-01 10:00:00+02");
+}
+
+/// A server whose version is not known takes the safe side: its `TIMESTAMP`s are not written
+/// with an offset (its own reports did not parse, or disagree, or name two engines).
+#[test]
+fn the_offset_literal_takes_its_fail_safe_side_on_an_unknown_version() {
+    use crate::engine::{EngineFacts, EngineId, Fact, MyFacts, Version, Why};
+    let [_, my, maria] = every_engine();
+    for why in [Why::VersionUnknown, Why::VersionsDisagree, Why::EnginesDisagree] {
+        let f = mysql_at(Fact::Unknown(why.clone()));
+        assert_eq!(my.engine().spec().values.zoned_literal(&f), Fact::Unknown(why.clone()), "{why:?}");
+        let mariadb = facts(
+            Fact::Unknown(why.clone()),
+            EngineFacts::MariaDb(MyFacts::new(Version::new(11, 4, 13), EngineId::MariaDb)),
+        );
+        assert_eq!(maria.engine().spec().values.zoned_literal(&mariadb), Fact::No(Why::NotOnEngine), "{why:?}");
+    }
+}

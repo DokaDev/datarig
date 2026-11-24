@@ -706,6 +706,13 @@ pub enum NotWhole {
     SessionUnknown,
     /// A `TIMESTAMP` or a text whose pages were read in different time zones or character sets.
     SessionChanged,
+    /// A `TIMESTAMP` with a time zone offset, for a server that does not read one, or whose
+    /// version is not known (why: [`ValueRules::zoned_literal`]).
+    ///
+    /// [`ValueRules::zoned_literal`]: crate::engine::ValueRules::zoned_literal
+    NoOffsetLiteral(crate::engine::Why),
+    /// The rows were read on another engine than the one their tab uses now.
+    ReadElsewhere,
 }
 
 /// A column a copy as SQL refuses, and why.
@@ -803,6 +810,27 @@ impl SqlCells {
             Rule::Refuse(why) => Err(refused(why.clone())),
             Rule::AutoIncrement if v == "0" => Err(refused(NotWhole::AutoIncrementZero)),
             Rule::AutoIncrement => Ok(v.into()),
+        }
+    }
+
+    /// Value `v` of column `i` as it is written into SQL text ([`SqlCells::cell`]), where a
+    /// `TIMESTAMP` that is an instant is written with its offset only when the server that read
+    /// it reads one (`offsets`, [`ValueRules::zoned_literal`]): else it is refused with why.
+    ///
+    /// [`ValueRules::zoned_literal`]: crate::engine::ValueRules::zoned_literal
+    pub fn literal<'a>(
+        &self,
+        i: usize,
+        v: &'a str,
+        offsets: &crate::engine::Support,
+    ) -> Result<std::borrow::Cow<'a, str>, Refused> {
+        use crate::engine::Fact;
+        match (self.rules.get(i), offsets) {
+            (Some(Rule::Timestamp(_)), Fact::No(why) | Fact::Unknown(why)) if !v.starts_with("0000-00-00") => {
+                let column = self.names.get(i).cloned().unwrap_or_default();
+                Err(Refused { column, why: NotWhole::NoOffsetLiteral(why.clone()) })
+            }
+            _ => self.cell(i, v),
         }
     }
 

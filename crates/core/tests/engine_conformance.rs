@@ -65,6 +65,14 @@ pub enum Engine {
     MySqlVersionsDisagree,
     /// MariaDB whose own reports name different versions.
     MariaDbVersionsDisagree,
+    /// MySQL 8.0.18, the last version that reads no time zone offset in a `TIMESTAMP` value.
+    MySql8018,
+    /// MySQL 8.0.19, the first version that reads one.
+    MySql8019,
+    /// MySQL whose greeting names MariaDB: its version is not known.
+    MySqlEnginesDisagree,
+    /// MySQL whose session has not said what its server is.
+    MySqlNotChecked,
 }
 
 /// The engines every case must have an expectation for.
@@ -85,9 +93,13 @@ impl Engine {
     pub fn dialect(self) -> Dialect {
         match self {
             Engine::Pg | Engine::PgVersionUnknown => Dialect::Postgres,
-            Engine::MySql | Engine::MySqlVersionUnknown | Engine::MySqlVersionsDisagree => {
-                Dialect::MySql(MySqlMode::default())
-            }
+            Engine::MySql
+            | Engine::MySqlVersionUnknown
+            | Engine::MySqlVersionsDisagree
+            | Engine::MySql8018
+            | Engine::MySql8019
+            | Engine::MySqlEnginesDisagree
+            | Engine::MySqlNotChecked => Dialect::MySql(MySqlMode::default()),
             Engine::MariaDb | Engine::MariaDbVersionUnknown | Engine::MariaDbVersionsDisagree => {
                 Dialect::MariaDb(MySqlMode::default())
             }
@@ -264,6 +276,11 @@ fn sql_cells_cases_on_every_engine() {
 }
 
 #[test]
+fn sql_literal_cases_on_every_engine() {
+    run_versioned("sql literal", &values::literal_cases(), values::literal);
+}
+
+#[test]
 fn keyset_chunk_sql_on_every_engine() {
     run("keyset chunk", &export::keyset_cases(), export::keyset);
 }
@@ -299,6 +316,7 @@ fn every_case_names_every_engine() {
         named("compares", &filter::compares_cases()),
         named("edit input", &values::input_cases()),
         named("sql cells", &values::cells_cases()),
+        named_versioned("sql literal", &values::literal_cases()),
         named("keyset chunk", &export::keyset_cases()),
         named("tx step", &tx::cases()),
         named("tx statement", &tx::statement_cases()),

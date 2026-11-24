@@ -29,7 +29,7 @@ pub static SPEC: EngineSpec = EngineSpec {
     tx: &FamilyTx,
     session: &FamilySession,
     cancel: &FamilyCancel,
-    values: &FamilyValues,
+    values: &FamilyValues { offsets_since: Some(Version::new(8, 0, 19)) },
     export: Fact::Known(&FamilyExport),
     edit: Fact::Known(&MysqlEdits),
 };

@@ -162,6 +162,11 @@ pub trait ValueRules: Sync {
     /// The clause an `INSERT` writes after its column list when it writes the values of an
     /// identity column the server generates (`overriding`): empty where none is needed.
     fn insert_overriding(&self, overriding: bool) -> &'static str;
+
+    /// Whether the server of `f` reads a value of a time with a time zone written as text with
+    /// its offset after it (`'2024-01-01 10:00:00+02:00'`) as that instant, so that copy as SQL
+    /// and an SQL export may write it so ([`SqlCells::literal`]).
+    fn zoned_literal(&self, f: &ServerFacts) -> Support;
 }
 
 /// How an engine's tables are read for an export.
