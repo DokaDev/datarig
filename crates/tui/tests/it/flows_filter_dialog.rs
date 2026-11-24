@@ -1011,8 +1011,9 @@ fn undo_keeps_the_value_field_on_its_own_condition() {
 
 /// A PostgreSQL server whose version did not parse (`18beta1`, `17devel`) is judged for `LIKE`
 /// on a nondeterministic collation by the number its metadata session read (180000 takes it,
-/// 170000 refuses it), as before: "starts with" is offered on the first and written with
-/// `LIKE`, dimmed on the second; "contains" (`ILIKE`) is refused on both.
+/// 170000 refuses it), as before, never by the version's text: "starts with" is offered where
+/// that read says the server takes it and written with `LIKE`, dimmed where it says not, even
+/// on a server that calls itself `18beta1`; "contains" (`ILIKE`) is refused on each.
 #[test]
 fn a_pg_18_beta_server_still_takes_like_on_a_nondeterministic_collation() {
     use datarig_core::engine::{EngineFacts, Fact, PgFacts, ServerFacts, Topology, Why};
@@ -1044,21 +1045,29 @@ fn a_pg_18_beta_server_still_takes_like_on_a_nondeterministic_collation() {
         h.keys("f");
         h
     };
-    for (line, takes) in [("18beta1", true), ("17devel", false)] {
+    for (line, takes) in [("18beta1", true), ("17devel", false), ("18beta1", false)] {
         let mut h = open_on(line, takes);
         h.key(KeyCode::Right);
         h.key(KeyCode::Char(' '));
         let offers = h.app.filter_dialog_offers().expect("the operators of the condition");
         let why =
             |op: &str| offers.iter().find(|(o, _)| o == op).unwrap_or_else(|| panic!("{op}: {offers:?}")).1.clone();
-        assert_eq!(why("contains").as_deref(), Some("PostgreSQL refuses ILIKE on the column's collation"), "{line}");
+        assert_eq!(
+            why("contains").as_deref(),
+            Some("PostgreSQL refuses ILIKE on the column's collation"),
+            "{line} {takes}"
+        );
         let refused = (!takes).then_some("The server refuses LIKE on the column's collation");
-        assert_eq!(why("starts with").as_deref(), refused, "{line}");
+        assert_eq!(why("starts with").as_deref(), refused, "{line} {takes}");
         if takes {
             let mut h = open_on(line, takes);
             condition(&mut h, 8, "a_b");
             h.key(KeyCode::Enter);
-            assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (name LIKE 'a!_b%' ESCAPE '!')")]], "{line}");
+            assert_eq!(
+                runs(&mut h),
+                vec![vec![format!("{ALL} WHERE (name LIKE 'a!_b%' ESCAPE '!')")]],
+                "{line} {takes}"
+            );
         }
     }
 }

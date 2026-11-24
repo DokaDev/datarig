@@ -88,7 +88,8 @@ pub(crate) fn texts() -> Vec<String> {
 }
 
 /// PostgreSQL, MySQL in every sql mode the lexer reads differently (dollar quotes read, not
-/// read and not known), and MariaDB with and without `ANSI_QUOTES` and `NO_BACKSLASH_ESCAPES`.
+/// read and not known), and MariaDB with and without `ANSI_QUOTES` and `NO_BACKSLASH_ESCAPES`,
+/// its dollar quotes not read and not known (a server whose reports name MySQL too).
 pub(crate) fn dialects() -> Vec<Dialect> {
     let mut out = vec![Dialect::Postgres];
     for bits in 0..4u8 {
@@ -101,7 +102,9 @@ pub(crate) fn dialects() -> Vec<Dialect> {
         for dollar in [DollarQuotes::NotRead, DollarQuotes::Read, DollarQuotes::NotKnown] {
             out.push(Dialect::MySql(mode(dollar)));
         }
-        out.push(Dialect::MariaDb(mode(DollarQuotes::NotRead)));
+        for dollar in [DollarQuotes::NotRead, DollarQuotes::NotKnown] {
+            out.push(Dialect::MariaDb(mode(dollar)));
+        }
     }
     out
 }
