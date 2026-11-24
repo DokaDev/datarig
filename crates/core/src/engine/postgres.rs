@@ -2,17 +2,18 @@
 
 use super::{
     CancelRules, CatalogueRules, CountInTx, DdlLock, DdlOfIndex, DdlRules, DdlToConsole, EditRules, EngineId,
-    EngineSpec, ExportRules, Fact, FilterCalls, InputRules, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof,
-    ResultTables, RiskRules, ServerFacts, SessionRules, Support, TextRules, Transport, TxAsk, TxNote, TxRefusal,
-    TxRules, TxStatement, TxVerdict, ValueRules,
+    EngineSpec, ExportRules, Fact, FilterCalls, FilterSql, FilterSyntax, GroupParts, InputRules, Like, NameMatch,
+    OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, ResultTables, RiskRules, ServerFacts, SessionRules, SortRules,
+    Support, TextRules, Transport, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, ValueRules,
 };
-use crate::driver::{ColumnMeta, EditFormat, Hierarchy, ReadIn, SessionRole, SessionValues, ValueKind};
+use crate::driver::{ArrayElement, ColumnMeta, EditFormat, Hierarchy, ReadIn, SessionRole, SessionValues, ValueKind};
 use crate::edit::input::{self, TypeName};
 use crate::edit::{BitsForm, BytesForm, Invalid, TableColumn};
 use crate::export::keyset::NotKeyset;
 use crate::export::{self, Kind, Refused, Rule, SqlCells, SqlColumn};
 use crate::profile::dsn::Scheme;
-use crate::sql::dialect::{Dialect, DollarQuotes, Language};
+use crate::query::{CaseMode, Compares, GROUP_PREVIEW, LINE_BREAKS, NoEquality, Nulls, RenderError, Target, hex};
+use crate::sql::dialect::{Dialect, DollarQuotes, Language, LiteralOpen};
 use crate::sql::risk::mysql::Judged;
 use crate::sql::risk::{Class, Classifier, TxStep};
 use std::ops::RangeInclusive;
@@ -38,6 +39,8 @@ pub static SPEC: EngineSpec = EngineSpec {
     edit: Fact::Known(&PgEdits),
     catalogue: &PgCatalogue,
     ddl: Fact::Known(&PgDdl),
+    sort: &PgSort,
+    filter: Fact::Known(&PgFilter),
 };
 
 /// How PostgreSQL's text is read.
@@ -642,5 +645,214 @@ impl InputRules for PgInput {
     /// Left to the server.
     fn interval(&self, _: &TableColumn, _: &str) -> Result<(), Invalid> {
         Ok(())
+    }
+}
+
+/// How PostgreSQL orders and pages a table's rows.
+struct PgSort;
+
+impl SortRules for PgSort {
+    /// No: NULL sorts as larger than any value.
+    fn nulls_low(&self) -> bool {
+        false
+    }
+
+    fn nulls_key(&self, col: &str, dir: &str, n: Nulls) -> String {
+        match n {
+            Nulls::First => format!("{col} {dir} NULLS FIRST"),
+            Nulls::Last => format!("{col} {dir} NULLS LAST"),
+        }
+    }
+
+    fn typed_nulls(&self) -> bool {
+        true
+    }
+
+    /// A bare name is the column of the name it folds to.
+    fn names(&self) -> NameMatch {
+        NameMatch::Exact
+    }
+
+    fn offset_alone(&self, offset: u64) -> String {
+        format!(" OFFSET {offset}")
+    }
+}
+
+/// How PostgreSQL's filter text is written.
+struct PgFilter;
+
+static PG_FILTER_SYNTAX: FilterSyntax = FilterSyntax { numbers_as_doubles: false, zoned_instants: false };
+
+impl FilterSql for PgFilter {
+    fn syntax(&self) -> &'static FilterSyntax {
+        &PG_FILTER_SYNTAX
+    }
+
+    /// `'…'`, or an escape string (`E'…'`) when it holds a backslash or a line break: it reads
+    /// the same whatever `standard_conforming_strings` is, and a line break is written as its
+    /// escape.
+    fn text_literal(&self, t: &Target, s: &str) -> String {
+        let d = t.dialect;
+        if s.contains('\\') || s.contains(LINE_BREAKS) {
+            let open = LiteralOpen { prefix: 1, quote: '\'', backslash: true };
+            // The backslashes are doubled first: the escapes written after them stay escapes.
+            let body = d.literal_body(s, open).replace('\n', "\\n").replace('\r', "\\r");
+            format!("E'{body}'")
+        } else {
+            d.quote_literal(s)
+        }
+    }
+
+    /// `'\x…'::pg_catalog.bytea`, the type named with its schema so that a domain of that name
+    /// earlier on the search path is not the one cast to.
+    fn bytes_literal(&self, t: &Target, b: &[u8]) -> String {
+        format!("{}::pg_catalog.bytea", self.text_literal(t, &format!("\\x{}", hex(b, false))))
+    }
+
+    fn null_safe(&self, col: &str, lit: &str, negated: bool) -> String {
+        match negated {
+            false => format!("{col} IS NOT DISTINCT FROM {lit}"),
+            true => format!("{col} IS DISTINCT FROM {lit}"),
+        }
+    }
+
+    /// `ILIKE` without case, only on a column whose collation is known to be deterministic (the
+    /// server refuses it on a nondeterministic one); `LIKE` on such a column, or on a server
+    /// known to take it on any collation (18 and later; before, it refuses a nondeterministic
+    /// one).
+    fn like(&self, t: &Target, c: &Like<'_>) -> Result<String, RenderError> {
+        let d = t.dialect;
+        let p = self.text_literal(t, c.pattern);
+        let e = d.quote_literal(&c.escape.to_string());
+        let col = d.quote_ident(c.col);
+        let not = if c.negated { "NOT " } else { "" };
+        let deterministic = c.facts.and_then(|f| f.deterministic);
+        match c.case {
+            CaseMode::Server => {
+                match (deterministic, t.like_nondeterministic) {
+                    (Some(true), _) | (_, Some(true)) => {}
+                    (Some(false), Some(false)) => return Err(RenderError::LikeRefused(c.col.to_string())),
+                    _ => return Err(RenderError::LikeUnknown(c.col.to_string())),
+                }
+                Ok(format!("{col} {not}LIKE {p} ESCAPE {e}"))
+            }
+            CaseMode::Insensitive => {
+                match deterministic {
+                    Some(true) => {}
+                    Some(false) => return Err(RenderError::CaseInsensitiveRefused(c.col.to_string())),
+                    None => return Err(RenderError::CollationUnknown(c.col.to_string())),
+                }
+                Ok(format!("{col} {not}ILIKE {p} ESCAPE {e}"))
+            }
+        }
+    }
+
+    /// `json`, `xml`, `point` and the other geometric types, and arrays of them, have no
+    /// equality a filter's literal reaches; `jsonb` and arrays of a type known to have one
+    /// compare for equality only.
+    fn compares(&self, m: &ColumnMeta, enum_known: bool) -> Result<Compares, NoEquality> {
+        let ty = m.type_name.to_ascii_lowercase();
+        match m.kind {
+            ValueKind::Integer
+            | ValueKind::Decimal
+            | ValueKind::Float
+            | ValueKind::Text
+            | ValueKind::Bool
+            | ValueKind::Date
+            | ValueKind::Time
+            | ValueKind::Timestamp
+            | ValueKind::TimestampTz
+            | ValueKind::Interval
+            | ValueKind::Bytes
+            | ValueKind::Bit => Ok(Compares::Order),
+            // `jsonb` has equality; `json` has none.
+            ValueKind::Json if ty == "jsonb" => Ok(Compares::Equality),
+            ValueKind::Json => Err(NoEquality),
+            // An array compares through its element type's equality: only one known to have it.
+            ValueKind::Array(ArrayElement::Number | ArrayElement::Bool | ArrayElement::Text)
+                if ty.strip_suffix("[]").is_some_and(|e| PG_ELEMENT_EQ.contains(&e)) =>
+            {
+                Ok(Compares::Equality)
+            }
+            ValueKind::Array(_) => Err(NoEquality),
+            ValueKind::Other if enum_known || PG_ORDERED.contains(&ty.as_str()) => Ok(Compares::Order),
+            ValueKind::Other => Err(NoEquality),
+        }
+    }
+
+    /// The value only when its length is at most [`GROUP_PREVIEW`] bytes, for a type that may
+    /// hold a long one; every function and operator named with `pg_catalog`, so that none of
+    /// them depends on the session's search path.
+    fn group_parts(&self, column: &ColumnMeta, quoted: &str) -> GroupParts {
+        let c = quoted;
+        let (preview, length) = match group_length(column, c) {
+            None => (c.to_string(), "NULL".to_string()),
+            Some(len) => (format!("CASE WHEN {len} OPERATOR(pg_catalog.<=) {GROUP_PREVIEW} THEN {c} END"), len),
+        };
+        GroupParts { preview, length, count: "pg_catalog.count(*)" }
+    }
+}
+
+/// PostgreSQL types of no kind of their own whose values compare as their text reads back
+/// (equality and order).
+const PG_ORDERED: &[&str] = &["uuid", "inet", "cidr", "macaddr", "macaddr8", "citext"];
+
+/// Built-in PostgreSQL element types (as an array's type names them, `text` of `text[]`) known
+/// to have the equality an array's `=` compares its elements with. Any other (`xml`, `json`,
+/// `point` and the other geometric types have none) is not compared.
+const PG_ELEMENT_EQ: &[&str] = &[
+    "int2",
+    "int4",
+    "int8",
+    "float4",
+    "float8",
+    "numeric",
+    "oid",
+    "money",
+    "text",
+    "varchar",
+    "bpchar",
+    "char",
+    "name",
+    "bool",
+    "date",
+    "time",
+    "timetz",
+    "timestamp",
+    "timestamptz",
+    "interval",
+    "uuid",
+    "bytea",
+    "inet",
+    "cidr",
+    "macaddr",
+    "macaddr8",
+    "bit",
+    "varbit",
+];
+
+/// The byte length of value `c` (column `column` quoted) of a group count when its type may hold
+/// a long one; `None` for a type whose values are short (a number, a date, …). Text and bytes
+/// are measured as they are; JSON, arrays and `numeric` (a domain over it too) by their text,
+/// written by the type's own output function (no cast, which could be one of the user's).
+///
+/// The column's type is the one its metadata says, which may be older than the table: the
+/// driver checks the statement's columns as the server prepares it, and refuses a value of a
+/// type that is not short sent without its length.
+fn group_length(column: &ColumnMeta, c: &str) -> Option<String> {
+    let ty = column.type_name.to_ascii_lowercase();
+    match column.kind {
+        ValueKind::Text | ValueKind::Bytes | ValueKind::Bit => Some(format!("pg_catalog.octet_length({c})")),
+        ValueKind::Other if ty == "citext" => Some(format!("pg_catalog.octet_length({c})")),
+        ValueKind::Json if ty == "jsonb" => {
+            Some(format!("pg_catalog.octet_length(pg_catalog.textin(pg_catalog.jsonb_out({c})))"))
+        }
+        ValueKind::Array(_) => Some(format!("pg_catalog.octet_length(pg_catalog.textin(pg_catalog.array_out({c})))")),
+        // `numeric` and a domain over it (by its own name): its text has no bound of its own.
+        // `money` is short.
+        ValueKind::Decimal if ty != "money" => {
+            Some(format!("pg_catalog.octet_length(pg_catalog.textin(pg_catalog.numeric_out({c})))"))
+        }
+        _ => None,
     }
 }

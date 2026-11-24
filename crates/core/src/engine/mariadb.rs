@@ -2,8 +2,8 @@
 //! row and icon.
 
 use super::mysql_family::{
-    FamilyCancel, FamilyCatalogue, FamilyDdl, FamilyExport, FamilySession, FamilyText, FamilyTx, FamilyValues,
-    family_classifier, family_filter_calls, family_read_only_calls,
+    FamilyCancel, FamilyCatalogue, FamilyDdl, FamilyExport, FamilyFilter, FamilySession, FamilySort, FamilyText,
+    FamilyTx, FamilyValues, family_classifier, family_filter_calls, family_read_only_calls,
 };
 use super::{EngineId, EngineSpec, Fact, FilterCalls, MYSQL_FAMILY, RiskRules, Support, Transport, Why};
 use crate::driver::Hierarchy;
@@ -33,6 +33,8 @@ pub static SPEC: EngineSpec = EngineSpec {
     edit: Fact::No(Why::NotBuilt),
     catalogue: &FamilyCatalogue,
     ddl: Fact::Known(&FamilyDdl),
+    sort: &FamilySort,
+    filter: Fact::Known(&FamilyFilter),
 };
 
 /// How MariaDB's statements are judged: the family's classifier of the text's dialect

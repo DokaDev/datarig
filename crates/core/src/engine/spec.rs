@@ -6,6 +6,7 @@ use crate::edit::{Invalid, TableColumn};
 use crate::export::keyset::NotKeyset;
 use crate::export::{Kind, Refused, SqlCells, SqlColumn};
 use crate::profile::dsn::Scheme;
+use crate::query::{CaseMode, ColumnFacts, Compares, NoEquality, Nulls, RenderError, Target};
 use crate::sql::dialect::{Dialect, DollarQuotes};
 use crate::sql::risk::Classifier;
 use crate::sql::risk::mysql::Judged;
@@ -59,6 +60,10 @@ pub struct EngineSpec {
     pub catalogue: &'static dyn CatalogueRules,
     /// How the DDL of its objects is shown and opened in a console.
     pub ddl: Fact<&'static dyn DdlRules>,
+    /// How a table's rows are ordered and paged.
+    pub sort: &'static dyn SortRules,
+    /// How a table's filter is written.
+    pub filter: Fact<&'static dyn FilterSql>,
 }
 
 /// How an engine's text is read on a server.
@@ -288,4 +293,96 @@ pub trait InputRules: Sync {
 
     /// A span of time.
     fn interval(&self, c: &TableColumn, s: &str) -> Result<(), Invalid>;
+}
+
+/// How an engine orders and pages a table's rows.
+pub trait SortRules: Sync {
+    /// Whether NULL sorts as smaller than any value (else as larger), where a key does not say
+    /// where its NULLs go.
+    fn nulls_low(&self) -> bool;
+
+    /// The sort key on column `col` (quoted) in direction `dir` (`ASC` or `DESC`), its NULLs
+    /// where `n` says.
+    fn nulls_key(&self, col: &str, dir: &str, n: Nulls) -> String;
+
+    /// Whether an order may say where its NULLs go (`NULLS FIRST`, `NULLS LAST`).
+    fn typed_nulls(&self) -> bool;
+
+    /// How the server matches an unquoted name with a column.
+    fn names(&self) -> NameMatch;
+
+    /// The clause (with a leading space) that skips the first `offset` rows and reads every
+    /// row after them.
+    fn offset_alone(&self, offset: u64) -> String;
+}
+
+/// How a server matches an unquoted name with a column ([`SortRules::names`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NameMatch {
+    /// The name as it folds it, exactly.
+    Exact,
+    /// Any column whose name differs from it only in case.
+    AnyCase,
+}
+
+/// How a table's filter is written on an engine. Each answer takes what is known of the table
+/// and its session ([`Target`]) where it reads it.
+pub trait FilterSql: Sync {
+    /// What the engine's filter text means, as data.
+    fn syntax(&self) -> &'static FilterSyntax;
+
+    /// `s` as a string literal the server reads as `s`, on one line.
+    fn text_literal(&self, t: &Target, s: &str) -> String;
+
+    /// Bytes `b` as a literal the server reads as them.
+    fn bytes_literal(&self, t: &Target, b: &[u8]) -> String;
+
+    /// Column `col` (quoted) compared with literal `lit` so that NULL equals NULL; `negated`:
+    /// that they differ so.
+    fn null_safe(&self, col: &str, lit: &str, negated: bool) -> String;
+
+    /// The pattern `c`, or why the server would not read it as shown.
+    fn like(&self, t: &Target, c: &Like<'_>) -> Result<String, RenderError>;
+
+    /// How a filter compares the values of a result column `m`, as its type says: with an
+    /// order, for equality only, or not at all. `enum_known`: the column's type is known to be
+    /// an enum of the engine that has no kind of its own.
+    fn compares(&self, m: &ColumnMeta, enum_known: bool) -> Result<Compares, NoEquality>;
+
+    /// The three items a group count reads of `column` (`quoted`, its name as written).
+    fn group_parts(&self, column: &ColumnMeta, quoted: &str) -> GroupParts;
+}
+
+/// What an engine's filter text means, as data: each engine writes every field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FilterSyntax {
+    /// The server compares a number column with a string as two doubles: a number for such a
+    /// column is written as its exact decimal, a single-precision float bare, and values that
+    /// would compare otherwise than shown are refused.
+    pub numbers_as_doubles: bool,
+    /// A value with the offset of the zone it was read in, compared with a column shown in the
+    /// session's zone, is written as that instant in the session's zone.
+    pub zoned_instants: bool,
+}
+
+/// A pattern of a filter ([`FilterSql::like`]): column `col` (its name, not quoted) matched with
+/// `pattern` (escaped with `escape`), as `case` says, `negated` or not. `facts`: what is known
+/// of the column.
+#[derive(Clone, Copy, Debug)]
+pub struct Like<'a> {
+    pub col: &'a str,
+    pub pattern: &'a str,
+    pub escape: char,
+    pub negated: bool,
+    pub case: CaseMode,
+    pub facts: Option<&'a ColumnFacts>,
+}
+
+/// The items a group count reads ([`FilterSql::group_parts`]): the value, sent only when it is
+/// short; its length, or NULL for a type whose values are short; and the count of its rows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GroupParts {
+    pub preview: String,
+    pub length: String,
+    pub count: &'static str,
 }

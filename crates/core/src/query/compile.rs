@@ -1,6 +1,6 @@
 //! A [`Query`] as one `SELECT` statement of the target's dialect.
 
-use super::{ColName, Dir, KeyOrigin, Nulls, OrderKey, Query, Source, Target};
+use super::{ColName, Dir, KeyOrigin, OrderKey, Query, Source, Target};
 use crate::sql::dialect::Dialect;
 use std::ops::Range;
 
@@ -66,13 +66,11 @@ pub fn capped(sql: &str, q: &Query, d: Dialect) -> String {
 
 /// `q`'s `LIMIT` and `OFFSET` as SQL (with a leading space), empty when it sets neither.
 fn cap_clause(q: &Query, d: Dialect) -> String {
-    match (q.limit, q.offset, d) {
-        (Some(n), Some(m), _) => format!(" LIMIT {n} OFFSET {m}"),
-        (Some(n), None, _) => format!(" LIMIT {n}"),
-        (None, Some(m), Dialect::Postgres) => format!(" OFFSET {m}"),
-        // MySQL has no `OFFSET` without a `LIMIT`: the largest one stands for none.
-        (None, Some(m), Dialect::MySql(_) | Dialect::MariaDb(_)) => format!(" LIMIT {} OFFSET {m}", u64::MAX),
-        (None, None, _) => String::new(),
+    match (q.limit, q.offset) {
+        (Some(n), Some(m)) => format!(" LIMIT {n} OFFSET {m}"),
+        (Some(n), None) => format!(" LIMIT {n}"),
+        (None, Some(m)) => d.engine().spec().sort.offset_alone(m),
+        (None, None) => String::new(),
     }
 }
 
@@ -103,19 +101,17 @@ fn total(order: &[OrderKey], t: &Target) -> bool {
     has(&t.primary_key) || t.unique_keys.iter().any(|k| has(k))
 }
 
-/// One sort key as SQL. MySQL has no `NULLS FIRST`/`LAST`: it sorts on whether the value is
-/// NULL first.
+/// One sort key as SQL, its NULLs placed as the engine writes that ([`SortRules::nulls_key`]).
+///
+/// [`SortRules::nulls_key`]: crate::engine::SortRules::nulls_key
 fn key_sql(d: Dialect, k: &OrderKey) -> String {
     let col = d.force_quote_ident(&k.col);
     let dir = match k.dir {
         Dir::Asc => "ASC",
         Dir::Desc => "DESC",
     };
-    match (d, k.nulls) {
-        (_, None) => format!("{col} {dir}"),
-        (Dialect::Postgres, Some(Nulls::First)) => format!("{col} {dir} NULLS FIRST"),
-        (Dialect::Postgres, Some(Nulls::Last)) => format!("{col} {dir} NULLS LAST"),
-        (Dialect::MySql(_) | Dialect::MariaDb(_), Some(Nulls::First)) => format!("{col} IS NULL DESC, {col} {dir}"),
-        (Dialect::MySql(_) | Dialect::MariaDb(_), Some(Nulls::Last)) => format!("{col} IS NULL ASC, {col} {dir}"),
+    match k.nulls {
+        None => format!("{col} {dir}"),
+        Some(n) => d.engine().spec().sort.nulls_key(&col, dir, n),
     }
 }

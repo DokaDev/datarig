@@ -2214,6 +2214,43 @@ fn every_group_count_statement_has_three_columns() {
     }
 }
 
+/// An engine without rules a filter is written by writes no filter text and no group count:
+/// the value filter is refused, and a group count is refused as the filter bar refuses a filter,
+/// whether other conditions come with it or not. No engine of the registry is such an engine.
+#[test]
+fn a_filter_without_the_engines_rules_is_refused() {
+    use crate::driver::ValueKind;
+    use crate::engine::{Fact, FilterSql, Why};
+    let none: Fact<&'static dyn FilterSql> = Fact::No(Why::NotBuilt);
+    let unknown: Fact<&'static dyn FilterSql> = Fact::Unknown(Why::NotChecked);
+    let name = meta("name", "text", ValueKind::Text);
+    for d in [Dialect::Postgres, MY, Dialect::MariaDb(MySqlMode::default())] {
+        let t = Target { utf8mb4: true, ..target(d) };
+        let classifier = Classifier::new(Language::Sql(d));
+        for (group, why) in [(&none, Why::NotBuilt), (&unknown, Why::NotChecked)] {
+            let cond = cmp("id", CmpOp::Eq, num("1"));
+            assert_eq!(render::written(&cond, &t, group), Err(RenderError::Engine(why.clone())), "{d:?}");
+            for other in [None, Some("id > 1")] {
+                let g = GroupCount {
+                    table: &users(),
+                    target: &t,
+                    column: &name,
+                    enum_known: false,
+                    other,
+                    classifier: &classifier,
+                    read_only: false,
+                };
+                let refused = Err(GroupRefusal::Filter(BarRefusal::Engine(why.clone())));
+                assert_eq!(group::counted(&g, group), refused, "{d:?} {other:?}");
+            }
+        }
+        // The registry's own rules write both.
+        assert!(render(&cmp("id", CmpOp::Eq, num("1")), &t).is_ok(), "{d:?}");
+        assert!(group(d, &name, Some("id > 1"), false).is_ok(), "{d:?}");
+        assert!(filter_sql(d).is_ok(), "{d:?}");
+    }
+}
+
 #[test]
 fn group_count_refuses_what_the_filter_bar_refuses_and_unknown_calls() {
     use crate::driver::ValueKind;

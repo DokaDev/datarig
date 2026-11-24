@@ -374,6 +374,7 @@ impl App {
                 Label::TableFilterByValueOffCollationUnknown,
                 warn(Msg::TableFilterByValueLikeUnknown { column }),
             ),
+            RenderError::Engine(why) => Off::new(Label::EngineWhyNotBuilt, warn(super::engine_why::why_text(&why))),
             _ => Off::new(Label::TableFilterByValueOffType, self.by_value_type_notice(m)),
         }
     }

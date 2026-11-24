@@ -33,9 +33,10 @@
 //! a server known to take it on any collation (18 and later; before, it refuses a
 //! nondeterministic one).
 
-use super::{BarRefusal, CaseMode, CmpOp, ColumnFacts, ColumnKind, Cond, Target, Value};
+use super::{BarRefusal, CmpOp, ColumnFacts, ColumnKind, Cond, Target, Value};
+use crate::engine::{Fact, FilterSql, Like, Why};
 use crate::export::{negative_zero, sql_number};
-use crate::sql::dialect::{Dialect, LiteralOpen};
+use crate::sql::dialect::Dialect;
 
 /// Why a condition is not written.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,6 +72,8 @@ pub enum RenderError {
     /// A pattern with the server's case on a PostgreSQL column whose collation is not known to
     /// be deterministic, on a server not known to take `LIKE` on one that is not: the column.
     LikeUnknown(String),
+    /// The engine has no rules a filter is written by: why.
+    Engine(Why),
 }
 
 /// The escape character of the patterns written here.
@@ -108,32 +111,39 @@ enum Place {
 /// `c` as filter text of `t`'s dialect. A condition of several parts that is not all `AND`s is
 /// in parentheses, so that `AND` may be written after it.
 pub fn render(c: &Cond, t: &Target) -> Result<String, RenderError> {
-    render_at(c, t, Place::Top)
+    written(c, t, &t.dialect.engine().spec().filter)
 }
 
-fn render_at(c: &Cond, t: &Target, place: Place) -> Result<String, RenderError> {
+/// [`render`] by the filter rules of `group`, the engine's filter group: refused where it has
+/// none ([`RenderError::Engine`]).
+pub(super) fn written(c: &Cond, t: &Target, group: &Fact<&'static dyn FilterSql>) -> Result<String, RenderError> {
+    let rules = super::known(group).map_err(RenderError::Engine)?;
+    render_at(c, t, rules, Place::Top)
+}
+
+fn render_at(c: &Cond, t: &Target, f: &dyn FilterSql, place: Place) -> Result<String, RenderError> {
     let d = t.dialect;
     let col = |name: &str| d.quote_ident(name);
-    let lit = |name: &str, v: &Value| literal(t, t.column(name), v);
+    let lit = |name: &str, v: &Value| literal(t, f, t.column(name), v);
     let not = |negated: bool| if negated { "NOT " } else { "" };
-    if let Some(e) = refused_values(c, t) {
+    if let Some(e) = refused_values(c, t, f) {
         return Err(e);
     }
     Ok(match c {
-        Cond::All(cs) if cs.len() == 1 => render_at(&cs[0], t, place)?,
-        Cond::Any(cs) if cs.len() == 1 => render_at(&cs[0], t, place)?,
+        Cond::All(cs) if cs.len() == 1 => render_at(&cs[0], t, f, place)?,
+        Cond::Any(cs) if cs.len() == 1 => render_at(&cs[0], t, f, place)?,
         Cond::All(cs) if cs.is_empty() => "TRUE".to_string(),
         Cond::Any(cs) if cs.is_empty() => "FALSE".to_string(),
         Cond::All(cs) => {
-            let parts = cs.iter().map(|c| render_at(c, t, Place::Operand)).collect::<Result<Vec<_>, _>>()?;
+            let parts = cs.iter().map(|c| render_at(c, t, f, Place::Operand)).collect::<Result<Vec<_>, _>>()?;
             let s = parts.join(" AND ");
             if place == Place::Top { s } else { format!("({s})") }
         }
         Cond::Any(cs) => {
-            let parts = cs.iter().map(|c| render_at(c, t, Place::Operand)).collect::<Result<Vec<_>, _>>()?;
+            let parts = cs.iter().map(|c| render_at(c, t, f, Place::Operand)).collect::<Result<Vec<_>, _>>()?;
             format!("({})", parts.join(" OR "))
         }
-        Cond::Not(inner) => format!("NOT {}", grouped(d, render_at(inner, t, Place::Operand)?)),
+        Cond::Not(inner) => format!("NOT {}", grouped(d, render_at(inner, t, f, Place::Operand)?)),
         Cond::Raw(s) => grouped(d, s.clone()),
         Cond::Cmp { col: name, op, value } => {
             if *value == Value::Null {
@@ -141,12 +151,7 @@ fn render_at(c: &Cond, t: &Target, place: Place) -> Result<String, RenderError> 
             }
             format!("{} {} {}", col(name), op.sql(), lit(name, value))
         }
-        Cond::NotDistinct { col: name, value, negated } => match (d, negated) {
-            (Dialect::Postgres, false) => format!("{} IS NOT DISTINCT FROM {}", col(name), lit(name, value)),
-            (Dialect::Postgres, true) => format!("{} IS DISTINCT FROM {}", col(name), lit(name, value)),
-            (Dialect::MySql(_) | Dialect::MariaDb(_), false) => format!("{} <=> {}", col(name), lit(name, value)),
-            (Dialect::MySql(_) | Dialect::MariaDb(_), true) => format!("NOT ({} <=> {})", col(name), lit(name, value)),
-        },
+        Cond::NotDistinct { col: name, value, negated } => f.null_safe(&col(name), &lit(name, value), *negated),
         Cond::IsNull { col: name, negated } => format!("{} IS {}NULL", col(name), not(*negated)),
         Cond::In { col: name, values, negated } => {
             let null = values.contains(&Value::Null);
@@ -160,41 +165,10 @@ fn render_at(c: &Cond, t: &Target, place: Place) -> Result<String, RenderError> 
                 (false, true, true) => format!("({c} NOT IN ({}) AND {c} IS NOT NULL)", rest.join(", ")),
             }
         }
-        Cond::Like { col: name, pattern, negated, case } => {
-            let p = text_literal(t, pattern);
-            let e = d.quote_literal(&ESCAPE.to_string());
-            let facts = t.column(name);
-            match (d, case) {
-                (Dialect::Postgres, CaseMode::Server) => {
-                    match (facts.and_then(|f| f.deterministic), t.like_nondeterministic) {
-                        (Some(true), _) | (_, Some(true)) => {}
-                        (Some(false), Some(false)) => return Err(RenderError::LikeRefused(name.clone())),
-                        _ => return Err(RenderError::LikeUnknown(name.clone())),
-                    }
-                    format!("{} {}LIKE {p} ESCAPE {e}", col(name), not(*negated))
-                }
-                (Dialect::MySql(_) | Dialect::MariaDb(_), CaseMode::Server) => {
-                    format!("{} {}LIKE {p} ESCAPE {e}", col(name), not(*negated))
-                }
-                (Dialect::Postgres, CaseMode::Insensitive) => {
-                    match facts.and_then(|f| f.deterministic) {
-                        Some(true) => {}
-                        Some(false) => return Err(RenderError::CaseInsensitiveRefused(name.clone())),
-                        None => return Err(RenderError::CollationUnknown(name.clone())),
-                    }
-                    format!("{} {}ILIKE {p} ESCAPE {e}", col(name), not(*negated))
-                }
-                // A `_ci` collation compares without case already (and keeps an index usable).
-                (Dialect::MySql(_) | Dialect::MariaDb(_), CaseMode::Insensitive)
-                    if facts.is_some_and(case_insensitive) =>
-                {
-                    format!("{} {}LIKE {p} ESCAPE {e}", col(name), not(*negated))
-                }
-                (Dialect::MySql(_) | Dialect::MariaDb(_), CaseMode::Insensitive) => {
-                    format!("LOWER({}) {}LIKE LOWER({p}) ESCAPE {e}", col(name), not(*negated))
-                }
-            }
-        }
+        Cond::Like { col: name, pattern, negated, case } => f.like(
+            t,
+            &Like { col: name, pattern, escape: ESCAPE, negated: *negated, case: *case, facts: t.column(name) },
+        )?,
         Cond::Between { col: name, lo, hi, negated } => {
             if *lo == Value::Null || *hi == Value::Null {
                 return Err(RenderError::NullCompare(name.clone()));
@@ -209,13 +183,9 @@ fn grouped(d: Dialect, s: String) -> String {
     if d.unparenthesized(&s).len() < s.trim().len() { s } else { format!("({s})") }
 }
 
-/// A MySQL collation that compares without case (`utf8mb4_0900_ai_ci`).
-fn case_insensitive(c: &ColumnFacts) -> bool {
-    c.collation.as_deref().is_some_and(|n| n.to_ascii_lowercase().ends_with("_ci"))
-}
-
-/// `v` as a literal compared with column `c` (unknown: no kind).
-fn literal(t: &Target, c: Option<&ColumnFacts>, v: &Value) -> String {
+/// `v` as a literal compared with column `c` (unknown: no kind), by the filter rules `f`.
+fn literal(t: &Target, f: &dyn FilterSql, c: Option<&ColumnFacts>, v: &Value) -> String {
+    let syntax = f.syntax();
     match v {
         Value::Null => "NULL".to_string(),
         Value::Bool(true) => "TRUE".to_string(),
@@ -224,7 +194,7 @@ fn literal(t: &Target, c: Option<&ColumnFacts>, v: &Value) -> String {
         // string as two doubles: a number for a number column is written as its exact decimal
         // (a number that has none is refused before, `RenderError::NotExact`).
         Value::Number(n) | Value::Text(n)
-            if matches!(t.dialect, Dialect::MySql(_) | Dialect::MariaDb(_))
+            if syntax.numbers_as_doubles
                 && c.is_some_and(|c| c.kind == ColumnKind::Number)
                 && sql_number(n)
                 && !negative_zero(n) =>
@@ -232,15 +202,17 @@ fn literal(t: &Target, c: Option<&ColumnFacts>, v: &Value) -> String {
             exact_decimal(n).unwrap_or_else(|| n.clone())
         }
         Value::Number(n)
-            if c.is_some_and(|c| bare_numbers(t.dialect, c.kind)) && sql_number(n) && !negative_zero(n) =>
+            if c.is_some_and(|c| bare_numbers(syntax.numbers_as_doubles, c.kind))
+                && sql_number(n)
+                && !negative_zero(n) =>
         {
             n.clone()
         }
-        Value::Number(n) => text_literal(t, n),
+        Value::Number(n) => f.text_literal(t, n),
         // A MySQL `FLOAT`: compared as a double whatever is written, the number as typed.
         Value::Text(s)
-            if matches!(t.dialect, Dialect::MySql(_) | Dialect::MariaDb(_))
-                && c.is_some_and(|c| bare_numbers(t.dialect, c.kind))
+            if syntax.numbers_as_doubles
+                && c.is_some_and(|c| bare_numbers(syntax.numbers_as_doubles, c.kind))
                 && sql_number(s)
                 && !negative_zero(s) =>
         {
@@ -253,19 +225,12 @@ fn literal(t: &Target, c: Option<&ColumnFacts>, v: &Value) -> String {
         // The instant is written in UTC (the source zone `+00:00`, which every server reads); a
         // value with an offset that is no such instant is refused before
         // (`RenderError::NotInstant`).
-        Value::Text(s)
-            if matches!(t.dialect, Dialect::MySql(_) | Dialect::MariaDb(_)) && c.is_some_and(|c| c.zoned) =>
-        {
-            match instant(s) {
-                Some(Some(utc)) => format!("CONVERT_TZ({}, '+00:00', @@session.time_zone)", text_literal(t, &utc)),
-                _ => text_literal(t, s),
-            }
-        }
-        Value::Text(s) => text_literal(t, s),
-        Value::Bytes(b) => match t.dialect {
-            Dialect::Postgres => format!("{}::pg_catalog.bytea", text_literal(t, &format!("\\x{}", hex(b, false)))),
-            Dialect::MySql(_) | Dialect::MariaDb(_) => format!("X'{}'", hex(b, true)),
+        Value::Text(s) if syntax.zoned_instants && c.is_some_and(|c| c.zoned) => match instant(s) {
+            Some(Some(utc)) => format!("CONVERT_TZ({}, '+00:00', @@session.time_zone)", f.text_literal(t, &utc)),
+            _ => f.text_literal(t, s),
         },
+        Value::Text(s) => f.text_literal(t, s),
+        Value::Bytes(b) => f.bytes_literal(t, b),
     }
 }
 
@@ -412,12 +377,13 @@ pub(super) fn exact_decimal(s: &str) -> Option<String> {
     })
 }
 
-/// A number compared with a column of kind `kind` of dialect `d` is written bare: a number
-/// column, or a MySQL `FLOAT` (a PostgreSQL `real` takes it as a string, see [`ColumnKind::Real`]).
-pub(super) fn bare_numbers(d: Dialect, kind: ColumnKind) -> bool {
+/// A number compared with a column of kind `kind` is written bare: a number column, or a
+/// single-precision float where the server compares numbers as doubles (`doubles`: MySQL's
+/// `FLOAT`; a PostgreSQL `real` takes it as a string, see [`ColumnKind::Real`]).
+pub(super) fn bare_numbers(doubles: bool, kind: ColumnKind) -> bool {
     match kind {
         ColumnKind::Number => true,
-        ColumnKind::Real => matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)),
+        ColumnKind::Real => doubles,
         _ => false,
     }
 }
@@ -427,9 +393,12 @@ pub(super) fn bare_numbers(d: Dialect, kind: ColumnKind) -> bool {
 /// number compared with a number column ([`RenderError::NotNumber`]), or a number with no exact
 /// decimal spelling compared with one ([`RenderError::NotExact`]); a value with an offset that is
 /// no instant compared with a `TIMESTAMP` ([`RenderError::NotInstant`]). PostgreSQL refuses such
-/// text itself (an error, never a silent conversion).
-fn refused_values(c: &Cond, t: &Target) -> Option<RenderError> {
-    if t.dialect == Dialect::Postgres {
+/// text itself (an error, never a silent conversion): only an engine whose server compares
+/// numbers as doubles ([`FilterSyntax::numbers_as_doubles`]) refuses them here.
+///
+/// [`FilterSyntax::numbers_as_doubles`]: crate::engine::FilterSyntax::numbers_as_doubles
+fn refused_values(c: &Cond, t: &Target, f: &dyn FilterSql) -> Option<RenderError> {
+    if !f.syntax().numbers_as_doubles {
         return None;
     }
     let (name, values, equality): (&str, Vec<&Value>, bool) = match c {
@@ -465,29 +434,7 @@ fn refused_values(c: &Cond, t: &Target) -> Option<RenderError> {
 
 /// Characters a literal does not hold as they are: the filter's text fields are one line, and
 /// would put a space for them, so that the text it shows would not be the text that runs.
-const LINE_BREAKS: [char; 2] = ['\n', '\r'];
-
-/// `s` as a string literal that the server reads as `s`, on one line (see the module docs).
-fn text_literal(t: &Target, s: &str) -> String {
-    let d = t.dialect;
-    match d {
-        Dialect::Postgres if s.contains('\\') || s.contains(LINE_BREAKS) => {
-            let open = LiteralOpen { prefix: 1, quote: '\'', backslash: true };
-            // The backslashes are doubled first: the escapes written after them stay escapes.
-            let body = d.literal_body(s, open).replace('\n', "\\n").replace('\r', "\\r");
-            format!("E'{body}'")
-        }
-        Dialect::Postgres => d.quote_literal(s),
-        // A value holding the characters `/*M!` (MariaDB's own executable comment) is written as
-        // its bytes too: a MariaDB session refuses text that holds them as typed.
-        Dialect::MySql(_) | Dialect::MariaDb(_)
-            if t.utf8mb4 && !s.contains(['\\', '\0']) && !s.contains(LINE_BREAKS) && !s.contains("/*M!") =>
-        {
-            d.quote_literal(s)
-        }
-        Dialect::MySql(_) | Dialect::MariaDb(_) => format!("_utf8mb4 X'{}'", hex(s.as_bytes(), true)),
-    }
-}
+pub(crate) const LINE_BREAKS: [char; 2] = ['\n', '\r'];
 
 /// Filter text `base` with condition `cond` (as [`render`] writes one) added to it: `cond` alone
 /// when `base` is blank, else `base AND cond`. `base` is put in parentheses first unless every
@@ -548,7 +495,7 @@ fn plain_and_chain(text: &str, d: Dialect) -> bool {
 }
 
 /// Bytes in hexadecimal, two digits each.
-fn hex(b: &[u8], upper: bool) -> String {
+pub(crate) fn hex(b: &[u8], upper: bool) -> String {
     b.iter().map(|b| if upper { format!("{b:02X}") } else { format!("{b:02x}") }).collect()
 }
 

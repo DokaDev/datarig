@@ -13,6 +13,7 @@
 //! that name. Names are read and written through the dialect only.
 
 use super::{Dir, KeyOrigin, Nulls, OrderKey, Target};
+use crate::engine::NameMatch;
 use crate::sql::dialect::Dialect;
 use crate::sql::lexer::{Tok, Token, lex_in};
 use std::ops::Range;
@@ -103,7 +104,7 @@ pub fn parse_order(text: &str, t: &Target) -> Result<Vec<OrderKey>, OrderError> 
             let Some(place) = place else {
                 return err(tok, OrderProblem::NullsIncomplete);
             };
-            if let Dialect::MySql(_) | Dialect::MariaDb(_) = d {
+            if !d.engine().spec().sort.typed_nulls() {
                 let end = tokens[i + 1].end;
                 return Err(OrderError { range: tok.start..end, kind: OrderProblem::NullsUnsupported });
             }
@@ -142,14 +143,17 @@ fn column(text: &str, tok: &Token, t: &Target) -> Result<String, OrderError> {
             return Ok(folded);
         }
     }
-    if let Dialect::MySql(_) | Dialect::MariaDb(_) = d {
-        let same: Vec<&str> =
-            t.columns.iter().map(|c| c.name.as_str()).filter(|c| c.eq_ignore_ascii_case(&name)).collect();
-        match same.as_slice() {
-            [one] => return Ok(one.to_string()),
-            [] => {}
-            _ => return fail(OrderProblem::AmbiguousColumn(name)),
+    match d.engine().spec().sort.names() {
+        NameMatch::AnyCase => {
+            let same: Vec<&str> =
+                t.columns.iter().map(|c| c.name.as_str()).filter(|c| c.eq_ignore_ascii_case(&name)).collect();
+            match same.as_slice() {
+                [one] => return Ok(one.to_string()),
+                [] => {}
+                _ => return fail(OrderProblem::AmbiguousColumn(name)),
+            }
         }
+        NameMatch::Exact => {}
     }
     let shown = if quoted { name } else { d.fold(&name) };
     fail(OrderProblem::UnknownColumn(shown))

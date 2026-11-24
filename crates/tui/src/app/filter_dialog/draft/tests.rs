@@ -960,3 +960,18 @@ fn a_timestamp_instant_is_a_row_only_on_a_timestamp() {
     assert_eq!(w.terms()[0].row, None);
     assert_eq!(w.text(), filter);
 }
+
+/// A pattern operator the renderer refuses because the engine has no rules a filter is written
+/// by is dimmed with the engine's words, not a collation's. No engine of the registry is such an
+/// engine.
+#[test]
+fn no_filter_rules_dims_the_operator_with_the_engines_words() {
+    use datarig_core::engine::Why;
+    for why in [Why::NotBuilt, Why::NotChecked] {
+        assert_eq!(render_off(RenderError::Engine(why)), OpOff::NoFilterRules);
+    }
+    assert_eq!(super::super::keys::op_off_label(OpOff::NoFilterRules), datarig_i18n::Label::EngineWhyNotBuilt);
+    // The renderer's other refusals keep their own words.
+    assert_eq!(render_off(RenderError::LikeRefused("name".into())), OpOff::LikeRefused);
+    assert_eq!(render_off(RenderError::NotNumber("id".into())), OpOff::LikeUnknown);
+}

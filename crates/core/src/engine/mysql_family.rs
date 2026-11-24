@@ -3,15 +3,18 @@
 
 use super::{
     CancelRules, CatalogueRules, CountInTx, DdlOfIndex, DdlRules, DdlToConsole, EngineFacts, EngineId, ExportRules,
-    Fact, FilterCalls, InputRules, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, ResultTables, ServerFacts,
-    SessionRules, Support, TextRules, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, ValueRules, Version,
-    Why,
+    Fact, FilterCalls, FilterSql, FilterSyntax, GroupParts, InputRules, Like, NameMatch, OpenVerdict,
+    READ_ONLY_NOT_PROVEN, ReadOnlyProof, ResultTables, ServerFacts, SessionRules, SortRules, Support, TextRules, TxAsk,
+    TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, ValueRules, Version, Why,
 };
 use crate::driver::{ColumnMeta, ReadIn, SessionRole, SessionValues, ValueKind};
 use crate::edit::input::{self, TypeName};
 use crate::edit::{BitsForm, BytesForm, Invalid, TableColumn};
 use crate::export::keyset::{NotKeyset, expanded};
 use crate::export::{self, Kind, NotWhole, Refused, Rule, SqlCells, SqlColumn, fixed_offset};
+use crate::query::{
+    CaseMode, ColumnFacts, Compares, GROUP_PREVIEW, LINE_BREAKS, NoEquality, Nulls, RenderError, Target, hex,
+};
 use crate::sql::dialect::{Dialect, DollarQuotes, Language};
 use crate::sql::risk::mysql::Judged;
 use crate::sql::risk::{Class, Classifier, Danger};
@@ -614,4 +617,126 @@ impl InputRules for FamilyInput {
     fn interval(&self, c: &TableColumn, s: &str) -> Result<(), Invalid> {
         input::mysql_time(&TypeName::read(&c.column.type_name), s)
     }
+}
+
+/// How MySQL and MariaDB order and page a table's rows.
+pub(super) struct FamilySort;
+
+impl SortRules for FamilySort {
+    /// Yes: NULL sorts as smaller than any value.
+    fn nulls_low(&self) -> bool {
+        true
+    }
+
+    /// There is no `NULLS FIRST`/`LAST`: the key sorts on whether the value is NULL first.
+    fn nulls_key(&self, col: &str, dir: &str, n: Nulls) -> String {
+        match n {
+            Nulls::First => format!("{col} IS NULL DESC, {col} {dir}"),
+            Nulls::Last => format!("{col} IS NULL ASC, {col} {dir}"),
+        }
+    }
+
+    /// No: the servers have no such syntax.
+    fn typed_nulls(&self) -> bool {
+        false
+    }
+
+    /// Column names compare without regard to case.
+    fn names(&self) -> NameMatch {
+        NameMatch::AnyCase
+    }
+
+    /// There is no `OFFSET` without a `LIMIT`: the largest one stands for none.
+    fn offset_alone(&self, offset: u64) -> String {
+        format!(" LIMIT {} OFFSET {offset}", u64::MAX)
+    }
+}
+
+/// How MySQL's and MariaDB's filter text is written.
+pub(super) struct FamilyFilter;
+
+static FAMILY_FILTER_SYNTAX: FilterSyntax = FilterSyntax { numbers_as_doubles: true, zoned_instants: true };
+
+impl FilterSql for FamilyFilter {
+    fn syntax(&self) -> &'static FilterSyntax {
+        &FAMILY_FILTER_SYNTAX
+    }
+
+    /// Plain only when the session's character set is known to be `utf8mb4` and it holds no
+    /// backslash or NUL (which `NO_BACKSLASH_ESCAPES` reads otherwise) and no line break; else
+    /// its UTF-8 bytes, `_utf8mb4 X'…'`. A value holding the characters `/*M!` (MariaDB's own
+    /// executable comment) is written as its bytes too: a MariaDB session refuses text that
+    /// holds them as typed.
+    fn text_literal(&self, t: &Target, s: &str) -> String {
+        if t.utf8mb4 && !s.contains(['\\', '\0']) && !s.contains(LINE_BREAKS) && !s.contains("/*M!") {
+            t.dialect.quote_literal(s)
+        } else {
+            format!("_utf8mb4 X'{}'", hex(s.as_bytes(), true))
+        }
+    }
+
+    fn bytes_literal(&self, _: &Target, b: &[u8]) -> String {
+        format!("X'{}'", hex(b, true))
+    }
+
+    fn null_safe(&self, col: &str, lit: &str, negated: bool) -> String {
+        match negated {
+            false => format!("{col} <=> {lit}"),
+            true => format!("NOT ({col} <=> {lit})"),
+        }
+    }
+
+    /// Without case: `LIKE` on a column of a `_ci` collation, which compares without case already
+    /// (and keeps an index usable), else `LOWER(…) LIKE LOWER(…)`.
+    fn like(&self, t: &Target, c: &Like<'_>) -> Result<String, RenderError> {
+        let d = t.dialect;
+        let p = self.text_literal(t, c.pattern);
+        let e = d.quote_literal(&c.escape.to_string());
+        let col = d.quote_ident(c.col);
+        let not = if c.negated { "NOT " } else { "" };
+        Ok(match c.case {
+            CaseMode::Server => format!("{col} {not}LIKE {p} ESCAPE {e}"),
+            CaseMode::Insensitive if c.facts.is_some_and(case_insensitive) => {
+                format!("{col} {not}LIKE {p} ESCAPE {e}")
+            }
+            CaseMode::Insensitive => format!("LOWER({col}) {not}LIKE LOWER({p}) ESCAPE {e}"),
+        })
+    }
+
+    /// JSON (compared with a string as a JSON string), the spatial and vector types (which come
+    /// as bytes but do not compare as such), bits (shown as `b'…'`, no string literal of them),
+    /// arrays and the types of no kind of their own have no equality a filter's literal reaches.
+    fn compares(&self, m: &ColumnMeta, _: bool) -> Result<Compares, NoEquality> {
+        let ty = m.type_name.to_ascii_lowercase();
+        match m.kind {
+            ValueKind::Integer
+            | ValueKind::Decimal
+            | ValueKind::Float
+            | ValueKind::Text
+            | ValueKind::Bool
+            | ValueKind::Date
+            | ValueKind::Time
+            | ValueKind::Timestamp
+            | ValueKind::TimestampTz
+            | ValueKind::Interval => Ok(Compares::Order),
+            ValueKind::Bytes if ty == "geometry" || ty == "vector" => Err(NoEquality),
+            ValueKind::Bytes => Ok(Compares::Order),
+            ValueKind::Bit | ValueKind::Json | ValueKind::Array(_) | ValueKind::Other => Err(NoEquality),
+        }
+    }
+
+    /// Every value measured, whatever its type is said to be (`OCTET_LENGTH` of a number or a
+    /// date is that of its text, which the server sends): what is sent is bounded by the
+    /// statement itself, and the value keeps its column's type. Bytes in every mode: `LENGTH`
+    /// counts characters under MariaDB's `sql_mode=ORACLE`.
+    fn group_parts(&self, _: &ColumnMeta, quoted: &str) -> GroupParts {
+        let c = quoted;
+        let len = format!("OCTET_LENGTH({c})");
+        GroupParts { preview: format!("IF({len} <= {GROUP_PREVIEW}, {c}, NULL)"), length: len, count: "COUNT(*)" }
+    }
+}
+
+/// A collation that compares without case (`utf8mb4_0900_ai_ci`).
+fn case_insensitive(c: &ColumnFacts) -> bool {
+    c.collation.as_deref().is_some_and(|n| n.to_ascii_lowercase().ends_with("_ci"))
 }

@@ -172,6 +172,8 @@ pub(crate) enum OpOff {
     LikeRefused,
     /// Neither the column's collation nor the server is known to take `LIKE` here.
     LikeUnknown,
+    /// The engine has no rules a filter is written by.
+    NoFilterRules,
 }
 
 /// What the dialog knows of a column of the table.
@@ -390,7 +392,12 @@ fn op_allowed(
     // The collation rules are the renderer's: what it refuses to write is dimmed.
     let row = Row { col: c.name.clone(), op, values: vec![Value::Text("x".into())], keep_nulls: false };
     let Some(cond) = row.cond() else { return Ok(()) };
-    query::render(&cond, target).map(|_| ()).map_err(|e| match e {
+    query::render(&cond, target).map(|_| ()).map_err(render_off)
+}
+
+/// Why a pattern operator is dimmed, by why the renderer refuses to write it.
+pub(crate) fn render_off(e: RenderError) -> OpOff {
+    match e {
         RenderError::CaseInsensitiveRefused(_) => OpOff::CaseInsensitiveRefused,
         RenderError::CollationUnknown(_) => OpOff::CollationUnknown,
         RenderError::LikeRefused(_) => OpOff::LikeRefused,
@@ -401,7 +408,8 @@ fn op_allowed(
         | RenderError::NotNumber(_)
         | RenderError::NotExact(_)
         | RenderError::NotInstant(_) => OpOff::LikeUnknown,
-    })
+        RenderError::Engine(_) => OpOff::NoFilterRules,
+    }
 }
 
 /// One condition of one column, as a row of the dialog edits it.

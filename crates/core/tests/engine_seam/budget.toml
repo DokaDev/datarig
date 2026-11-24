@@ -11,7 +11,7 @@
 "crates/bench/src/monitor" = 1
 "crates/core/src/monitor" = 14
 "crates/core/src/profile" = 2
-"crates/core/src/query" = 98
+"crates/core/src/query" = 40
 "crates/drivers/mysql/src/connect" = 0
 "crates/drivers/mysql/src/meta" = 0
 "crates/drivers/mysql/src/monitor" = 2
@@ -40,7 +40,7 @@
 # Matches with an arm naming an engine variant and a catch-all arm (seam modules included).
 [catch_alls]
 "crates/core/src/monitor" = 1
-"crates/core/src/query" = 5
+"crates/core/src/query" = 2
 "crates/core/src/sql" = 2
 "crates/tui/src/app" = 1
 "crates/tui/src/app/copy" = 0
@@ -52,7 +52,7 @@
 # `matches!`, `==`, `!=`, `if let` and `let .. else` on an engine variant (seam modules included).
 [boolean_tests]
 "crates/core/src/monitor" = 4
-"crates/core/src/query" = 24
+"crates/core/src/query" = 15
 "crates/core/src/sql" = 3
 "crates/tui/src/app" = 10
 "crates/tui/src/app/copy" = 0
