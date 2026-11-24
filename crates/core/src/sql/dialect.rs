@@ -312,6 +312,35 @@ impl Dialect {
         }
     }
 
+    /// Every way a session in this dialect may read filter text `text`, the session's own
+    /// first: PostgreSQL's plain strings with a backslash also as `standard_conforming_strings
+    /// = off` reads them; MySQL's and MariaDB's text also in each other sql mode that reads it
+    /// differently (`risk::mysql::other_readings`).
+    pub fn filter_readings(self, text: &str) -> Vec<lexer::Lexing> {
+        let mut out = vec![lexer::Lexing::In(self)];
+        match self {
+            Self::Postgres => {
+                if text.contains('\\') {
+                    out.push(lexer::Lexing::BackslashStrings);
+                }
+            }
+            Self::MySql(mode) | Self::MariaDb(mode) => {
+                let others = super::risk::mysql::other_readings(text, mode);
+                out.extend(others.into_iter().map(|m| lexer::Lexing::In(self.with_mode(m))));
+            }
+        }
+        out
+    }
+
+    /// Whether a string has no backslash escapes in this dialect: a backslash in it is an
+    /// ordinary character (MySQL and MariaDB under `NO_BACKSLASH_ESCAPES`).
+    pub fn raw_strings(self) -> bool {
+        match self {
+            Self::Postgres => false,
+            Self::MySql(mode) | Self::MariaDb(mode) => mode.no_backslash_escapes,
+        }
+    }
+
     /// The name an unquoted identifier stands for: PostgreSQL folds ASCII letters to lower
     /// case (`Shop` is `shop`; other letters stay as written). MySQL keeps it as written
     /// (whether names that differ in case are the same table is the server's

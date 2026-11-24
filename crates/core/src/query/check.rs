@@ -34,10 +34,10 @@
 //! What is not seen, as for the editor's classifier: a function of the user's called in
 //! attribute notation (`t.f`), a user-defined operator, and code a view or a policy runs.
 
-use super::{Filter, Query, Source, TableName, Target, compile};
-use crate::engine::{FilterCalls, Why};
+use super::{Filter, Query, Source, TableName, Target, compile, filter_sql};
+use crate::engine::{FilterCalls, FilterShape, FilterSyntax, Why};
 use crate::sql::dialect::Dialect;
-use crate::sql::lexer::{Tok, Token, lex_backslash_strings, lex_in};
+use crate::sql::lexer::{Lexing, Tok, Token, lex_backslash_strings, lex_in};
 use crate::sql::risk::{self, Class, Classifier, Danger, ReadOnlyBlock};
 use serde_json::Value;
 use std::ops::Range;
@@ -94,13 +94,14 @@ pub enum EstimateOff {
 
 /// Whether filter `text`, as [`check_filter`] judged it (`verdict`), may be planned for an
 /// estimate of its rows: only a filter that passed without a word (no call outside the
-/// allowlist, even one the user confirmed), and on MySQL only without a subquery
-/// ([`has_subquery`]).
+/// allowlist, even one the user confirmed), and where the planner may run a subquery only
+/// without one ([`has_subquery`]). Never on an engine without filter rules.
 pub fn estimate_allowed(verdict: &FilterVerdict, text: &str, d: Dialect) -> Result<(), EstimateOff> {
     if *verdict != FilterVerdict::Clear {
         return Err(EstimateOff::Calls);
     }
-    if matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)) && has_subquery(text, d) {
+    let Ok(rules) = filter_sql(d) else { return Err(EstimateOff::Calls) };
+    if rules.syntax().plans_subqueries && has_subquery(text, d) {
         return Err(EstimateOff::Subquery);
     }
     Ok(())
@@ -108,9 +109,11 @@ pub fn estimate_allowed(verdict: &FilterVerdict, text: &str, d: Dialect) -> Resu
 
 /// Whether filter `text` may hold a subquery: an opening parenthesis followed by `SELECT`,
 /// `WITH`, `VALUES` or `TABLE` in any reading of it the server may run. A text the lexical
-/// check refuses may hold one as far as is known (`true`).
+/// check refuses, or one of an engine without filter rules, may hold one as far as is known
+/// (`true`).
 pub fn has_subquery(text: &str, d: Dialect) -> bool {
-    let Ok(readings) = readings(text, d) else { return true };
+    let Ok(rules) = filter_sql(d) else { return true };
+    let Ok(readings) = readings(text, d, rules.syntax()) else { return true };
     readings.iter().any(|r| {
         let ws: Vec<&Token> = r.tokens.iter().filter(|t| !t.is_trivia()).collect();
         ws.windows(2).any(|w| {
@@ -181,7 +184,8 @@ pub fn check_filter(
     classifier: &Classifier,
     read_only: bool,
 ) -> Result<FilterVerdict, BarRefusal> {
-    let readings = readings(text, target.dialect)?;
+    let syntax = filter_sql(target.dialect).map_err(BarRefusal::Engine)?.syntax();
+    let readings = readings(text, target.dialect, syntax)?;
     let query =
         Query { filter: Some(Filter { text: text.to_string(), recognised: None }), ..Query::table(table.clone()) };
     let sql = compile(&query, target).sql;
@@ -193,7 +197,7 @@ pub fn check_filter(
         BarRefusal::Shape { problem: ShapeProblem::Locking, at }
     };
     if matches!(risk.danger, Some(Danger::Unparsed | Danger::TooComplex)) {
-        if target.dialect == Dialect::Postgres
+        if syntax.shape == FilterShape::ParseTree
             && readings.first().is_some_and(|r| pg_lock_at(&r.tokens, text).is_some())
         {
             return Err(pg_lock());
@@ -201,8 +205,8 @@ pub fn check_filter(
         return Err(BarRefusal::NotRead { class: risk.class, danger: risk.danger });
     }
     let unread = || BarRefusal::NotRead { class: Class::Unknown, danger: Some(Danger::Unparsed) };
-    let calls: Vec<Call> = match target.dialect {
-        Dialect::Postgres => {
+    let calls: Vec<Call> = match syntax.shape {
+        FilterShape::ParseTree => {
             let Source::Table(t) = &query.source;
             match pg_tree(&sql, t, target.dialect.engine().spec().risk.filter_calls()) {
                 Some(Ok(calls)) => calls,
@@ -214,7 +218,7 @@ pub fn check_filter(
                 None => return Err(unread()),
             }
         }
-        Dialect::MySql(_) | Dialect::MariaDb(_) => {
+        FilterShape::Tokens => {
             let mut calls = Vec::new();
             for r in &readings {
                 mysql_shape(&r.tokens, text).map_err(|(problem, at)| BarRefusal::Shape { problem, at: Some(at) })?;
@@ -304,34 +308,28 @@ struct Reading {
     dialect: Dialect,
 }
 
-/// The lexical check alone (step 1 of the module docs).
+/// The lexical check alone (step 1 of the module docs); refused on an engine without filter
+/// rules.
 pub(super) fn lexical(text: &str, d: Dialect) -> Result<(), BarRefusal> {
-    readings(text, d).map(|_| ())
+    let rules = filter_sql(d).map_err(BarRefusal::Engine)?;
+    readings(text, d, rules.syntax()).map(|_| ())
 }
 
-/// The readings of `text` that the server may run, after the lexical check of each.
-fn readings(text: &str, d: Dialect) -> Result<Vec<Reading>, BarRefusal> {
+/// The readings of `text` that the server may run ([`Dialect::filter_readings`]), after the
+/// lexical check of each by `syntax`, the engine's.
+fn readings(text: &str, d: Dialect, syntax: &FilterSyntax) -> Result<Vec<Reading>, BarRefusal> {
     if text.trim().is_empty() {
         return Err(BarRefusal::Empty);
     }
     // A blank after the text: a string or a name left open runs over it.
     let ext = format!("{text} ");
-    let mut all = vec![Reading { tokens: lex_in(&ext, d), dialect: d }];
-    match d {
-        Dialect::Postgres if text.contains('\\') => {
-            all.push(Reading { tokens: lex_backslash_strings(&ext), dialect: d });
-        }
-        Dialect::Postgres => {}
-        Dialect::MySql(mode) | Dialect::MariaDb(mode) => {
-            for m in risk::mysql::other_readings(text, mode) {
-                let read = d.with_mode(m);
-                all.push(Reading { tokens: lex_in(&ext, read), dialect: read });
-            }
-        }
-    }
+    let all = d.filter_readings(text).into_iter().map(|lexing| match lexing {
+        Lexing::In(read) => Reading { tokens: lex_in(&ext, read), dialect: read },
+        Lexing::BackslashStrings => Reading { tokens: lex_backslash_strings(&ext), dialect: d },
+    });
     let mut out: Vec<Reading> = Vec::new();
-    for (i, r) in all.into_iter().enumerate() {
-        match problems(&r.tokens, text, r.dialect, i == 0) {
+    for (i, r) in all.enumerate() {
+        match problems(&r.tokens, text, syntax.m_bang, i == 0) {
             Ok(()) => {}
             Err((problem, at, _)) if i == 0 => return Err(BarRefusal::Lexical { problem, at }),
             // A syntax error on the server: that reading does not run.
@@ -365,19 +363,16 @@ fn piece<'a>(t: &Token, text: &'a str) -> &'a str {
 
 /// The first token of one reading the filter may not hold: the problem, where, and whether the
 /// server would refuse the statement for it as a syntax error (a string or a parenthesis left
-/// open). `own`: the reading is the session's (the first).
-fn problems(tokens: &[Token], text: &str, d: Dialect, own: bool) -> Result<(), (LexProblem, Range<usize>, bool)> {
+/// open). `m_bang`: `/*M!` opens a comment the server runs; `own`: the reading is the
+/// session's (the first).
+fn problems(tokens: &[Token], text: &str, m_bang: bool, own: bool) -> Result<(), (LexProblem, Range<usize>, bool)> {
     let mut open: Vec<Range<usize>> = Vec::new();
     for t in tokens.iter().filter(|t| t.start < text.len()) {
         let at = clamp(t, text);
         let problem = match t.kind {
             Tok::Semi => LexProblem::Semicolon,
             Tok::LineComment => LexProblem::Comment,
-            Tok::BlockComment
-                if matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)) && text[at.clone()].starts_with("/*M!") =>
-            {
-                LexProblem::ExecutableComment
-            }
+            Tok::BlockComment if m_bang && text[at.clone()].starts_with("/*M!") => LexProblem::ExecutableComment,
             Tok::BlockComment => LexProblem::Comment,
             Tok::ExecComment => LexProblem::ExecutableComment,
             Tok::Directive => LexProblem::ClientCommand,

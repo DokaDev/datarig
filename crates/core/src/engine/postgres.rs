@@ -2,9 +2,10 @@
 
 use super::{
     CancelRules, CatalogueRules, CountInTx, DdlLock, DdlOfIndex, DdlRules, DdlToConsole, EditRules, EngineId,
-    EngineSpec, ExportRules, Fact, FilterCalls, FilterSql, FilterSyntax, GroupParts, InputRules, Like, NameMatch,
-    OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, ResultTables, RiskRules, ServerFacts, SessionRules, SortRules,
-    Support, TextRules, Transport, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, ValueRules,
+    EngineSpec, ExportRules, Fact, FilterCalls, FilterShape, FilterSql, FilterSyntax, GroupParts, InputRules, Like,
+    NameMatch, NullSafe, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, ResultTables, RiskRules, ServerFacts,
+    SessionRules, SortRules, Support, TextRules, Transport, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict,
+    ValueRules,
 };
 use crate::driver::{ArrayElement, ColumnMeta, EditFormat, Hierarchy, ReadIn, SessionRole, SessionValues, ValueKind};
 use crate::edit::input::{self, TypeName};
@@ -681,7 +682,20 @@ impl SortRules for PgSort {
 /// How PostgreSQL's filter text is written.
 struct PgFilter;
 
-static PG_FILTER_SYNTAX: FilterSyntax = FilterSyntax { numbers_as_doubles: false, zoned_instants: false };
+static PG_FILTER_SYNTAX: FilterSyntax = FilterSyntax {
+    numbers_as_doubles: false,
+    zoned_instants: false,
+    null_safe: NullSafe::DistinctFrom,
+    ilike: true,
+    hex_strings: false,
+    pg_strings: true,
+    loose_ops: false,
+    not_caution: false,
+    interval_and: false,
+    plans_subqueries: false,
+    m_bang: false,
+    shape: FilterShape::ParseTree,
+};
 
 impl FilterSql for PgFilter {
     fn syntax(&self) -> &'static FilterSyntax {
