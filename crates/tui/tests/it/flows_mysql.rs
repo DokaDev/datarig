@@ -661,6 +661,9 @@ fn copy_in(h: &mut Harness) {
 const ENGINE_WORDS: &str = "Not copied as SQL: column “at” is a TIMESTAMP. This server does not read a time zone \
                             offset in a TIMESTAMP value (MariaDB, MySQL before 8.0.19), so it cannot be copied or \
                             exported as SQL.";
+const NOT_YET_WORDS: &str = "Not copied as SQL: column “at” is a TIMESTAMP. The server version was not known yet \
+                             when these rows were read, so a time with a time zone offset cannot be written \
+                             safely as SQL. Run the query again, or export as CSV or JSON.";
 const UNKNOWN_WORDS: &str = "Not copied as SQL: column “at” is a TIMESTAMP. The server version is not known, so a \
                              time with a time zone offset cannot be written safely as SQL. Export as CSV or JSON \
                              still works, and so does copying from a session whose server version is known.";
@@ -802,7 +805,7 @@ fn an_old_result_keeps_the_rules_of_the_server_that_read_it() {
 }
 
 /// A result read on MySQL 8.4 keeps what its server reads: copied with the offset right after
-/// its session is lost (no session now), and again after the tab connects again.
+/// its session is lost (no session now), and again once a new session of the tab connected.
 #[test]
 fn a_result_read_on_mysql_8_4_still_copies_as_sql_after_the_session_is_lost() {
     let mut h = mysql();
@@ -816,10 +819,10 @@ fn a_result_read_on_mysql_8_4_still_copies_as_sql_after_the_session_is_lost() {
     h.command("copy insert");
     assert_eq!(clip.last().as_deref(), Some(want), "{}", flashed(&h));
     let copies = clip.texts.lock().unwrap().len();
-    h.tab_db(0, DbEvent::Connected);
-    for ev in mysql_8_4() {
-        h.tab_db(0, ev);
-    }
+    reconnect_keeping_the_result(&mut h, 0, "SELECT * FROM `shop`.`Gone`", mysql_8_4());
+    let facts = h.app.tab().exec.current_facts().cloned().expect("facts");
+    assert_eq!(facts.version, datarig_core::engine::Fact::Known(datarig_core::engine::Version::new(8, 4, 6)));
+    h.app.focus = datarig_tui::app::Focus::Results;
     h.command("copy insert");
     assert_eq!(clip.last().as_deref(), Some(want), "{}", flashed(&h));
     assert_eq!(clip.texts.lock().unwrap().len(), copies + 1);
@@ -827,7 +830,7 @@ fn a_result_read_on_mysql_8_4_still_copies_as_sql_after_the_session_is_lost() {
 
 /// Whether a result's `TIMESTAMP`s are copied with their offset is what its session had said of
 /// its server when its first page came: nothing said (never, or only after that page), refused
-/// as a version not known; said before, written.
+/// as a version not known yet; said before, written.
 #[test]
 fn a_result_read_before_the_server_said_its_facts_refuses_its_timestamps() {
     let start = || {
@@ -843,7 +846,7 @@ fn a_result_read_before_the_server_said_its_facts_refuses_its_timestamps() {
     let (mut h, clip) = start();
     items_rows(&mut h, Vec::new(), &["id", "at"], row);
     h.command("copy insert");
-    assert_eq!(flashed(&h), UNKNOWN_WORDS);
+    assert_eq!(flashed(&h), NOT_YET_WORDS);
     assert!(clip.last().is_none());
     // Said after the first page: still refused, the result keeps what was known then.
     for ev in mysql_8_4() {
@@ -851,7 +854,7 @@ fn a_result_read_before_the_server_said_its_facts_refuses_its_timestamps() {
     }
     h.app.transient = None;
     h.command("copy insert");
-    assert_eq!(flashed(&h), UNKNOWN_WORDS);
+    assert_eq!(flashed(&h), NOT_YET_WORDS);
     assert!(clip.last().is_none());
     // Said before: written. The session is open: the facts go to it before the run.
     let (mut h, clip) = start();

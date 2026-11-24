@@ -759,10 +759,16 @@ impl App {
                         Ok(c) => c,
                         Err(r) => return self.flash(self.not_whole(&r)),
                     };
-                    let written: Vec<usize> = plan.set.iter().chain(&plan.keys).map(|c| c.0).collect();
+                    let mut written = vec![false; columns.len()];
+                    for c in plan.set.iter().chain(&plan.keys) {
+                        if let Some(w) = written.get_mut(c.0) {
+                            *w = true;
+                        }
+                    }
                     let mut w = export::Writer::new(export::Format::Update(d, target), &columns);
                     stream(&mut |rows, _| {
-                        let rows = written_as(&cells, rows, &|i| written.contains(&i).then_some(offsets), &mut refused);
+                        let into = |i: usize| written.get(i).copied().unwrap_or(false).then_some(offsets);
+                        let rows = written_as(&cells, rows, &into, &mut refused);
                         let rows: Vec<export::Row> =
                             rows.iter().map(|r| r.iter().map(|v| v.as_deref()).collect()).collect();
                         w.rows(&rows);
@@ -810,8 +816,14 @@ impl App {
                     let defaults = overlaid && b.rows.clone().any(|r| (0..written.len()).any(|j| default(r, j)));
                     let mut w = export::Writer::new(export::Format::Sql(d, target.clone()), &columns);
                     let mut parts: Vec<String> = Vec::new();
+                    let mut into_sql = vec![false; b.cols.len()];
+                    for w in &written {
+                        if let Some(i) = into_sql.get_mut(w.0) {
+                            *i = true;
+                        }
+                    }
                     stream(&mut |rows, at| {
-                        let into = |i| written.iter().any(|w| w.0 == i).then_some(offsets);
+                        let into = |i: usize| into_sql.get(i).copied().unwrap_or(false).then_some(offsets);
                         let rows = written_as(&cells, rows, &into, &mut refused);
                         let rows: Vec<export::Row> =
                             rows.iter().map(|r| written.iter().map(|w| r[w.0].as_deref()).collect()).collect();
@@ -1364,6 +1376,8 @@ impl App {
             export::NotWhole::NoOffsetLiteral(why) => {
                 let label = match why {
                     Why::NotOnEngine | Why::VersionTooOld { .. } => Label::CopySqlWhyNoOffsetLiteral,
+                    // Taken before the session said what its server is.
+                    Why::NotChecked => Label::CopySqlWhyVersionNotKnownYet,
                     _ => Label::CopySqlWhyVersionUnknown,
                 };
                 self.i18n.label(label).to_string()

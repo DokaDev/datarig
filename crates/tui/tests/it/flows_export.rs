@@ -1308,6 +1308,8 @@ fn export_again(h: &mut Harness, command: &str, columns: Vec<ColumnMeta>, rows: 
 
 const ENGINE_WORDS: &str = "This server does not read a time zone offset in a TIMESTAMP value (MariaDB, MySQL before \
                             8.0.19), so it cannot be copied or exported as SQL.";
+const NOT_YET_WORDS: &str = "The server version was not known yet when these rows were read, so a time with a time \
+                             zone offset cannot be written safely as SQL.";
 const UNKNOWN_WORDS: &str = "The server version is not known, so a time with a time zone offset cannot be written \
                              safely as SQL.";
 
@@ -1436,7 +1438,7 @@ fn a_timestamp_held_and_read_again_is_judged_by_what_was_said_when_it_was_read()
     export_command(&mut h, &format!("export fetched {}", held.display()));
     pump_until(&mut h, "the end", done);
     let s = status(&h);
-    assert!(s.starts_with("Export failed") && s.contains(UNKNOWN_WORDS), "{s}");
+    assert!(s.starts_with("Export failed") && s.contains(NOT_YET_WORDS), "{s}");
     let again = dir.join("again.sql");
     export_again(
         &mut h,
@@ -1456,13 +1458,17 @@ fn a_timestamp_held_and_read_again_is_judged_by_what_was_said_when_it_was_read()
     // The session is lost, then connects again: its old result is not read again.
     let index = h.app.tabs.active_index();
     h.tab_db(index, DbEvent::Lost { error: DbError::Closed });
-    h.tab_db(index, DbEvent::Connected);
-    for ev in mysql_8_4() {
-        h.tab_db(index, ev);
-    }
     let values = datarig_core::driver::SessionValues { time_zone: "+00:00".into(), charset: "utf8mb4".into() };
-    h.tab_db(index, DbEvent::SessionValues(values));
+    let mut said = mysql_8_4();
+    said.push(DbEvent::SessionValues(values));
+    reconnect_keeping_the_result(&mut h, index, "SELECT * FROM shop.gone", said);
+    let facts = h.app.tab().exec.current_facts().cloned().expect("facts");
+    assert_eq!(facts.version, datarig_core::engine::Fact::Known(datarig_core::engine::Version::new(8, 4, 6)));
     let stale = dir.join("stale.sql");
+    // The failed run's messages are shown: back to the rows read before.
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.keys("HH");
+    assert!(h.screen(120, 30).contains("[Result 1]"), "{}", h.screen(120, 30));
     h.app.transient = None;
     h.command(&format!("export all {}", stale.display()));
     assert_eq!(told(&h), h.app.i18n.label(datarig_i18n::Label::ExportStale).to_string());
@@ -1571,4 +1577,31 @@ fn a_column_whose_type_changed_stops_an_sql_export_on_its_last_rows() {
     let s = status(&h);
     assert!(s.contains("the result's columns changed while it was read"), "{s}");
     assert!(!path.exists());
+}
+
+/// A CSV file of every row read again takes the rows a session still had in the channel when it
+/// answered as they come, a columns batch among them changing nothing: only an SQL file judges
+/// its values by the columns' types there.
+#[test]
+fn a_csv_export_takes_its_last_rows_whatever_columns_come_with_them() {
+    let dir = scratch("csv-last");
+    let mut h = Harness::connected(Lang::En);
+    first_page(&mut h, 10, true);
+    h.sent();
+    let path = dir.join("last.csv");
+    h.command(&format!("export all {}", path.display()));
+    let (id, _, _, sink) = wait_export(&mut h);
+    h.tab_db(
+        0,
+        DbEvent::Exported { id, result: Ok(ExportRead { rows: 5, last: None, complete: true }), cancelled: false },
+    );
+    let feeder = std::thread::spawn(move || {
+        let _ = sink.blocking_send(ExportBatch::Rows(rows(0, 2)));
+        let _ = sink.blocking_send(ExportBatch::Columns(vec![meta("other", "text", false, false)]));
+        let _ = sink.blocking_send(ExportBatch::Rows(rows(2, 3)));
+    });
+    pump_until(&mut h, "the end", done);
+    feeder.join().unwrap();
+    assert!(status(&h).starts_with("Exported 5 rows to "), "{}", status(&h));
+    assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 6);
 }

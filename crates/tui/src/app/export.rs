@@ -379,6 +379,9 @@ struct Spec {
     /// How SQL formats write each picked value (MySQL's rules).
     cells: Option<SqlCells>,
     sql: Option<SqlTarget>,
+    /// For each picked column, whether its values go into the SQL text (an `INSERT`'s written
+    /// columns, an `UPDATE`'s set and key columns).
+    written: Vec<bool>,
     /// Whether the server whose rules the SQL formats write by reads a time zone offset after a
     /// time ([`SqlCells::literal`]).
     offsets: datarig_core::engine::Support,
@@ -1769,6 +1772,17 @@ impl App {
             }
             _ => (None, None),
         };
+        let mut written = vec![false; cols.len()];
+        let into_sql: Vec<usize> = match &sql {
+            Some(SqlTarget::Insert { written, .. }) => written.iter().map(|w| w.0).collect(),
+            Some(SqlTarget::Update { set, keys, .. }) => set.iter().chain(keys).map(|c| c.0).collect(),
+            None => Vec::new(),
+        };
+        for i in into_sql {
+            if let Some(w) = written.get_mut(i) {
+                *w = true;
+            }
+        }
         Ok(Spec {
             format: req.format,
             csv: req.csv.clone(),
@@ -1777,6 +1791,7 @@ impl App {
             pick: cols.to_vec(),
             cells,
             sql,
+            written,
             offsets,
             source: rs.columns.iter().map(|c| c.meta.name.clone()).collect(),
             source_types: rs.columns.iter().map(|c| (c.meta.kind, c.meta.type_name.clone())).collect(),
@@ -2270,8 +2285,10 @@ fn db_rows<S: RowSink>(
                                 return Stopped::Failed(f);
                             }
                         }
+                        // An SQL format's values were judged by the columns' types: a change of
+                        // them stops it here too; the other formats write what is left.
                         Some(ExportBatch::Columns(cols)) => {
-                            if !same_columns(spec, &cols) {
+                            if spec.sql.is_some() && !same_columns(spec, &cols) {
                                 return Stopped::Failed(Failure::SchemaChanged);
                             }
                         }
@@ -2319,7 +2336,9 @@ fn write_rows<S: RowSink>(
             .map(|(i, &c)| {
                 let v = r.get(c).and_then(|v| v.as_deref());
                 match (&spec.cells, v) {
-                    (Some(cells), Some(v)) if written(spec, i) => cells.literal(i, v, &spec.offsets).map(Some),
+                    (Some(cells), Some(v)) if spec.written.get(i).copied().unwrap_or(false) => {
+                        cells.literal(i, v, &spec.offsets).map(Some)
+                    }
                     (Some(cells), Some(v)) => cells.cell(i, v).map(Some),
                     (_, v) => Ok(v.map(Cow::Borrowed)),
                 }
@@ -2333,16 +2352,6 @@ fn write_rows<S: RowSink>(
         w.rows(&[out]).map_err(io)?;
     }
     Ok(())
-}
-
-/// Whether picked column `i` is written into the SQL text of `spec`: an `INSERT`'s written
-/// columns, an `UPDATE`'s set and key columns.
-fn written(spec: &Spec, i: usize) -> bool {
-    match &spec.sql {
-        Some(SqlTarget::Insert { written, .. }) => written.iter().any(|w| w.0 == i),
-        Some(SqlTarget::Update { set, keys, .. }) => set.iter().chain(keys).any(|c| c.0 == i),
-        None => false,
-    }
 }
 
 #[cfg(test)]

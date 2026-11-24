@@ -329,6 +329,21 @@ fn no_plan(ev: Option<&DbEvent>) -> bool {
 /// What a MariaDB server answers to whether it reads a time zone offset after a time: never.
 const MARIADB_OFFSETS: datarig_core::engine::Support =
     datarig_core::engine::Fact::No(datarig_core::engine::Why::NotOnEngine);
+/// Whether the server of `facts` reads a time zone offset after a `TIMESTAMP`'s value, as the
+/// test knows it: MySQL from 8.0.19 (older: too old; a version not known: not known), MariaDB
+/// never.
+fn offsets_expected(facts: &datarig_core::engine::ServerFacts) -> datarig_core::engine::Support {
+    use datarig_core::engine::{EngineFacts, Fact, Version, Why};
+    let since = Version::new(8, 0, 19);
+    match (&facts.detail, &facts.version) {
+        (EngineFacts::MySql(_), Fact::Known(v)) if *v >= since => Fact::Known(()),
+        (EngineFacts::MySql(_), Fact::Known(_)) => Fact::No(Why::VersionTooOld { needed: since }),
+        (EngineFacts::MySql(_), Fact::No(why) | Fact::Unknown(why)) => Fact::Unknown(why.clone()),
+        (EngineFacts::MariaDb(_), _) => Fact::No(Why::NotOnEngine),
+        (EngineFacts::Postgres(_), _) => panic!("not a MySQL-family server: {facts:?}"),
+    }
+}
+
 /// A known fault on MariaDB, not checked there until it is mended.
 const TIMESTAMP_OFFSET: &str = "known bug, TIMESTAMP values copied as SQL carry an offset MariaDB does not read";
 /// Why MariaDB has no `caching_sha2_password` account.
@@ -5433,10 +5448,6 @@ async fn rows_copied_as_sql_run_back_byte_for_byte() {
          1e308, NULL, NULL, NULL, NULL, NULL), \
         (4, 'second', '{}', NULL, NULL, NULL, NULL, NULL, '2024-10-27 01:30:00', NULL, NULL, NULL, NULL, NULL, \
          NULL, NULL, NULL, NULL, NULL, NULL)";
-    let offsets_read = !mariadb(&url).await;
-    // The columns copied and compared: on a server that reads no offset, all but the TIMESTAMP.
-    let compared: Vec<&str> = columns.iter().copied().filter(|c| offsets_read || *c != "ts").collect();
-    let select = if offsets_read { "*".to_string() } else { compared.join(", ") };
     for (n, flag) in ["", ",NO_BACKSLASH_ESCAPES", ",ANSI_QUOTES"].iter().enumerate() {
         let mode = format!("{base}{flag}");
         let ddl = |sql: &str| vec![setup[0].clone(), setup[1].clone(), sql.to_string()];
@@ -5463,7 +5474,11 @@ async fn rows_copied_as_sql_run_back_byte_for_byte() {
             panic!("what the server is")
         };
         let offsets = facts.engine().spec().values.zoned_literal(&facts);
-        assert_eq!(offsets == datarig_core::engine::Fact::Known(()), offsets_read, "{facts:?}");
+        assert_eq!(offsets, offsets_expected(&facts), "{facts:?}");
+        let offsets_read = offsets == datarig_core::engine::Fact::Known(());
+        // The columns copied and compared: on a server that reads no offset, all but the TIMESTAMP.
+        let compared: Vec<&str> = columns.iter().copied().filter(|c| offsets_read || *c != "ts").collect();
+        let select = if offsets_read { "*".to_string() } else { compared.join(", ") };
         let DbEvent::Language(Language::Sql(Dialect::MySql(started) | Dialect::MariaDb(started))) =
             q.wait(|e| matches!(e, DbEvent::Language(_)), 15).await
         else {
@@ -5483,12 +5498,12 @@ async fn rows_copied_as_sql_run_back_byte_for_byte() {
         );
         // Where the server reads no offset, the TIMESTAMP's copy is refused.
         let every = copied_as_sql(&mut q, 3, &keys, &src, "*", session_mode, &values, &offsets, false).await;
-        if !offsets_read {
-            let refused = every.unwrap_err();
-            assert_eq!(
-                (refused.column.as_str(), refused.why),
-                ("ts", NotWhole::NoOffsetLiteral(datarig_core::engine::Why::NotOnEngine))
-            );
+        match &offsets {
+            datarig_core::engine::Fact::Known(()) => assert!(every.is_ok(), "{every:?}"),
+            datarig_core::engine::Fact::No(why) | datarig_core::engine::Fact::Unknown(why) => {
+                let refused = every.unwrap_err();
+                assert_eq!((refused.column.as_str(), refused.why), ("ts", NotWhole::NoOffsetLiteral(why.clone())));
+            }
         }
         let insert =
             copied_as_sql(&mut q, 4, &keys, &src, &select, session_mode, &values, &offsets, false).await.unwrap();

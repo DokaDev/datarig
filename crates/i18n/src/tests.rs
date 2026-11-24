@@ -129,6 +129,12 @@ fn the_offset_literal_refusals_read_in_both_languages() {
              Export as CSV or JSON still works, and so does copying from a session whose server version is known.",
         ),
         (
+            Label::CopySqlWhyVersionNotKnownYet,
+            "copy.sql_why.version_not_known_yet",
+            "The server version was not known yet when these rows were read, so a time with a time zone offset \
+             cannot be written safely as SQL. Run the query again, or export as CSV or JSON.",
+        ),
+        (
             Label::CopySqlWhyReadElsewhere,
             "copy.sql_why.read_elsewhere",
             "These rows were read on another database engine than the one the tab uses now; run the query again.",

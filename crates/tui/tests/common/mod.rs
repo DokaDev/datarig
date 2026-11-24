@@ -1534,3 +1534,29 @@ pub fn server_said(maria: bool, version: Option<(u16, u16, u16)>) -> Vec<DbEvent
     said.push(DbEvent::Server(std::sync::Arc::new(facts)));
     said
 }
+
+/// Tab `index`'s lost session opened again by a run (`sql`), the new session saying `said` and
+/// that it connected before the run fails, so the tab's result stays the one read before. Fails
+/// unless the tab now has a session of another generation that said what its server is.
+pub fn reconnect_keeping_the_result(h: &mut Harness, index: usize, sql: &str, said: Vec<DbEvent>) {
+    let generation = h.app.tabs.iter().nth(index).expect("tab").exec.generation;
+    h.app.run(vec![sql.to_string()]);
+    let run = h
+        .sent()
+        .into_iter()
+        .rev()
+        .find_map(|c| match c {
+            DbCommand::Execute { id, .. } => Some(id),
+            _ => None,
+        })
+        .expect("a run sent");
+    for ev in said {
+        h.tab_db(index, ev);
+    }
+    h.tab_db(index, DbEvent::Connected);
+    let error = datarig_core::driver::DbError::Server("ERROR 1146 (42S02): no such table".into());
+    h.tab_db(index, DbEvent::Failed { id: run, error, cancelled: false });
+    let t = h.app.tabs.iter().nth(index).expect("tab");
+    assert_ne!(t.exec.generation, generation, "a new session");
+    assert!(t.exec.current_facts().is_some(), "the new session said what its server is");
+}
