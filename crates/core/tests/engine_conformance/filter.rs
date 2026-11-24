@@ -1,13 +1,15 @@
-//! A table's filter and order as each engine's SQL, and which column types a filter compares.
+//! A table's filter and order as each engine's SQL, which column types a filter compares, and
+//! the statement that counts the rows of each value of a column.
 
-use crate::Engine::{MariaDb, MySql, Pg};
+use crate::Engine::{MariaDb, MySql, MySqlAnsiQuotes, MySqlNoBackslashEscapes, Pg};
 use crate::{Case, Engine};
 use datarig_core::driver::{ArrayElement, ColumnMeta, ValueKind};
 use datarig_core::query::{
-    CaseMode, CmpOp, ColumnFacts, ColumnKind, Cond, Dir, Nulls, OrderKey, Query, TableName, Target, Value,
+    CaseMode, CmpOp, ColumnFacts, ColumnKind, Cond, Dir, GroupCount, Nulls, OrderKey, Query, TableName, Target, Value,
     compile_capped,
 };
-use datarig_core::sql::dialect::Dialect;
+use datarig_core::sql::dialect::{Dialect, Language};
+use datarig_core::sql::risk::Classifier;
 
 /// What a filter case writes: one condition (with what the session's character set is known
 /// to be), a pattern on the `name` column with what is known of its collation and of the
@@ -640,6 +642,184 @@ pub fn compares_cases() -> Vec<Case<Column>> {
             name: "interval",
             input: col("interval", ValueKind::Interval),
             expect: &[(Pg, "Order"), (MySql, "Order"), (MariaDb, "Order")],
+        },
+    ]
+}
+
+/// A column a group count reads: one of the table's (by name), as a driver describes it.
+pub struct Grouped {
+    pub name: &'static str,
+    pub type_name: &'static str,
+    pub kind: ValueKind,
+}
+
+/// The statement that counts the rows of each value of the column on `e`, or the `Debug` of why
+/// it is not written.
+pub fn group_count(e: Engine, c: &Grouped) -> String {
+    group_count_in(e.dialect(), c)
+}
+
+/// [`group_count`] in dialect `d`.
+pub fn group_count_in(d: Dialect, c: &Grouped) -> String {
+    let table = TableName { database: None, schema: "s".to_string(), name: "t".to_string() };
+    let column = ColumnMeta::new(c.name.to_string(), c.type_name.to_string(), c.kind, None);
+    let classifier = Classifier::new(Language::Sql(d));
+    let g = GroupCount {
+        table: &table,
+        target: &target(d, true),
+        column: &column,
+        enum_known: false,
+        other: None,
+        classifier: &classifier,
+        read_only: false,
+    };
+    match datarig_core::query::group_count(&g) {
+        Ok(sql) => sql,
+        Err(why) => format!("{why:?}"),
+    }
+}
+
+fn grouped(name: &'static str, type_name: &'static str, kind: ValueKind) -> Grouped {
+    Grouped { name, type_name, kind }
+}
+
+/// The statement of a family text column: the same in every sql mode.
+const FAMILY_TEXT: &str = "SELECT IF(OCTET_LENGTH(`name`) <= 4096, `name`, NULL), OCTET_LENGTH(`name`), COUNT(*) \
+     FROM `s`.`t` GROUP BY `name` ORDER BY COUNT(*) DESC LIMIT 201";
+
+pub fn group_count_cases() -> Vec<Case<Grouped>> {
+    vec![
+        Case {
+            name: "text",
+            input: grouped("name", "text", ValueKind::Text),
+            expect: &[
+                (
+                    Pg,
+                    "SELECT CASE WHEN pg_catalog.octet_length(\"name\") OPERATOR(pg_catalog.<=) 4096 THEN \"name\" END, \
+                     pg_catalog.octet_length(\"name\"), pg_catalog.count(*) FROM \"s\".\"t\" GROUP BY \"name\" \
+                     ORDER BY pg_catalog.count(*) DESC LIMIT 201",
+                ),
+                (MySql, FAMILY_TEXT),
+                (MariaDb, FAMILY_TEXT),
+                (MySqlAnsiQuotes, FAMILY_TEXT),
+                (MySqlNoBackslashEscapes, FAMILY_TEXT),
+            ],
+        },
+        Case {
+            name: "bytes",
+            input: grouped("data", "bytea", ValueKind::Bytes),
+            expect: &[
+                (
+                    Pg,
+                    "SELECT CASE WHEN pg_catalog.octet_length(\"data\") OPERATOR(pg_catalog.<=) 4096 THEN \"data\" END, \
+                     pg_catalog.octet_length(\"data\"), pg_catalog.count(*) FROM \"s\".\"t\" GROUP BY \"data\" \
+                     ORDER BY pg_catalog.count(*) DESC LIMIT 201",
+                ),
+                (
+                    MySql,
+                    "SELECT IF(OCTET_LENGTH(`data`) <= 4096, `data`, NULL), OCTET_LENGTH(`data`), COUNT(*) \
+                     FROM `s`.`t` GROUP BY `data` ORDER BY COUNT(*) DESC LIMIT 201",
+                ),
+                (
+                    MariaDb,
+                    "SELECT IF(OCTET_LENGTH(`data`) <= 4096, `data`, NULL), OCTET_LENGTH(`data`), COUNT(*) \
+                     FROM `s`.`t` GROUP BY `data` ORDER BY COUNT(*) DESC LIMIT 201",
+                ),
+            ],
+        },
+        Case {
+            name: "number",
+            input: grouped("id", "int4", ValueKind::Integer),
+            expect: &[
+                (
+                    Pg,
+                    "SELECT \"id\", NULL, pg_catalog.count(*) FROM \"s\".\"t\" GROUP BY \"id\" \
+                     ORDER BY pg_catalog.count(*) DESC LIMIT 201",
+                ),
+                (
+                    MySql,
+                    "SELECT IF(OCTET_LENGTH(`id`) <= 4096, `id`, NULL), OCTET_LENGTH(`id`), COUNT(*) \
+                     FROM `s`.`t` GROUP BY `id` ORDER BY COUNT(*) DESC LIMIT 201",
+                ),
+                (
+                    MariaDb,
+                    "SELECT IF(OCTET_LENGTH(`id`) <= 4096, `id`, NULL), OCTET_LENGTH(`id`), COUNT(*) \
+                     FROM `s`.`t` GROUP BY `id` ORDER BY COUNT(*) DESC LIMIT 201",
+                ),
+            ],
+        },
+        Case {
+            name: "jsonb",
+            input: grouped("born", "jsonb", ValueKind::Json),
+            expect: &[
+                (
+                    Pg,
+                    "SELECT CASE WHEN pg_catalog.octet_length(pg_catalog.textin(pg_catalog.jsonb_out(\"born\"))) \
+                     OPERATOR(pg_catalog.<=) 4096 THEN \"born\" END, \
+                     pg_catalog.octet_length(pg_catalog.textin(pg_catalog.jsonb_out(\"born\"))), pg_catalog.count(*) \
+                     FROM \"s\".\"t\" GROUP BY \"born\" ORDER BY pg_catalog.count(*) DESC LIMIT 201",
+                ),
+                (MySql, "NoEquality"),
+                (MariaDb, "NoEquality"),
+            ],
+        },
+        Case {
+            name: "citext",
+            input: grouped("born", "citext", ValueKind::Other),
+            expect: &[
+                (
+                    Pg,
+                    "SELECT CASE WHEN pg_catalog.octet_length(\"born\") OPERATOR(pg_catalog.<=) 4096 THEN \"born\" END, \
+                     pg_catalog.octet_length(\"born\"), pg_catalog.count(*) FROM \"s\".\"t\" GROUP BY \"born\" \
+                     ORDER BY pg_catalog.count(*) DESC LIMIT 201",
+                ),
+                (MySql, "NoEquality"),
+                (MariaDb, "NoEquality"),
+            ],
+        },
+        Case {
+            name: "numeric",
+            input: grouped("price", "numeric", ValueKind::Decimal),
+            expect: &[
+                (
+                    Pg,
+                    "SELECT CASE WHEN pg_catalog.octet_length(pg_catalog.textin(pg_catalog.numeric_out(\"price\"))) \
+                     OPERATOR(pg_catalog.<=) 4096 THEN \"price\" END, \
+                     pg_catalog.octet_length(pg_catalog.textin(pg_catalog.numeric_out(\"price\"))), pg_catalog.count(*) \
+                     FROM \"s\".\"t\" GROUP BY \"price\" ORDER BY pg_catalog.count(*) DESC LIMIT 201",
+                ),
+                (
+                    MySql,
+                    "SELECT IF(OCTET_LENGTH(`price`) <= 4096, `price`, NULL), OCTET_LENGTH(`price`), COUNT(*) \
+                     FROM `s`.`t` GROUP BY `price` ORDER BY COUNT(*) DESC LIMIT 201",
+                ),
+                (
+                    MariaDb,
+                    "SELECT IF(OCTET_LENGTH(`price`) <= 4096, `price`, NULL), OCTET_LENGTH(`price`), COUNT(*) \
+                     FROM `s`.`t` GROUP BY `price` ORDER BY COUNT(*) DESC LIMIT 201",
+                ),
+            ],
+        },
+        Case {
+            name: "money",
+            input: grouped("price", "money", ValueKind::Decimal),
+            expect: &[
+                (
+                    Pg,
+                    "SELECT \"price\", NULL, pg_catalog.count(*) FROM \"s\".\"t\" GROUP BY \"price\" \
+                     ORDER BY pg_catalog.count(*) DESC LIMIT 201",
+                ),
+                (
+                    MySql,
+                    "SELECT IF(OCTET_LENGTH(`price`) <= 4096, `price`, NULL), OCTET_LENGTH(`price`), COUNT(*) \
+                     FROM `s`.`t` GROUP BY `price` ORDER BY COUNT(*) DESC LIMIT 201",
+                ),
+                (
+                    MariaDb,
+                    "SELECT IF(OCTET_LENGTH(`price`) <= 4096, `price`, NULL), OCTET_LENGTH(`price`), COUNT(*) \
+                     FROM `s`.`t` GROUP BY `price` ORDER BY COUNT(*) DESC LIMIT 201",
+                ),
+            ],
         },
     ]
 }

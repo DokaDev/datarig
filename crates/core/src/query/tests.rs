@@ -2118,6 +2118,102 @@ fn group_count_on_mysql_measures_bytes_in_every_sql_mode() {
     assert!(!sql.replace("OCTET_LENGTH(", "").contains("LENGTH("), "{sql}");
 }
 
+/// Every statement a group count writes reads three items, on every engine and in every sql
+/// mode the app models: the value (NULL when it is long), its length (NULL for a type whose
+/// values are short) and the count. Each item is one expression (no comma outside its own
+/// parentheses), and the statement is exactly those three around the table's grouped read.
+#[test]
+fn every_group_count_statement_has_three_columns() {
+    use crate::driver::{ArrayElement, ValueKind};
+    use crate::sql::lexer::{Tok, lex_in};
+    let mut dialects = vec![Dialect::Postgres];
+    for ansi_quotes in [false, true] {
+        for no_backslash_escapes in [false, true] {
+            for ignore_space in [false, true] {
+                for dollar_quotes in [DollarQuotes::NotRead, DollarQuotes::Read, DollarQuotes::NotKnown] {
+                    let m = MySqlMode { ansi_quotes, no_backslash_escapes, dollar_quotes, ignore_space };
+                    dialects.extend([Dialect::MySql(m), Dialect::MariaDb(m)]);
+                }
+            }
+        }
+    }
+    // A column, and whether the MySQL family groups it.
+    let columns = [
+        (meta("name", "text", ValueKind::Text), true),
+        (meta("data", "bytea", ValueKind::Bytes), true),
+        (meta("id", "int4", ValueKind::Integer), true),
+        (meta("born", "jsonb", ValueKind::Json), false),
+        (meta("born", "citext", ValueKind::Other), false),
+        (meta("price", "numeric", ValueKind::Decimal), true),
+        (meta("price", "amount", ValueKind::Decimal), true),
+        (meta("price", "money", ValueKind::Decimal), true),
+        (meta("born", "timestamptz", ValueKind::TimestampTz), true),
+        (meta("born", "text[]", ValueKind::Array(ArrayElement::Text)), false),
+    ];
+    // The PostgreSQL length of column `c` of type `ty` (`amount`: a domain over `numeric`);
+    // `None` for a type whose values are short.
+    let pg_length = |ty: &str, c: &str| {
+        let by_output = |f: &str| format!("pg_catalog.octet_length(pg_catalog.textin(pg_catalog.{f}({c})))");
+        match ty {
+            "text" | "bytea" | "citext" => Some(format!("pg_catalog.octet_length({c})")),
+            "jsonb" => Some(by_output("jsonb_out")),
+            "numeric" | "amount" => Some(by_output("numeric_out")),
+            "text[]" => Some(by_output("array_out")),
+            _ => None,
+        }
+    };
+    let one_expression = |d: Dialect, e: &str| {
+        let mut depth = 0i64;
+        let mut top_comma = false;
+        for t in lex_in(e, d) {
+            match t.kind {
+                Tok::LParen => depth += 1,
+                Tok::RParen => depth -= 1,
+                Tok::Comma if depth == 0 => top_comma = true,
+                _ => {}
+            }
+        }
+        !e.trim().is_empty() && depth == 0 && !top_comma
+    };
+    for d in dialects {
+        let pg = d == Dialect::Postgres;
+        let from = format!("{}.{}", d.force_quote_ident("shop"), d.force_quote_ident("users"));
+        for (m, family_groups) in &columns {
+            let c = d.force_quote_ident(&m.name);
+            let got = group(d, m, None, false);
+            if !pg && !family_groups {
+                assert_eq!(got, Err(GroupRefusal::NoEquality), "{d:?} {}", m.type_name);
+                continue;
+            }
+            let (preview, length, count) = match pg {
+                true => match pg_length(&m.type_name, &c) {
+                    None => (c.clone(), "NULL".to_string(), "pg_catalog.count(*)"),
+                    Some(len) => (
+                        format!("CASE WHEN {len} OPERATOR(pg_catalog.<=) 4096 THEN {c} END"),
+                        len,
+                        "pg_catalog.count(*)",
+                    ),
+                },
+                false => {
+                    let len = format!("OCTET_LENGTH({c})");
+                    (format!("IF({len} <= 4096, {c}, NULL)"), len, "COUNT(*)")
+                }
+            };
+            for part in [&preview, &length, &count.to_string()] {
+                assert!(one_expression(d, part), "{d:?} {}: {part}", m.type_name);
+            }
+            assert_eq!(
+                got,
+                Ok(format!(
+                    "SELECT {preview}, {length}, {count} FROM {from} GROUP BY {c} ORDER BY {count} DESC LIMIT 201"
+                )),
+                "{d:?} {}",
+                m.type_name
+            );
+        }
+    }
+}
+
 #[test]
 fn group_count_refuses_what_the_filter_bar_refuses_and_unknown_calls() {
     use crate::driver::ValueKind;
