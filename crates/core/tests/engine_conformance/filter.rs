@@ -1550,8 +1550,8 @@ pub fn read_cases() -> Vec<Case<Read>> {
 /// Every condition of [`render_cases`] as each MySQL-family session writes it: every column it
 /// names quoted, and read back as the same condition the text with those names bare reads as
 /// (a name the server may call bare excepted: bare it is no column, its own read cases say so;
-/// text that names no column of the table is kept as written either way). The differences
-/// found, or none.
+/// text that names no column of the table is kept as written either way); text whose names
+/// are all kept quoted reads as the condition itself. The differences found, or none.
 pub fn read_back_differences() -> Vec<String> {
     let mut out = Vec::new();
     for engine in [MySql, MariaDb, MySqlAnsiQuotes, MySqlNoBackslashEscapes] {
@@ -1573,7 +1573,13 @@ pub fn read_back_differences() -> Vec<String> {
             let (read, read_bare) =
                 (datarig_core::query::recognise(&text, &t), datarig_core::query::recognise(&bare, &t));
             let raw_both = matches!((&read, &read_bare), (Some(Cond::Raw(_)), Some(Cond::Raw(_))));
-            if read != read_bare && !raw_both {
+            // No name written bare to compare with (each must be quoted, `` a`b ``): the reading
+            // is the condition itself.
+            if bare == text && !columns(cond).is_empty() {
+                if read.as_ref() != Some(cond) {
+                    out.push(format!("{engine:?} `{}`: {text:?} reads as {read:?}", case.name));
+                }
+            } else if read != read_bare && !raw_both {
                 out.push(format!("{engine:?} `{}`: {text:?} reads as {read:?}, {bare:?} as {read_bare:?}", case.name));
             }
         }

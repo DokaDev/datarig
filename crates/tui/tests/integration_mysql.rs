@@ -160,7 +160,8 @@ impl Made {
 impl Drop for Made {
     fn drop(&mut self) {
         let (admin, undo) = (self.admin.clone(), self.undo.clone());
-        let _ = std::thread::spawn(move || {
+        let what = undo.join("; ");
+        let ended = std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             rt.block_on(async {
                 let mut c = side(&admin).await;
@@ -173,6 +174,9 @@ impl Drop for Made {
             });
         })
         .join();
+        if ended.is_err() {
+            let _ = writeln!(std::io::stderr(), "warning: {what}: the cleanup connection failed");
+        }
     }
 }
 

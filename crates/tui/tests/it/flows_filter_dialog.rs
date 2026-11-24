@@ -1129,6 +1129,11 @@ fn family_where(h: &mut Harness, name: &str, ty: &str, text: &str) {
 /// The dialog opened on column `col` of the grid: its count of the column's values (`#`), as
 /// the statement sent.
 fn family_count(h: &mut Harness, col: usize) -> String {
+    family_count_id(h, col).1
+}
+
+/// [`family_count`] with the count's request id.
+fn family_count_id(h: &mut Harness, col: usize) -> (u64, String) {
     h.app.tab_mut().grid.col = col;
     h.keys("f");
     assert!(open(h), "{}", h.screen(120, 34));
@@ -1136,10 +1141,20 @@ fn family_count(h: &mut Harness, col: usize) -> String {
     h.sent()
         .into_iter()
         .find_map(|c| match c {
-            DbCommand::GroupCount { sql, .. } => Some(sql),
+            DbCommand::GroupCount { id, sql, .. } => Some((id, sql)),
             _ => None,
         })
         .expect("a count is sent")
+}
+
+/// The server's answer to count `id`: one NULL in one row; the dialog's screen then.
+fn family_counted(h: &mut Harness, id: u64) -> String {
+    use datarig_core::driver::{GroupCounts, GroupValue};
+    let value = GroupValue { value: None, whole: true, bytes: None, rows: 1, prefix: false, inexact: false };
+    let result = Ok(GroupCounts { values: vec![value], more: false });
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::GroupCounted { id, result, snapshot: false });
+    h.screen(120, 34)
 }
 
 /// In the dialog opened on the grid's `id` column: the first value of its list ticked, the
@@ -1166,8 +1181,18 @@ fn a_bare_name_the_server_may_call_stays_as_written() {
     assert_eq!(ticked, "current_role IS NULL AND id > 0 AND `id` = 1");
     let mut h = family_table(true, "current_role", "varchar(20)");
     family_where(&mut h, "current_role", "varchar(20)", "current_role IS NULL AND id > 0");
-    let count = family_count(&mut h, 1);
+    let (id, count) = family_count_id(&mut h, 1);
     assert!(count.contains(" WHERE (current_role IS NULL AND id > 0) GROUP BY `current_role`"), "{count}");
+    // The kept expression names the function, not the column: no note that it is kept.
+    let kept = "an expression that names this column is kept in the count";
+    let screen = family_counted(&mut h, id);
+    assert!(screen.contains("exact") && !screen.contains(kept), "{screen}");
+    // One that names the column says so.
+    let mut h = family_table(true, "current_role", "varchar(20)");
+    family_where(&mut h, "current_role", "varchar(20)", "LENGTH(`current_role`) > 0");
+    let (id, _) = family_count_id(&mut h, 1);
+    let screen = family_counted(&mut h, id);
+    assert!(screen.contains(kept), "{screen}");
     // Quoted: the column's condition, left out of its own count.
     let mut h = family_table(true, "current_role", "varchar(20)");
     family_where(&mut h, "current_role", "varchar(20)", "`current_role` IS NULL AND id > 0");

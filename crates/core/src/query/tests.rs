@@ -1561,7 +1561,7 @@ fn order_text_quotes_every_name_on_the_family() {
 
 #[test]
 fn a_bare_name_the_family_may_call_is_no_column() {
-    let names = ["current_role", "current_date", "utc_timestamp", "localtime", "date", "char", "user", "id"];
+    let names = ["current_role", "current_date", "utc_timestamp", "localtime", "date", "char", "user", "id", "unknown"];
     let table = |d: Dialect| Target::new(d, names.map(|c| ColumnFacts::new(c, ColumnKind::Number)).to_vec());
     let is_null = |col: &str| Some(Cond::IsNull { col: col.into(), negated: false });
     for d in [MY, Dialect::MariaDb(MySqlMode::default())] {
@@ -1577,8 +1577,9 @@ fn a_bare_name_the_family_may_call_is_no_column() {
         for col in ["date", "char", "user", "id"] {
             assert_eq!(recognise(&format!("{col} IS NULL"), &t), is_null(col), "{d:?} {col}");
         }
-        // UNKNOWN is a constant, whatever the columns.
+        // UNKNOWN is a constant, whatever the columns (a column `unknown` too); quoted, the column.
         assert_eq!(recognise("unknown IS NULL", &t), Some(Cond::Raw("unknown IS NULL".into())), "{d:?}");
+        assert_eq!(recognise("`unknown` IS NULL", &t), is_null("unknown"), "{d:?}");
     }
     let pg = table(Dialect::Postgres);
     assert_eq!(recognise("current_role IS NULL", &pg), is_null("current_role"));

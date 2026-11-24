@@ -801,7 +801,7 @@ fn a_completed_column_is_quoted_on_mysql_and_mariadb() {
         let index = h.app.tabs.active_index();
         h.tab_db(index, DbEvent::Language(lang));
         h.tab_db(index, DbEvent::Connected);
-        answer(&mut h);
+        answer_role(&mut h);
         h.sent();
         h.key(KeyCode::Tab);
         completed(&mut h, name, role, driver_name);
@@ -810,13 +810,30 @@ fn a_completed_column_is_quoted_on_mysql_and_mariadb() {
     let mut h = Harness::connected(Lang::En);
     h.db(DbEvent::Catalog(Ok(cat)));
     open(&mut h, "users");
-    answer(&mut h);
+    answer_role(&mut h);
     h.sent();
     h.key(KeyCode::Tab);
     completed(&mut h, "name", "\"current_role\"", "postgres");
 
+    /// The table's first page: `id`, `name` and `current_role` (the order completes the
+    /// columns of the rows loaded).
+    fn answer_role(h: &mut Harness) {
+        let id = h.app.tab().exec.query_id;
+        let index = h.app.tabs.active_index();
+        let columns = vec![
+            meta("id", "int8", true, false),
+            meta("name", "text", false, false),
+            meta("current_role", "text", false, false),
+        ];
+        let rows = vec![vec![Some("1".into()), Some("n".into()), None]];
+        h.tab_db(
+            index,
+            DbEvent::Page { id, columns: Some(columns), rows, more: false, elapsed: Duration::from_millis(2) },
+        );
+    }
+
     /// In the dialog of the open table: `na` and then `current_r` completed in the `WHERE`
-    /// field, `na` in the `ORDER BY` field, each through `Ctrl+Space` and `Tab`.
+    /// field and in the `ORDER BY` field, each through `Ctrl+Space` and `Tab`.
     fn completed(h: &mut Harness, name: &str, role: &str, what: &str) {
         let pick = |h: &mut Harness, typed: &str| {
             h.type_text(typed);
@@ -837,5 +854,8 @@ fn a_completed_column_is_quoted_on_mysql_and_mariadb() {
         h.key(KeyCode::Down);
         pick(h, "na");
         assert_eq!(fields(h).1, name, "{what}");
+        h.type_text(" DESC, ");
+        pick(h, "current_r");
+        assert_eq!(fields(h).1, format!("{name} DESC, {role}"), "{what}");
     }
 }
