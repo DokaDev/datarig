@@ -277,6 +277,16 @@ fn group_count_cases_on_every_engine() {
 }
 
 #[test]
+fn filter_read_cases_on_every_engine() {
+    run("filter read", &filter::read_cases(), filter::read);
+}
+
+#[test]
+fn filter_check_cases_on_every_engine() {
+    run("filter check", &filter::check_cases(), filter::check);
+}
+
+#[test]
 fn sort_rules_on_every_engine() {
     run("sort rules", &sort::sort_cases(), sort::sort);
 }
@@ -361,6 +371,8 @@ fn every_case_names_every_engine() {
         named("filter render", &filter::render_cases()),
         named("compares", &filter::compares_cases()),
         named("group count", &filter::group_count_cases()),
+        named("filter read", &filter::read_cases()),
+        named("filter check", &filter::check_cases()),
         named("sort rules", &sort::sort_cases()),
         named("edit input", &values::input_cases()),
         named("sql cells", &values::cells_cases()),

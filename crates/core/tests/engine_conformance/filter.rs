@@ -1,7 +1,7 @@
 //! A table's filter and order as each engine's SQL, which column types a filter compares, and
 //! the statement that counts the rows of each value of a column.
 
-use crate::Engine::{MariaDb, MySql, MySqlAnsiQuotes, MySqlNoBackslashEscapes, Pg};
+use crate::Engine::{MariaDb, MySql, MySqlAnsiQuotes, MySqlDollarNotKnown, MySqlNoBackslashEscapes, Pg};
 use crate::{Case, Engine};
 use datarig_core::driver::{ArrayElement, ColumnMeta, ValueKind};
 use datarig_core::query::{
@@ -818,6 +818,981 @@ pub fn group_count_cases() -> Vec<Case<Grouped>> {
                     MariaDb,
                     "SELECT IF(OCTET_LENGTH(`price`) <= 4096, `price`, NULL), OCTET_LENGTH(`price`), COUNT(*) \
                      FROM `s`.`t` GROUP BY `price` ORDER BY COUNT(*) DESC LIMIT 201",
+                ),
+            ],
+        },
+    ]
+}
+
+/// Filter text read back into a condition: the bar text and the table it is read for (the
+/// table of [`read_target`], or with `mixed` one with the columns `aB` and `Ab` only).
+pub struct Read {
+    pub text: &'static str,
+    pub mixed: bool,
+}
+
+/// The table filter text is read for: numbers `id`, `x` and `y`, text `name`, a float `price`,
+/// bytes `data`, a date `d` and an instant `at` shown in the session's zone; with `mixed`, the
+/// columns `aB` and `Ab` (in that order).
+fn read_target(d: Dialect, mixed: bool) -> Target {
+    if mixed {
+        return Target::new(
+            d,
+            vec![ColumnFacts::new("aB", ColumnKind::Number), ColumnFacts::new("Ab", ColumnKind::Number)],
+        );
+    }
+    let mut at = ColumnFacts::new("at", ColumnKind::Other);
+    at.zoned = true;
+    Target::new(
+        d,
+        vec![
+            ColumnFacts::new("id", ColumnKind::Number),
+            ColumnFacts::new("name", ColumnKind::Text),
+            ColumnFacts::new("price", ColumnKind::Real),
+            ColumnFacts::new("data", ColumnKind::Bytes),
+            ColumnFacts::new("x", ColumnKind::Number),
+            ColumnFacts::new("y", ColumnKind::Number),
+            ColumnFacts::new("d", ColumnKind::Other),
+            at,
+        ],
+    )
+}
+
+/// What filter text reads as on `e`: the condition the reader finds and the terms of its
+/// conjunction, each as its `Debug`.
+pub fn read(e: Engine, r: &Read) -> String {
+    let d = e.dialect();
+    let cond = datarig_core::query::recognise(r.text, &read_target(d, r.mixed));
+    let terms = datarig_core::query::split_terms(r.text, d);
+    format!("{cond:?} | terms {terms:?}")
+}
+
+fn read_case(text: &'static str) -> Read {
+    Read { text, mixed: false }
+}
+
+pub fn read_cases() -> Vec<Case<Read>> {
+    vec![
+        Case {
+            name: "null-safe equality",
+            input: read_case("id <=> 1"),
+            expect: &[
+                (Pg, "Some(Raw(\"id <=> 1\")) | terms Some([0..8])"),
+                (MySql, "Some(NotDistinct { col: \"id\", value: Number(\"1\"), negated: false }) | terms Some([0..8])"),
+                (
+                    MariaDb,
+                    "Some(NotDistinct { col: \"id\", value: Number(\"1\"), negated: false }) | terms Some([0..8])",
+                ),
+                (
+                    MySqlAnsiQuotes,
+                    "Some(NotDistinct { col: \"id\", value: Number(\"1\"), negated: false }) | terms Some([0..8])",
+                ),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Some(NotDistinct { col: \"id\", value: Number(\"1\"), negated: false }) | terms Some([0..8])",
+                ),
+            ],
+        },
+        Case {
+            name: "negated null-safe equality",
+            input: read_case("NOT (id <=> 1)"),
+            expect: &[
+                (Pg, "Some(Not(Raw(\"id <=> 1\"))) | terms Some([0..14])"),
+                (MySql, "Some(NotDistinct { col: \"id\", value: Number(\"1\"), negated: true }) | terms Some([0..14])"),
+                (
+                    MariaDb,
+                    "Some(NotDistinct { col: \"id\", value: Number(\"1\"), negated: true }) | terms Some([0..14])",
+                ),
+                (
+                    MySqlAnsiQuotes,
+                    "Some(NotDistinct { col: \"id\", value: Number(\"1\"), negated: true }) | terms Some([0..14])",
+                ),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Some(NotDistinct { col: \"id\", value: Number(\"1\"), negated: true }) | terms Some([0..14])",
+                ),
+            ],
+        },
+        Case {
+            name: "is not distinct from",
+            input: read_case("id IS NOT DISTINCT FROM 1"),
+            expect: &[
+                (Pg, "Some(NotDistinct { col: \"id\", value: Number(\"1\"), negated: false }) | terms Some([0..25])"),
+                (
+                    MySql,
+                    "Some(NotDistinct { col: \"id\", value: Number(\"1\"), negated: false }) | terms Some([0..25])",
+                ),
+                (
+                    MariaDb,
+                    "Some(NotDistinct { col: \"id\", value: Number(\"1\"), negated: false }) | terms Some([0..25])",
+                ),
+                (
+                    MySqlAnsiQuotes,
+                    "Some(NotDistinct { col: \"id\", value: Number(\"1\"), negated: false }) | terms Some([0..25])",
+                ),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Some(NotDistinct { col: \"id\", value: Number(\"1\"), negated: false }) | terms Some([0..25])",
+                ),
+            ],
+        },
+        Case {
+            name: "ilike",
+            input: read_case("name ILIKE 'a%'"),
+            expect: &[
+                (
+                    Pg,
+                    "Some(Like { col: \"name\", pattern: \"a%\", negated: false, case: Insensitive }) | terms Some([0..15])",
+                ),
+                (MySql, "Some(Raw(\"name ILIKE 'a%'\")) | terms Some([0..15])"),
+                (MariaDb, "Some(Raw(\"name ILIKE 'a%'\")) | terms Some([0..15])"),
+                (MySqlAnsiQuotes, "Some(Raw(\"name ILIKE 'a%'\")) | terms Some([0..15])"),
+                (MySqlNoBackslashEscapes, "Some(Raw(\"name ILIKE 'a%'\")) | terms Some([0..15])"),
+            ],
+        },
+        Case {
+            name: "lower like lower",
+            input: read_case("LOWER(name) LIKE LOWER('a%')"),
+            expect: &[
+                (
+                    Pg,
+                    "Some(Like { col: \"name\", pattern: \"a%\", negated: false, case: Insensitive }) | terms Some([0..28])",
+                ),
+                (
+                    MySql,
+                    "Some(Like { col: \"name\", pattern: \"a%\", negated: false, case: Insensitive }) | terms Some([0..28])",
+                ),
+                (
+                    MariaDb,
+                    "Some(Like { col: \"name\", pattern: \"a%\", negated: false, case: Insensitive }) | terms Some([0..28])",
+                ),
+                (
+                    MySqlAnsiQuotes,
+                    "Some(Like { col: \"name\", pattern: \"a%\", negated: false, case: Insensitive }) | terms Some([0..28])",
+                ),
+                (MySqlNoBackslashEscapes, "Some(Raw(\"LOWER(name) LIKE LOWER('a%')\")) | terms Some([0..28])"),
+            ],
+        },
+        Case {
+            name: "xor",
+            input: read_case("id = 1 XOR y = 2"),
+            expect: &[
+                (Pg, "Some(Raw(\"id = 1 XOR y = 2\")) | terms None"),
+                (MySql, "Some(Raw(\"id = 1 XOR y = 2\")) | terms None"),
+                (MariaDb, "Some(Raw(\"id = 1 XOR y = 2\")) | terms None"),
+                (MySqlAnsiQuotes, "Some(Raw(\"id = 1 XOR y = 2\")) | terms None"),
+                (MySqlNoBackslashEscapes, "Some(Raw(\"id = 1 XOR y = 2\")) | terms None"),
+            ],
+        },
+        Case {
+            name: "bitwise or",
+            input: read_case("id | 1"),
+            expect: &[
+                (Pg, "Some(Raw(\"id | 1\")) | terms Some([0..6])"),
+                (MySql, "Some(Raw(\"id | 1\")) | terms None"),
+                (MariaDb, "Some(Raw(\"id | 1\")) | terms None"),
+                (MySqlAnsiQuotes, "Some(Raw(\"id | 1\")) | terms None"),
+                (MySqlNoBackslashEscapes, "Some(Raw(\"id | 1\")) | terms None"),
+            ],
+        },
+        Case {
+            name: "bitwise and in a conjunction",
+            input: read_case("id = 1 AND y & 2"),
+            expect: &[
+                (
+                    Pg,
+                    "Some(All([Cmp { col: \"id\", op: Eq, value: Number(\"1\") }, Raw(\"y & 2\")])) | terms Some([0..6, 11..16])",
+                ),
+                (MySql, "Some(Raw(\"id = 1 AND y & 2\")) | terms None"),
+                (MariaDb, "Some(Raw(\"id = 1 AND y & 2\")) | terms None"),
+                (MySqlAnsiQuotes, "Some(Raw(\"id = 1 AND y & 2\")) | terms None"),
+                (MySqlNoBackslashEscapes, "Some(Raw(\"id = 1 AND y & 2\")) | terms None"),
+            ],
+        },
+        Case {
+            name: "bang in a conjunction",
+            input: read_case("id = 1 AND ! y"),
+            expect: &[
+                (
+                    Pg,
+                    "Some(All([Cmp { col: \"id\", op: Eq, value: Number(\"1\") }, Raw(\"! y\")])) | terms Some([0..6, 11..14])",
+                ),
+                (MySql, "Some(All([Cmp { col: \"id\", op: Eq, value: Number(\"1\") }, Raw(\"! y\")])) | terms None"),
+                (MariaDb, "Some(All([Cmp { col: \"id\", op: Eq, value: Number(\"1\") }, Raw(\"! y\")])) | terms None"),
+                (
+                    MySqlAnsiQuotes,
+                    "Some(All([Cmp { col: \"id\", op: Eq, value: Number(\"1\") }, Raw(\"! y\")])) | terms None",
+                ),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Some(All([Cmp { col: \"id\", op: Eq, value: Number(\"1\") }, Raw(\"! y\")])) | terms None",
+                ),
+            ],
+        },
+        Case {
+            name: "not equal in a conjunction",
+            input: read_case("id = 1 AND y != 2"),
+            expect: &[
+                (
+                    Pg,
+                    "Some(All([Cmp { col: \"id\", op: Eq, value: Number(\"1\") }, Cmp { col: \"y\", op: Ne, value: Number(\"2\") }])) | terms Some([0..6, 11..17])",
+                ),
+                (
+                    MySql,
+                    "Some(All([Cmp { col: \"id\", op: Eq, value: Number(\"1\") }, Cmp { col: \"y\", op: Ne, value: Number(\"2\") }])) | terms Some([0..6, 11..17])",
+                ),
+                (
+                    MariaDb,
+                    "Some(All([Cmp { col: \"id\", op: Eq, value: Number(\"1\") }, Cmp { col: \"y\", op: Ne, value: Number(\"2\") }])) | terms Some([0..6, 11..17])",
+                ),
+                (
+                    MySqlAnsiQuotes,
+                    "Some(All([Cmp { col: \"id\", op: Eq, value: Number(\"1\") }, Cmp { col: \"y\", op: Ne, value: Number(\"2\") }])) | terms Some([0..6, 11..17])",
+                ),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Some(All([Cmp { col: \"id\", op: Eq, value: Number(\"1\") }, Cmp { col: \"y\", op: Ne, value: Number(\"2\") }])) | terms Some([0..6, 11..17])",
+                ),
+            ],
+        },
+        Case {
+            name: "not before between",
+            input: read_case("NOT id BETWEEN 1 AND 2"),
+            expect: &[
+                (
+                    Pg,
+                    "Some(Not(Between { col: \"id\", lo: Number(\"1\"), hi: Number(\"2\"), negated: false })) | terms Some([0..22])",
+                ),
+                (MySql, "Some(Raw(\"NOT id BETWEEN 1 AND 2\")) | terms Some([0..22])"),
+                (MariaDb, "Some(Raw(\"NOT id BETWEEN 1 AND 2\")) | terms Some([0..22])"),
+                (MySqlAnsiQuotes, "Some(Raw(\"NOT id BETWEEN 1 AND 2\")) | terms Some([0..22])"),
+                (MySqlNoBackslashEscapes, "Some(Raw(\"NOT id BETWEEN 1 AND 2\")) | terms Some([0..22])"),
+            ],
+        },
+        Case {
+            name: "not over a group",
+            input: read_case("NOT (id BETWEEN 1 AND 2)"),
+            expect: &[
+                (
+                    Pg,
+                    "Some(Not(Between { col: \"id\", lo: Number(\"1\"), hi: Number(\"2\"), negated: false })) | terms Some([0..24])",
+                ),
+                (
+                    MySql,
+                    "Some(Not(Between { col: \"id\", lo: Number(\"1\"), hi: Number(\"2\"), negated: false })) | terms Some([0..24])",
+                ),
+                (
+                    MariaDb,
+                    "Some(Not(Between { col: \"id\", lo: Number(\"1\"), hi: Number(\"2\"), negated: false })) | terms Some([0..24])",
+                ),
+                (
+                    MySqlAnsiQuotes,
+                    "Some(Not(Between { col: \"id\", lo: Number(\"1\"), hi: Number(\"2\"), negated: false })) | terms Some([0..24])",
+                ),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Some(Not(Between { col: \"id\", lo: Number(\"1\"), hi: Number(\"2\"), negated: false })) | terms Some([0..24])",
+                ),
+            ],
+        },
+        Case {
+            name: "between in a conjunction",
+            input: read_case("x BETWEEN 1 AND 2 AND y = 1"),
+            expect: &[
+                (
+                    Pg,
+                    "Some(All([Between { col: \"x\", lo: Number(\"1\"), hi: Number(\"2\"), negated: false }, Cmp { col: \"y\", op: Eq, value: Number(\"1\") }])) | terms Some([0..17, 22..27])",
+                ),
+                (
+                    MySql,
+                    "Some(All([Between { col: \"x\", lo: Number(\"1\"), hi: Number(\"2\"), negated: false }, Cmp { col: \"y\", op: Eq, value: Number(\"1\") }])) | terms Some([0..17, 22..27])",
+                ),
+                (
+                    MariaDb,
+                    "Some(All([Between { col: \"x\", lo: Number(\"1\"), hi: Number(\"2\"), negated: false }, Cmp { col: \"y\", op: Eq, value: Number(\"1\") }])) | terms Some([0..17, 22..27])",
+                ),
+                (
+                    MySqlAnsiQuotes,
+                    "Some(All([Between { col: \"x\", lo: Number(\"1\"), hi: Number(\"2\"), negated: false }, Cmp { col: \"y\", op: Eq, value: Number(\"1\") }])) | terms Some([0..17, 22..27])",
+                ),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Some(All([Between { col: \"x\", lo: Number(\"1\"), hi: Number(\"2\"), negated: false }, Cmp { col: \"y\", op: Eq, value: Number(\"1\") }])) | terms Some([0..17, 22..27])",
+                ),
+            ],
+        },
+        Case {
+            name: "interval in a conjunction",
+            input: read_case("d > NOW() - INTERVAL 1 DAY AND y = 1"),
+            expect: &[
+                (
+                    Pg,
+                    "Some(All([Raw(\"d > NOW() - INTERVAL 1 DAY\"), Cmp { col: \"y\", op: Eq, value: Number(\"1\") }])) | terms Some([0..26, 31..36])",
+                ),
+                (
+                    MySql,
+                    "Some(All([Raw(\"d > NOW() - INTERVAL 1 DAY\"), Cmp { col: \"y\", op: Eq, value: Number(\"1\") }])) | terms None",
+                ),
+                (
+                    MariaDb,
+                    "Some(All([Raw(\"d > NOW() - INTERVAL 1 DAY\"), Cmp { col: \"y\", op: Eq, value: Number(\"1\") }])) | terms None",
+                ),
+                (
+                    MySqlAnsiQuotes,
+                    "Some(All([Raw(\"d > NOW() - INTERVAL 1 DAY\"), Cmp { col: \"y\", op: Eq, value: Number(\"1\") }])) | terms None",
+                ),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Some(All([Raw(\"d > NOW() - INTERVAL 1 DAY\"), Cmp { col: \"y\", op: Eq, value: Number(\"1\") }])) | terms None",
+                ),
+            ],
+        },
+        Case {
+            name: "utf8mb4 hex text",
+            input: read_case("name = _utf8mb4 X'78'"),
+            expect: &[
+                (Pg, "Some(Raw(\"name = _utf8mb4 X'78'\")) | terms Some([0..21])"),
+                (MySql, "Some(Cmp { col: \"name\", op: Eq, value: Text(\"x\") }) | terms Some([0..21])"),
+                (MariaDb, "Some(Cmp { col: \"name\", op: Eq, value: Text(\"x\") }) | terms Some([0..21])"),
+                (MySqlAnsiQuotes, "Some(Cmp { col: \"name\", op: Eq, value: Text(\"x\") }) | terms Some([0..21])"),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Some(Cmp { col: \"name\", op: Eq, value: Text(\"x\") }) | terms Some([0..21])",
+                ),
+            ],
+        },
+        Case {
+            name: "hex bytes",
+            input: read_case("data = X'00ab'"),
+            expect: &[
+                (Pg, "Some(Raw(\"data = X'00ab'\")) | terms Some([0..14])"),
+                (MySql, "Some(Cmp { col: \"data\", op: Eq, value: Bytes([0, 171]) }) | terms Some([0..14])"),
+                (MariaDb, "Some(Cmp { col: \"data\", op: Eq, value: Bytes([0, 171]) }) | terms Some([0..14])"),
+                (MySqlAnsiQuotes, "Some(Cmp { col: \"data\", op: Eq, value: Bytes([0, 171]) }) | terms Some([0..14])"),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Some(Cmp { col: \"data\", op: Eq, value: Bytes([0, 171]) }) | terms Some([0..14])",
+                ),
+            ],
+        },
+        Case {
+            name: "bytea cast",
+            input: read_case(r#"data = '\x00ab'::bytea"#),
+            expect: &[
+                (Pg, "Some(Raw(\"data = '\\\\x00ab'::bytea\")) | terms Some([0..22])"),
+                (MySql, "Some(Raw(\"data = '\\\\x00ab'::bytea\")) | terms Some([0..22])"),
+                (MariaDb, "Some(Raw(\"data = '\\\\x00ab'::bytea\")) | terms Some([0..22])"),
+                (MySqlAnsiQuotes, "Some(Raw(\"data = '\\\\x00ab'::bytea\")) | terms Some([0..22])"),
+                (MySqlNoBackslashEscapes, "Some(Raw(\"data = '\\\\x00ab'::bytea\")) | terms Some([0..22])"),
+            ],
+        },
+        Case {
+            name: "bytea cast with its schema",
+            input: read_case(r#"data = '\x00ab'::pg_catalog.bytea"#),
+            expect: &[
+                (Pg, "Some(Raw(\"data = '\\\\x00ab'::pg_catalog.bytea\")) | terms Some([0..33])"),
+                (MySql, "Some(Raw(\"data = '\\\\x00ab'::pg_catalog.bytea\")) | terms Some([0..33])"),
+                (MariaDb, "Some(Raw(\"data = '\\\\x00ab'::pg_catalog.bytea\")) | terms Some([0..33])"),
+                (MySqlAnsiQuotes, "Some(Raw(\"data = '\\\\x00ab'::pg_catalog.bytea\")) | terms Some([0..33])"),
+                (MySqlNoBackslashEscapes, "Some(Raw(\"data = '\\\\x00ab'::pg_catalog.bytea\")) | terms Some([0..33])"),
+            ],
+        },
+        Case {
+            name: "plain string with a backslash",
+            input: read_case(r#"name = 'a\b'"#),
+            expect: &[
+                (Pg, "Some(Raw(\"name = 'a\\\\b'\")) | terms Some([0..12])"),
+                (MySql, "Some(Raw(\"name = 'a\\\\b'\")) | terms Some([0..12])"),
+                (MariaDb, "Some(Raw(\"name = 'a\\\\b'\")) | terms Some([0..12])"),
+                (MySqlAnsiQuotes, "Some(Raw(\"name = 'a\\\\b'\")) | terms Some([0..12])"),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Some(Cmp { col: \"name\", op: Eq, value: Text(\"a\\\\b\") }) | terms Some([0..12])",
+                ),
+            ],
+        },
+        Case {
+            name: "plain string with an escaped backslash",
+            input: read_case(r#"name = 'a\\b'"#),
+            expect: &[
+                (Pg, "Some(Raw(\"name = 'a\\\\\\\\b'\")) | terms Some([0..13])"),
+                (MySql, "Some(Cmp { col: \"name\", op: Eq, value: Text(\"a\\\\b\") }) | terms Some([0..13])"),
+                (MariaDb, "Some(Cmp { col: \"name\", op: Eq, value: Text(\"a\\\\b\") }) | terms Some([0..13])"),
+                (MySqlAnsiQuotes, "Some(Cmp { col: \"name\", op: Eq, value: Text(\"a\\\\b\") }) | terms Some([0..13])"),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Some(Cmp { col: \"name\", op: Eq, value: Text(\"a\\\\\\\\b\") }) | terms Some([0..13])",
+                ),
+            ],
+        },
+        Case {
+            name: "escape string",
+            input: read_case(r#"E'a\\b' = name"#),
+            expect: &[
+                (Pg, "Some(Raw(\"E'a\\\\\\\\b' = name\")) | terms Some([0..14])"),
+                (MySql, "Some(Raw(\"E'a\\\\\\\\b' = name\")) | terms Some([0..14])"),
+                (MariaDb, "Some(Raw(\"E'a\\\\\\\\b' = name\")) | terms Some([0..14])"),
+                (MySqlAnsiQuotes, "Some(Raw(\"E'a\\\\\\\\b' = name\")) | terms Some([0..14])"),
+                (MySqlNoBackslashEscapes, "Some(Raw(\"E'a\\\\\\\\b' = name\")) | terms Some([0..14])"),
+            ],
+        },
+        Case {
+            name: "escape string compared",
+            input: read_case(r#"name = E'a\\b'"#),
+            expect: &[
+                (Pg, "Some(Cmp { col: \"name\", op: Eq, value: Text(\"a\\\\b\") }) | terms Some([0..14])"),
+                (MySql, "Some(Raw(\"name = E'a\\\\\\\\b'\")) | terms Some([0..14])"),
+                (MariaDb, "Some(Raw(\"name = E'a\\\\\\\\b'\")) | terms Some([0..14])"),
+                (MySqlAnsiQuotes, "Some(Raw(\"name = E'a\\\\\\\\b'\")) | terms Some([0..14])"),
+                (MySqlNoBackslashEscapes, "Some(Raw(\"name = E'a\\\\\\\\b'\")) | terms Some([0..14])"),
+            ],
+        },
+        Case {
+            name: "double-quoted",
+            input: read_case(r#"name = "x""#),
+            expect: &[
+                (Pg, "Some(Raw(\"name = \\\"x\\\"\")) | terms Some([0..10])"),
+                (MySql, "Some(Cmp { col: \"name\", op: Eq, value: Text(\"x\") }) | terms Some([0..10])"),
+                (MariaDb, "Some(Cmp { col: \"name\", op: Eq, value: Text(\"x\") }) | terms Some([0..10])"),
+                (MySqlAnsiQuotes, "Some(Raw(\"name = \\\"x\\\"\")) | terms Some([0..10])"),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Some(Cmp { col: \"name\", op: Eq, value: Text(\"x\") }) | terms Some([0..10])",
+                ),
+            ],
+        },
+        Case {
+            name: "like without escape",
+            input: read_case(r#"name LIKE 'a\%'"#),
+            expect: &[
+                (Pg, "Some(Raw(\"name LIKE 'a\\\\%'\")) | terms Some([0..15])"),
+                (MySql, "Some(Raw(\"name LIKE 'a\\\\%'\")) | terms Some([0..15])"),
+                (MariaDb, "Some(Raw(\"name LIKE 'a\\\\%'\")) | terms Some([0..15])"),
+                (MySqlAnsiQuotes, "Some(Raw(\"name LIKE 'a\\\\%'\")) | terms Some([0..15])"),
+                (MySqlNoBackslashEscapes, "Some(Raw(\"name LIKE 'a\\\\%'\")) | terms Some([0..15])"),
+            ],
+        },
+        Case {
+            name: "like with escape",
+            input: read_case("name LIKE 'a!%' ESCAPE '!'"),
+            expect: &[
+                (
+                    Pg,
+                    "Some(Like { col: \"name\", pattern: \"a!%\", negated: false, case: Server }) | terms Some([0..26])",
+                ),
+                (
+                    MySql,
+                    "Some(Like { col: \"name\", pattern: \"a!%\", negated: false, case: Server }) | terms Some([0..26])",
+                ),
+                (
+                    MariaDb,
+                    "Some(Like { col: \"name\", pattern: \"a!%\", negated: false, case: Server }) | terms Some([0..26])",
+                ),
+                (
+                    MySqlAnsiQuotes,
+                    "Some(Like { col: \"name\", pattern: \"a!%\", negated: false, case: Server }) | terms Some([0..26])",
+                ),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Some(Like { col: \"name\", pattern: \"a!%\", negated: false, case: Server }) | terms Some([0..26])",
+                ),
+            ],
+        },
+        Case {
+            name: "instant",
+            input: read_case("at = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)"),
+            expect: &[
+                (
+                    Pg,
+                    "Some(Raw(\"at = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)\")) | terms Some([0..69])",
+                ),
+                (
+                    MySql,
+                    "Some(Cmp { col: \"at\", op: Eq, value: Text(\"2026-11-10 09:30:00+00:00\") }) | terms Some([0..69])",
+                ),
+                (
+                    MariaDb,
+                    "Some(Cmp { col: \"at\", op: Eq, value: Text(\"2026-11-10 09:30:00+00:00\") }) | terms Some([0..69])",
+                ),
+                (
+                    MySqlAnsiQuotes,
+                    "Some(Cmp { col: \"at\", op: Eq, value: Text(\"2026-11-10 09:30:00+00:00\") }) | terms Some([0..69])",
+                ),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Some(Cmp { col: \"at\", op: Eq, value: Text(\"2026-11-10 09:30:00+00:00\") }) | terms Some([0..69])",
+                ),
+            ],
+        },
+        Case {
+            name: "instant on a column not zoned",
+            input: read_case("d = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)"),
+            expect: &[
+                (
+                    Pg,
+                    "Some(Raw(\"d = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)\")) | terms Some([0..68])",
+                ),
+                (
+                    MySql,
+                    "Some(Raw(\"d = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)\")) | terms Some([0..68])",
+                ),
+                (
+                    MariaDb,
+                    "Some(Raw(\"d = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)\")) | terms Some([0..68])",
+                ),
+                (
+                    MySqlAnsiQuotes,
+                    "Some(Raw(\"d = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)\")) | terms Some([0..68])",
+                ),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Some(Raw(\"d = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)\")) | terms Some([0..68])",
+                ),
+            ],
+        },
+        Case {
+            name: "mixed-case column",
+            input: read_case("NAME = 'x'"),
+            expect: &[
+                (Pg, "Some(Cmp { col: \"name\", op: Eq, value: Text(\"x\") }) | terms Some([0..10])"),
+                (MySql, "Some(Cmp { col: \"name\", op: Eq, value: Text(\"x\") }) | terms Some([0..10])"),
+                (MariaDb, "Some(Cmp { col: \"name\", op: Eq, value: Text(\"x\") }) | terms Some([0..10])"),
+                (MySqlAnsiQuotes, "Some(Cmp { col: \"name\", op: Eq, value: Text(\"x\") }) | terms Some([0..10])"),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Some(Cmp { col: \"name\", op: Eq, value: Text(\"x\") }) | terms Some([0..10])",
+                ),
+            ],
+        },
+        Case {
+            name: "dollar string",
+            input: read_case("name = $$a$$"),
+            expect: &[
+                (Pg, "Some(Raw(\"name = $$a$$\")) | terms Some([0..12])"),
+                (MySql, "Some(Raw(\"name = $$a$$\")) | terms Some([0..12])"),
+                (MariaDb, "Some(Raw(\"name = $$a$$\")) | terms Some([0..12])"),
+                (MySqlAnsiQuotes, "Some(Raw(\"name = $$a$$\")) | terms Some([0..12])"),
+                (MySqlNoBackslashEscapes, "Some(Raw(\"name = $$a$$\")) | terms Some([0..12])"),
+                (MySqlDollarNotKnown, "Some(Raw(\"name = $$a$$\")) | terms Some([0..12])"),
+            ],
+        },
+        Case {
+            name: "name as written",
+            input: Read { text: "Ab = 1", mixed: true },
+            expect: &[
+                (Pg, "Some(Raw(\"Ab = 1\")) | terms Some([0..6])"),
+                (MySql, "Some(Cmp { col: \"aB\", op: Eq, value: Number(\"1\") }) | terms Some([0..6])"),
+                (MariaDb, "Some(Cmp { col: \"aB\", op: Eq, value: Number(\"1\") }) | terms Some([0..6])"),
+                (MySqlAnsiQuotes, "Some(Cmp { col: \"aB\", op: Eq, value: Number(\"1\") }) | terms Some([0..6])"),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Some(Cmp { col: \"aB\", op: Eq, value: Number(\"1\") }) | terms Some([0..6])",
+                ),
+            ],
+        },
+        Case {
+            name: "name in another case",
+            input: Read { text: "ab = 1", mixed: true },
+            expect: &[
+                (Pg, "Some(Raw(\"ab = 1\")) | terms Some([0..6])"),
+                (MySql, "Some(Cmp { col: \"aB\", op: Eq, value: Number(\"1\") }) | terms Some([0..6])"),
+                (MariaDb, "Some(Cmp { col: \"aB\", op: Eq, value: Number(\"1\") }) | terms Some([0..6])"),
+                (MySqlAnsiQuotes, "Some(Cmp { col: \"aB\", op: Eq, value: Number(\"1\") }) | terms Some([0..6])"),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Some(Cmp { col: \"aB\", op: Eq, value: Number(\"1\") }) | terms Some([0..6])",
+                ),
+            ],
+        },
+    ]
+}
+
+/// Filter text checked before it runs, on a session judged on its own engine or, with
+/// `sibling`, on both engines of the MySQL family (PostgreSQL's is always its own).
+pub struct Check {
+    pub text: &'static str,
+    pub sibling: bool,
+}
+
+/// The check of filter text on `e` (its verdict or refusal, whole), whether it may be planned
+/// for an estimate, and whether it may hold a subquery.
+pub fn check(e: Engine, c: &Check) -> String {
+    use datarig_core::query::{check_filter, estimate_allowed, has_subquery};
+    use datarig_core::sql::risk::mysql::Judged;
+    let d = e.dialect();
+    let table = TableName { database: None, schema: "s".to_string(), name: "t".to_string() };
+    let classifier = match Classifier::new(Language::Sql(d)) {
+        Classifier::MySql(mode, _) if c.sibling => Classifier::MySql(mode, Judged::WithSibling),
+        Classifier::MariaDb(mode, _) if c.sibling => Classifier::MariaDb(mode, Judged::WithSibling),
+        own => own,
+    };
+    let verdict = check_filter(c.text, &table, &read_target(d, false), &classifier, false);
+    let estimate = match &verdict {
+        Ok(v) => format!("{:?}", estimate_allowed(v, c.text, d)),
+        Err(_) => "-".to_string(),
+    };
+    format!("{verdict:?} | estimate {estimate} | subquery {}", has_subquery(c.text, d))
+}
+
+fn check_case(text: &'static str) -> Check {
+    Check { text, sibling: false }
+}
+
+pub fn check_cases() -> Vec<Case<Check>> {
+    vec![
+        Case {
+            name: "plain",
+            input: check_case("id = 1"),
+            expect: &[
+                (Pg, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySql, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MariaDb, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlAnsiQuotes, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlNoBackslashEscapes, "Ok(Clear) | estimate Ok(()) | subquery false"),
+            ],
+        },
+        Case {
+            name: "subquery",
+            input: check_case("id IN (SELECT 1)"),
+            expect: &[
+                (Pg, "Ok(Clear) | estimate Ok(()) | subquery true"),
+                (MySql, "Ok(Clear) | estimate Err(Subquery) | subquery true"),
+                (MariaDb, "Ok(Clear) | estimate Err(Subquery) | subquery true"),
+                (MySqlAnsiQuotes, "Ok(Clear) | estimate Err(Subquery) | subquery true"),
+                (MySqlNoBackslashEscapes, "Ok(Clear) | estimate Err(Subquery) | subquery true"),
+            ],
+        },
+        Case {
+            name: "subquery in another case",
+            input: check_case("id IN ( select 1 )"),
+            expect: &[
+                (Pg, "Ok(Clear) | estimate Ok(()) | subquery true"),
+                (MySql, "Ok(Clear) | estimate Err(Subquery) | subquery true"),
+                (MariaDb, "Ok(Clear) | estimate Err(Subquery) | subquery true"),
+                (MySqlAnsiQuotes, "Ok(Clear) | estimate Err(Subquery) | subquery true"),
+                (MySqlNoBackslashEscapes, "Ok(Clear) | estimate Err(Subquery) | subquery true"),
+            ],
+        },
+        Case {
+            name: "mariadb executable comment",
+            input: check_case("id = 1 /*M! OR 1 = 1 */"),
+            expect: &[
+                (Pg, "Err(Lexical { problem: Comment, at: 7..23 }) | estimate - | subquery true"),
+                (MySql, "Err(Lexical { problem: ExecutableComment, at: 7..23 }) | estimate - | subquery true"),
+                (MariaDb, "Err(Lexical { problem: ExecutableComment, at: 7..23 }) | estimate - | subquery true"),
+                (
+                    MySqlAnsiQuotes,
+                    "Err(Lexical { problem: ExecutableComment, at: 7..23 }) | estimate - | subquery true",
+                ),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Err(Lexical { problem: ExecutableComment, at: 7..23 }) | estimate - | subquery true",
+                ),
+            ],
+        },
+        Case {
+            name: "executable comment",
+            input: check_case("id = 1 /*! OR 1 = 1 */"),
+            expect: &[
+                (Pg, "Err(Lexical { problem: Comment, at: 7..22 }) | estimate - | subquery true"),
+                (MySql, "Err(Lexical { problem: ExecutableComment, at: 7..10 }) | estimate - | subquery true"),
+                (MariaDb, "Err(Lexical { problem: ExecutableComment, at: 7..10 }) | estimate - | subquery true"),
+                (
+                    MySqlAnsiQuotes,
+                    "Err(Lexical { problem: ExecutableComment, at: 7..10 }) | estimate - | subquery true",
+                ),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Err(Lexical { problem: ExecutableComment, at: 7..10 }) | estimate - | subquery true",
+                ),
+            ],
+        },
+        Case {
+            name: "comment",
+            input: check_case("id = 1 /* x */"),
+            expect: &[
+                (Pg, "Err(Lexical { problem: Comment, at: 7..14 }) | estimate - | subquery true"),
+                (MySql, "Err(Lexical { problem: Comment, at: 7..14 }) | estimate - | subquery true"),
+                (MariaDb, "Err(Lexical { problem: Comment, at: 7..14 }) | estimate - | subquery true"),
+                (MySqlAnsiQuotes, "Err(Lexical { problem: Comment, at: 7..14 }) | estimate - | subquery true"),
+                (MySqlNoBackslashEscapes, "Err(Lexical { problem: Comment, at: 7..14 }) | estimate - | subquery true"),
+            ],
+        },
+        Case {
+            name: "hash comment",
+            input: check_case("id = 1 # x"),
+            expect: &[
+                (Pg, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySql, "Err(Lexical { problem: Comment, at: 7..10 }) | estimate - | subquery true"),
+                (MariaDb, "Err(Lexical { problem: Comment, at: 7..10 }) | estimate - | subquery true"),
+                (MySqlAnsiQuotes, "Err(Lexical { problem: Comment, at: 7..10 }) | estimate - | subquery true"),
+                (MySqlNoBackslashEscapes, "Err(Lexical { problem: Comment, at: 7..10 }) | estimate - | subquery true"),
+            ],
+        },
+        Case {
+            name: "semicolon",
+            input: check_case("id = 1; DROP TABLE t"),
+            expect: &[
+                (Pg, "Err(Lexical { problem: Semicolon, at: 6..7 }) | estimate - | subquery true"),
+                (MySql, "Err(Lexical { problem: Semicolon, at: 6..7 }) | estimate - | subquery true"),
+                (MariaDb, "Err(Lexical { problem: Semicolon, at: 6..7 }) | estimate - | subquery true"),
+                (MySqlAnsiQuotes, "Err(Lexical { problem: Semicolon, at: 6..7 }) | estimate - | subquery true"),
+                (MySqlNoBackslashEscapes, "Err(Lexical { problem: Semicolon, at: 6..7 }) | estimate - | subquery true"),
+            ],
+        },
+        Case {
+            name: "backslash in a plain string",
+            input: check_case(r#"name = 'a\b'"#),
+            expect: &[
+                (Pg, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySql, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MariaDb, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlAnsiQuotes, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlNoBackslashEscapes, "Ok(Clear) | estimate Ok(()) | subquery false"),
+            ],
+        },
+        Case {
+            name: "backslash before a quote",
+            input: check_case(r#"name = 'a\' OR id = 1 OR name = '"#),
+            expect: &[
+                (Pg, "Err(Lexical { problem: Unterminated, at: 32..33 }) | estimate - | subquery true"),
+                (MySql, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MariaDb, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlAnsiQuotes, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Err(Lexical { problem: Unterminated, at: 32..33 }) | estimate - | subquery true",
+                ),
+            ],
+        },
+        Case {
+            name: "double quote",
+            input: check_case(r#"name = "a""#),
+            expect: &[
+                (Pg, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySql, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MariaDb, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlAnsiQuotes, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlNoBackslashEscapes, "Ok(Clear) | estimate Ok(()) | subquery false"),
+            ],
+        },
+        Case {
+            name: "double quote read as a name",
+            input: check_case(r#""name" = 'a' "#),
+            expect: &[
+                (Pg, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySql, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MariaDb, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlAnsiQuotes, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlNoBackslashEscapes, "Ok(Clear) | estimate Ok(()) | subquery false"),
+            ],
+        },
+        Case {
+            name: "dollar",
+            input: check_case("name = $$a$$"),
+            expect: &[
+                (Pg, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySql, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MariaDb, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlAnsiQuotes, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlNoBackslashEscapes, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlDollarNotKnown, "Ok(Clear) | estimate Ok(()) | subquery false"),
+            ],
+        },
+        Case {
+            name: "for update",
+            input: check_case("id = 1 FOR UPDATE"),
+            expect: &[
+                (Pg, "Err(Shape { problem: Locking, at: Some(7..17) }) | estimate - | subquery false"),
+                (MySql, "Err(Shape { problem: Locking, at: Some(7..10) }) | estimate - | subquery false"),
+                (MariaDb, "Err(Shape { problem: Locking, at: Some(7..10) }) | estimate - | subquery false"),
+                (MySqlAnsiQuotes, "Err(Shape { problem: Locking, at: Some(7..10) }) | estimate - | subquery false"),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Err(Shape { problem: Locking, at: Some(7..10) }) | estimate - | subquery false",
+                ),
+            ],
+        },
+        Case {
+            name: "lock in share mode",
+            input: check_case("id = 1 LOCK IN SHARE MODE"),
+            expect: &[
+                (Pg, "Err(NotRead { class: Unknown, danger: Some(Unparsed) }) | estimate - | subquery false"),
+                (MySql, "Err(Shape { problem: Locking, at: Some(7..11) }) | estimate - | subquery false"),
+                (MariaDb, "Err(Shape { problem: Locking, at: Some(7..11) }) | estimate - | subquery false"),
+                (MySqlAnsiQuotes, "Err(Shape { problem: Locking, at: Some(7..11) }) | estimate - | subquery false"),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Err(Shape { problem: Locking, at: Some(7..11) }) | estimate - | subquery false",
+                ),
+            ],
+        },
+        Case {
+            name: "union",
+            input: check_case("id = 1 UNION SELECT 1"),
+            expect: &[
+                (Pg, "Err(NotRead { class: Unknown, danger: Some(Unparsed) }) | estimate - | subquery false"),
+                (MySql, "Err(Shape { problem: SetOperation, at: Some(7..12) }) | estimate - | subquery false"),
+                (MariaDb, "Err(Shape { problem: SetOperation, at: Some(7..12) }) | estimate - | subquery false"),
+                (
+                    MySqlAnsiQuotes,
+                    "Err(Shape { problem: SetOperation, at: Some(7..12) }) | estimate - | subquery false",
+                ),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Err(Shape { problem: SetOperation, at: Some(7..12) }) | estimate - | subquery false",
+                ),
+            ],
+        },
+        Case {
+            name: "next value for",
+            input: check_case("id = NEXT VALUE FOR s"),
+            expect: &[
+                (Pg, "Err(NotRead { class: Unknown, danger: Some(Unparsed) }) | estimate - | subquery false"),
+                (MySql, "Err(Shape { problem: Sequence, at: Some(5..9) }) | estimate - | subquery false"),
+                (MariaDb, "Err(Shape { problem: Sequence, at: Some(5..9) }) | estimate - | subquery false"),
+                (MySqlAnsiQuotes, "Err(Shape { problem: Sequence, at: Some(5..9) }) | estimate - | subquery false"),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Err(Shape { problem: Sequence, at: Some(5..9) }) | estimate - | subquery false",
+                ),
+            ],
+        },
+        Case {
+            name: "nextval",
+            input: check_case("NEXTVAL(s) > 0"),
+            expect: &[
+                (Pg, "Err(RefusedCalls([\"nextval\"])) | estimate - | subquery false"),
+                (MySql, "Err(RefusedCalls([\"NEXTVAL\"])) | estimate - | subquery false"),
+                (MariaDb, "Err(RefusedCalls([\"NEXTVAL\"])) | estimate - | subquery false"),
+                (MySqlAnsiQuotes, "Err(RefusedCalls([\"NEXTVAL\"])) | estimate - | subquery false"),
+                (MySqlNoBackslashEscapes, "Err(RefusedCalls([\"NEXTVAL\"])) | estimate - | subquery false"),
+            ],
+        },
+        Case {
+            name: "setval",
+            input: check_case("SETVAL(s, 1) > 0"),
+            expect: &[
+                (Pg, "Err(RefusedCalls([\"setval\"])) | estimate - | subquery false"),
+                (MySql, "Err(RefusedCalls([\"SETVAL\"])) | estimate - | subquery false"),
+                (MariaDb, "Err(RefusedCalls([\"SETVAL\"])) | estimate - | subquery false"),
+                (MySqlAnsiQuotes, "Err(RefusedCalls([\"SETVAL\"])) | estimate - | subquery false"),
+                (MySqlNoBackslashEscapes, "Err(RefusedCalls([\"SETVAL\"])) | estimate - | subquery false"),
+            ],
+        },
+        Case {
+            name: "nextval beside an unknown call",
+            input: check_case("NEXTVAL(s) > 0 AND foo(id) = 1"),
+            expect: &[
+                (Pg, "Err(RefusedCalls([\"nextval\"])) | estimate - | subquery false"),
+                (MySql, "Err(RefusedCalls([\"NEXTVAL\"])) | estimate - | subquery false"),
+                (MariaDb, "Err(RefusedCalls([\"NEXTVAL\"])) | estimate - | subquery false"),
+                (MySqlAnsiQuotes, "Err(RefusedCalls([\"NEXTVAL\"])) | estimate - | subquery false"),
+                (MySqlNoBackslashEscapes, "Err(RefusedCalls([\"NEXTVAL\"])) | estimate - | subquery false"),
+            ],
+        },
+        Case {
+            name: "setval beside an unknown call",
+            input: check_case("SETVAL(s, 1) > 0 AND foo(id) = 1"),
+            expect: &[
+                (Pg, "Err(RefusedCalls([\"setval\"])) | estimate - | subquery false"),
+                (MySql, "Err(RefusedCalls([\"SETVAL\"])) | estimate - | subquery false"),
+                (MariaDb, "Err(RefusedCalls([\"SETVAL\"])) | estimate - | subquery false"),
+                (MySqlAnsiQuotes, "Err(RefusedCalls([\"SETVAL\"])) | estimate - | subquery false"),
+                (MySqlNoBackslashEscapes, "Err(RefusedCalls([\"SETVAL\"])) | estimate - | subquery false"),
+            ],
+        },
+        Case {
+            name: "nextval judged with the sibling",
+            input: Check { text: "NEXTVAL(s) > 0", sibling: true },
+            expect: &[
+                (Pg, "Err(RefusedCalls([\"nextval\"])) | estimate - | subquery false"),
+                (MySql, "Err(RefusedCalls([\"NEXTVAL\"])) | estimate - | subquery false"),
+                (MariaDb, "Err(RefusedCalls([\"NEXTVAL\"])) | estimate - | subquery false"),
+                (MySqlAnsiQuotes, "Err(RefusedCalls([\"NEXTVAL\"])) | estimate - | subquery false"),
+                (MySqlNoBackslashEscapes, "Err(RefusedCalls([\"NEXTVAL\"])) | estimate - | subquery false"),
+            ],
+        },
+        Case {
+            name: "setval judged with the sibling",
+            input: Check { text: "SETVAL(s, 1) > 0", sibling: true },
+            expect: &[
+                (Pg, "Err(RefusedCalls([\"setval\"])) | estimate - | subquery false"),
+                (MySql, "Err(RefusedCalls([\"SETVAL\"])) | estimate - | subquery false"),
+                (MariaDb, "Err(RefusedCalls([\"SETVAL\"])) | estimate - | subquery false"),
+                (MySqlAnsiQuotes, "Err(RefusedCalls([\"SETVAL\"])) | estimate - | subquery false"),
+                (MySqlNoBackslashEscapes, "Err(RefusedCalls([\"SETVAL\"])) | estimate - | subquery false"),
+            ],
+        },
+        Case {
+            name: "nextval beside an unknown call judged with the sibling",
+            input: Check { text: "NEXTVAL(s) > 0 AND foo(id) = 1", sibling: true },
+            expect: &[
+                (Pg, "Err(RefusedCalls([\"nextval\"])) | estimate - | subquery false"),
+                (MySql, "Err(RefusedCalls([\"NEXTVAL\"])) | estimate - | subquery false"),
+                (MariaDb, "Err(RefusedCalls([\"NEXTVAL\"])) | estimate - | subquery false"),
+                (MySqlAnsiQuotes, "Err(RefusedCalls([\"NEXTVAL\"])) | estimate - | subquery false"),
+                (MySqlNoBackslashEscapes, "Err(RefusedCalls([\"NEXTVAL\"])) | estimate - | subquery false"),
+            ],
+        },
+        Case {
+            name: "setval beside an unknown call judged with the sibling",
+            input: Check { text: "SETVAL(s, 1) > 0 AND foo(id) = 1", sibling: true },
+            expect: &[
+                (Pg, "Err(RefusedCalls([\"setval\"])) | estimate - | subquery false"),
+                (MySql, "Err(RefusedCalls([\"SETVAL\"])) | estimate - | subquery false"),
+                (MariaDb, "Err(RefusedCalls([\"SETVAL\"])) | estimate - | subquery false"),
+                (MySqlAnsiQuotes, "Err(RefusedCalls([\"SETVAL\"])) | estimate - | subquery false"),
+                (MySqlNoBackslashEscapes, "Err(RefusedCalls([\"SETVAL\"])) | estimate - | subquery false"),
+            ],
+        },
+        Case {
+            name: "unknown call",
+            input: check_case("foo(id) = 1"),
+            expect: &[
+                (Pg, "Ok(NeedsConfirm([Calls([\"foo\"])])) | estimate Err(Calls) | subquery false"),
+                (MySql, "Ok(NeedsConfirm([Calls([\"FOO\"])])) | estimate Err(Calls) | subquery false"),
+                (MariaDb, "Ok(NeedsConfirm([Calls([\"FOO\"])])) | estimate Err(Calls) | subquery false"),
+                (MySqlAnsiQuotes, "Ok(NeedsConfirm([Calls([\"FOO\"])])) | estimate Err(Calls) | subquery false"),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Ok(NeedsConfirm([Calls([\"FOO\"])])) | estimate Err(Calls) | subquery false",
+                ),
+            ],
+        },
+        Case {
+            name: "allowed call",
+            input: check_case("LOWER(name) = 'a'"),
+            expect: &[
+                (Pg, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySql, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MariaDb, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlAnsiQuotes, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlNoBackslashEscapes, "Ok(Clear) | estimate Ok(()) | subquery false"),
+            ],
+        },
+        Case {
+            name: "refused call",
+            input: check_case("SLEEP(1) = 0"),
+            expect: &[
+                (Pg, "Ok(NeedsConfirm([Calls([\"sleep\"])])) | estimate Err(Calls) | subquery false"),
+                (MySql, "Err(RefusedCalls([\"SLEEP\"])) | estimate - | subquery false"),
+                (MariaDb, "Err(RefusedCalls([\"SLEEP\"])) | estimate - | subquery false"),
+                (MySqlAnsiQuotes, "Err(RefusedCalls([\"SLEEP\"])) | estimate - | subquery false"),
+                (MySqlNoBackslashEscapes, "Err(RefusedCalls([\"SLEEP\"])) | estimate - | subquery false"),
+            ],
+        },
+        Case {
+            name: "assignment",
+            input: check_case("(@a := 1) = 1"),
+            expect: &[
+                (Pg, "Err(NotRead { class: Unknown, danger: Some(Unparsed) }) | estimate - | subquery false"),
+                (MySql, "Err(Shape { problem: Assignment, at: Some(4..5) }) | estimate - | subquery false"),
+                (MariaDb, "Err(Shape { problem: Assignment, at: Some(4..5) }) | estimate - | subquery false"),
+                (MySqlAnsiQuotes, "Err(Shape { problem: Assignment, at: Some(4..5) }) | estimate - | subquery false"),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Err(Shape { problem: Assignment, at: Some(4..5) }) | estimate - | subquery false",
                 ),
             ],
         },
