@@ -363,6 +363,54 @@ pub struct FilterSyntax {
     /// A value with the offset of the zone it was read in, compared with a column shown in the
     /// session's zone, is written as that instant in the session's zone.
     pub zoned_instants: bool,
+    /// How a NULL-safe equality is written, and so read back.
+    pub null_safe: NullSafe,
+    /// `ILIKE` is the server's case-insensitive pattern.
+    pub ilike: bool,
+    /// A string may be written as hexadecimal digits: `X'…'` bytes, and `_utf8mb4 X'…'` text.
+    pub hex_strings: bool,
+    /// A plain string with a backslash reads as the server's `standard_conforming_strings`
+    /// says (only `E'…'` reads it the same either way), and `'\x…'::bytea` is bytes.
+    pub pg_strings: bool,
+    /// Operators the reader does not model may stand beside `AND` and `NOT` at another
+    /// precedence: `XOR`, `&`, `|` (`||` may be `OR`), `!` and `:=`. A text holding one at its
+    /// level is kept whole.
+    pub loose_ops: bool,
+    /// A `NOT` before a bare comparison may bind otherwise under a server setting
+    /// (`HIGH_NOT_PRECEDENCE` reads `NOT a BETWEEN …` as `(NOT a) BETWEEN …`): only a `NOT`
+    /// over one parenthesised group is read.
+    pub not_caution: bool,
+    /// `INTERVAL expr unit` takes an expression that may hold an `AND` of its own.
+    pub interval_and: bool,
+    /// The planner may run a subquery while it plans a statement: no estimate of a filter that
+    /// may hold one.
+    pub plans_subqueries: bool,
+    /// The filter refuses `/*M! … */` as an executable comment, not as a plain one. MariaDB runs
+    /// what it holds; MySQL reads it as a plain comment, and its filter says the same as
+    /// MariaDB's.
+    pub m_bang: bool,
+    /// How the shape of a filter's statement is checked.
+    pub shape: FilterShape,
+}
+
+/// How a NULL-safe equality is written ([`FilterSyntax::null_safe`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NullSafe {
+    /// `a IS NOT DISTINCT FROM v`, and `a IS DISTINCT FROM v` for the inequality.
+    DistinctFrom,
+    /// `a <=> v`, and `NOT (a <=> v)` for the inequality (also read as `IS [NOT] DISTINCT
+    /// FROM`).
+    Spaceship,
+}
+
+/// How the statement a filter is put in is checked to be one read of the table
+/// ([`FilterSyntax::shape`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FilterShape {
+    /// On the server's parse tree of the statement.
+    ParseTree,
+    /// On the tokens of each reading of the text.
+    Tokens,
 }
 
 /// A pattern of a filter ([`FilterSql::like`]): column `col` (its name, not quoted) matched with

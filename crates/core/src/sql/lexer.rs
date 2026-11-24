@@ -386,6 +386,16 @@ pub fn lex_backslash_strings(src: &str) -> Vec<Token> {
     lex_with(src, Dialect::Postgres, true)
 }
 
+/// How a text is lexed, as one reading of it the server may run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lexing {
+    /// As the dialect reads it ([`lex_in`]).
+    In(Dialect),
+    /// As PostgreSQL with `standard_conforming_strings = off` reads it
+    /// ([`lex_backslash_strings`]).
+    BackslashStrings,
+}
+
 /// Whether PostgreSQL text `src` may read differently with `standard_conforming_strings` off
 /// than on: it has a backslash anywhere, or `U&` (a Unicode escape string, which a server with
 /// the setting off rejects). A plain or national string with a backslash reads it as an escape

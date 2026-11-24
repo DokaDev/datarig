@@ -3,9 +3,9 @@
 
 use super::{
     CancelRules, CatalogueRules, CountInTx, DdlOfIndex, DdlRules, DdlToConsole, EngineFacts, EngineId, ExportRules,
-    Fact, FilterCalls, FilterSql, FilterSyntax, GroupParts, InputRules, Like, NameMatch, OpenVerdict,
-    READ_ONLY_NOT_PROVEN, ReadOnlyProof, ResultTables, ServerFacts, SessionRules, SortRules, Support, TextRules, TxAsk,
-    TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, ValueRules, Version, Why,
+    Fact, FilterCalls, FilterShape, FilterSql, FilterSyntax, GroupParts, InputRules, Like, NameMatch, NullSafe,
+    OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, ResultTables, ServerFacts, SessionRules, SortRules, Support,
+    TextRules, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, ValueRules, Version, Why,
 };
 use crate::driver::{ColumnMeta, ReadIn, SessionRole, SessionValues, ValueKind};
 use crate::edit::input::{self, TypeName};
@@ -655,7 +655,20 @@ impl SortRules for FamilySort {
 /// How MySQL's and MariaDB's filter text is written.
 pub(super) struct FamilyFilter;
 
-static FAMILY_FILTER_SYNTAX: FilterSyntax = FilterSyntax { numbers_as_doubles: true, zoned_instants: true };
+static FAMILY_FILTER_SYNTAX: FilterSyntax = FilterSyntax {
+    numbers_as_doubles: true,
+    zoned_instants: true,
+    null_safe: NullSafe::Spaceship,
+    ilike: false,
+    hex_strings: true,
+    pg_strings: false,
+    loose_ops: true,
+    not_caution: true,
+    interval_and: true,
+    plans_subqueries: true,
+    m_bang: true,
+    shape: FilterShape::Tokens,
+};
 
 impl FilterSql for FamilyFilter {
     fn syntax(&self) -> &'static FilterSyntax {

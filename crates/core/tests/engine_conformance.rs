@@ -5,7 +5,7 @@
 //! engines are PostgreSQL ([`Dialect::Postgres`]), MySQL ([`Dialect::MySql`] in the default
 //! [`MySqlMode`]) and MariaDB ([`Dialect::MariaDb`], what a MariaDB session says). A case may
 //! also pin a MySQL sql mode where it changes the output (`ANSI_QUOTES`,
-//! `NO_BACKSLASH_ESCAPES`). A case without an expectation for one of the three engines fails
+//! `NO_BACKSLASH_ESCAPES`, `IGNORE_SPACE`). A case without an expectation for one of the three engines fails
 //! ([`every_case_names_every_engine`]): adding an engine means answering every case for it. A
 //! case of the classifier or split table whose text has a `$` must also answer for a MySQL
 //! session that does not know whether its server reads dollar quotes
@@ -61,6 +61,8 @@ pub enum Engine {
     MySqlNoBackslashEscapes,
     /// MySQL whose server's own reports disagree on whether it reads dollar quotes.
     MySqlDollarNotKnown,
+    /// MySQL with `IGNORE_SPACE`.
+    MySqlIgnoreSpace,
     /// PostgreSQL whose version did not parse.
     PgVersionUnknown,
     /// MySQL whose version did not parse.
@@ -116,6 +118,7 @@ impl Engine {
             Engine::MySqlDollarNotKnown => {
                 Dialect::MySql(MySqlMode { dollar_quotes: DollarQuotes::NotKnown, ..MySqlMode::default() })
             }
+            Engine::MySqlIgnoreSpace => Dialect::MySql(MySqlMode { ignore_space: true, ..MySqlMode::default() }),
         }
     }
 }
@@ -277,6 +280,16 @@ fn group_count_cases_on_every_engine() {
 }
 
 #[test]
+fn filter_read_cases_on_every_engine() {
+    run("filter read", &filter::read_cases(), filter::read);
+}
+
+#[test]
+fn filter_check_cases_on_every_engine() {
+    run("filter check", &filter::check_cases(), filter::check);
+}
+
+#[test]
 fn sort_rules_on_every_engine() {
     run("sort rules", &sort::sort_cases(), sort::sort);
 }
@@ -361,6 +374,8 @@ fn every_case_names_every_engine() {
         named("filter render", &filter::render_cases()),
         named("compares", &filter::compares_cases()),
         named("group count", &filter::group_count_cases()),
+        named("filter read", &filter::read_cases()),
+        named("filter check", &filter::check_cases()),
         named("sort rules", &sort::sort_cases()),
         named("edit input", &values::input_cases()),
         named("sql cells", &values::cells_cases()),

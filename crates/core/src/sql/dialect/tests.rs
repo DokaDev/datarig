@@ -323,3 +323,52 @@ fn every_method_answers_mariadb_as_the_mysql_dialect() {
     }
     assert_eq!(Dialect::Postgres.with_mode(MySqlMode::default()), Dialect::Postgres);
 }
+
+/// A filter is read every way its session may read it, its own reading first: PostgreSQL's
+/// text with a backslash also as `standard_conforming_strings = off` reads it, MySQL's and
+/// MariaDB's in each other sql mode that reads it differently. A string has no backslash
+/// escapes only in a MySQL-family mode with `NO_BACKSLASH_ESCAPES`.
+#[test]
+fn filter_readings_and_raw_strings_answer_every_mode() {
+    use crate::sql::lexer::Lexing;
+    let texts = ["id = 1", "a = 'x\\y'", "a = \"x\"", "a = $$x$$", "a = '\\\"$'", ""];
+    let pg = Dialect::Postgres;
+    assert!(!pg.raw_strings());
+    for text in texts {
+        let mut expected = vec![Lexing::In(pg)];
+        if text.contains('\\') {
+            expected.push(Lexing::BackslashStrings);
+        }
+        assert_eq!(pg.filter_readings(text), expected, "{text:?}");
+    }
+    // Every mode, and each with a server whose reports disagree on dollar quotes.
+    let not_known = every_mode().into_iter().map(|m| MySqlMode { dollar_quotes: DollarQuotes::NotKnown, ..m });
+    for mode in every_mode().into_iter().chain(not_known) {
+        for d in [Dialect::MySql(mode), Dialect::MariaDb(mode)] {
+            assert_eq!(d.raw_strings(), mode.no_backslash_escapes, "{d:?}");
+            for text in texts {
+                let mut expected = vec![Lexing::In(d)];
+                for m in crate::sql::risk::mysql::other_readings(text, mode) {
+                    expected.push(Lexing::In(d.with_mode(m)));
+                }
+                assert_eq!(d.filter_readings(text), expected, "{d:?} {text:?}");
+            }
+        }
+    }
+    let my = Dialect::MySql(MySqlMode::default());
+    let raw = Dialect::MySql(MySqlMode { no_backslash_escapes: true, ..MySqlMode::default() });
+    assert_eq!(my.filter_readings("a = 'x\\y'"), [Lexing::In(my), Lexing::In(raw)]);
+    assert_eq!(raw.filter_readings("a = 'x\\y'"), [Lexing::In(raw), Lexing::In(my)]);
+    // Dollar quotes not known: the session's reading (lexed as not read) first, then the one
+    // that reads them.
+    let unsure = Dialect::MySql(MySqlMode { dollar_quotes: DollarQuotes::NotKnown, ..MySqlMode::default() });
+    let dollars = Dialect::MySql(MySqlMode { dollar_quotes: DollarQuotes::Read, ..MySqlMode::default() });
+    assert_eq!(unsure.filter_readings("a = $$x$$"), [Lexing::In(unsure), Lexing::In(dollars)]);
+    assert_eq!(unsure.filter_readings("a = 1"), [Lexing::In(unsure)]);
+    // A text with a backslash, a double quote and a dollar sign is read in all eight
+    // combinations of the three settings, its own first.
+    let d = Dialect::MariaDb(MySqlMode::default());
+    let readings = d.filter_readings("a = '\\\"$'");
+    assert_eq!(readings.len(), 8);
+    assert_eq!(readings[0], Lexing::In(d));
+}

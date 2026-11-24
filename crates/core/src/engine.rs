@@ -30,8 +30,8 @@ pub use rules::{Rules, UNBOUND_TAB_DIALECT};
 pub use session::{OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof};
 pub use spec::{
     CancelRules, CatalogueRules, DdlOfIndex, DdlRules, DdlToConsole, EditRules, EngineSpec, ExportRules, FilterCalls,
-    FilterSql, FilterSyntax, GroupParts, InputRules, Like, NameMatch, ResultTables, RiskRules, SessionRules, SortRules,
-    TextRules, Transport, TxRules, ValueRules,
+    FilterShape, FilterSql, FilterSyntax, GroupParts, InputRules, Like, NameMatch, NullSafe, ResultTables, RiskRules,
+    SessionRules, SortRules, TextRules, Transport, TxRules, ValueRules,
 };
 pub use tx::{CountInTx, DdlLock, TxAsk, TxNote, TxRefusal, TxStatement, TxVerdict};
 pub use why::{Feature, Why};

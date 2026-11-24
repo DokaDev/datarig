@@ -21,21 +21,24 @@
 use std::ops::Range;
 
 use super::check::lexical;
+use super::filter_sql;
 use super::recognise::{group, is_word, level, split};
+use crate::engine::FilterSyntax;
 use crate::sql::dialect::Dialect;
 use crate::sql::lexer::{Tok, Token, lex_in};
 
 /// The byte ranges of the terms of filter `text` when it is a conjunction at its top level (see
 /// the module docs), in order, each without the blanks around it; one range for a text of one
 /// term, none for a blank one. `None` when it is not proven to be one: the whole text is then one
-/// term.
+/// term; and on an engine without filter rules.
 pub fn split_terms(text: &str, d: Dialect) -> Option<Vec<Range<usize>>> {
+    let syntax = filter_sql(d).ok()?.syntax();
     let toks: Vec<Token> = lex_in(text, d).into_iter().filter(|t| !t.is_trivia()).collect();
     if toks.is_empty() && text.trim().is_empty() {
         return Some(Vec::new());
     }
     lexical(text, d).ok()?;
-    if level(text, &toks).any(|(i, t)| looser_than_and(text, &toks, i, t, d)) || !cases_close(text, &toks) {
+    if level(text, &toks).any(|(i, t)| looser_than_and(text, &toks, i, t, syntax)) || !cases_close(text, &toks) {
         return None;
     }
     let parts = split(text, &toks, "AND");
@@ -57,8 +60,8 @@ pub fn split_terms(text: &str, d: Dialect) -> Option<Vec<Range<usize>>> {
 const NOT_BEFORE: [&str; 7] = ["IN", "LIKE", "ILIKE", "BETWEEN", "SIMILAR", "REGEXP", "RLIKE"];
 
 /// Whether token `t` (at `i` of `toks`, at the top level of `text`) binds more loosely than `AND`
-/// or may be read so (see the module docs).
-fn looser_than_and(text: &str, toks: &[Token], i: usize, t: &Token, d: Dialect) -> bool {
+/// or may be read so on an engine of `syntax` (see the module docs).
+fn looser_than_and(text: &str, toks: &[Token], i: usize, t: &Token, syntax: &FilterSyntax) -> bool {
     let s = t.text(text);
     let glued = |k: usize, c: &str| {
         toks.get(k).is_some_and(|n| n.kind == Tok::Op && n.start == toks[k - 1].end && n.text(text) == c)
@@ -75,17 +78,17 @@ fn looser_than_and(text: &str, toks: &[Token], i: usize, t: &Token, d: Dialect) 
             return !(after_is || before_op || leads);
         }
         // MySQL's `INTERVAL expr unit`: an `AND` up to the unit belongs to the interval.
-        return matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)) && s.eq_ignore_ascii_case("INTERVAL");
+        return syntax.interval_and && s.eq_ignore_ascii_case("INTERVAL");
     }
-    match d {
-        Dialect::MySql(_) | Dialect::MariaDb(_) if t.kind == Tok::Op => match s {
-            "|" | "&" => true,
-            // `!=` compares; `!` alone is `NOT`.
-            "!" => !glued(i + 1, "="),
-            // `:=` assigns.
-            ":" => glued(i + 1, "="),
-            _ => false,
-        },
+    if !syntax.loose_ops || t.kind != Tok::Op {
+        return false;
+    }
+    match s {
+        "|" | "&" => true,
+        // `!=` compares; `!` alone is `NOT`.
+        "!" => !glued(i + 1, "="),
+        // `:=` assigns.
+        ":" => glued(i + 1, "="),
         _ => false,
     }
 }
