@@ -30,6 +30,8 @@ pub struct EditPreview {
     format: EditFormat,
     /// After an Apply whose result is not known, `y` was pressed once: the next applies again.
     again: bool,
+    /// `y` sent its Apply: what the answer says is never covered by the preview closing.
+    sent: bool,
     /// The first line of the body on screen.
     pub scroll: usize,
     pub buttons: Buttons,
@@ -114,6 +116,7 @@ impl App {
             target,
             format,
             again: false,
+            sent: false,
             scroll: 0,
             buttons: Buttons::default(),
             body: None,
@@ -198,22 +201,26 @@ impl App {
 
     /// After every event: the preview closes when it is no longer current, or no longer stands
     /// for what it would apply, and says why; an answer key pressed for it is then ignored a
-    /// while, never taken by the grid ([`super::ask::ANSWER_GUARD`]). While an Apply it sent is
-    /// not answered, what the sessions say does not close it: the answer is reported.
+    /// while, never taken by the grid ([`super::ask::ANSWER_GUARD`]). Once it sent its Apply,
+    /// what the sessions say does not close it, and it closes without words: the Apply's answer
+    /// is what is said.
     pub(super) fn sweep_edit_preview(&mut self) {
         let Some(p) = self.overlays.edit_preview() else { return };
-        let applying = self.applying(p.tab, p.result);
-        let gone = if applying { None } else { self.edit_preview_choice_gone() };
+        // Once `y` sent its Apply, the preview says what became of it (`y` checks again before
+        // sending anything more), and closes without words of its own.
+        let sent = p.sent;
+        let gone = if sent { None } else { self.edit_preview_choice_gone() };
         let said: Msg = match gone {
             Some(why) => {
                 let reason = self.i18n.msg(&self.edit_preview_gone_words(&why)).to_string();
                 Msg::EditPreviewCantApply { reason }
             }
-            None if !self.edit_preview_current() => Label::EditPreviewClosed.into(),
-            None => return,
+            None if self.edit_preview_current() => return,
+            None if sent => return self.overlays.close(OverlayKind::EditPreview),
+            None => Label::EditPreviewClosed.into(),
         };
         self.overlays.close(OverlayKind::EditPreview);
-        self.ask_ended(said);
+        self.dialog_ended(said);
     }
 
     /// Why the open preview's choice among identical rows is gone, as the Changes tab words it
@@ -224,7 +231,12 @@ impl App {
             .edit_preview()
             .and_then(|p| self.tabs.get(p.tab).and_then(rows_of).filter(|rs| rs.id == p.result));
         let count = rs.and_then(|rs| rs.edit.checks.matches().values().copied().max()).unwrap_or(0);
-        super::changes::withheld_text(count, why)
+        // A preview that offers no choice among identical rows (it confirms a write): the reason
+        // alone.
+        match count > 1 {
+            true => super::changes::withheld_text(count, why),
+            false => crate::app::engine_why::why_text(why),
+        }
     }
 
     /// How an Apply in tab `tab` stands to a transaction now, in words: inside the open one,
@@ -384,6 +396,9 @@ impl App {
             Some(t) if self.manual_commit(tab) => ApplyTx::Keep { idle_timeout: self.manual_idle_timeout(t) },
             _ => ApplyTx::Commit,
         };
+        if let Some(p) = self.overlays.edit_preview_mut() {
+            p.sent = true;
+        }
         self.send_apply(tab, result, plan.steps.clone(), tx);
     }
 

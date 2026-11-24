@@ -73,12 +73,24 @@ fn edits(nowait: bool) -> DbEvent {
 /// A MySQL profile, connected, the keys of `shop.items` read (no key): `meta` is what its
 /// metadata session says first.
 fn profile(meta: Vec<DbEvent>) -> Harness {
+    profile_in(meta, false)
+}
+
+/// [`profile`], its environment confirming every write when `confirm` (an Apply shows the
+/// preview first).
+fn profile_in(meta: Vec<DbEvent>, confirm: bool) -> Harness {
+    use datarig_core::policy::{Confirm, Policy};
     let driver = FakeDriver::default();
     driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
-    let cfg = Config {
-        connections: vec![ConnectionConfig { driver: "mysql".into(), ..ConnectionConfig::test_db() }],
+    let mut cfg = Config {
+        connections: vec![ConnectionConfig {
+            driver: "mysql".into(),
+            policy: confirm.then(|| "stg".into()),
+            ..ConnectionConfig::test_db()
+        }],
         ..Config::default()
     };
+    cfg.policies.insert("stg", Policy { confirm: Confirm::Writes, ..Policy::default() });
     let mut h = Harness::with_driver(&cfg, Lang::En, driver);
     // A key that lands in the grid copies there: never to the system's clipboard.
     FakeClipboard::attach(&mut h, false, &[]);
@@ -601,6 +613,75 @@ fn a_choice_refused_before_the_facts_came_is_offered_once_they_do() {
     apply_counted(&mut h, 2);
     offered(&h);
     all_applied(&mut h);
+}
+
+/// `a` then `y` in the preview: the one Apply sent, its id.
+fn all_sent(h: &mut Harness) -> u64 {
+    h.key(KeyCode::Char('a'));
+    h.key(KeyCode::Char('y'));
+    let ids: Vec<u64> = h
+        .sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::ApplyEdits { id, .. } => Some(id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ids.len(), 1, "one Apply sent");
+    ids[0]
+}
+
+/// The edit format changes after `y` sent the Apply, then the Apply fails: what the answer says
+/// stands (its commit not known, or the failure), never covered by the preview's closing words.
+#[test]
+fn a_sent_edits_answer_is_never_covered_by_the_preview_closing() {
+    use datarig_core::driver::{ApplyError, ApplyFailure};
+    let unknown = ApplyError::Db(DbError::CommitUnknown);
+    let failed = ApplyError::Db(DbError::Server("ERROR 1205: Lock wait timeout exceeded".into()));
+    for why in [unknown, failed] {
+        let mut h = previewed();
+        let id = all_sent(&mut h);
+        meta_db(&mut h, edits(false));
+        h.app.transient = None;
+        h.db(DbEvent::Applied { id, result: Err(ApplyFailure { step: None, why: why.clone() }) });
+        let said = said(&mut h);
+        assert!(!matches!(said, Some(Msg::EditPreviewCantApply { .. }) | None), "{why:?}: {said:?}");
+        if matches!(why, ApplyError::Db(DbError::CommitUnknown)) {
+            assert_eq!(said, Some(datarig_i18n::Label::EditFailedUnknown.into()));
+        }
+        assert!(no_apply_sent(&mut h));
+    }
+}
+
+/// After the preview closed by itself, its choice keys (`a`, `1`) are not taken by the grid
+/// either: ignored a while, said so.
+#[test]
+fn the_choice_keys_after_the_preview_closed_by_itself_are_ignored() {
+    for key in ['a', '1'] {
+        let mut h = previewed();
+        meta_db(&mut h, edits(false));
+        assert!(h.app.edit_preview_view().is_none(), "the preview is closed");
+        h.app.transient = None;
+        h.key(KeyCode::Char(key));
+        assert!(matches!(said(&mut h), Some(Msg::EditAskIgnored { .. })), "{key}");
+    }
+}
+
+/// A preview opened to confirm a write of a row that matches one row closes on a format change
+/// saying only that the format changed (no count of identical rows).
+#[test]
+fn a_format_change_closes_a_confirming_preview_with_the_format_words_only() {
+    let mut h = profile_in(vec![mysql(v(8, 4, 6)), edits(true)], true);
+    read(&mut h, vec![mysql(v(8, 4, 6)), edits(true)], false);
+    change(&mut h, false);
+    apply_counted(&mut h, 1);
+    assert!(h.app.edit_preview_view().is_some(), "the preview confirms the write");
+    meta_db(&mut h, edits(false));
+    assert!(h.app.edit_preview_view().is_none(), "the preview is closed");
+    assert_eq!(
+        said_text(&mut h).as_deref(),
+        Some("Can't apply yet: this edit format differs from the one the applying session takes")
+    );
 }
 
 // ── Offered: the sessions agree ─────────────────────────────────────────────────────────────

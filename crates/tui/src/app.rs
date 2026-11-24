@@ -491,8 +491,8 @@ pub struct App {
     /// An Apply waiting for the counts of its rows found by their values.
     pub apply_wait: Option<edit::ApplyWait>,
     /// A question (or a waiting Apply) ended without its answer: until when its answer keys are
-    /// ignored, and what it said.
-    pub(crate) ask_gone: Option<(Instant, Msg)>,
+    /// ignored, what it said, and whether it was the Apply dialog (its choice keys too).
+    pub(crate) ask_gone: Option<(Instant, Msg, bool)>,
     /// Text pasted into the grid, waiting for its result's table to be known.
     pub(crate) paste_in: Option<edit::PasteIn>,
     /// The last paste into a grid: `space d V` reads it again while it is the newest change.
