@@ -428,6 +428,11 @@ impl ValueRules for PgValues {
     fn insert_overriding(&self, overriding: bool) -> &'static str {
         if overriding { " OVERRIDING SYSTEM VALUE" } else { "" }
     }
+
+    /// On every version (a `timestamp with time zone` is written as shown, with its offset).
+    fn zoned_literal(&self, _: &ServerFacts) -> Support {
+        Fact::Known(())
+    }
 }
 
 /// Which edits of a result's rows PostgreSQL's servers take.

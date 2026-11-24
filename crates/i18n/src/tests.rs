@@ -115,3 +115,48 @@ fn io_errors_read_as_friendly_localized_reasons() {
     assert_eq!(ko.msg(&io_reason(ErrorKind::Other)), ko_text("io.other").as_str());
     assert!(!en.msg(&io_reason(ErrorKind::Other)).contains("os error"));
 }
+
+/// Why a time with a time zone offset is not written as SQL, and why rows read on another
+/// engine are not, in both languages.
+#[test]
+fn the_offset_literal_refusals_read_in_both_languages() {
+    let (en, ko) = (I18n::new(Lang::En), I18n::new(Lang::Ko));
+    let words = [
+        (
+            Label::CopySqlWhyVersionUnknown,
+            "copy.sql_why.version_unknown",
+            "The server version is not known, so a time with a time zone offset cannot be written safely as SQL. \
+             Export as CSV or JSON still works, and so does copying from a session whose server version is known.",
+        ),
+        (
+            Label::CopySqlWhyVersionNotKnownYet,
+            "copy.sql_why.version_not_known_yet",
+            "The server version was not known yet when these rows were read, so a time with a time zone offset \
+             cannot be written safely as SQL. Run the query again, or export as CSV or JSON.",
+        ),
+        (
+            Label::CopySqlWhyReadElsewhere,
+            "copy.sql_why.read_elsewhere",
+            "These rows were read on another database engine than the one the tab uses now; run the query again.",
+        ),
+        (
+            Label::CopySqlWhyNoOffsetLiteral,
+            "copy.sql_why.no_offset_literal",
+            "This server does not read a time zone offset in a TIMESTAMP value (MariaDB, MySQL before 8.0.19), so \
+             it cannot be copied or exported as SQL. Export as CSV or JSON still works.",
+        ),
+    ];
+    for (label, key, english) in words {
+        assert_eq!(en.label(label), english, "{key}");
+        assert_eq!(ko.label(label), ko_text(key).as_str(), "{key}");
+        assert_ne!(ko.label(label).to_string(), english, "{key}");
+    }
+    let reason = "R".to_string();
+    let no_offset = Msg::CopySqlNoOffset { column: "at".into(), reason: reason.clone() };
+    assert_eq!(en.msg(&no_offset), "Not copied as SQL: column “at” is a TIMESTAMP. R");
+    let ko_no_offset = ko_text("copy.sql_no_offset").replace("{column}", "at").replace("{reason}", "R");
+    assert_eq!(ko.msg(&no_offset), ko_no_offset.as_str());
+    let refused = Msg::CopySqlRefused { reason };
+    assert_eq!(en.msg(&refused), "Not copied as SQL. R");
+    assert_eq!(ko.msg(&refused), ko_text("copy.sql_refused").replace("{reason}", "R").as_str());
+}

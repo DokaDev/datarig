@@ -938,6 +938,35 @@ fn a_mysql_timestamp_is_written_from_utc_or_not_at_all() {
     }
 }
 
+/// A `TIMESTAMP` ticked in the filter is written from its instant in UTC on every server of the
+/// family, whether it reads an offset after a time or not, and whatever its version: MariaDB,
+/// MySQL 8.0.18 and a MySQL whose version is not known.
+#[test]
+fn a_timestamp_filter_value_is_taken_on_every_mysql_family_server() {
+    for (server, said) in [
+        ("MariaDB 11.4", server_said(true, Some((11, 4, 13)))),
+        ("MySQL 8.0.18", server_said(false, Some((8, 0, 18)))),
+        ("MySQL of a version not known", server_said(false, None)),
+    ] {
+        let mut h = mysql();
+        let index = h.app.tabs.active_index();
+        for ev in said {
+            h.tab_db(index, ev);
+        }
+        zone(&mut h, "+14:00");
+        h.app.dispatch(datarig_tui::app::action::Action::RunStatement);
+        runs(&mut h);
+        my_page(&mut h, &["2026-11-10 23:30:00"]);
+        dialog_on(&mut h, 1);
+        to_values(&mut h, 0);
+        h.key(KeyCode::Char(' '));
+        let instant = "at = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)";
+        assert_eq!(draft(&h), instant, "{server}: {}", h.screen(120, 34));
+        h.key(KeyCode::Enter);
+        assert_eq!(runs(&mut h), vec![vec![format!("SELECT * FROM `shop`.`users` WHERE ({instant})")]], "{server}");
+    }
+}
+
 #[test]
 fn a_mysql_timestamp_is_ticked_only_in_the_zone_it_was_read_in() {
     let mut h = mysql();

@@ -148,6 +148,30 @@ cells MariaDb "postgres bytes": NotShownWhole
 cells Pg "bool": true | '1'
 cells MySql "bool": true | '1'
 cells MariaDb "bool": true | '1'
+literal Pg "timestamp read in a fixed zone": '2024-01-01 10:00:00' | NULL | '0000-00-00 00:00:00'
+literal MySql "timestamp read in a fixed zone": '2024-01-01 10:00:00+02:00' | NULL | '0000-00-00 00:00:00'
+literal MariaDb "timestamp read in a fixed zone": NoOffsetLiteral(NotOnEngine) | NULL | '0000-00-00 00:00:00'
+literal PgVersionUnknown "timestamp read in a fixed zone": '2024-01-01 10:00:00' | NULL | '0000-00-00 00:00:00'
+literal MySqlVersionUnknown "timestamp read in a fixed zone": NoOffsetLiteral(VersionUnknown) | NULL | '0000-00-00 00:00:00'
+literal MariaDbVersionUnknown "timestamp read in a fixed zone": NoOffsetLiteral(NotOnEngine) | NULL | '0000-00-00 00:00:00'
+literal MySqlVersionsDisagree "timestamp read in a fixed zone": NoOffsetLiteral(VersionsDisagree) | NULL | '0000-00-00 00:00:00'
+literal MariaDbVersionsDisagree "timestamp read in a fixed zone": NoOffsetLiteral(NotOnEngine) | NULL | '0000-00-00 00:00:00'
+literal MySql8018 "timestamp read in a fixed zone": NoOffsetLiteral(VersionTooOld { needed: Version { major: 8, minor: 0, patch: 19 } }) | NULL | '0000-00-00 00:00:00'
+literal MySql8019 "timestamp read in a fixed zone": '2024-01-01 10:00:00+02:00' | NULL | '0000-00-00 00:00:00'
+literal MySqlEnginesDisagree "timestamp read in a fixed zone": NoOffsetLiteral(EnginesDisagree) | NULL | '0000-00-00 00:00:00'
+literal MySqlNotChecked "timestamp read in a fixed zone": NoOffsetLiteral(NotChecked) | NULL | '0000-00-00 00:00:00'
+literal Pg "timestamp read in a zone with daylight saving": '2024-01-01 10:00:00' | NULL | '0000-00-00 00:00:00'
+literal MySql "timestamp read in a zone with daylight saving": refused Refused { column: "at", why: TimeZone("Europe/Berlin") }
+literal MariaDb "timestamp read in a zone with daylight saving": refused Refused { column: "at", why: TimeZone("Europe/Berlin") }
+literal PgVersionUnknown "timestamp read in a zone with daylight saving": '2024-01-01 10:00:00' | NULL | '0000-00-00 00:00:00'
+literal MySqlVersionUnknown "timestamp read in a zone with daylight saving": refused Refused { column: "at", why: TimeZone("Europe/Berlin") }
+literal MariaDbVersionUnknown "timestamp read in a zone with daylight saving": refused Refused { column: "at", why: TimeZone("Europe/Berlin") }
+literal MySqlVersionsDisagree "timestamp read in a zone with daylight saving": refused Refused { column: "at", why: TimeZone("Europe/Berlin") }
+literal MariaDbVersionsDisagree "timestamp read in a zone with daylight saving": refused Refused { column: "at", why: TimeZone("Europe/Berlin") }
+literal MySql8018 "timestamp read in a zone with daylight saving": refused Refused { column: "at", why: TimeZone("Europe/Berlin") }
+literal MySql8019 "timestamp read in a zone with daylight saving": refused Refused { column: "at", why: TimeZone("Europe/Berlin") }
+literal MySqlEnginesDisagree "timestamp read in a zone with daylight saving": refused Refused { column: "at", why: TimeZone("Europe/Berlin") }
+literal MySqlNotChecked "timestamp read in a zone with daylight saving": refused Refused { column: "at", why: TimeZone("Europe/Berlin") }
 keyset Pg "number key": SELECT * FROM "shop"."orders" ORDER BY "id" LIMIT 10000 | SELECT * FROM "shop"."orders" WHERE "id" OPERATOR(pg_catalog.>) 42 ORDER BY "id" LIMIT 10000
 keyset MySql "number key": SELECT * FROM `shop`.`orders` ORDER BY `id` LIMIT 10000 | SELECT * FROM `shop`.`orders` WHERE `id` > 42 ORDER BY `id` LIMIT 10000
 keyset MariaDb "number key": SELECT * FROM `shop`.`orders` ORDER BY `id` LIMIT 10000 | SELECT * FROM `shop`.`orders` WHERE `id` > 42 ORDER BY `id` LIMIT 10000

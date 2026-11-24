@@ -439,3 +439,131 @@ pub fn cells_cases() -> Vec<Case<Copied>> {
         },
     ]
 }
+
+/// The answer to whether the server of a session of column `e` reads a time zone offset in a
+/// `TIMESTAMP` value, by the rules of `e`'s engine (`ValueRules::zoned_literal`): PostgreSQL
+/// 17.2, MySQL 8.4.6, 8.0.18 and 8.0.19, MariaDB 11.4.13, each reached directly, or a version not
+/// known; `Unknown(NotChecked)` for a session that has not said what its server is.
+fn offsets(e: Engine) -> datarig_core::engine::Support {
+    use datarig_core::engine::{EngineFacts, EngineId, Fact, MyFacts, PgFacts, ServerFacts, Topology, Version, Why};
+    let pg = || EngineFacts::Postgres(PgFacts::default());
+    let my = |greeting, v: Version| EngineFacts::MySql(MyFacts::new(v, greeting));
+    let maria = |v: Version| EngineFacts::MariaDb(MyFacts::new(v, EngineId::MariaDb));
+    let known = |major, minor, patch| Fact::Known(Version::new(major, minor, patch));
+    let (version, detail) = match e {
+        Engine::Pg => (known(17, 2, 0), pg()),
+        Engine::PgVersionUnknown => (Fact::Unknown(Why::VersionUnknown), pg()),
+        Engine::MySql => (known(8, 4, 6), my(EngineId::MySql, Version::new(8, 4, 6))),
+        Engine::MySql8018 => (known(8, 0, 18), my(EngineId::MySql, Version::new(8, 0, 18))),
+        Engine::MySql8019 => (known(8, 0, 19), my(EngineId::MySql, Version::new(8, 0, 19))),
+        Engine::MySqlVersionUnknown => (Fact::Unknown(Why::VersionUnknown), my(EngineId::MySql, Version::new(8, 4, 6))),
+        Engine::MySqlVersionsDisagree => {
+            (Fact::Unknown(Why::VersionsDisagree), my(EngineId::MySql, Version::new(8, 0, 36)))
+        }
+        Engine::MySqlEnginesDisagree => {
+            (Fact::Unknown(Why::EnginesDisagree), my(EngineId::MariaDb, Version::new(8, 0, 36)))
+        }
+        Engine::MySqlNotChecked => return Fact::Unknown(Why::NotChecked),
+        Engine::MariaDb => (known(11, 4, 13), maria(Version::new(11, 4, 13))),
+        Engine::MariaDbVersionUnknown => (Fact::Unknown(Why::VersionUnknown), maria(Version::new(11, 4, 13))),
+        Engine::MariaDbVersionsDisagree => (Fact::Unknown(Why::VersionsDisagree), maria(Version::new(11, 8, 0))),
+        other => panic!("{other:?} is not a column of the SQL literal table"),
+    };
+    let facts = ServerFacts {
+        version,
+        version_text: None,
+        provider: Fact::Unknown(Why::NotChecked),
+        topology: Fact::Known(Topology::Direct),
+        detail,
+    };
+    e.dialect().engine().spec().values.zoned_literal(&facts)
+}
+
+/// How the column's values are written into SQL text on `e` (`SqlCells::literal` with the
+/// answer of [`offsets`], written by `sql_value` in the column's kind): refused, or each value's
+/// literal or why not.
+pub fn literal(e: Engine, c: &Copied) -> String {
+    let d = e.dialect();
+    let kind = Kind::from(c.columns[0].kind);
+    let offsets = offsets(e);
+    match sql_cells(d, c.columns, &c.read_in, c.server_zone) {
+        Err(refused) => format!("refused {refused:?}"),
+        Ok(cells) => c
+            .values
+            .iter()
+            .map(|v| match v {
+                None => sql_value(d, kind, None),
+                Some(v) => match cells.literal(0, v, &offsets) {
+                    Ok(taken) => sql_value(d, kind, Some(&taken)),
+                    Err(refused) => format!("{:?}", refused.why),
+                },
+            })
+            .collect::<Vec<_>>()
+            .join(" | "),
+    }
+}
+
+/// The columns every case of the SQL literal table is recorded on (golden): its engines, the
+/// sessions whose version is not known, and MySQL either side of 8.0.19.
+pub const LITERAL_ENGINES: [Engine; 12] = [
+    Pg,
+    MySql,
+    MariaDb,
+    Engine::PgVersionUnknown,
+    Engine::MySqlVersionUnknown,
+    Engine::MariaDbVersionUnknown,
+    Engine::MySqlVersionsDisagree,
+    Engine::MariaDbVersionsDisagree,
+    Engine::MySql8018,
+    Engine::MySql8019,
+    Engine::MySqlEnginesDisagree,
+    Engine::MySqlNotChecked,
+];
+
+pub fn literal_cases() -> Vec<Case<Copied>> {
+    const VALUES: &[Option<&str>] = &[Some("2024-01-01 10:00:00"), None, Some("0000-00-00 00:00:00")];
+    const WRITTEN: &str = "'2024-01-01 10:00:00+02:00' | NULL | '0000-00-00 00:00:00'";
+    const OLD: &str = "NoOffsetLiteral(VersionTooOld { needed: Version { major: 8, minor: 0, patch: 19 } }) | NULL | '0000-00-00 00:00:00'";
+    const NOT_ON_ENGINE: &str = "NoOffsetLiteral(NotOnEngine) | NULL | '0000-00-00 00:00:00'";
+    vec![
+        Case {
+            name: "timestamp read in a fixed zone",
+            input: copied(TIMESTAMP, read_in("+02:00", "utf8mb4"), VALUES),
+            expect: &[
+                (Pg, "'2024-01-01 10:00:00' | NULL | '0000-00-00 00:00:00'"),
+                (MySql, WRITTEN),
+                (MariaDb, NOT_ON_ENGINE),
+                (Engine::PgVersionUnknown, "'2024-01-01 10:00:00' | NULL | '0000-00-00 00:00:00'"),
+                (Engine::MySqlVersionUnknown, "NoOffsetLiteral(VersionUnknown) | NULL | '0000-00-00 00:00:00'"),
+                (Engine::MariaDbVersionUnknown, NOT_ON_ENGINE),
+                (Engine::MySqlVersionsDisagree, "NoOffsetLiteral(VersionsDisagree) | NULL | '0000-00-00 00:00:00'"),
+                (Engine::MariaDbVersionsDisagree, NOT_ON_ENGINE),
+                (Engine::MySql8018, OLD),
+                (Engine::MySql8019, WRITTEN),
+                (Engine::MySqlEnginesDisagree, "NoOffsetLiteral(EnginesDisagree) | NULL | '0000-00-00 00:00:00'"),
+                (Engine::MySqlNotChecked, "NoOffsetLiteral(NotChecked) | NULL | '0000-00-00 00:00:00'"),
+            ],
+        },
+        Case {
+            name: "timestamp read in a zone with daylight saving",
+            input: copied(TIMESTAMP, read_in("Europe/Berlin", "utf8mb4"), VALUES),
+            expect: &[
+                (Pg, "'2024-01-01 10:00:00' | NULL | '0000-00-00 00:00:00'"),
+                (MySql, BERLIN),
+                (MariaDb, BERLIN),
+                (Engine::PgVersionUnknown, "'2024-01-01 10:00:00' | NULL | '0000-00-00 00:00:00'"),
+                (Engine::MySqlVersionUnknown, BERLIN),
+                (Engine::MariaDbVersionUnknown, BERLIN),
+                (Engine::MySqlVersionsDisagree, BERLIN),
+                (Engine::MariaDbVersionsDisagree, BERLIN),
+                (Engine::MySql8018, BERLIN),
+                (Engine::MySql8019, BERLIN),
+                (Engine::MySqlEnginesDisagree, BERLIN),
+                (Engine::MySqlNotChecked, BERLIN),
+            ],
+        },
+    ]
+}
+
+/// A `TIMESTAMP` column read in Europe/Berlin: refused as a whole, whatever the server reads.
+const BERLIN: &str = "refused Refused { column: \"at\", why: TimeZone(\"Europe/Berlin\") }";

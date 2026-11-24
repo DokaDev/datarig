@@ -27,7 +27,7 @@ pub static SPEC: EngineSpec = EngineSpec {
     tx: &FamilyTx,
     session: &FamilySession,
     cancel: &FamilyCancel,
-    values: &FamilyValues,
+    values: &FamilyValues { offsets_since: None },
     export: Fact::Known(&FamilyExport),
     // Its collations and row locks differ from MySQL's.
     edit: Fact::No(Why::NotBuilt),

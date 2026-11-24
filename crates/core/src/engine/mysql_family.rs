@@ -297,7 +297,11 @@ pub(super) fn family_filter_calls() -> FilterCalls {
 }
 
 /// How MySQL's and MariaDB's values are typed and shown.
-pub(super) struct FamilyValues;
+pub(super) struct FamilyValues {
+    /// The first version of the engine whose servers read a time zone offset written after a
+    /// `TIMESTAMP` value; `None` for an engine that reads none on any version.
+    pub(super) offsets_since: Option<Version>,
+}
 
 impl ValueRules for FamilyValues {
     fn input(&self) -> &'static dyn InputRules {
@@ -376,6 +380,20 @@ impl ValueRules for FamilyValues {
     /// None: the family's identity (`AUTO_INCREMENT`) takes a written value as it is.
     fn insert_overriding(&self, _: bool) -> &'static str {
         ""
+    }
+
+    /// From [`FamilyValues::offsets_since`] on, on a server of the engine whose version is
+    /// known; never on a server the facts name as another engine. A version that is not known
+    /// is not taken as new enough.
+    fn zoned_literal(&self, f: &ServerFacts) -> Support {
+        let Some(since) = self.offsets_since else { return Fact::No(Why::NotOnEngine) };
+        match (&f.detail, &f.version) {
+            (EngineFacts::MySql(_), Fact::Known(v)) if *v >= since => Fact::Known(()),
+            (EngineFacts::MySql(_), Fact::Known(_)) => Fact::No(Why::VersionTooOld { needed: since }),
+            (EngineFacts::MySql(_), Fact::No(why) | Fact::Unknown(why)) => Fact::Unknown(why.clone()),
+            (EngineFacts::MariaDb(_), _) => Fact::No(Why::NotOnEngine),
+            (EngineFacts::Postgres(_), _) => Fact::Unknown(Why::EnginesDisagree),
+        }
     }
 }
 

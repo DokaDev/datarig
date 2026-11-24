@@ -1,9 +1,10 @@
 //! Every answer of the value rules, recorded: each typed value of the edit input table
 //! (`check_input`), each column of the copy as SQL table (`sql_cells`, each `cell` and its
-//! `sql_value` literal), each table of the keyset table (its first chunk and the chunk after
-//! the last row) and each column default of the default tests (`default_shown`), on
-//! PostgreSQL, MySQL and MariaDB. A change of any of them is a change of `golden/values.txt`;
-//! `DATARIG_BLESS=1` writes the file anew.
+//! `sql_value` literal), each column of the SQL literal table (`SqlCells::literal`, also on the
+//! sessions whose server's version is not known), each table of the keyset table (its first
+//! chunk and the chunk after the last row) and each column default of the default tests
+//! (`default_shown`), on PostgreSQL, MySQL and MariaDB. A change of any of them is a change of
+//! `golden/values.txt`; `DATARIG_BLESS=1` writes the file anew.
 
 use crate::Engine;
 use datarig_core::driver::structure::{ColumnFill, StructureColumn};
@@ -96,6 +97,11 @@ fn values() -> String {
     for case in crate::values::cells_cases() {
         for e in ENGINES {
             out.push_str(&format!("cells {e:?} {:?}: {}\n", case.name, crate::values::cells(e, &case.input)));
+        }
+    }
+    for case in crate::values::literal_cases() {
+        for e in crate::values::LITERAL_ENGINES {
+            out.push_str(&format!("literal {e:?} {:?}: {}\n", case.name, crate::values::literal(e, &case.input)));
         }
     }
     for case in crate::export::keyset_cases() {

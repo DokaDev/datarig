@@ -326,6 +326,24 @@ fn no_plan(ev: Option<&DbEvent>) -> bool {
     }
 }
 
+/// What a MariaDB server answers to whether it reads a time zone offset after a time: never.
+const MARIADB_OFFSETS: datarig_core::engine::Support =
+    datarig_core::engine::Fact::No(datarig_core::engine::Why::NotOnEngine);
+/// Whether the server of `facts` reads a time zone offset after a `TIMESTAMP`'s value, as the
+/// test knows it: MySQL from 8.0.19 (older: too old; a version not known: not known), MariaDB
+/// never.
+fn offsets_expected(facts: &datarig_core::engine::ServerFacts) -> datarig_core::engine::Support {
+    use datarig_core::engine::{EngineFacts, Fact, Version, Why};
+    let since = Version::new(8, 0, 19);
+    match (&facts.detail, &facts.version) {
+        (EngineFacts::MySql(_), Fact::Known(v)) if *v >= since => Fact::Known(()),
+        (EngineFacts::MySql(_), Fact::Known(_)) => Fact::No(Why::VersionTooOld { needed: since }),
+        (EngineFacts::MySql(_), Fact::No(why) | Fact::Unknown(why)) => Fact::Unknown(why.clone()),
+        (EngineFacts::MariaDb(_), _) => Fact::No(Why::NotOnEngine),
+        (EngineFacts::Postgres(_), _) => panic!("not a MySQL-family server: {facts:?}"),
+    }
+}
+
 /// A known fault on MariaDB, not checked there until it is mended.
 const TIMESTAMP_OFFSET: &str = "known bug, TIMESTAMP values copied as SQL carry an offset MariaDB does not read";
 /// Why MariaDB has no `caching_sha2_password` account.
@@ -5285,22 +5303,26 @@ fn reported(evs: &[DbEvent]) -> (Option<datarig_core::driver::SessionValues>, Op
     (values, mode)
 }
 
-/// The rows of `SELECT * FROM table` on query session `q`, copied as SQL by the app's own path
-/// ([`export::sql_cells`], then [`insert_source`] and the writer for an INSERT, `update` true
-/// [`update_source`] for an UPDATE), in the session's mode `mode` and values `values`; or the
+/// The rows of `SELECT <select> FROM table` on query session `q`, copied as SQL by the app's own
+/// path ([`export::sql_cells`], then [`insert_source`] and the writer for an INSERT, `update` true
+/// [`update_source`] for an UPDATE), in the session's mode `mode` and values `values`, the values
+/// written into the SQL as a server that reads offsets as `offsets` says reads them; or the
 /// column the copy refuses.
+#[allow(clippy::too_many_arguments)]
 async fn copied_as_sql(
     q: &mut Conn,
     id: u64,
     keys: &datarig_core::driver::keys::KeyCatalog,
     table: &Table,
+    select: &str,
     mode: MySqlMode,
     values: &datarig_core::driver::SessionValues,
+    offsets: &datarig_core::engine::Support,
     update: bool,
 ) -> Result<String, datarig_core::export::Refused> {
     use datarig_core::driver::keys::{Generated, insert_source, update_source};
     use datarig_core::export::{self, Format, Kind, SqlColumn, Target, UpdateTarget, Writer};
-    let sql = format!("SELECT * FROM `shop`.`{}`", table.name);
+    let sql = format!("SELECT {select} FROM `shop`.`{}`", table.name);
     let evs = q.run(id, &[&sql]).await;
     let (cols, rows, more) = page_of(&evs);
     assert!(!more);
@@ -5324,25 +5346,42 @@ async fn copied_as_sql(
         .collect();
     let read_in = datarig_core::driver::ReadIn::Values(values.clone());
     let cells = export::sql_cells(d, &sql_columns, &read_in, keys.server_zone())?;
+    // The columns whose values go into the SQL text: judged as the server reads them.
+    let (update_plan, insert_plan) = match update {
+        true => {
+            (Some(update_source(d, Some(keys), &origins, &names, &sql).expect("rows of one table with its key")), None)
+        }
+        false => (None, Some(insert_source(d, Some(keys), &origins, &names, &sql).expect("rows of one table"))),
+    };
+    let written: Vec<usize> = match (&update_plan, &insert_plan) {
+        (Some(p), _) => p.set.iter().chain(&p.keys).map(|c| c.0).collect(),
+        (_, Some(p)) => p.columns.iter().map(|c| c.0).collect(),
+        (None, None) => Vec::new(),
+    };
     let owned: Vec<Vec<Option<String>>> = rows
         .iter()
         .map(|r| {
             r.iter()
                 .enumerate()
-                .map(|(i, v)| v.as_deref().map(|v| cells.cell(i, v).map(|c| c.into_owned())).transpose())
+                .map(|(i, v)| {
+                    let taken = |v| match written.contains(&i) {
+                        true => cells.literal(i, v, offsets),
+                        false => cells.cell(i, v),
+                    };
+                    v.as_deref().map(|v| taken(v).map(|c| c.into_owned())).transpose()
+                })
                 .collect::<Result<_, _>>()
         })
         .collect::<Result<_, _>>()?;
     let rows: Vec<export::Row> = owned.iter().map(|r| r.iter().map(|v| v.as_deref()).collect()).collect();
-    if update {
-        let plan = update_source(d, Some(keys), &origins, &names, &sql).expect("rows of one table with its key");
+    if let Some(plan) = update_plan {
         let target =
             UpdateTarget { schema: &plan.table.schema, name: &plan.table.name, set: plan.set.clone(), keys: plan.keys };
         let mut w = Writer::new(Format::Update(d, target), &columns);
         w.rows(&rows);
         return Ok(w.finish());
     }
-    let plan = insert_source(d, Some(keys), &origins, &names, &sql).expect("rows of one table");
+    let plan = insert_plan.expect("an INSERT");
     let target = Target::Table {
         schema: &plan.table.schema,
         name: &plan.table.name,
@@ -5372,7 +5411,8 @@ async fn run_all(q: &mut Conn, first_id: u64, text: &str, d: Dialect) {
 /// path, run back into a copy of the table, are the rows byte for byte: in the server's default
 /// escaping, `NO_BACKSLASH_ESCAPES` and `ANSI_QUOTES`, and run in a session in another mode and
 /// another time zone than the one they were copied in (a string with a backslash is written as
-/// its bytes, a `TIMESTAMP` with its offset). What would not be written whole is refused: a
+/// its bytes, a `TIMESTAMP` with its offset where the server reads one: on MariaDB its copy is
+/// refused, and the rows without it run back). What would not be written whole is refused: a
 /// `FLOAT`, text read in latin1, a `TIMESTAMP` in a zone with daylight saving (where one shown
 /// time is two instants).
 #[tokio::test(flavor = "multi_thread")]
@@ -5408,10 +5448,6 @@ async fn rows_copied_as_sql_run_back_byte_for_byte() {
          1e308, NULL, NULL, NULL, NULL, NULL), \
         (4, 'second', '{}', NULL, NULL, NULL, NULL, NULL, '2024-10-27 01:30:00', NULL, NULL, NULL, NULL, NULL, \
          NULL, NULL, NULL, NULL, NULL, NULL)";
-    let offsets_read = !mariadb(&url).await;
-    if !offsets_read {
-        not_on_mariadb(test, TIMESTAMP_OFFSET);
-    }
     for (n, flag) in ["", ",NO_BACKSLASH_ESCAPES", ",ANSI_QUOTES"].iter().enumerate() {
         let mode = format!("{base}{flag}");
         let ddl = |sql: &str| vec![setup[0].clone(), setup[1].clone(), sql.to_string()];
@@ -5434,6 +5470,15 @@ async fn rows_copied_as_sql_run_back_byte_for_byte() {
         // The session says its mode as it starts, which a statement that leaves it as it is
         // does not say again.
         let mut q = Conn::start(&url, SessionRole::Query, false, test);
+        let DbEvent::Server(facts) = q.wait(|e| matches!(e, DbEvent::Server(_)), 15).await else {
+            panic!("what the server is")
+        };
+        let offsets = facts.engine().spec().values.zoned_literal(&facts);
+        assert_eq!(offsets, offsets_expected(&facts), "{facts:?}");
+        let offsets_read = offsets == datarig_core::engine::Fact::Known(());
+        // The columns copied and compared: on a server that reads no offset, all but the TIMESTAMP.
+        let compared: Vec<&str> = columns.iter().copied().filter(|c| offsets_read || *c != "ts").collect();
+        let select = if offsets_read { "*".to_string() } else { compared.join(", ") };
         let DbEvent::Language(Language::Sql(Dialect::MySql(started) | Dialect::MariaDb(started))) =
             q.wait(|e| matches!(e, DbEvent::Language(_)), 15).await
         else {
@@ -5451,41 +5496,49 @@ async fn rows_copied_as_sql_run_back_byte_for_byte() {
             (flag.contains("BACKSLASH"), flag.contains("ANSI")),
             "{mode}"
         );
-        let insert = copied_as_sql(&mut q, 3, &keys, &src, session_mode, &values, false).await.unwrap();
+        // Where the server reads no offset, the TIMESTAMP's copy is refused.
+        let every = copied_as_sql(&mut q, 3, &keys, &src, "*", session_mode, &values, &offsets, false).await;
+        match &offsets {
+            datarig_core::engine::Fact::Known(()) => assert!(every.is_ok(), "{every:?}"),
+            datarig_core::engine::Fact::No(why) | datarig_core::engine::Fact::Unknown(why) => {
+                let refused = every.unwrap_err();
+                assert_eq!((refused.column.as_str(), refused.why), ("ts", NotWhole::NoOffsetLiteral(why.clone())));
+            }
+        }
+        let insert =
+            copied_as_sql(&mut q, 4, &keys, &src, &select, session_mode, &values, &offsets, false).await.unwrap();
         let insert = insert.replace(&format!("`{}`", src.name), &format!("`{}`", copy.name));
         assert!(!insert.contains("OVERRIDING") && !insert.contains("`twice`"), "{insert}");
-        // Run back where the server reads the offset of a TIMESTAMP's value.
-        if offsets_read {
-            assert!(insert.contains("'2024-10-27 00:30:00.500+00:00'"), "{insert}");
-            // Run in another mode and another zone than the copy was made in.
-            let other = if flag.is_empty() { format!("{base},NO_BACKSLASH_ESCAPES") } else { base.to_string() };
-            q.ok(10, &format!("SET SESSION sql_mode = '{other}'")).await;
-            q.ok(11, "SET SESSION time_zone = '+05:00'").await;
-            let other_mode = MySqlMode { no_backslash_escapes: other.contains("BACKSLASH"), ..session_mode };
-            run_all(&mut q, 20, &insert, Dialect::MySql(MySqlMode { ansi_quotes: false, ..other_mode })).await;
-            let mut a = side(&admin).await;
-            let want = row_hashes(&mut a, &src.q(), &columns).await;
-            assert_eq!(row_hashes(&mut a, &copy.q(), &columns).await, want, "INSERT, {mode}:\n{insert}");
-            // UPDATE: the copy's rows changed, then set back by the statements.
-            a.query_drop(format!(
-                "UPDATE {} SET txt = 'changed', js = '{{}}', bin = NULL, blb = 0x01, bt = b'0', d = NULL, \
-                 dt = '2000-01-01', ts = '2000-01-01 00:00:00', tm = '01:00:00', yr = 1999, big = 1, amount = 2, \
-                 nul = 'y', dbl = 3, en = 'a', st = 'y', geo = ST_GeomFromText('POINT(9 9)'), bn = 0x09, lat = 'z'",
-                copy.q()
-            ))
-            .await
-            .unwrap();
-            assert_ne!(row_hashes(&mut a, &copy.q(), &columns).await, want);
-            q.ok(30, &format!("SET SESSION sql_mode = '{mode}'")).await;
-            q.ok(31, "SET SESSION time_zone = '+00:00'").await;
-            let update = copied_as_sql(&mut q, 32, &keys, &src, session_mode, &values, true).await.unwrap();
-            let update = update.replace(&format!("`{}`", src.name), &format!("`{}`", copy.name));
-            q.ok(33, &format!("SET SESSION sql_mode = '{other}'")).await;
-            q.ok(34, "SET SESSION time_zone = '-03:00'").await;
-            run_all(&mut q, 40, &update, Dialect::MySql(MySqlMode { ansi_quotes: false, ..other_mode })).await;
-            assert_eq!(row_hashes(&mut a, &copy.q(), &columns).await, want, "UPDATE, {mode}:\n{update}");
-            a.disconnect().await.unwrap();
-        }
+        assert_eq!(insert.contains("'2024-10-27 00:30:00.500+00:00'"), offsets_read, "{insert}");
+        // Run back in another mode and another zone than the copy was made in.
+        let other = if flag.is_empty() { format!("{base},NO_BACKSLASH_ESCAPES") } else { base.to_string() };
+        q.ok(10, &format!("SET SESSION sql_mode = '{other}'")).await;
+        q.ok(11, "SET SESSION time_zone = '+05:00'").await;
+        let other_mode = MySqlMode { no_backslash_escapes: other.contains("BACKSLASH"), ..session_mode };
+        run_all(&mut q, 20, &insert, Dialect::MySql(MySqlMode { ansi_quotes: false, ..other_mode })).await;
+        let mut a = side(&admin).await;
+        let want = row_hashes(&mut a, &src.q(), &compared).await;
+        assert_eq!(row_hashes(&mut a, &copy.q(), &compared).await, want, "INSERT, {mode}:\n{insert}");
+        // UPDATE: the copy's rows changed, then set back by the statements.
+        a.query_drop(format!(
+            "UPDATE {} SET txt = 'changed', js = '{{}}', bin = NULL, blb = 0x01, bt = b'0', d = NULL, \
+             dt = '2000-01-01', ts = '2000-01-01 00:00:00', tm = '01:00:00', yr = 1999, big = 1, amount = 2, \
+             nul = 'y', dbl = 3, en = 'a', st = 'y', geo = ST_GeomFromText('POINT(9 9)'), bn = 0x09, lat = 'z'",
+            copy.q()
+        ))
+        .await
+        .unwrap();
+        assert_ne!(row_hashes(&mut a, &copy.q(), &compared).await, want);
+        q.ok(30, &format!("SET SESSION sql_mode = '{mode}'")).await;
+        q.ok(31, "SET SESSION time_zone = '+00:00'").await;
+        let update =
+            copied_as_sql(&mut q, 32, &keys, &src, &select, session_mode, &values, &offsets, true).await.unwrap();
+        let update = update.replace(&format!("`{}`", src.name), &format!("`{}`", copy.name));
+        q.ok(33, &format!("SET SESSION sql_mode = '{other}'")).await;
+        q.ok(34, "SET SESSION time_zone = '-03:00'").await;
+        run_all(&mut q, 40, &update, Dialect::MySql(MySqlMode { ansi_quotes: false, ..other_mode })).await;
+        assert_eq!(row_hashes(&mut a, &copy.q(), &compared).await, want, "UPDATE, {mode}:\n{update}");
+        a.disconnect().await.unwrap();
         if n > 0 {
             continue;
         }
@@ -5494,14 +5547,16 @@ async fn rows_copied_as_sql_run_back_byte_for_byte() {
         let (latin1, _) = reported(&evs);
         let latin1 = latin1.expect("the session says its character set");
         assert_eq!(latin1.charset, "latin1");
-        let refused = copied_as_sql(&mut q, 51, &keys, &src, session_mode, &latin1, false).await.unwrap_err();
+        let refused =
+            copied_as_sql(&mut q, 51, &keys, &src, "*", session_mode, &latin1, &offsets, false).await.unwrap_err();
         assert_eq!((refused.column.as_str(), refused.why), ("txt", NotWhole::Charset("latin1".into())));
         // Refused: text read in utf8mb3, where the emoji of row 2 arrives as `?`.
         let evs = q.run(52, &["SET NAMES utf8mb3"]).await;
         let (mb3, _) = reported(&evs);
         let mb3 = mb3.expect("the session says its character set");
         assert_eq!(mb3.charset, "utf8mb3");
-        let refused = copied_as_sql(&mut q, 58, &keys, &src, session_mode, &mb3, false).await.unwrap_err();
+        let refused =
+            copied_as_sql(&mut q, 58, &keys, &src, "*", session_mode, &mb3, &offsets, false).await.unwrap_err();
         assert_eq!((refused.column.as_str(), refused.why), ("txt", NotWhole::Charset("utf8mb3".into())));
         let evs = q.run(59, &["SET NAMES utf8mb4"]).await;
         assert_eq!(reported(&evs).0.map(|v| v.charset).as_deref(), Some("utf8mb4"));
@@ -5519,7 +5574,9 @@ async fn rows_copied_as_sql_run_back_byte_for_byte() {
                 );
                 let berlin =
                     datarig_core::driver::SessionValues { time_zone: "Europe/Berlin".into(), ..values.clone() };
-                let refused = copied_as_sql(&mut q, 55, &keys, &src, session_mode, &berlin, false).await.unwrap_err();
+                let refused = copied_as_sql(&mut q, 55, &keys, &src, "*", session_mode, &berlin, &offsets, false)
+                    .await
+                    .unwrap_err();
                 assert_eq!((refused.column.as_str(), refused.why), ("ts", NotWhole::TimeZone("Europe/Berlin".into())));
             }
         }
@@ -5534,7 +5591,8 @@ async fn rows_copied_as_sql_run_back_byte_for_byte() {
         let evs = q.run(56, &[&format!("SELECT f FROM {} ORDER BY id", floats.q())]).await;
         let shown: Vec<_> = page_of(&evs).1.iter().map(|r| r[0].clone()).collect();
         assert_eq!(shown, [Some("16777200".to_string()), Some("1.23457".to_string())], "rounded");
-        let refused = copied_as_sql(&mut q, 57, &keys, &floats, session_mode, &values, false).await.unwrap_err();
+        let refused =
+            copied_as_sql(&mut q, 57, &keys, &floats, "*", session_mode, &values, &offsets, false).await.unwrap_err();
         assert_eq!((refused.column.as_str(), refused.why), ("f", NotWhole::Float));
     }
 }
@@ -8086,7 +8144,8 @@ async fn mariadb_invisible_columns_are_listed_read_and_copied() {
     let evs = q.run(n, &["SET SESSION time_zone = '+00:00'"]).await;
     let values = reported(&evs).0.expect("the session's values");
     n += 1;
-    let insert = copied_as_sql(&mut q, n, &keys, &t, MySqlMode::default(), &values, false).await.unwrap();
+    let insert =
+        copied_as_sql(&mut q, n, &keys, &t, "*", MySqlMode::default(), &values, &MARIADB_OFFSETS, false).await.unwrap();
     assert!(!insert.contains("`c`") && !insert.contains("`g`"), "the columns shown: {insert}");
     let insert = insert.replace(&format!("`{}`", t.name), &format!("`{}`", copy.name));
     run_all(&mut q, 100, &insert, Dialect::MySql(MySqlMode::default())).await;
@@ -8270,7 +8329,10 @@ async fn mariadb_system_versioned_tables_are_listed_read_and_paged_as_tables() {
     let evs = q.run(n, &["SET SESSION time_zone = '+00:00'"]).await;
     let values = reported(&evs).0.expect("the session's values");
     n += 1;
-    let insert = copied_as_sql(&mut q, n, &keys, &declared, MySqlMode::default(), &values, false).await.unwrap();
+    let insert =
+        copied_as_sql(&mut q, n, &keys, &declared, "*", MySqlMode::default(), &values, &MARIADB_OFFSETS, false)
+            .await
+            .unwrap();
     assert!(!insert.contains("`rs`") && !insert.contains("`re`"), "the columns shown: {insert}");
     let insert = insert.replace(&format!("`{}`", declared.name), &format!("`{}`", rows_copy.name));
     run_all(&mut q, 100, &insert, Dialect::MySql(MySqlMode::default())).await;

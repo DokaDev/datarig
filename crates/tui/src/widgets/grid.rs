@@ -61,6 +61,13 @@ pub struct ResultSet {
     /// What its values were read in (the session's time zone and character set when its first
     /// page came, and whether a later page came under others): what a copy as SQL judges it by.
     pub read_in: datarig_core::driver::ReadIn,
+    /// The dialect of its tab when its first page came: its values are judged by the rules of
+    /// that dialect's engine, and refused for SQL once the tab is on another engine.
+    pub read_as: datarig_core::sql::dialect::Dialect,
+    /// Whether the server of the session that read it reads a time zone offset written after a
+    /// time (`ValueRules::zoned_literal` of what that session said of its server when the first
+    /// page came; `Unknown(NotChecked)` when it had said nothing yet).
+    pub offsets: datarig_core::engine::Support,
     /// How its values read as text were written (a PostgreSQL session's `DateStyle`,
     /// `IntervalStyle` and `TimeZone` when its first page came; `None`: not known, or a later
     /// page came under others): where its `styled` columns' text reads back the same. Known
@@ -213,6 +220,8 @@ impl ResultSet {
             pages_in: PagesIn::Nothing,
             tx: None,
             read_in: Default::default(),
+            read_as: Default::default(),
+            offsets: datarig_core::engine::Fact::Unknown(datarig_core::engine::Why::NotChecked),
             text_in: None,
             text_check: None,
             edit: Default::default(),

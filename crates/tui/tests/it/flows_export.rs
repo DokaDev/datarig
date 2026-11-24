@@ -1188,3 +1188,463 @@ fn a_lost_session_says_why_by_the_engine() {
         assert!(s.starts_with("Export failed") && s.contains(why), "{engine}: {s}");
     }
 }
+
+/// `shop.items` as the MySQL driver reports its keys: `id` the primary key, `at` a `TIMESTAMP`,
+/// `made` a `TIMESTAMP` the database generates, `dt` a `DATETIME`, `d` a `DOUBLE`.
+fn items_keys() -> datarig_core::driver::keys::KeyCatalog {
+    use datarig_core::driver::keys::{Generated, KeyCatalog, KeyKind, NameRule};
+    let mut k = KeyCatalog::default();
+    k.set_names(NameRule::MySql { tables_ignore_case: false });
+    k.set_server_zone("UTC");
+    let names = ["id", "at", "made", "dt", "d"];
+    k.add_table(1, "shop", "items", names.iter().enumerate().map(|(i, n)| (i as i16 + 1, n.to_string())));
+    k.mark(1, &[1], KeyKind::Primary);
+    k.set_generated(1, 3, Generated::Expression);
+    k
+}
+
+/// Column `name` of `shop.items` as the MySQL driver gives it (`items_keys`), of type `ty`.
+fn item_column(name: &str, ty: &str) -> ColumnMeta {
+    use datarig_core::driver::{ColumnOrigin, ValueKind};
+    let kind = match ty {
+        "int" => ValueKind::Integer,
+        "timestamp" => ValueKind::TimestampTz,
+        "datetime" => ValueKind::Timestamp,
+        "double" | "float" => ValueKind::Float,
+        other => panic!("no type {other}"),
+    };
+    let origin = ColumnOrigin::Named { schema: "shop".into(), table: "items".into(), column: name.into() };
+    ColumnMeta::new(name.into(), ty.into(), kind, Some(origin))
+}
+
+/// The columns `cols` of `shop.items`, each of its own type.
+fn item_columns(cols: &[&str]) -> Vec<ColumnMeta> {
+    cols.iter()
+        .map(|&c| {
+            let ty = match c {
+                "id" => "int",
+                "at" | "made" => "timestamp",
+                "dt" => "datetime",
+                _ => "double",
+            };
+            item_column(c, ty)
+        })
+        .collect()
+}
+
+/// Rows of text values (`None`: NULL).
+fn text_rows(rows: &[&[Option<&str>]]) -> Vec<Vec<Option<String>>> {
+    rows.iter().map(|r| r.iter().map(|v| v.map(str::to_string)).collect()).collect()
+}
+
+/// A tab of a MySQL profile (keys of `shop.items` read) that ran `SELECT <cols> FROM
+/// shop.items`, its session at `+00:00` saying `said` before its first page `rows` came (`more`:
+/// the server has more); nothing sent since.
+fn items_tab(said: Vec<DbEvent>, cols: &[&str], rows: &[&[Option<&str>]], more: bool) -> Harness {
+    items_tab_of(FakeDriver::default(), said, cols, rows, more)
+}
+
+/// [`items_tab`] on driver `driver`.
+fn items_tab_of(
+    driver: FakeDriver,
+    said: Vec<DbEvent>,
+    cols: &[&str],
+    rows: &[&[Option<&str>]],
+    more: bool,
+) -> Harness {
+    use datarig_core::driver::SessionValues;
+    driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut p = datarig_core::profile::ConnectionConfig::test_db();
+    (p.name, p.driver) = ("local-my".into(), "mysql".into());
+    let mut pg = datarig_core::profile::ConnectionConfig::test_db();
+    pg.name = "local-pg".into();
+    let cfg = datarig_core::config::Config { connections: vec![p, pg], ..Default::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Keys(Ok(items_keys())));
+    h.app.run(vec![format!("SELECT {} FROM shop.items", cols.join(", "))]);
+    h.db(DbEvent::SessionValues(SessionValues { time_zone: "+00:00".into(), charset: "utf8mb4".into() }));
+    for ev in said {
+        h.db(ev);
+    }
+    let id = h.app.tab().exec.query_id;
+    // A MySQL session lets the statement go before the page, as when it keeps no rows open.
+    h.db(DbEvent::Released { id });
+    h.db(DbEvent::Page { id, columns: Some(item_columns(cols)), rows: text_rows(rows), more, elapsed: Duration::ZERO });
+    h.sent();
+    h
+}
+
+/// Start the export `command` (`y` to its question, if it asks).
+fn export_command(h: &mut Harness, command: &str) {
+    h.command(command);
+    if h.app.overlays.confirm().map(|c| c.action) == Some(ConfirmAction::ExportStart) {
+        h.key(KeyCode::Char('y'));
+    }
+}
+
+/// Export every row read again: the session sends `columns`, then `rows`, and answers.
+fn export_again(h: &mut Harness, command: &str, columns: Vec<ColumnMeta>, rows: Vec<Vec<Option<String>>>) {
+    export_command(h, command);
+    let (id, _, _, sink) = wait_export(h);
+    let n = rows.len() as u64;
+    let feeder = std::thread::spawn(move || {
+        let _ = sink.blocking_send(ExportBatch::Columns(columns));
+        let _ = sink.blocking_send(ExportBatch::Rows(rows));
+    });
+    feeder.join().unwrap();
+    // The writer may have stopped already (it then ignores the answer).
+    let start = std::time::Instant::now();
+    while !done(h) && start.elapsed() < Duration::from_secs(2) {
+        h.app.pump_exports(Duration::from_millis(50));
+    }
+    if !done(h) {
+        let index = h.app.tabs.active_index();
+        let read = ExportRead { rows: n, last: None, complete: true };
+        h.tab_db(index, DbEvent::Exported { id, result: Ok(read), cancelled: false });
+    }
+    pump_until(h, "the end", done);
+}
+
+const ENGINE_WORDS: &str = "This server does not read a time zone offset in a TIMESTAMP value (MariaDB, MySQL before \
+                            8.0.19), so it cannot be copied or exported as SQL. Export as CSV or JSON still works.";
+const NOT_YET_WORDS: &str = "The server version was not known yet when these rows were read, so a time with a time \
+                             zone offset cannot be written safely as SQL.";
+const UNKNOWN_WORDS: &str = "The server version is not known, so a time with a time zone offset cannot be written \
+                             safely as SQL. Export as CSV or JSON still works, and so does copying from a session \
+                             whose server version is known.";
+
+/// An SQL file export writes a `TIMESTAMP` with its offset only where the server that read it
+/// reads one: for MariaDB, MySQL 8.0.18 and a MySQL whose version is not known, an `INSERT` or an
+/// `UPDATE` file of it fails with the reason, from the rows held and from every row read again
+/// alike (a failure on its first row leaves no file; after rows were written, the partial file
+/// keeps them); NULLs, zero dates and a generated `TIMESTAMP` left out of the `INSERT` are
+/// exported as before. MySQL 8.4 writes it with its offset.
+#[test]
+fn a_timestamp_is_exported_as_sql_only_where_the_server_reads_its_offset() {
+    let dir = scratch("x-offset");
+    let at = Some("2024-10-27 00:30:00");
+    let cols = ["id", "at", "made"];
+    let servers = [("mariadb", ENGINE_WORDS), ("mysql-8.0.18", ENGINE_WORDS), ("mysql-unknown", UNKNOWN_WORDS)];
+    let said = |server: &str| match server {
+        "mariadb" => server_said(true, Some((11, 4, 13))),
+        "mysql-8.0.18" => server_said(false, Some((8, 0, 18))),
+        "mysql-unknown" => server_said(false, None),
+        _ => mysql_8_4(),
+    };
+    for (server, words) in servers {
+        for (format, scope) in [("", "fetched"), ("update ", "fetched"), ("", "all"), ("update ", "all")] {
+            let case = format!("{server} {format}{scope}");
+            // Its first row: nothing kept.
+            let mut h = items_tab(said(server), &cols, &[&[Some("1"), at, at]], true);
+            let path = dir.join(format!("first-{server}-{}{scope}.sql", format.trim()));
+            let command = format!("export {format}{scope} {}", path.display());
+            match scope {
+                "fetched" => {
+                    export_command(&mut h, &command);
+                    pump_until(&mut h, "the end", done);
+                }
+                _ => export_again(&mut h, &command, item_columns(&cols), text_rows(&[&[Some("1"), at, at]])),
+            }
+            let s = status(&h);
+            assert_eq!(s, format!("Export failed: column “at” is a TIMESTAMP. {words}"), "{case}");
+            assert!(!path.exists() && !partial_of(&path).exists(), "{case}: no file");
+            // A later row: the rows before it are in the partial file. A generated TIMESTAMP is
+            // not in the INSERT, nor in the UPDATE's SET: not judged.
+            let rows: &[&[Option<&str>]] = &[&[Some("1"), None, at], &[Some("2"), at, at]];
+            let mut h = items_tab(said(server), &cols, rows, true);
+            let path = dir.join(format!("later-{server}-{}{scope}.sql", format.trim()));
+            let command = format!("export {format}{scope} {}", path.display());
+            match scope {
+                "fetched" => {
+                    export_command(&mut h, &command);
+                    pump_until(&mut h, "the end", done);
+                }
+                _ => export_again(&mut h, &command, item_columns(&cols), text_rows(rows)),
+            }
+            let s = status(&h);
+            assert!(s.starts_with("Export failed after 1 row") && s.contains(words), "{case}: {s}");
+            let kept = std::fs::read_to_string(partial_of(&path)).unwrap_or_default();
+            assert_eq!(kept.lines().count(), 1, "{case}: {kept}");
+            assert!(kept.contains("NULL") && !path.exists(), "{case}: {kept}");
+        }
+        // NULLs and zero dates: every row exported, as before.
+        let rows: &[&[Option<&str>]] = &[&[Some("1"), None, at], &[Some("2"), Some("0000-00-00 00:00:00"), at]];
+        let mut h = items_tab(said(server), &cols, rows, false);
+        let path = dir.join(format!("null-{server}.sql"));
+        export_command(&mut h, &format!("export {}", path.display()));
+        pump_until(&mut h, "the end", done);
+        assert_eq!(
+            std::fs::read_to_string(&path).ok().as_deref(),
+            Some(
+                "INSERT INTO `shop`.`items` (`id`, `at`) VALUES (1, NULL);\n\
+                 INSERT INTO `shop`.`items` (`id`, `at`) VALUES (2, '0000-00-00 00:00:00');\n"
+            ),
+            "{server}: {}",
+            status(&h)
+        );
+    }
+    // MySQL 8.4 reads the offset.
+    for scope in ["fetched", "all"] {
+        let mut h = items_tab(mysql_8_4(), &cols, &[&[Some("1"), at, at]], true);
+        let path = dir.join(format!("mysql-8.4-{scope}.sql"));
+        let command = format!("export {scope} {}", path.display());
+        match scope {
+            "fetched" => {
+                export_command(&mut h, &command);
+                pump_until(&mut h, "the end", done);
+            }
+            _ => export_again(&mut h, &command, item_columns(&cols), text_rows(&[&[Some("1"), at, at]])),
+        }
+        assert_eq!(
+            std::fs::read_to_string(&path).ok().as_deref(),
+            Some("INSERT INTO `shop`.`items` (`id`, `at`) VALUES (1, '2024-10-27 00:30:00+00:00');\n"),
+            "{scope}: {}",
+            status(&h)
+        );
+    }
+}
+
+/// What a MySQL 8.4 session says it is.
+fn mysql_8_4() -> Vec<DbEvent> {
+    server_said(false, Some((8, 4, 6)))
+}
+
+/// What the app flashed last, else the tab's status, as text.
+fn told(h: &Harness) -> String {
+    h.app.transient.as_ref().map_or_else(|| status(h), |(n, _)| n.render(&h.app.i18n).to_string())
+}
+
+/// The partial file of an export to `path`.
+fn partial_of(path: &Path) -> PathBuf {
+    let mut p = path.as_os_str().to_owned();
+    p.push(".partial");
+    PathBuf::from(p)
+}
+
+/// The rows held keep what their session had said of its server when they were read: a MySQL 8.4
+/// session that said it only after the first page leaves them refused, while every row read
+/// again now is exported with the offset. A result from before the session was lost is not read
+/// again (the session is not its own any more), as before.
+#[test]
+fn a_timestamp_held_and_read_again_is_judged_by_what_was_said_when_it_was_read() {
+    let dir = scratch("x-late");
+    let at = Some("2024-10-27 00:30:00");
+    let cols = ["id", "at"];
+    let mut h = items_tab(Vec::new(), &cols, &[&[Some("1"), at]], true);
+    for ev in mysql_8_4() {
+        h.db(ev);
+    }
+    let held = dir.join("held.sql");
+    export_command(&mut h, &format!("export fetched {}", held.display()));
+    pump_until(&mut h, "the end", done);
+    let s = status(&h);
+    assert!(s.starts_with("Export failed") && s.contains(NOT_YET_WORDS), "{s}");
+    let again = dir.join("again.sql");
+    export_again(
+        &mut h,
+        &format!("export all {}", again.display()),
+        item_columns(&cols),
+        text_rows(&[&[Some("1"), at], &[Some("2"), at]]),
+    );
+    assert_eq!(
+        std::fs::read_to_string(&again).ok().as_deref(),
+        Some(
+            "INSERT INTO `shop`.`items` (`id`, `at`) VALUES (1, '2024-10-27 00:30:00+00:00');\n\
+             INSERT INTO `shop`.`items` (`id`, `at`) VALUES (2, '2024-10-27 00:30:00+00:00');\n"
+        ),
+        "{}",
+        status(&h)
+    );
+    // The session is lost, then connects again: its old result is not read again.
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Lost { error: DbError::Closed });
+    let values = datarig_core::driver::SessionValues { time_zone: "+00:00".into(), charset: "utf8mb4".into() };
+    let mut said = mysql_8_4();
+    said.push(DbEvent::SessionValues(values));
+    reconnect_keeping_the_result(&mut h, index, "SELECT * FROM shop.gone", said);
+    let facts = h.app.tab().exec.current_facts().cloned().expect("facts");
+    assert_eq!(facts.version, datarig_core::engine::Fact::Known(datarig_core::engine::Version::new(8, 4, 6)));
+    let stale = dir.join("stale.sql");
+    // The failed run's messages are shown: back to the rows read before.
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.keys("HH");
+    assert!(h.screen(120, 30).contains("[Result 1]"), "{}", h.screen(120, 30));
+    h.app.transient = None;
+    h.command(&format!("export all {}", stale.display()));
+    assert_eq!(told(&h), h.app.i18n.label(datarig_i18n::Label::ExportStale).to_string());
+    assert!(export_sent(&mut h).is_none() && !stale.exists());
+}
+
+/// Rows held are written as SQL by the rules of the engine that read them: once their tab is on
+/// a PostgreSQL profile, an SQL export of them is refused (read on another engine). Every row read
+/// again is written in the tab's dialect, as before: not refused as read on another engine, but
+/// as a result that is not of the tab's session.
+#[test]
+fn an_sql_export_of_rows_read_on_another_engine_is_refused() {
+    let dir = scratch("x-elsewhere");
+    let driver = FakeDriver::default();
+    let mysql = driver.mysql.clone();
+    let mut h = items_tab_of(driver, mysql_8_4(), &["id"], &[&[Some("1")]], true);
+    let tab = h.app.tab().id;
+    // The fake driver serves PostgreSQL's profile as PostgreSQL from now on.
+    mysql.store(false, std::sync::atomic::Ordering::SeqCst);
+    h.command("conn local-pg");
+    h.db(DbEvent::Connected);
+    h.command("conn local-my");
+    assert_eq!(h.app.tab().id, tab);
+    h.keys(" cs");
+    if h.overlay_kind() == Some(OverlayKind::Confirm) {
+        h.keys("y");
+    }
+    h.type_text("local-pg");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.tab_language(tab).dialect().engine(), EngineId::Postgres);
+    let held = dir.join("held.sql");
+    h.app.transient = None;
+    h.command(&format!("export fetched {}", held.display()));
+    let flash = h.app.transient.as_ref().map(|(n, _)| n.render(&h.app.i18n).to_string()).unwrap_or_default();
+    assert_eq!(
+        flash,
+        "Not exported as SQL: these rows were read on another database engine than the one the tab uses now; run the \
+         query again"
+    );
+    assert!(!held.exists());
+    // The export dialog strikes SQL INSERT and UPDATE with the same reason.
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.keys(" re");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Export), "the dialog opened");
+    use datarig_tui::app::export_form::ExportField;
+    let tab_to = |h: &mut Harness, field: ExportField| {
+        for _ in 0..12 {
+            if h.app.overlays.export_form().expect("the dialog").focus == field {
+                return;
+            }
+            h.key(KeyCode::Tab);
+        }
+        panic!("no field {field:?}");
+    };
+    // The rows held (every row read again is written in the tab's dialect).
+    tab_to(&mut h, ExportField::Scope);
+    h.key(KeyCode::Right);
+    assert_eq!(h.app.overlays.export_form().unwrap().scope, datarig_tui::app::export::ExportScope::Fetched);
+    tab_to(&mut h, ExportField::Format);
+    h.key(KeyCode::Enter);
+    let screen = h.screen(240, 45);
+    let reason = "these rows were read on another database engine";
+    for format in ["SQL INSERT", "SQL UPDATE"] {
+        assert!(screen.lines().any(|l| l.contains(format) && l.contains(reason)), "{format}: {screen}");
+    }
+    h.key(KeyCode::Esc);
+    h.key(KeyCode::Esc);
+    assert_eq!(h.overlay_kind(), None);
+    // As CSV they are still exported.
+    let csv = dir.join("held.csv");
+    h.command(&format!("export fetched {}", csv.display()));
+    pump_until(&mut h, "the end", done);
+    assert_eq!(std::fs::read_to_string(&csv).ok().as_deref(), Some("id\n1\n"), "{}", status(&h));
+    let again = dir.join("again.sql");
+    h.app.transient = None;
+    h.command(&format!("export all {}", again.display()));
+    assert!(!told(&h).contains("another database engine"), "{}", told(&h));
+    let again_csv = dir.join("again.csv");
+    h.app.transient = None;
+    h.command(&format!("export all {}", again_csv.display()));
+    assert_eq!(told(&h), h.app.i18n.label(datarig_i18n::Label::ExportStale).to_string());
+    assert!(export_sent(&mut h).is_none() && !again.exists() && !again_csv.exists());
+}
+
+/// Every row read again for an SQL file is written by the types its values were judged by: a
+/// column of the same name whose type changed (a `DATETIME` that is now a `TIMESTAMP`, a `DOUBLE`
+/// that is now a `FLOAT`, of the same kind) stops the export, as other columns would. A CSV or a
+/// JSON file of the same rows is written as before.
+#[test]
+fn a_column_whose_type_changed_stops_an_sql_export() {
+    let dir = scratch("x-types");
+    let cols = ["id", "dt", "d"];
+    let rows = || text_rows(&[&[Some("1"), Some("2024-10-27 00:30:00"), Some("0.5")]]);
+    let changed = [
+        ("kind", vec![item_column("id", "int"), item_column("dt", "timestamp"), item_column("d", "double")]),
+        ("type", vec![item_column("id", "int"), item_column("dt", "datetime"), item_column("d", "float")]),
+    ];
+    let row: &[&[Option<&str>]] = &[&[Some("1"), Some("2024-10-27 00:30:00"), Some("0.5")]];
+    for (what, columns) in changed {
+        let mut h = items_tab(mysql_8_4(), &cols, row, true);
+        let path = dir.join(format!("{what}.sql"));
+        export_again(&mut h, &format!("export all {}", path.display()), columns.clone(), rows());
+        let s = status(&h);
+        assert!(s.contains("the result's columns changed while it was read"), "{what}: {s}");
+        assert!(!path.exists(), "{what}");
+        for ext in ["csv", "json"] {
+            let mut h = items_tab(mysql_8_4(), &cols, row, true);
+            let path = dir.join(format!("{what}.{ext}"));
+            export_again(&mut h, &format!("export all {}", path.display()), columns.clone(), rows());
+            assert!(path.exists(), "{what}.{ext}: {}", status(&h));
+        }
+    }
+}
+
+/// The same check on the rows a session still had in the channel when it answered: with the
+/// answer in before any batch, the writer reads every batch after it, a column whose type
+/// changed among them.
+#[test]
+fn a_column_whose_type_changed_stops_an_sql_export_on_its_last_rows() {
+    let dir = scratch("x-types-last");
+    let cols = ["id", "dt"];
+    let row = |id: &str| vec![Some(id.to_string()), Some("2024-10-27 00:30:00".to_string())];
+    let mut h = items_tab(mysql_8_4(), &cols, &[&[Some("1"), Some("2024-10-27 00:30:00")]], true);
+    let path = dir.join("last.sql");
+    export_command(&mut h, &format!("export all {}", path.display()));
+    let (id, _, _, sink) = wait_export(&mut h);
+    let index = h.app.tabs.active_index();
+    let read = ExportRead { rows: 2, last: None, complete: true };
+    h.tab_db(index, DbEvent::Exported { id, result: Ok(read), cancelled: false });
+    let changed = vec![item_column("id", "int"), item_column("dt", "timestamp")];
+    let feeder = std::thread::spawn(move || {
+        let _ = sink.blocking_send(ExportBatch::Rows(vec![row("1")]));
+        let _ = sink.blocking_send(ExportBatch::Columns(changed));
+        let _ = sink.blocking_send(ExportBatch::Rows(vec![row("2")]));
+    });
+    pump_until(&mut h, "the end", done);
+    feeder.join().unwrap();
+    let s = status(&h);
+    assert!(s.contains("the result's columns changed while it was read"), "{s}");
+    assert!(!path.exists());
+}
+
+/// A CSV file of every row read again takes the rows a session still had in the channel when it
+/// answered as they come, a columns batch among them changing nothing: only an SQL file judges
+/// its values by the columns' types there.
+#[test]
+fn a_csv_export_takes_its_last_rows_whatever_columns_come_with_them() {
+    let dir = scratch("csv-last");
+    let mut h = Harness::connected(Lang::En);
+    first_page(&mut h, 10, true);
+    h.sent();
+    let path = dir.join("last.csv");
+    h.command(&format!("export all {}", path.display()));
+    let (id, _, _, sink) = wait_export(&mut h);
+    h.tab_db(
+        0,
+        DbEvent::Exported { id, result: Ok(ExportRead { rows: 5, last: None, complete: true }), cancelled: false },
+    );
+    let feeder = std::thread::spawn(move || {
+        let _ = sink.blocking_send(ExportBatch::Rows(rows(0, 2)));
+        let _ = sink.blocking_send(ExportBatch::Columns(vec![meta("other", "text", false, false)]));
+        let _ = sink.blocking_send(ExportBatch::Rows(rows(2, 3)));
+    });
+    pump_until(&mut h, "the end", done);
+    feeder.join().unwrap();
+    assert!(status(&h).starts_with("Exported 5 rows to "), "{}", status(&h));
+    // Every row in order, the header of the result's own columns: row 0's NULL name empty, the
+    // names quoted (a comma and quotes in them, the quotes doubled).
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "id,name\n\
+         0,\n\
+         1,\"n\u{d55c}1, \"\"q\"\"\"\n\
+         2,\"n\u{d55c}2, \"\"q\"\"\"\n\
+         3,\"n\u{d55c}3, \"\"q\"\"\"\n\
+         4,\"n\u{d55c}4, \"\"q\"\"\"\n"
+    );
+}

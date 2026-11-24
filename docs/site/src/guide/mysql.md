@@ -139,6 +139,14 @@ leave generated columns out. A string with a backslash or a NUL is written as it
 with the offset of the session's time zone. `UPDATE` needs the table's primary key in the
 result.
 
+Only MySQL 8.0.19 and later read that offset. On MariaDB, on MySQL before 8.0.19, and on a
+server whose version datarig does not know (a proxy that rewrites the version line, or a version
+line it cannot read), a copy or export as SQL with a `TIMESTAMP` value is refused with the
+reason; NULL and zero-date (`0000-00-00 …`) values still copy and export as SQL, and CSV or JSON
+export still works. Aurora MySQL 3 reports a MySQL 8.0 version, so it still writes the offset.
+Rows are judged by the server that read them: after the tab moves to a profile of another
+database engine, run the query again to copy or export them as SQL.
+
 A copy is refused, naming the column, where a value would not be written whole: a `FLOAT` (the
 server sends it rounded to about six digits), a `TIMESTAMP` while the session's time zone is not
 a fixed offset (`SET time_zone = '+00:00'` first), text while the session's results are not

@@ -328,6 +328,13 @@ impl App {
         // The allowlist's question about a result's statement, for the settings its text was
         // written in (`ResultSet::first_styled`).
         let risk = self.tab_dialect(id).engine().spec().risk;
+        // What a result read now is judged by for SQL: the tab's dialect, and whether the server
+        // its session said it is reads a time zone offset.
+        let read_as = self.tab_dialect(id);
+        let offsets = match self.tabs.get(id).and_then(|t| t.exec.current_facts()) {
+            Some(f) => read_as.engine().spec().values.zoned_literal(f),
+            None => datarig_core::engine::Fact::Unknown(datarig_core::engine::Why::NotChecked),
+        };
         let mut ask_style: Option<(u64, String)> = None;
         // A result's first page: the kinds of its columns' types to look up are asked.
         let first_page =
@@ -781,6 +788,7 @@ impl App {
                         let store = datarig_core::results::RowStore::new(rows, spill, limits);
                         let mut rs = ResultSet::new(cols, store, more, &null);
                         rs.read_in = read_in(&mut t.exec);
+                        (rs.read_as, rs.offsets) = (read_as, offsets.clone());
                         let sql = t.exec.run.statements.get(index).map_or("", |s| s.sql.as_str());
                         ask_style = rs.first_styled(t.exec.text.as_ref(), sql, risk, &mut self.query_seq);
                         rs.edit.bind(bound);
@@ -962,6 +970,7 @@ impl App {
                 let mut rs = ResultSet::new(cols, store, more, &null);
                 // Bound to the session's values now: a later `SET time_zone` is not this result's.
                 rs.read_in = read_in(&mut t.exec);
+                (rs.read_as, rs.offsets) = (read_as, offsets.clone());
                 let sql = t.exec.run.statements.last().map_or("", |s| s.sql.as_str());
                 ask_style = rs.first_styled(t.exec.text.as_ref(), sql, risk, &mut self.query_seq);
                 rs.edit.bind(bound);

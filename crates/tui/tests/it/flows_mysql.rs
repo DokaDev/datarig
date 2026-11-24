@@ -493,13 +493,27 @@ fn items_keys() -> datarig_core::driver::keys::KeyCatalog {
     k
 }
 
+/// What a MySQL 8.4 session says it is (a real session says it before it connects).
+fn mysql_8_4() -> Vec<DbEvent> {
+    server_said(false, Some((8, 4, 6)))
+}
+
 /// The explorer's statement of `shop.<table>` run, and its one row back (`id`, `txt` as given),
 /// the grid focused; `columns` of the table's columns (the first `n`). The origins name the
-/// table as the server writes it in the result (`txt` in another case).
+/// table as the server writes it in the result (`txt` in another case). The session says it is
+/// MySQL 8.4 before the rows come.
 fn items_result(h: &mut Harness, table: &str, id: &str, txt: &str, n: usize) {
+    items_result_said(h, mysql_8_4(), table, id, txt, n);
+}
+
+/// [`items_result`], the session saying `said` before the rows come.
+fn items_result_said(h: &mut Harness, said: Vec<DbEvent>, table: &str, id: &str, txt: &str, n: usize) {
     use datarig_core::driver::{ColumnMeta, ColumnOrigin, ValueKind};
     h.app.run(vec![format!("SELECT * FROM `shop`.`{table}`")]);
     let run = sent_run(h);
+    for ev in said {
+        h.tab_db(0, ev);
+    }
     let col = |name: &str, ty: &str, kind: ValueKind| {
         let origin = ColumnOrigin::Named { schema: "shop".into(), table: table.into(), column: name.into() };
         ColumnMeta::new(name.into(), ty.into(), kind, Some(origin))
@@ -606,6 +620,258 @@ fn mysql_rows_copy_as_mysql_sql_or_say_why_not() {
     refused(&mut h, "the tables' columns could not be read (ERROR 1142 (42000): denied)");
 }
 
+/// `SELECT <cols> FROM shop.Items` run (columns of `items_result`'s types, by name), the session
+/// saying `said` before its rows `rows` come; the grid focused.
+fn items_rows(h: &mut Harness, said: Vec<DbEvent>, cols: &[&str], rows: &[&[Option<&str>]]) {
+    use datarig_core::driver::{ColumnMeta, ColumnOrigin, ValueKind};
+    h.app.run(vec![format!("SELECT {} FROM `shop`.`Items`", cols.join(", "))]);
+    let run = sent_run(h);
+    for ev in said {
+        h.tab_db(0, ev);
+    }
+    let columns = cols
+        .iter()
+        .map(|&name| {
+            let (ty, kind) = match name {
+                "id" => ("int", ValueKind::Integer),
+                "at" => ("timestamp", ValueKind::TimestampTz),
+                other => panic!("no column {other}"),
+            };
+            let origin = ColumnOrigin::Named { schema: "shop".into(), table: "Items".into(), column: name.into() };
+            ColumnMeta::new(name.into(), ty.into(), kind, Some(origin))
+        })
+        .collect();
+    let rows = rows.iter().map(|r| r.iter().map(|v| v.map(str::to_string)).collect()).collect();
+    h.tab_db(0, DbEvent::Page { id: run, columns: Some(columns), rows, more: false, elapsed: Default::default() });
+    h.app.focus = datarig_tui::app::Focus::Results;
+}
+
+/// What the app flashed last, in words.
+fn flashed(h: &Harness) -> String {
+    h.app.transient.as_ref().map(|(n, _)| n.render(&h.app.i18n).to_string()).unwrap_or_default()
+}
+
+/// Copy the result as an SQL `IN` list.
+fn copy_in(h: &mut Harness) {
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::copy::{CopyFormat, CopyScope};
+    h.app.dispatch(Action::Copy(CopyScope::Fetched, CopyFormat::SqlIn));
+}
+
+const ENGINE_WORDS: &str = "Not copied as SQL: column “at” is a TIMESTAMP. This server does not read a time zone \
+                            offset in a TIMESTAMP value (MariaDB, MySQL before 8.0.19), so it cannot be copied or \
+                            exported as SQL. Export as CSV or JSON still works.";
+const NOT_YET_WORDS: &str = "Not copied as SQL: column “at” is a TIMESTAMP. The server version was not known yet \
+                             when these rows were read, so a time with a time zone offset cannot be written \
+                             safely as SQL. Run the query again, or export as CSV or JSON.";
+const UNKNOWN_WORDS: &str = "Not copied as SQL: column “at” is a TIMESTAMP. The server version is not known, so a \
+                             time with a time zone offset cannot be written safely as SQL. Export as CSV or JSON \
+                             still works, and so does copying from a session whose server version is known.";
+
+/// A `TIMESTAMP` is copied as SQL with its offset only for a server that reads one (MySQL from
+/// 8.0.19): for MariaDB, MySQL 8.0.18 and a MySQL whose version is not known, an `INSERT`, an
+/// `UPDATE` and an `IN` list of it are refused with the reason (the `IN` list before "no value to
+/// list"); NULLs and zero dates are still copied, an `IN` list of NULLs only still has no value.
+/// MySQL 8.4 writes it with its offset, as before.
+#[test]
+fn a_timestamp_is_not_copied_as_sql_for_a_server_that_reads_no_offset() {
+    let servers = [
+        ("MariaDB 11.4", server_said(true, Some((11, 4, 13))), ENGINE_WORDS),
+        ("MySQL 8.0.18", server_said(false, Some((8, 0, 18))), ENGINE_WORDS),
+        ("MySQL of a version not known", server_said(false, None), UNKNOWN_WORDS),
+    ];
+    for (server, said, words) in servers {
+        let mut h = mysql();
+        let clip = FakeClipboard::attach(&mut h, false, &[]);
+        h.db(DbEvent::Connected);
+        h.db(DbEvent::Keys(Ok(items_keys())));
+        h.tab_db(0, session("+00:00", "utf8mb4"));
+        let copies = || clip.texts.lock().unwrap().len();
+        items_rows(&mut h, said, &["id", "at"], &[&[Some("7"), Some("2024-10-27 00:30:00")]]);
+        for copy in ["copy insert", "copy update"] {
+            h.app.transient = None;
+            h.command(copy);
+            assert_eq!(flashed(&h), words, "{server}: {copy}");
+            assert_eq!(copies(), 0, "{server}: {copy}: nothing copied");
+        }
+        // NULLs and zero dates are no instant: copied as before.
+        let rows: &[&[Option<&str>]] = &[&[Some("8"), None], &[Some("9"), Some("0000-00-00 00:00:00")]];
+        items_rows(&mut h, Vec::new(), &["id", "at"], rows);
+        h.command("copy insert");
+        assert_eq!(
+            clip.last().as_deref(),
+            Some(
+                "INSERT INTO `shop`.`Items` (`id`, `at`) VALUES (8, NULL);\n\
+                 INSERT INTO `shop`.`Items` (`id`, `at`) VALUES (9, '0000-00-00 00:00:00');"
+            ),
+            "{server}"
+        );
+        h.command("copy update");
+        assert_eq!(
+            clip.last().as_deref(),
+            Some(
+                "UPDATE `shop`.`Items` SET `at` = NULL WHERE `id` = 8;\n\
+                 UPDATE `shop`.`Items` SET `at` = '0000-00-00 00:00:00' WHERE `id` = 9;"
+            ),
+            "{server}"
+        );
+        // An IN list of the value: its reason, not "no value to list".
+        items_rows(&mut h, Vec::new(), &["at"], &[&[Some("2024-10-27 00:30:00")], &[None]]);
+        let before = copies();
+        h.app.transient = None;
+        copy_in(&mut h);
+        assert_eq!(flashed(&h), words, "{server}: IN");
+        assert_eq!(copies(), before, "{server}: IN");
+        // A zero date is listed; NULLs only have no value to list, as before.
+        items_rows(&mut h, Vec::new(), &["at"], &[&[Some("0000-00-00 00:00:00")], &[None]]);
+        copy_in(&mut h);
+        assert_eq!(clip.last().as_deref(), Some("('0000-00-00 00:00:00')"), "{server}");
+        items_rows(&mut h, Vec::new(), &["at"], &[&[None]]);
+        h.app.transient = None;
+        copy_in(&mut h);
+        assert_eq!(flashed(&h), "Not copied as an IN list: there is no value to list (NULL is left out)", "{server}");
+    }
+    // MySQL 8.4 reads the offset: written with it.
+    let mut h = mysql();
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Keys(Ok(items_keys())));
+    h.tab_db(0, session("+00:00", "utf8mb4"));
+    items_rows(&mut h, mysql_8_4(), &["id", "at"], &[&[Some("7"), Some("2024-10-27 00:30:00")]]);
+    h.command("copy insert");
+    assert_eq!(
+        clip.last().as_deref(),
+        Some("INSERT INTO `shop`.`Items` (`id`, `at`) VALUES (7, '2024-10-27 00:30:00+00:00');")
+    );
+    items_rows(&mut h, Vec::new(), &["at"], &[&[Some("2024-10-27 00:30:00")]]);
+    copy_in(&mut h);
+    assert_eq!(clip.last().as_deref(), Some("('2024-10-27 00:30:00+00:00')"));
+}
+
+/// Rows are judged as SQL by the engine that read them: rows read on MariaDB, in a tab moved
+/// since to a PostgreSQL profile, are not copied as SQL by PostgreSQL's rules.
+#[test]
+fn an_old_result_keeps_the_rules_of_the_server_that_read_it() {
+    let driver = FakeDriver::default();
+    driver.mysql.store(true, Ordering::SeqCst);
+    let mysql = driver.mysql.clone();
+    let mut my = datarig_core::profile::ConnectionConfig::test_db();
+    (my.name, my.driver) = ("local-my".into(), "mysql".into());
+    let mut pg = datarig_core::profile::ConnectionConfig::test_db();
+    pg.name = "local-pg".into();
+    let cfg = Config { connections: vec![my, pg], ..Config::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Keys(Ok(items_keys())));
+    h.tab_db(0, session("+00:00", "utf8mb4"));
+    items_rows(&mut h, server_said(true, Some((11, 4, 13))), &["id"], &[&[Some("7")]]);
+    let tab = h.app.tab().id;
+    h.command("copy insert");
+    assert_eq!(clip.last().as_deref(), Some("INSERT INTO `shop`.`Items` (`id`) VALUES (7);"), "{}", flashed(&h));
+    // The tab moves to the PostgreSQL profile (which the fake driver serves as PostgreSQL from
+    // now on); its rows stay.
+    mysql.store(false, Ordering::SeqCst);
+    h.command("conn local-pg");
+    h.db(DbEvent::Connected);
+    h.command("conn local-my");
+    assert_eq!(h.app.tab().id, tab);
+    h.keys(" cs");
+    if h.overlay_kind() == Some(datarig_tui::app::overlay::OverlayKind::Confirm) {
+        h.keys("y");
+    }
+    h.type_text("local-pg");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.tab().id, tab);
+    assert_eq!(h.app.tab_language(tab).dialect(), Dialect::Postgres);
+    h.app.focus = datarig_tui::app::Focus::Results;
+    let copies = clip.texts.lock().unwrap().len();
+    for copy in ["copy insert", "copy update", "copy insert shop.Items"] {
+        h.app.transient = None;
+        h.command(copy);
+        assert_eq!(
+            flashed(&h),
+            "Not copied as SQL. These rows were read on another database engine than the one the tab uses now; \
+             run the query again.",
+            "{copy}"
+        );
+    }
+    copy_in(&mut h);
+    assert!(flashed(&h).contains("read on another database engine"), "{}", flashed(&h));
+    assert_eq!(clip.texts.lock().unwrap().len(), copies, "nothing copied as SQL");
+    // As text it is still copied.
+    h.command("copy csv all");
+    assert_eq!(clip.last().as_deref(), Some("id\n7"));
+}
+
+/// A result read on MySQL 8.4 keeps what its server reads: copied with the offset right after
+/// its session is lost (no session now), and again once a new session of the tab connected.
+#[test]
+fn a_result_read_on_mysql_8_4_still_copies_as_sql_after_the_session_is_lost() {
+    let mut h = mysql();
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Keys(Ok(items_keys())));
+    h.tab_db(0, session("+00:00", "utf8mb4"));
+    items_rows(&mut h, mysql_8_4(), &["id", "at"], &[&[Some("7"), Some("2024-10-27 00:30:00")]]);
+    let want = "INSERT INTO `shop`.`Items` (`id`, `at`) VALUES (7, '2024-10-27 00:30:00+00:00');";
+    h.tab_db(0, DbEvent::Lost { error: DbError::Closed });
+    h.command("copy insert");
+    assert_eq!(clip.last().as_deref(), Some(want), "{}", flashed(&h));
+    let copies = clip.texts.lock().unwrap().len();
+    reconnect_keeping_the_result(&mut h, 0, "SELECT * FROM `shop`.`Gone`", mysql_8_4());
+    let facts = h.app.tab().exec.current_facts().cloned().expect("facts");
+    assert_eq!(facts.version, datarig_core::engine::Fact::Known(datarig_core::engine::Version::new(8, 4, 6)));
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.command("copy insert");
+    assert_eq!(clip.last().as_deref(), Some(want), "{}", flashed(&h));
+    assert_eq!(clip.texts.lock().unwrap().len(), copies + 1);
+}
+
+/// Whether a result's `TIMESTAMP`s are copied with their offset is what its session had said of
+/// its server when its first page came: nothing said (never, or only after that page), refused
+/// as a version not known yet; said before, written.
+#[test]
+fn a_result_read_before_the_server_said_its_facts_refuses_its_timestamps() {
+    let start = || {
+        let mut h = mysql();
+        let clip = FakeClipboard::attach(&mut h, false, &[]);
+        h.db(DbEvent::Connected);
+        h.db(DbEvent::Keys(Ok(items_keys())));
+        h.tab_db(0, session("+00:00", "utf8mb4"));
+        (h, clip)
+    };
+    let row: &[&[Option<&str>]] = &[&[Some("7"), Some("2024-10-27 00:30:00")]];
+    // Never said.
+    let (mut h, clip) = start();
+    items_rows(&mut h, Vec::new(), &["id", "at"], row);
+    h.command("copy insert");
+    assert_eq!(flashed(&h), NOT_YET_WORDS);
+    assert!(clip.last().is_none());
+    // Said after the first page: still refused, the result keeps what was known then.
+    for ev in mysql_8_4() {
+        h.tab_db(0, ev);
+    }
+    h.app.transient = None;
+    h.command("copy insert");
+    assert_eq!(flashed(&h), NOT_YET_WORDS);
+    assert!(clip.last().is_none());
+    // Said before: written. The session is open: the facts go to it before the run.
+    let (mut h, clip) = start();
+    items_rows(&mut h, Vec::new(), &["id"], &[&[Some("1")]]);
+    for ev in mysql_8_4() {
+        h.tab_db(0, ev);
+    }
+    items_rows(&mut h, Vec::new(), &["id", "at"], row);
+    h.command("copy insert");
+    assert_eq!(
+        clip.last().as_deref(),
+        Some("INSERT INTO `shop`.`Items` (`id`, `at`) VALUES (7, '2024-10-27 00:30:00+00:00');"),
+        "{}",
+        flashed(&h)
+    );
+}
+
 /// A result is copied by what its values were read in, not by what the session reads in now:
 /// a `TIMESTAMP` read under Europe/Berlin stays refused after `SET time_zone = '+00:00'` (never
 /// written with `+00:00` after Berlin's text), and a text read under latin1 stays refused after
@@ -625,6 +891,11 @@ fn a_result_is_copied_by_the_values_it_was_read_in() {
     let cols = || vec![col("id", "int", ValueKind::Integer), col("at", "timestamp", ValueKind::TimestampTz)];
     let page = |h: &mut Harness, rows: usize, more: bool, first: bool| {
         let run = if first { sent_run(h) } else { h.app.tab().exec.query_id };
+        if first {
+            for ev in mysql_8_4() {
+                h.tab_db(0, ev);
+            }
+        }
         let rows = (0..rows).map(|i| vec![Some((i + 1).to_string()), Some("2024-10-27 02:30:00".into())]).collect();
         let columns = first.then(cols);
         h.tab_db(0, DbEvent::Page { id: run, columns, rows, more, elapsed: Default::default() });
@@ -709,6 +980,9 @@ fn a_result_of_server_code_is_not_copied_with_the_old_values() {
             h.keys("y");
         }
         let run = sent_run(h);
+        for ev in mysql_8_4() {
+            h.tab_db(0, ev);
+        }
         if let Some(ev) = before {
             h.tab_db(0, ev);
         }

@@ -32,6 +32,7 @@ use datarig_core::driver::keys::{
 };
 use datarig_core::edit::Value;
 use datarig_core::edit::paste::MAX_ROWS as MAX_PASTE_ROWS;
+use datarig_core::engine::Why;
 use datarig_core::export::{self, Kind, Target};
 use datarig_core::fault::{ErrorLog, Fault};
 use datarig_core::sql::dialect::Dialect;
@@ -614,8 +615,15 @@ impl App {
         let text = {
             let t = self.tab();
             let Results::Rows(rs) = &t.results else { return };
-            // The SQL formats are written in the tab's dialect.
+            // The SQL formats are written in the tab's dialect, of the engine that read the rows:
+            // they are judged by its rules and what its server reads.
             let d = self.tab_dialect(t.id);
+            let as_sql = matches!(req.format, CopyFormat::SqlIn | CopyFormat::SqlInsert | CopyFormat::SqlUpdate);
+            if as_sql && rs.read_as.engine() != d.engine() {
+                let refused = export::Refused { column: String::new(), why: export::NotWhole::ReadElsewhere };
+                return self.flash(self.not_whole(&refused));
+            }
+            let offsets = &rs.offsets;
             let columns: Vec<export::Column> = b
                 .cols
                 .iter()
@@ -644,7 +652,7 @@ impl App {
                         }
                     })
                     .collect();
-                export::sql_cells(d, &cols, &rs.read_in, keys.and_then(|k| k.server_zone()))
+                export::sql_cells(rs.read_as, &cols, &rs.read_in, keys.and_then(|k| k.server_zone()))
             };
             // The chosen columns of the rows of `b` as the grid shows them, `COPY_CHUNK` at a
             // time, into `write` with the row the chunk starts at.
@@ -708,9 +716,16 @@ impl App {
                     };
                     let mut values: Vec<Option<String>> = Vec::new();
                     let read = stream(&mut |rows, _| {
-                        let rows = written_as(&cells, rows, &mut refused);
+                        let rows = written_as(&cells, rows, &|_| Some(offsets), &mut refused);
                         values.extend(rows.iter().map(|r| r[0].as_deref().map(str::to_string)));
                     });
+                    // A value the server would not read as written is said before "no values".
+                    if read.is_ok()
+                        && let Some(r) =
+                            refused.as_ref().filter(|r| matches!(r.why, export::NotWhole::NoOffsetLiteral(_)))
+                    {
+                        return self.flash(self.not_whole(r));
+                    }
                     let rows: Vec<export::Row> = values.iter().map(|v| vec![v.as_deref()]).collect();
                     match (read, export::sql_in(d, &columns, &rows)) {
                         (Err(fault), _) => Err(fault),
@@ -744,9 +759,16 @@ impl App {
                         Ok(c) => c,
                         Err(r) => return self.flash(self.not_whole(&r)),
                     };
+                    let mut written = vec![false; columns.len()];
+                    for c in plan.set.iter().chain(&plan.keys) {
+                        if let Some(w) = written.get_mut(c.0) {
+                            *w = true;
+                        }
+                    }
                     let mut w = export::Writer::new(export::Format::Update(d, target), &columns);
                     stream(&mut |rows, _| {
-                        let rows = written_as(&cells, rows, &mut refused);
+                        let into = |i: usize| written.get(i).copied().unwrap_or(false).then_some(offsets);
+                        let rows = written_as(&cells, rows, &into, &mut refused);
                         let rows: Vec<export::Row> =
                             rows.iter().map(|r| r.iter().map(|v| v.as_deref()).collect()).collect();
                         w.rows(&rows);
@@ -794,8 +816,15 @@ impl App {
                     let defaults = overlaid && b.rows.clone().any(|r| (0..written.len()).any(|j| default(r, j)));
                     let mut w = export::Writer::new(export::Format::Sql(d, target.clone()), &columns);
                     let mut parts: Vec<String> = Vec::new();
+                    let mut into_sql = vec![false; b.cols.len()];
+                    for w in &written {
+                        if let Some(i) = into_sql.get_mut(w.0) {
+                            *i = true;
+                        }
+                    }
                     stream(&mut |rows, at| {
-                        let rows = written_as(&cells, rows, &mut refused);
+                        let into = |i: usize| into_sql.get(i).copied().unwrap_or(false).then_some(offsets);
+                        let rows = written_as(&cells, rows, &into, &mut refused);
                         let rows: Vec<export::Row> =
                             rows.iter().map(|r| written.iter().map(|w| r[w.0].as_deref()).collect()).collect();
                         if defaults {
@@ -1322,7 +1351,12 @@ impl App {
     /// Why a copy as SQL was refused for a value of a column ([`export::sql_cells`]), in words.
     pub(super) fn not_whole(&self, r: &export::Refused) -> Notice {
         let reason = self.not_whole_reason(&r.why);
-        Notice::new(Msg::CopySqlNotWhole { column: r.column.clone(), reason }, Level::Warning)
+        let msg = match r.why {
+            export::NotWhole::NoOffsetLiteral(_) => Msg::CopySqlNoOffset { column: r.column.clone(), reason },
+            export::NotWhole::ReadElsewhere => Msg::CopySqlRefused { reason },
+            _ => Msg::CopySqlNotWhole { column: r.column.clone(), reason },
+        };
+        Notice::new(msg, Level::Warning)
     }
 
     /// Why a value is not written whole, in words.
@@ -1339,6 +1373,16 @@ impl App {
             export::NotWhole::NotShownWhole => self.i18n.label(Label::CopySqlWhyNotShownWhole).to_string(),
             export::NotWhole::SessionUnknown => self.i18n.label(Label::CopySqlWhySessionUnknown).to_string(),
             export::NotWhole::SessionChanged => self.i18n.label(Label::CopySqlWhySessionChanged).to_string(),
+            export::NotWhole::NoOffsetLiteral(why) => {
+                let label = match why {
+                    Why::NotOnEngine | Why::VersionTooOld { .. } => Label::CopySqlWhyNoOffsetLiteral,
+                    // Taken before the session said what its server is.
+                    Why::NotChecked => Label::CopySqlWhyVersionNotKnownYet,
+                    _ => Label::CopySqlWhyVersionUnknown,
+                };
+                self.i18n.label(label).to_string()
+            }
+            export::NotWhole::ReadElsewhere => self.i18n.label(Label::CopySqlWhyReadElsewhere).to_string(),
         }
     }
 
@@ -1370,8 +1414,6 @@ impl App {
 #[cfg(test)]
 mod tests;
 
-/// The values of `rows` as the SQL formats write them ([`export::SqlCells::cell`]); the first
-/// one that is not written whole is kept in `refused` (the copy is then refused).
 /// What the grid shows over the rows as read in block `b` of `rs`: whether some of it is pending
 /// (a value, a row to be deleted) and how many of its rows are to be deleted; or why it is not
 /// copied: a value it shows has none yet (a pending DEFAULT, except in an INSERT (`insert`),
@@ -1402,9 +1444,14 @@ fn over_block(rs: &ResultSet, b: &Block, insert: bool) -> Result<(bool, u64), Ms
     Ok((pending, deleted))
 }
 
-fn written_as<'a>(
+/// The values of `rows` as the SQL formats write them: those of the columns written into the SQL
+/// text (`offsets` of their index: what the server reads, [`export::SqlCells::literal`]), the
+/// others as [`export::SqlCells::cell`] takes them; the first one that is not written whole is
+/// kept in `refused` (the copy is then refused).
+fn written_as<'a, 'o>(
     cells: &export::SqlCells,
     rows: &'a [export::Row],
+    offsets: &dyn Fn(usize) -> Option<&'o datarig_core::engine::Support>,
     refused: &mut Option<export::Refused>,
 ) -> Vec<Vec<Option<std::borrow::Cow<'a, str>>>> {
     rows.iter()
@@ -1412,7 +1459,11 @@ fn written_as<'a>(
             r.iter()
                 .enumerate()
                 .map(|(i, v)| {
-                    v.and_then(|v| match cells.cell(i, v) {
+                    let taken = |v| match offsets(i) {
+                        Some(o) => cells.literal(i, v, o),
+                        None => cells.cell(i, v),
+                    };
+                    v.and_then(|v| match taken(v) {
                         Ok(c) => Some(c),
                         Err(r) => {
                             refused.get_or_insert(r);
