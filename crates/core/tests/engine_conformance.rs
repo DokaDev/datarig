@@ -401,6 +401,110 @@ fn value_rules_on_every_engine() {
     }
 }
 
+/// How each engine's value rules write a value as an SQL literal, judge the columns of a
+/// result copied as SQL, and write the clause of an identity column's `INSERT`, as today.
+#[test]
+fn value_rules_write_sql_on_every_engine() {
+    use datarig_core::driver::{ReadIn, SessionValues, ValueKind};
+    use datarig_core::engine::EngineId;
+    use datarig_core::export::{Kind, SqlColumn};
+    // A value of a kind, then its literal on PostgreSQL and on the MySQL family.
+    let literals: &[(Kind, Option<&str>, &str, &str)] = &[
+        (Kind::Number, None, "NULL", "NULL"),
+        (Kind::Text, None, "NULL", "NULL"),
+        (Kind::Number, Some("12"), "12", "12"),
+        (Kind::Number, Some("-0"), "'-0'", "'-0'"),
+        (Kind::Number, Some("NaN"), "'NaN'", "'NaN'"),
+        (Kind::Bool, Some("true"), "true", "true"),
+        (Kind::Bool, Some("t"), "'t'", "'t'"),
+        (Kind::Text, Some("it's"), "'it''s'", "'it''s'"),
+        (Kind::Text, Some("a\\b"), "E'a\\\\b'", "_utf8mb4 X'615C62'"),
+        (Kind::Text, Some("a\0b"), "'a\0b'", "_utf8mb4 X'610062'"),
+        (Kind::Bytes, Some("0x01FF"), "'0x01FF'", "X'01FF'"),
+        (Kind::Bytes, Some("0x1"), "'0x1'", "'0x1'"),
+        (Kind::Bytes, Some("\\x01ff"), "E'\\\\x01ff'", "_utf8mb4 X'5C7830316666'"),
+        (Kind::Bit, Some("b'101'"), "'b''101'''", "b'101'"),
+        (Kind::Bit, Some("101"), "'101'", "'101'"),
+    ];
+    let column = |name, type_name, kind| SqlColumn { name, type_name, kind, auto_increment: false };
+    let columns = [
+        column("t", "varchar", ValueKind::Text),
+        column("b", "varbinary", ValueKind::Bytes),
+        column("at", "timestamp", ValueKind::TimestampTz),
+        SqlColumn { auto_increment: true, ..column("id", "int", ValueKind::Integer) },
+    ];
+    let cells: &[(usize, &str)] = &[(0, "x"), (1, "0x0"), (1, "0x00"), (2, "2024-01-01 00:00:00"), (3, "0"), (3, "5")];
+    let floats = [column("f", "float", ValueKind::Float)];
+    let read_in = ReadIn::Values(SessionValues { time_zone: "+02:00".into(), charset: "utf8mb4".into() });
+    for id in EngineId::ALL {
+        let values = id.spec().values;
+        let pg = match id {
+            EngineId::Postgres => true,
+            EngineId::MySql | EngineId::MariaDb => false,
+        };
+        for (kind, v, on_pg, on_family) in literals {
+            let want = if pg { on_pg } else { on_family };
+            assert_eq!(values.literal(*kind, *v), *want, "{id:?} {kind:?} {v:?}");
+        }
+        let rules = values.sql_cells(&columns, &read_in, None).unwrap();
+        let got: Vec<String> = cells
+            .iter()
+            .map(|(i, v)| match rules.cell(*i, v) {
+                Ok(taken) => taken.into_owned(),
+                Err(r) => format!("{} {:?}", r.column, r.why),
+            })
+            .collect();
+        let want: &[&str] = if pg {
+            &["x", "0x0", "0x00", "2024-01-01 00:00:00", "0", "5"]
+        } else {
+            &["x", "b NotShownWhole", "0x00", "2024-01-01 00:00:00+02:00", "id AutoIncrementZero", "5"]
+        };
+        assert_eq!(got, want, "{id:?}");
+        let float =
+            values.sql_cells(&floats, &read_in, None).map(|_| ()).map_err(|r| format!("{} {:?}", r.column, r.why));
+        assert_eq!(float, if pg { Ok(()) } else { Err("f Float".to_string()) }, "{id:?}");
+        let overriding = [values.insert_overriding(true), values.insert_overriding(false)];
+        assert_eq!(overriding, if pg { [" OVERRIDING SYSTEM VALUE", ""] } else { ["", ""] }, "{id:?}");
+    }
+}
+
+/// A copy as SQL and a keyset chunk on a MySQL session in another sql mode (`ANSI_QUOTES`,
+/// `NO_BACKSLASH_ESCAPES`) are written as in the default mode, as today: a string with a
+/// backslash is written as its bytes, which every mode reads the same.
+#[test]
+fn sql_cells_and_keyset_chunks_under_other_mysql_modes() {
+    use datarig_core::driver::{ReadIn, SessionValues, ValueKind};
+    use datarig_core::export::SqlColumn;
+    const TEXT: &[SqlColumn<'static>; 1] =
+        &[SqlColumn { name: "t", type_name: "varchar", kind: ValueKind::Text, auto_increment: false }];
+    let copied = values::Copied {
+        columns: TEXT,
+        read_in: ReadIn::Values(SessionValues { time_zone: "+00:00".into(), charset: "utf8mb4".into() }),
+        server_zone: None,
+        values: &[Some("it's"), Some("a\\b"), None],
+    };
+    let table = export::Table {
+        schema: "shop",
+        table: "lines",
+        columns: &[
+            ("order_id", "int", ValueKind::Integer),
+            ("code", "varchar", ValueKind::Text),
+            ("qty", "int", ValueKind::Integer),
+        ],
+        key: &["order_id", "code"],
+        last: &[Some("7"), Some("a\\b"), Some("1")],
+    };
+    for engine in [Engine::MySqlAnsiQuotes, Engine::MySqlNoBackslashEscapes] {
+        let d = engine.dialect();
+        assert_eq!(values::cells_in(d, &copied), "'it''s' | _utf8mb4 X'615C62' | NULL", "{engine:?}");
+        assert_eq!(
+            export::keyset_in(d, &table),
+            "SELECT * FROM `shop`.`lines` ORDER BY `order_id`, `code` LIMIT 10000 | SELECT * FROM `shop`.`lines` WHERE `order_id` > 7 OR (`order_id` = 7 AND (`code` > _utf8mb4 X'615C62')) ORDER BY `order_id`, `code` LIMIT 10000",
+            "{engine:?}"
+        );
+    }
+}
+
 /// What each engine's export rules answer: the kind of a key column of each kind, with text read
 /// whole in the session and without (`-`: not a key), the condition past a key of one and of two
 /// columns, whether a session's text is read whole, and whether the server drops a slow reader.

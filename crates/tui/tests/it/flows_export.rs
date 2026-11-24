@@ -1048,3 +1048,131 @@ fn a_mysql_tabs_first_result_is_exported_as_sql() {
         status(&h)
     );
 }
+
+/// A tab of a profile on `engine` (`postgres`, `mysql` or `mariadb`) that ran the query of table
+/// `shop.users`, its session saying character set `charset` (`None`: it said nothing), with a
+/// first page of its rows and more on the server; nothing sent since. The profile is `local-pg` or
+/// `local-my`.
+fn users_tab_on(engine: &str, charset: Option<&str>) -> Harness {
+    use datarig_core::driver::{SessionValues, ValueKind};
+    use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+    let family = engine != "postgres";
+    let driver = FakeDriver::default();
+    driver.mysql.store(family, std::sync::atomic::Ordering::SeqCst);
+    let mut p = datarig_core::profile::ConnectionConfig::test_db();
+    if family {
+        (p.name, p.driver) = ("local-my".into(), "mysql".into());
+    }
+    let cfg = datarig_core::config::Config { connections: vec![p], ..Default::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    let maria = Language::Sql(Dialect::MariaDb(MySqlMode::default()));
+    if engine == "mariadb" {
+        h.db(DbEvent::Language(maria));
+    }
+    h.db(DbEvent::Connected);
+    let table = TableRef { schema: "shop".into(), name: "users".into() };
+    let quote = if family { '`' } else { '"' };
+    h.app.tab_mut().doc.table = Some(table);
+    h.app.run(vec![format!("SELECT * FROM {quote}shop{quote}.{quote}users{quote}")]);
+    if let Some(charset) = charset {
+        let values = SessionValues { time_zone: "+00:00".into(), charset: charset.into() };
+        h.db(DbEvent::SessionValues(values));
+    }
+    let kinds = [ValueKind::Integer, ValueKind::Text, ValueKind::Text, ValueKind::Text, ValueKind::Json];
+    let columns: Vec<ColumnMeta> = ["id", "email", "name", "nickname", "profile"]
+        .iter()
+        .zip(kinds)
+        .map(|(n, k)| ColumnMeta::new(n.to_string(), "text".into(), k, None))
+        .collect();
+    let row = |i: usize| vec![Some(i.to_string()), Some(format!("u{i}@x")), Some("n".into()), None, None];
+    let id = h.app.tab().exec.query_id;
+    let rows = (0..10).map(row).collect();
+    // A MySQL session lets the statement go before the page, as when it keeps no rows open.
+    if family {
+        h.db(DbEvent::Released { id });
+    }
+    h.db(DbEvent::Page { id, columns: Some(columns), rows, more: true, elapsed: Duration::ZERO });
+    h.sent();
+    h
+}
+
+/// `shop.users` keyed by its text column `email` alone.
+fn users_keyed_by_email() -> datarig_core::driver::structure::TableStructure {
+    let mut s = users_structure();
+    s.primary_key = s.unique_constraints.first().cloned();
+    s
+}
+
+/// Export tab `h`'s table, on profile `profile`, to CSV file `path`, its structure `s`: the
+/// statement the export sends first, and whether it reads the table in chunks by its key; `None`
+/// when it asks first.
+fn first_chunk(
+    h: &mut Harness,
+    profile: &str,
+    path: &Path,
+    s: datarig_core::driver::structure::TableStructure,
+) -> Option<(String, bool, ExportSink)> {
+    h.command(&format!("export {}", path.display()));
+    h.meta_db(profile, DbEvent::Structure { schema: "shop".into(), table: "users".into(), result: Ok(Box::new(s)) });
+    if h.overlay_kind().is_some() {
+        return None;
+    }
+    let (_, sql, guard, sink) = wait_export(h);
+    Some((sql, guard == ExportGuard::Keyset, sink))
+}
+
+/// The profile [`users_tab_on`] makes for `engine`.
+fn profile_of(engine: &str) -> &'static str {
+    if engine == "postgres" { "local-pg" } else { "local-my" }
+}
+
+/// A table keyed by a text column is read in chunks by it only where the session's text is read
+/// whole: always on PostgreSQL, in a `utf8mb4` session only on MySQL and MariaDB (any other
+/// character set, or none said, reads it with one statement).
+#[test]
+fn a_text_key_is_read_in_chunks_only_where_the_sessions_text_is_whole() {
+    let dir = scratch("text-key");
+    let pg = "SELECT * FROM \"shop\".\"users\" ORDER BY \"email\" LIMIT 10000";
+    let family = "SELECT * FROM `shop`.`users` ORDER BY `email` LIMIT 10000";
+    let cases = [
+        ("postgres", None, Some(pg)),
+        ("postgres", Some("latin1"), Some(pg)),
+        ("mysql", Some("utf8mb4"), Some(family)),
+        ("mysql", Some("latin1"), None),
+        ("mysql", None, None),
+        ("mariadb", Some("utf8mb4"), Some(family)),
+        ("mariadb", Some("utf8mb3"), None),
+        ("mariadb", None, None),
+    ];
+    for (i, (engine, charset, chunked)) in cases.into_iter().enumerate() {
+        let mut h = users_tab_on(engine, charset);
+        let path = dir.join(format!("users-{i}.csv"));
+        let first = first_chunk(&mut h, profile_of(engine), &path, users_keyed_by_email());
+        let keyset = first.as_ref().filter(|(_, keyset, _)| *keyset).map(|(sql, _, _)| sql.as_str());
+        assert_eq!(keyset, chunked, "{engine} {charset:?}");
+    }
+}
+
+/// An export whose session is lost says why by the engine: MySQL and MariaDB drop a connection
+/// whose reader stays behind (`net_write_timeout`), PostgreSQL's session just ended.
+#[test]
+fn a_lost_session_says_why_by_the_engine() {
+    let dir = scratch("lost-engine");
+    let cases = [
+        ("postgres", "the tab's session ended"),
+        ("mysql", "the connection was lost while rows were written"),
+        ("mariadb", "the connection was lost while rows were written"),
+    ];
+    for (engine, why) in cases {
+        let mut h = users_tab_on(engine, Some("utf8mb4"));
+        let path = dir.join(format!("lost-{engine}.csv"));
+        let (_, keyset, _sink) =
+            first_chunk(&mut h, profile_of(engine), &path, users_structure()).expect("no question");
+        assert!(keyset, "{engine}");
+        let index = h.app.tabs.active_index();
+        h.tab_db(index, DbEvent::Lost { error: DbError::Closed });
+        pump_until(&mut h, "the end", done);
+        let s = status(&h);
+        assert!(s.starts_with("Export failed") && s.contains(why), "{engine}: {s}");
+    }
+}

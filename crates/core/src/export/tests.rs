@@ -92,12 +92,30 @@ fn markdown_escapes_pipes_and_line_breaks() {
 }
 
 #[test]
-fn sql_quotes_identifiers_and_literals() {
+fn only_plain_numbers_are_sql_numbers() {
     for n in ["0", "12", "-3", "1.5", ".5", "5.", "1e10", "-2.5E-3"] {
         assert!(sql_number(n), "{n}");
     }
     for n in ["", "-", ".", "NaN", "Infinity", "1,000", "1e", "0x1F", "+1", "1 2"] {
         assert!(!sql_number(n), "{n}");
+    }
+}
+
+/// An identity column's value is written with PostgreSQL's `OVERRIDING SYSTEM VALUE`, where the
+/// server needs it to take one; MySQL and MariaDB write the value alone.
+#[test]
+fn the_overriding_clause_is_written_where_the_engine_needs_it() {
+    for d in every_engine() {
+        for overriding in [true, false] {
+            let t = Target::Table { schema: "s", name: "t", columns: vec!["id"], overriding };
+            let sql = sql_insert(d, &t, &[col("id", Kind::Number)], &[vec![Some("7")]]);
+            let want = match (d, overriding) {
+                (Dialect::Postgres, true) => "INSERT INTO \"s\".\"t\" (\"id\") OVERRIDING SYSTEM VALUE VALUES (7);",
+                (Dialect::Postgres, false) => "INSERT INTO \"s\".\"t\" (\"id\") VALUES (7);",
+                (Dialect::MySql(_) | Dialect::MariaDb(_), _) => "INSERT INTO `s`.`t` (`id`) VALUES (7);",
+            };
+            assert_eq!(sql, want, "{d:?} {overriding}");
+        }
     }
 }
 
@@ -390,6 +408,13 @@ fn bytes_and_bits_are_written_as_text() {
     assert_eq!(Kind::from(ValueKind::Bit), Kind::Bit);
 }
 
+/// A dialect of each engine, in the order of [`crate::engine::EngineId::ALL`].
+fn every_engine() -> [Dialect; 3] {
+    let all = [PG, MY, Dialect::MariaDb(crate::sql::dialect::MySqlMode::default())];
+    assert_eq!(all.map(Dialect::engine), crate::engine::EngineId::ALL, "one dialect of each engine");
+    all
+}
+
 const MY: Dialect = Dialect::MySql(crate::sql::dialect::MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: false,
@@ -512,7 +537,7 @@ fn a_cell_past_the_last_column_is_refused() {
     use crate::driver::ValueKind as V;
     let cols = [sqlc("t", "varchar", V::Text), sqlc("n", "int", V::Integer)];
     let past = Err(Refused { column: String::new(), why: NotWhole::NotShownWhole });
-    for d in [PG, MY] {
+    for d in every_engine() {
         let cells = sql_cells(d, &cols, &session("+00:00", "utf8mb4"), None).unwrap();
         assert_eq!(cells.cell(1, "7").unwrap(), "7", "{d:?}");
         assert_eq!(cells.cell(2, "7"), past, "{d:?}");
