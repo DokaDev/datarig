@@ -10,6 +10,7 @@ use crate::common;
 
 use common::*;
 use datarig_core::driver::{ColumnMeta, DbCommand, DbError, DbEvent, ExportBatch, ExportGuard, ExportRead, ExportSink};
+use datarig_core::engine::EngineId;
 use datarig_core::policy::Policy;
 use datarig_i18n::Lang;
 use datarig_tui::app::overlay::{ConfirmAction, OverlayKind};
@@ -1093,6 +1094,14 @@ fn users_tab_on(engine: &str, charset: Option<&str>) -> Harness {
     }
     h.db(DbEvent::Page { id, columns: Some(columns), rows, more: true, elapsed: Duration::ZERO });
     h.sent();
+    let want = match engine {
+        "postgres" => EngineId::Postgres,
+        "mysql" => EngineId::MySql,
+        _ => EngineId::MariaDb,
+    };
+    let tab = h.app.tab().id;
+    assert_eq!(h.app.tab_language(tab).dialect().engine(), want, "the tab's rules are {engine}'s");
+    assert_eq!(h.app.tab().exec.prepared.language().dialect().engine(), want, "the tab's session is {engine}'s");
     h
 }
 
@@ -1104,21 +1113,20 @@ fn users_keyed_by_email() -> datarig_core::driver::structure::TableStructure {
 }
 
 /// Export tab `h`'s table, on profile `profile`, to CSV file `path`, its structure `s`: the
-/// statement the export sends first, and whether it reads the table in chunks by its key; `None`
-/// when it asks first.
+/// statement the export sends first and its guard; `None` when it asks first.
 fn first_chunk(
     h: &mut Harness,
     profile: &str,
     path: &Path,
     s: datarig_core::driver::structure::TableStructure,
-) -> Option<(String, bool, ExportSink)> {
+) -> Option<(String, ExportGuard, ExportSink)> {
     h.command(&format!("export {}", path.display()));
     h.meta_db(profile, DbEvent::Structure { schema: "shop".into(), table: "users".into(), result: Ok(Box::new(s)) });
     if h.overlay_kind().is_some() {
         return None;
     }
     let (_, sql, guard, sink) = wait_export(h);
-    Some((sql, guard == ExportGuard::Keyset, sink))
+    Some((sql, guard, sink))
 }
 
 /// The profile [`users_tab_on`] makes for `engine`.
@@ -1128,12 +1136,14 @@ fn profile_of(engine: &str) -> &'static str {
 
 /// A table keyed by a text column is read in chunks by it only where the session's text is read
 /// whole: always on PostgreSQL, in a `utf8mb4` session only on MySQL and MariaDB (any other
-/// character set, or none said, reads it with one statement).
+/// character set, or none said, runs the table's own statement again as a whole, without a
+/// question: the server is asked that it only reads).
 #[test]
 fn a_text_key_is_read_in_chunks_only_where_the_sessions_text_is_whole() {
     let dir = scratch("text-key");
     let pg = "SELECT * FROM \"shop\".\"users\" ORDER BY \"email\" LIMIT 10000";
     let family = "SELECT * FROM `shop`.`users` ORDER BY `email` LIMIT 10000";
+    let plain = "SELECT * FROM `shop`.`users`";
     let cases = [
         ("postgres", None, Some(pg)),
         ("postgres", Some("latin1"), Some(pg)),
@@ -1148,8 +1158,11 @@ fn a_text_key_is_read_in_chunks_only_where_the_sessions_text_is_whole() {
         let mut h = users_tab_on(engine, charset);
         let path = dir.join(format!("users-{i}.csv"));
         let first = first_chunk(&mut h, profile_of(engine), &path, users_keyed_by_email());
-        let keyset = first.as_ref().filter(|(_, keyset, _)| *keyset).map(|(sql, _, _)| sql.as_str());
-        assert_eq!(keyset, chunked, "{engine} {charset:?}");
+        // Not by its key: the table's own statement runs again as a whole, guarded by the
+        // server's answer that it only reads.
+        let (sql, guard) = chunked.map_or((plain, ExportGuard::Repeatable), |sql| (sql, ExportGuard::Keyset));
+        let (sent, sent_guard, _) = first.expect("an export of the table's own statement is not asked");
+        assert_eq!((sent.as_str(), sent_guard), (sql, guard), "{engine} {charset:?}");
     }
 }
 
@@ -1166,9 +1179,8 @@ fn a_lost_session_says_why_by_the_engine() {
     for (engine, why) in cases {
         let mut h = users_tab_on(engine, Some("utf8mb4"));
         let path = dir.join(format!("lost-{engine}.csv"));
-        let (_, keyset, _sink) =
-            first_chunk(&mut h, profile_of(engine), &path, users_structure()).expect("no question");
-        assert!(keyset, "{engine}");
+        let (_, guard, _sink) = first_chunk(&mut h, profile_of(engine), &path, users_structure()).expect("no question");
+        assert_eq!(guard, ExportGuard::Keyset, "{engine}");
         let index = h.app.tabs.active_index();
         h.tab_db(index, DbEvent::Lost { error: DbError::Closed });
         pump_until(&mut h, "the end", done);
