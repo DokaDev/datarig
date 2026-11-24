@@ -1599,7 +1599,7 @@ impl App {
                 self.i18n.msg(&Msg::ExportWhyTargetAppeared { path: p.display().to_string() }).to_string()
             }
             Failure::SchemaChanged => self.i18n.label(Label::ExportWhySchemaChanged).to_string(),
-            Failure::NotWhole(r) => self.i18n.msg(&self.not_whole(r).msg).to_string(),
+            Failure::NotWhole(r) => self.i18n.msg(&self.export_why_not_whole(r)).to_string(),
             Failure::SessionEnded => self.i18n.label(Label::ExportWhySessionEnded).to_string(),
             Failure::MySqlLost => self.i18n.label(Label::ExportWhyMysqlLost).to_string(),
             Failure::Stale => self.i18n.label(Label::ExportStale).to_string(),
@@ -1700,6 +1700,29 @@ impl App {
         self.export_spec(cols, req, read_in, db).err()
     }
 
+    /// Why an SQL export refuses a column of the result, as a notice: the words of an export.
+    fn export_not_whole(&self, r: &Refused) -> Notice {
+        let (column, reason) = (r.column.clone(), self.not_whole_reason(&r.why));
+        let msg = match r.why {
+            core_export::NotWhole::NoOffsetLiteral(_) => Msg::ExportSqlNoOffset { column, reason },
+            core_export::NotWhole::ReadElsewhere => {
+                Msg::ExportSqlRefused { reason: self.i18n.label(Label::ExportWhyReadElsewhere).to_string() }
+            }
+            _ => Msg::ExportSqlNotWhole { column, reason },
+        };
+        Notice::new(msg, Level::Warning)
+    }
+
+    /// Why an SQL export stopped at a value, as the reason of its failure.
+    fn export_why_not_whole(&self, r: &Refused) -> Msg {
+        let (column, reason) = (r.column.clone(), self.not_whole_reason(&r.why));
+        match r.why {
+            core_export::NotWhole::NoOffsetLiteral(_) => Msg::ExportWhyNoOffset { column, reason },
+            core_export::NotWhole::ReadElsewhere => Msg::Label(Label::ExportWhyReadElsewhere),
+            _ => Msg::ExportWhyNotWhole { column, reason },
+        }
+    }
+
     /// `db`: the rows are read again on the tab's session, in its dialect and by what its server
     /// reads now; else the rows held are written by the rules of the engine that read them, and
     /// refused for SQL once the tab is on another engine.
@@ -1712,7 +1735,8 @@ impl App {
         let d = self.tab_dialect(t.id);
         let as_sql = matches!(req.format, ExportFormat::SqlInsert | ExportFormat::SqlUpdate);
         if as_sql && !db && rs.read_as.engine() != d.engine() {
-            return Err(self.not_whole(&Refused { column: String::new(), why: core_export::NotWhole::ReadElsewhere }));
+            let reason = self.i18n.label(Label::ExportWhyReadElsewhere).to_string();
+            return Err(Notice::new(Msg::ExportSqlRefused { reason }, Level::Warning));
         }
         let offsets = match (db, t.exec.current_facts()) {
             (false, _) => rs.offsets.clone(),
@@ -1745,7 +1769,7 @@ impl App {
                 let plan = insert_source(d, keys, &origins, &names, t.shown_sql())
                     .map_err(|why| Notice::new(Msg::CopyInsertRefused { reason: self.why(&why) }, Level::Warning))?;
                 let InsertPlan { table, columns: written, overriding, .. } = plan;
-                let cells = sql_cells(true).map_err(|r| self.not_whole(&r))?;
+                let cells = sql_cells(true).map_err(|r| self.export_not_whole(&r))?;
                 let target = SqlTarget::Insert {
                     dialect: d,
                     schema: table.schema.clone(),
@@ -1759,7 +1783,7 @@ impl App {
                 let plan = update_source(d, keys, &origins, &names, t.shown_sql()).map_err(|why| {
                     Notice::new(Msg::CopyUpdateRefused { reason: self.why_not_update(&why) }, Level::Warning)
                 })?;
-                let cells = sql_cells(false).map_err(|r| self.not_whole(&r))?;
+                let cells = sql_cells(false).map_err(|r| self.export_not_whole(&r))?;
                 let own = |v: &[(usize, &str)]| v.iter().map(|(i, n)| (*i, n.to_string())).collect();
                 let target = SqlTarget::Update {
                     dialect: d,

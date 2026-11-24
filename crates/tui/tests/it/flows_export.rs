@@ -1307,11 +1307,12 @@ fn export_again(h: &mut Harness, command: &str, columns: Vec<ColumnMeta>, rows: 
 }
 
 const ENGINE_WORDS: &str = "This server does not read a time zone offset in a TIMESTAMP value (MariaDB, MySQL before \
-                            8.0.19), so it cannot be copied or exported as SQL.";
+                            8.0.19), so it cannot be copied or exported as SQL. Export as CSV or JSON still works.";
 const NOT_YET_WORDS: &str = "The server version was not known yet when these rows were read, so a time with a time \
                              zone offset cannot be written safely as SQL.";
 const UNKNOWN_WORDS: &str = "The server version is not known, so a time with a time zone offset cannot be written \
-                             safely as SQL.";
+                             safely as SQL. Export as CSV or JSON still works, and so does copying from a session \
+                             whose server version is known.";
 
 /// An SQL file export writes a `TIMESTAMP` with its offset only where the server that read it
 /// reads one: for MariaDB, MySQL 8.0.18 and a MySQL whose version is not known, an `INSERT` or an
@@ -1346,7 +1347,7 @@ fn a_timestamp_is_exported_as_sql_only_where_the_server_reads_its_offset() {
                 _ => export_again(&mut h, &command, item_columns(&cols), text_rows(&[&[Some("1"), at, at]])),
             }
             let s = status(&h);
-            assert!(s.starts_with("Export failed") && s.contains(words), "{case}: {s}");
+            assert_eq!(s, format!("Export failed: column “at” is a TIMESTAMP. {words}"), "{case}");
             assert!(!path.exists() && !partial_of(&path).exists(), "{case}: no file");
             // A later row: the rows before it are in the partial file. A generated TIMESTAMP is
             // not in the INSERT, nor in the UPDATE's SET: not judged.
@@ -1503,8 +1504,40 @@ fn an_sql_export_of_rows_read_on_another_engine_is_refused() {
     h.app.transient = None;
     h.command(&format!("export fetched {}", held.display()));
     let flash = h.app.transient.as_ref().map(|(n, _)| n.render(&h.app.i18n).to_string()).unwrap_or_default();
-    assert!(flash.contains("These rows were read on another database engine than the one the tab uses now"), "{flash}");
+    assert_eq!(
+        flash,
+        "Not exported as SQL: these rows were read on another database engine than the one the tab uses now; run the \
+         query again"
+    );
     assert!(!held.exists());
+    // The export dialog strikes SQL INSERT and UPDATE with the same reason.
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.keys(" re");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Export), "the dialog opened");
+    use datarig_tui::app::export_form::ExportField;
+    let tab_to = |h: &mut Harness, field: ExportField| {
+        for _ in 0..12 {
+            if h.app.overlays.export_form().expect("the dialog").focus == field {
+                return;
+            }
+            h.key(KeyCode::Tab);
+        }
+        panic!("no field {field:?}");
+    };
+    // The rows held (every row read again is written in the tab's dialect).
+    tab_to(&mut h, ExportField::Scope);
+    h.key(KeyCode::Right);
+    assert_eq!(h.app.overlays.export_form().unwrap().scope, datarig_tui::app::export::ExportScope::Fetched);
+    tab_to(&mut h, ExportField::Format);
+    h.key(KeyCode::Enter);
+    let screen = h.screen(240, 45);
+    let reason = "these rows were read on another database engine";
+    for format in ["SQL INSERT", "SQL UPDATE"] {
+        assert!(screen.lines().any(|l| l.contains(format) && l.contains(reason)), "{format}: {screen}");
+    }
+    h.key(KeyCode::Esc);
+    h.key(KeyCode::Esc);
+    assert_eq!(h.overlay_kind(), None);
     // As CSV they are still exported.
     let csv = dir.join("held.csv");
     h.command(&format!("export fetched {}", csv.display()));

@@ -660,7 +660,7 @@ fn copy_in(h: &mut Harness) {
 
 const ENGINE_WORDS: &str = "Not copied as SQL: column “at” is a TIMESTAMP. This server does not read a time zone \
                             offset in a TIMESTAMP value (MariaDB, MySQL before 8.0.19), so it cannot be copied or \
-                            exported as SQL.";
+                            exported as SQL. Export as CSV or JSON still works.";
 const NOT_YET_WORDS: &str = "Not copied as SQL: column “at” is a TIMESTAMP. The server version was not known yet \
                              when these rows were read, so a time with a time zone offset cannot be written \
                              safely as SQL. Run the query again, or export as CSV or JSON.";

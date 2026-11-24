@@ -143,7 +143,7 @@ fn the_offset_literal_refusals_read_in_both_languages() {
             Label::CopySqlWhyNoOffsetLiteral,
             "copy.sql_why.no_offset_literal",
             "This server does not read a time zone offset in a TIMESTAMP value (MariaDB, MySQL before 8.0.19), so \
-             it cannot be copied or exported as SQL.",
+             it cannot be copied or exported as SQL. Export as CSV or JSON still works.",
         ),
     ];
     for (label, key, english) in words {
