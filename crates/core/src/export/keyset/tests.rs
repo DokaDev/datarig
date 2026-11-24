@@ -1,4 +1,5 @@
 use super::*;
+use crate::driver::ValueKind;
 use crate::driver::structure::{ColumnFill, Index, KeyConstraint, RelationKind, StructureColumn};
 
 const PG: Dialect = Dialect::Postgres;

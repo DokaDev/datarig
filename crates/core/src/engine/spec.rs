@@ -1,8 +1,10 @@
 //! What is fixed per engine, known without a connection: one [`EngineSpec`] per engine.
 
-use super::{CountInTx, EngineId, OpenVerdict, ReadOnlyProof, ServerFacts, Support, TxStatement, TxVerdict};
-use crate::driver::{Hierarchy, SessionRole, ValueKind};
+use super::{CountInTx, EngineId, Fact, OpenVerdict, ReadOnlyProof, ServerFacts, Support, TxStatement, TxVerdict};
+use crate::driver::{ColumnMeta, Hierarchy, ReadIn, SessionRole, SessionValues, ValueKind};
 use crate::edit::{Invalid, TableColumn};
+use crate::export::keyset::NotKeyset;
+use crate::export::{Kind, Refused, SqlCells, SqlColumn};
 use crate::profile::dsn::Scheme;
 use crate::sql::dialect::{Dialect, DollarQuotes};
 use crate::sql::risk::Classifier;
@@ -49,6 +51,8 @@ pub struct EngineSpec {
     pub cancel: &'static dyn CancelRules,
     /// How its values are typed and shown.
     pub values: &'static dyn ValueRules,
+    /// How its tables are read for an export.
+    pub export: Fact<&'static dyn ExportRules>,
 }
 
 /// How an engine's text is read on a server.
@@ -138,6 +142,42 @@ pub trait ValueRules: Sync {
 
     /// What the text of a bytes value starts with in a result, before its hexadecimal digits.
     fn bytes_shown_prefix(&self) -> &'static str;
+
+    /// Value `v` (`None`: NULL) of a column of `kind` as an SQL literal: NULL, a number or a
+    /// boolean bare, anything else a literal the server reads as the value.
+    fn literal(&self, kind: Kind, v: Option<&str>) -> String;
+
+    /// How the columns `columns` of a result are copied as SQL, or the first one that cannot be:
+    /// `read_in` the session's values when the result was read, `server_zone` the server's own
+    /// time zone.
+    fn sql_cells(
+        &self,
+        columns: &[SqlColumn],
+        read_in: &ReadIn,
+        server_zone: Option<&str>,
+    ) -> Result<SqlCells, Refused>;
+
+    /// The clause an `INSERT` writes after its column list when it writes the values of an
+    /// identity column the server generates (`overriding`): empty where none is needed.
+    fn insert_overriding(&self, overriding: bool) -> &'static str;
+}
+
+/// How an engine's tables are read for an export.
+pub trait ExportRules: Sync {
+    /// The kind of key column `c` as a keyset literal is written, or why it cannot be one.
+    /// `text_ok`: text read in the session is the text ([`ExportRules::text_read_whole`]).
+    fn key_kind(&self, c: &ColumnMeta, text_ok: bool) -> Result<Kind, NotKeyset>;
+
+    /// The condition that reads the rows past the key whose columns are `names` (quoted) and
+    /// whose values in the last row read are the literals `values` (of `kinds`); `None` when a
+    /// literal would not compare back exactly.
+    fn after(&self, names: &[String], values: &[String], kinds: &[Kind]) -> Option<String>;
+
+    /// Whether text read in a session of `values` (`None`: not known) is the text as stored.
+    fn text_read_whole(&self, values: Option<&SessionValues>) -> bool;
+
+    /// Whether the server ends a session that reads a result more slowly than it sends it.
+    fn drops_slow_readers(&self) -> bool;
 }
 
 /// Whether a value typed into a cell is a value of its column's type, in the form the result

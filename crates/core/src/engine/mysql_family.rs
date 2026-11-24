@@ -2,13 +2,15 @@
 //! the rules the two engines share.
 
 use super::{
-    CancelRules, CountInTx, EngineFacts, EngineId, Fact, FilterCalls, InputRules, OpenVerdict, READ_ONLY_NOT_PROVEN,
-    ReadOnlyProof, ServerFacts, SessionRules, Support, TextRules, TxAsk, TxNote, TxRefusal, TxRules, TxStatement,
-    TxVerdict, ValueRules, Version, Why,
+    CancelRules, CountInTx, EngineFacts, EngineId, ExportRules, Fact, FilterCalls, InputRules, OpenVerdict,
+    READ_ONLY_NOT_PROVEN, ReadOnlyProof, ServerFacts, SessionRules, Support, TextRules, TxAsk, TxNote, TxRefusal,
+    TxRules, TxStatement, TxVerdict, ValueRules, Version, Why,
 };
-use crate::driver::{SessionRole, ValueKind};
+use crate::driver::{ColumnMeta, ReadIn, SessionRole, SessionValues, ValueKind};
 use crate::edit::input::{self, TypeName};
 use crate::edit::{BitsForm, BytesForm, Invalid, TableColumn};
+use crate::export::keyset::{NotKeyset, expanded};
+use crate::export::{self, Kind, NotWhole, Refused, Rule, SqlCells, SqlColumn, fixed_offset};
 use crate::sql::dialect::{Dialect, DollarQuotes, Language};
 use crate::sql::risk::mysql::Judged;
 use crate::sql::risk::{Class, Classifier, Danger};
@@ -310,6 +312,116 @@ impl ValueRules for FamilyValues {
     /// `0x`.
     fn bytes_shown_prefix(&self) -> &'static str {
         "0x"
+    }
+
+    /// Bytes shown as `0x…` and bits as `b'…'` (every byte, every bit) as their hexadecimal and
+    /// bit literals, which are the value itself (a string literal of that text would be the
+    /// text); any other value as a string that reads the same whatever the session's
+    /// `NO_BACKSLASH_ESCAPES`.
+    fn literal(&self, kind: Kind, v: Option<&str>) -> String {
+        match v {
+            None => "NULL".to_string(),
+            Some(v) if export::bare(kind, v) => v.to_string(),
+            Some(v) if kind == Kind::Bytes && export::mysql_hex(v) => format!("X'{}'", &v[2..]),
+            Some(v) if kind == Kind::Bit && export::mysql_bits(v) => v.to_string(),
+            Some(v) => export::mysql_string(v),
+        }
+    }
+
+    /// A `FLOAT` is refused (the server sends it rounded); text read in a character set that is
+    /// not UTF-8 is refused; a `TIMESTAMP` is written with the offset of the time zone it was read
+    /// in when that is fixed ([`fixed_offset`]), and refused otherwise; a `TIMESTAMP` or a text
+    /// whose values are not known, or changed between the result's pages, is refused; bytes and
+    /// bits must be in the driver's form; an `AUTO_INCREMENT` value of 0 is refused (checked per
+    /// value, [`SqlCells::cell`]).
+    fn sql_cells(
+        &self,
+        columns: &[SqlColumn],
+        read_in: &ReadIn,
+        server_zone: Option<&str>,
+    ) -> Result<SqlCells, Refused> {
+        use crate::driver::ValueKind as V;
+        let names = columns.iter().map(|c| c.name.to_string()).collect();
+        let refused = |c: &SqlColumn, why| Refused { column: c.name.to_string(), why };
+        // Only `utf8mb4` is every character (`utf8mb3` turns an emoji into `?`).
+        let utf8 = |cs: &str| cs.eq_ignore_ascii_case("utf8mb4");
+        let mut rules = Vec::with_capacity(columns.len());
+        for c in columns {
+            let rule = match c.kind {
+                V::Float if c.type_name.starts_with("float") => return Err(refused(c, NotWhole::Float)),
+                V::Bytes | V::Bit => Rule::Shown,
+                V::TimestampTz => match read_in {
+                    ReadIn::Values(s) => match fixed_offset(&s.time_zone, server_zone) {
+                        Some(offset) => Rule::Timestamp(offset),
+                        None => return Err(refused(c, NotWhole::TimeZone(s.time_zone.clone()))),
+                    },
+                    ReadIn::Unknown => return Err(refused(c, NotWhole::SessionUnknown)),
+                    ReadIn::Changed => return Err(refused(c, NotWhole::SessionChanged)),
+                },
+                V::Text | V::Json | V::Other => match read_in {
+                    ReadIn::Values(s) if !utf8(&s.charset) => Rule::Refuse(NotWhole::Charset(s.charset.clone())),
+                    ReadIn::Unknown => Rule::Refuse(NotWhole::SessionUnknown),
+                    ReadIn::Changed => Rule::Refuse(NotWhole::SessionChanged),
+                    _ if c.auto_increment => Rule::AutoIncrement,
+                    _ => Rule::Plain,
+                },
+                _ if c.auto_increment => Rule::AutoIncrement,
+                _ => Rule::Plain,
+            };
+            rules.push(rule);
+        }
+        Ok(SqlCells { names, rules })
+    }
+
+    /// None: the family's identity (`AUTO_INCREMENT`) takes a written value as it is.
+    fn insert_overriding(&self, _: bool) -> &'static str {
+        ""
+    }
+}
+
+/// How MySQL's and MariaDB's tables are read for an export.
+pub(super) struct FamilyExport;
+
+impl ExportRules for FamilyExport {
+    /// Whole and decimal numbers (not `money`), text read whole but not an `ENUM` or a `SET`
+    /// (they sort by their members' numbers, not as their text compares), dates and times
+    /// without a time zone (a `TIMESTAMP`'s hour a clock goes back is two instants), booleans and
+    /// bytes.
+    fn key_kind(&self, c: &ColumnMeta, text_ok: bool) -> Result<Kind, NotKeyset> {
+        let refused = || NotKeyset::Kind(c.name.clone());
+        match c.kind {
+            ValueKind::Integer => Ok(Kind::Number),
+            ValueKind::Decimal if c.type_name != "money" => Ok(Kind::Number),
+            ValueKind::Text if c.type_name.eq_ignore_ascii_case("enum") || c.type_name.eq_ignore_ascii_case("set") => {
+                Err(refused())
+            }
+            ValueKind::Text if text_ok => Ok(Kind::Text),
+            ValueKind::Date | ValueKind::Timestamp => Ok(Kind::Text),
+            ValueKind::Bool => Ok(Kind::Bool),
+            ValueKind::Bytes => Ok(Kind::Bytes),
+            _ => Err(refused()),
+        }
+    }
+
+    /// The row comparison written out (the server does not read an index range for a row
+    /// comparison); `None` when a bytes value was not shown as `0x…`, as it would be compared as
+    /// its text.
+    fn after(&self, names: &[String], values: &[String], kinds: &[Kind]) -> Option<String> {
+        if kinds.iter().zip(values).any(|(k, v)| *k == Kind::Bytes && !v.starts_with("X'")) {
+            return None;
+        }
+        Some(expanded(names, values))
+    }
+
+    /// Only in a session whose results are `utf8mb4`, the one character set that is every
+    /// character.
+    fn text_read_whole(&self, values: Option<&SessionValues>) -> bool {
+        values.is_some_and(|v| v.charset.eq_ignore_ascii_case("utf8mb4"))
+    }
+
+    /// The server ends a session that does not read what it sends within `net_write_timeout`.
+    fn drops_slow_readers(&self) -> bool {
+        true
     }
 }
 

@@ -41,6 +41,7 @@ use super::*;
 use datarig_core::driver::keys::{Generated, InsertPlan, insert_source, update_source};
 use datarig_core::driver::structure::TableStructure;
 use datarig_core::driver::{Cell, ColumnMeta, DbError, ExportBatch, ExportGuard, ExportRead, ReadIn, ValueKind};
+use datarig_core::engine::Fact;
 use datarig_core::export::keyset::{self, Keyset};
 use datarig_core::export::stream::{BadDelimited, Delimited, Quote, RowSink, TextWriter};
 use datarig_core::export::{self as core_export, Kind, Refused, SqlCells};
@@ -870,12 +871,8 @@ impl App {
     pub(super) fn export_keyset(&self, id: TabId, schema: &str, table: &str, s: &TableStructure) -> Option<Keyset> {
         let t = self.tabs.get(id)?;
         let d = self.tab_dialect(id);
-        let text_ok = match d {
-            Dialect::Postgres => true,
-            Dialect::MySql(_) | Dialect::MariaDb(_) => {
-                t.exec.values.as_ref().is_some_and(|v| v.charset.eq_ignore_ascii_case("utf8mb4"))
-            }
-        };
+        let Fact::Known(rules) = d.engine().spec().export else { return None };
+        let text_ok = rules.text_read_whole(t.exec.values.as_ref());
         let Results::Rows(rs) = &t.results else { return None };
         let metas: Vec<ColumnMeta> = rs.columns.iter().map(|c| c.meta.clone()).collect();
         let table_columns: Vec<String> = s.columns.iter().map(|c| c.name.clone()).collect();
@@ -1445,8 +1442,11 @@ impl App {
                 }
                 _ => {
                     let lost = self.tabs.get(id).is_some_and(|t| t.exec.state == SessionState::Lost);
-                    let mysql = matches!(self.tab_dialect(id), Dialect::MySql(_) | Dialect::MariaDb(_));
-                    let why = if lost && mysql { Failure::MySqlLost } else { Failure::SessionEnded };
+                    let drops = match self.tab_dialect(id).engine().spec().export {
+                        Fact::Known(rules) => rules.drops_slow_readers(),
+                        Fact::No(_) | Fact::Unknown(_) => false,
+                    };
+                    let why = if lost && drops { Failure::MySqlLost } else { Failure::SessionEnded };
                     let Some(j) = self.exports.jobs.get_mut(&id) else { continue };
                     if let Some(ctl) = j.ctl.take() {
                         let _ = ctl.send(Ctl::Fail(why));

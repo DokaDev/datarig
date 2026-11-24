@@ -1,10 +1,10 @@
 //! MySQL's row of the registry.
 
 use super::mysql_family::{
-    FamilyCancel, FamilySession, FamilyText, FamilyTx, FamilyValues, family_classifier, family_filter_calls,
-    family_read_only_calls,
+    FamilyCancel, FamilyExport, FamilySession, FamilyText, FamilyTx, FamilyValues, family_classifier,
+    family_filter_calls, family_read_only_calls,
 };
-use super::{EngineId, EngineSpec, FilterCalls, MYSQL_FAMILY, RiskRules, Support, Transport};
+use super::{EngineId, EngineSpec, Fact, FilterCalls, MYSQL_FAMILY, RiskRules, Support, Transport};
 use crate::driver::Hierarchy;
 use crate::profile::dsn::Scheme;
 use crate::sql::dialect::Dialect;
@@ -27,6 +27,7 @@ pub static SPEC: EngineSpec = EngineSpec {
     session: &FamilySession,
     cancel: &FamilyCancel,
     values: &FamilyValues,
+    export: Fact::Known(&FamilyExport),
 };
 
 /// How MySQL's statements are judged: the family's classifier of the text's dialect

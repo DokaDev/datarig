@@ -9,7 +9,6 @@
 "crates/bench/src/editor" = 1
 "crates/bench/src/export" = 1
 "crates/bench/src/monitor" = 1
-"crates/core/src/export" = 20
 "crates/core/src/monitor" = 14
 "crates/core/src/profile" = 2
 "crates/core/src/query" = 98
@@ -21,7 +20,7 @@
 "crates/drivers/postgres/src/connect" = 0
 "crates/drivers/postgres/src/monitor" = 2
 "crates/drivers/postgres/src/query" = 1
-"crates/tui/src/app" = 40
+"crates/tui/src/app" = 35
 "crates/tui/src/app/idle" = 0
 "crates/tui/src/app/pages" = 0
 "crates/tui/src/app/tx" = 0
@@ -48,11 +47,10 @@
 
 # `matches!`, `==`, `!=`, `if let` and `let .. else` on an engine variant (seam modules included).
 [boolean_tests]
-"crates/core/src/export" = 6
 "crates/core/src/monitor" = 4
 "crates/core/src/query" = 24
 "crates/core/src/sql" = 3
-"crates/tui/src/app" = 14
+"crates/tui/src/app" = 13
 "crates/tui/src/app/idle" = 0
 "crates/tui/src/app/pages" = 0
 "crates/tui/src/app/tx" = 0

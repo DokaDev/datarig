@@ -693,3 +693,9 @@ fn column_settings_only_where_the_relation_kind_takes_them() {
     assert_eq!(settings(RelationKind::ForeignTable), [all[0], all[2], all[3]]);
     assert_eq!(settings(RelationKind::View), Vec::<String>::new());
 }
+
+#[test]
+fn strings_are_written_whatever_standard_conforming_strings_is() {
+    assert_eq!(quote_literal("it's"), "'it''s'");
+    assert_eq!(quote_literal("back\\slash"), "E'back\\\\slash'", "whatever standard_conforming_strings is");
+}
