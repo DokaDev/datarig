@@ -748,6 +748,51 @@ fn a_timestamp_is_not_copied_as_sql_for_a_server_that_reads_no_offset() {
     assert_eq!(clip.last().as_deref(), Some("('2024-10-27 00:30:00+00:00')"));
 }
 
+/// What an Aurora MySQL 3 session says it is, as the driver reads it: a MySQL 8.0.28 greeting
+/// and the version line `8.0.mysql_aurora.3.04.0`, whose version is not known.
+fn aurora_3() -> Vec<DbEvent> {
+    use datarig_core::engine::{EngineFacts, EngineId, Fact, MyFacts, ServerFacts, Topology, Version, Why};
+    let facts = ServerFacts {
+        version: Fact::Unknown(Why::VersionUnknown),
+        version_text: Some("8.0.mysql_aurora.3.04.0".into()),
+        provider: Fact::Unknown(Why::NotChecked),
+        topology: Fact::Known(Topology::Direct),
+        detail: EngineFacts::MySql(MyFacts::new(Version::new(8, 0, 28), EngineId::MySql)),
+    };
+    vec![DbEvent::Server(std::sync::Arc::new(facts))]
+}
+
+/// An Aurora MySQL 3 session reads a `TIMESTAMP` with an offset: its result is copied as SQL
+/// with the offset, though its version is not known.
+#[test]
+fn an_aurora_3_result_copies_its_timestamps_as_sql() {
+    let mut h = mysql();
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Keys(Ok(items_keys())));
+    h.tab_db(0, session("+00:00", "utf8mb4"));
+    items_rows(&mut h, aurora_3(), &["id", "at"], &[&[Some("7"), Some("2024-10-27 00:30:00")]]);
+    let facts = h.app.tab().exec.current_facts().cloned().expect("facts");
+    assert_eq!(facts.version, datarig_core::engine::Fact::Unknown(datarig_core::engine::Why::VersionUnknown));
+    h.command("copy insert");
+    assert_eq!(
+        clip.last().as_deref(),
+        Some("INSERT INTO `shop`.`Items` (`id`, `at`) VALUES (7, '2024-10-27 00:30:00+00:00');"),
+        "{}",
+        flashed(&h)
+    );
+    h.command("copy update");
+    assert_eq!(
+        clip.last().as_deref(),
+        Some("UPDATE `shop`.`Items` SET `at` = '2024-10-27 00:30:00+00:00' WHERE `id` = 7;"),
+        "{}",
+        flashed(&h)
+    );
+    items_rows(&mut h, Vec::new(), &["at"], &[&[Some("2024-10-27 00:30:00")]]);
+    copy_in(&mut h);
+    assert_eq!(clip.last().as_deref(), Some("('2024-10-27 00:30:00+00:00')"), "{}", flashed(&h));
+}
+
 /// Rows are judged as SQL by the engine that read them: rows read on MariaDB, in a tab moved
 /// since to a PostgreSQL profile, are not copied as SQL by PostgreSQL's rules.
 #[test]

@@ -345,6 +345,69 @@ fn dollar_quotes_follow_the_facts() {
     assert_eq!(EngineId::Postgres.spec().text.dollar_quotes(&pg), Read);
 }
 
+/// The facts of a MySQL-family session whose greeting names `greeting` at `handshake` and whose
+/// `VERSION()` line is `line`, as the driver judges them: the engine is the one the line names;
+/// the version is the greeting's number when the line names the greeting's engine and starts
+/// with it, else not known (the engines disagree, the numbers differ, or the line has none).
+fn judged(greeting: EngineId, handshake: Version, line: &str) -> ServerFacts {
+    let mariadb = mysql_family::line_names_mariadb(line);
+    let version = match Version::parse(line) {
+        _ if mariadb != (greeting == EngineId::MariaDb) => Fact::Unknown(Why::EnginesDisagree),
+        Some(v) if v == handshake => Fact::Known(v),
+        Some(_) => Fact::Unknown(Why::VersionsDisagree),
+        None => Fact::Unknown(Why::VersionUnknown),
+    };
+    let topology = match greeting == EngineId::MariaDb {
+        m if m != mariadb => Fact::Unknown(Why::EnginesDisagree),
+        _ => Fact::Known(Topology::Direct),
+    };
+    ServerFacts { version, ..reported(greeting, handshake, Some(line), topology) }
+}
+
+/// An Aurora MySQL 3 session (a MySQL 8.0 greeting and a `VERSION()` line of exactly the form
+/// `8.0.mysql_aurora.3.<n>(.<n>)*`) writes a `TIMESTAMP` with its offset: every Aurora MySQL 3
+/// is built on MySQL 8.0.23 or later. Any other line, or that line behind another greeting,
+/// stays not known and refused. The version itself stays not known in every case, so no other
+/// rule that asks the version moves.
+#[test]
+fn an_aurora_3_session_reads_offset_literals() {
+    let my = EngineId::MySql;
+    let v = Version::new;
+    // Each greeting and line, and whether the offset is read.
+    let table: [(EngineId, Version, &str, bool); 14] = [
+        (my, v(8, 0, 28), "8.0.mysql_aurora.3.04.0", true),
+        (my, v(8, 0, 23), "8.0.mysql_aurora.3.01.0", true),
+        // Aurora MySQL 2 is built on MySQL 5.7.
+        (my, v(5, 7, 12), "5.7.mysql_aurora.2.11.1", false),
+        // An Aurora MySQL 3 line behind a greeting of another version.
+        (my, v(8, 4, 6), "8.0.mysql_aurora.3.04.0", false),
+        (my, v(5, 7, 44), "8.0.mysql_aurora.3.04.0", false),
+        // Lines of another form.
+        (my, v(8, 0, 28), "8.0.mysql_aurora.", false),
+        (my, v(8, 0, 28), "8.0.mysql_aurora..1", false),
+        (my, v(8, 0, 28), "8.0.mysql_aurora.3", false),
+        (my, v(8, 0, 28), "8.0.mysql_aurora.3.", false),
+        (my, v(8, 0, 28), "8.0.mysql_aurora.3..0", false),
+        (my, v(8, 0, 28), "8.0.mysql_aurora.3.04.0a", false),
+        (my, v(8, 0, 28), "8.0.mysql_aurora.x", false),
+        (my, v(8, 0, 28), "8.0.mysql_aurora.4.0.0", false),
+        // A MariaDB greeting with an Aurora MySQL 3 line: the engines disagree.
+        (EngineId::MariaDb, v(11, 4, 13), "8.0.mysql_aurora.3.04.0", false),
+    ];
+    for (greeting, handshake, line, read) in table {
+        let f = judged(greeting, handshake, line);
+        let why = match greeting {
+            EngineId::MariaDb => Why::EnginesDisagree,
+            EngineId::MySql | EngineId::Postgres => Why::VersionUnknown,
+        };
+        assert_eq!(f.version, Fact::Unknown(why.clone()), "{greeting:?} {handshake:?}, line {line:?}");
+        assert_eq!(f.engine(), EngineId::MySql, "{line:?}");
+        let want = if read { Fact::Known(()) } else { Fact::Unknown(why) };
+        let got = f.engine().spec().values.zoned_literal(&f);
+        assert_eq!(got, want, "{greeting:?} {handshake:?}, line {line:?}");
+    }
+}
+
 #[test]
 fn rules_answer_the_language_before_and_after_the_server_said() {
     use crate::sql::dialect::{Dialect, Language, MySqlMode};

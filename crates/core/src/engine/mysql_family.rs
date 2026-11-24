@@ -2,7 +2,7 @@
 //! the rules the two engines share.
 
 use super::{
-    CancelRules, CountInTx, EngineFacts, EngineId, ExportRules, Fact, FilterCalls, InputRules, OpenVerdict,
+    CancelRules, CountInTx, EngineFacts, EngineId, ExportRules, Fact, FilterCalls, InputRules, MyFacts, OpenVerdict,
     READ_ONLY_NOT_PROVEN, ReadOnlyProof, ServerFacts, SessionRules, Support, TextRules, TxAsk, TxNote, TxRefusal,
     TxRules, TxStatement, TxVerdict, ValueRules, Version, Why,
 };
@@ -384,16 +384,39 @@ impl ValueRules for FamilyValues {
 
     /// From [`FamilyValues::offsets_since`] on, on a server of the engine whose version is
     /// known; never on a server the facts name as another engine. A version that is not known
-    /// is not taken as new enough.
+    /// is not taken as new enough, except on Aurora MySQL 3 ([`aurora_3`]): every Aurora MySQL 3
+    /// is newer than the first MySQL it is built on, 8.0.23.
     fn zoned_literal(&self, f: &ServerFacts) -> Support {
         let Some(since) = self.offsets_since else { return Fact::No(Why::NotOnEngine) };
         match (&f.detail, &f.version) {
             (EngineFacts::MySql(_), Fact::Known(v)) if *v >= since => Fact::Known(()),
             (EngineFacts::MySql(_), Fact::Known(_)) => Fact::No(Why::VersionTooOld { needed: since }),
+            (EngineFacts::MySql(my), Fact::Unknown(Why::VersionUnknown))
+                if AURORA_3_FROM >= since && aurora_3(my, f.version_text.as_deref()) =>
+            {
+                Fact::Known(())
+            }
             (EngineFacts::MySql(_), Fact::No(why) | Fact::Unknown(why)) => Fact::Unknown(why.clone()),
             (EngineFacts::MariaDb(_), _) => Fact::No(Why::NotOnEngine),
             (EngineFacts::Postgres(_), _) => Fact::Unknown(Why::EnginesDisagree),
         }
+    }
+}
+
+/// The MySQL version the first Aurora MySQL 3 is built on (Aurora MySQL 3.01).
+const AURORA_3_FROM: Version = Version::new(8, 0, 23);
+
+/// Whether a MySQL server is Aurora MySQL 3 by both its reports: a MySQL greeting of 8.0 and a
+/// `VERSION()` line `line` of exactly the form `8.0.mysql_aurora.3.<n>` with one or more
+/// further `.<n>`, each `<n>` one or more ASCII digits (`8.0.mysql_aurora.3.04.0`). Any other
+/// line, or the same line behind another greeting, is not taken for it.
+fn aurora_3(my: &MyFacts, line: Option<&str>) -> bool {
+    let number = |n: &str| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit());
+    let line =
+        || line.and_then(|l| l.strip_prefix("8.0.mysql_aurora.3.")).is_some_and(|rest| rest.split('.').all(number));
+    match my.greeting {
+        EngineId::MySql => (my.handshake.major, my.handshake.minor) == (8, 0) && line(),
+        EngineId::MariaDb | EngineId::Postgres => false,
     }
 }
 
