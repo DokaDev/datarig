@@ -677,3 +677,36 @@ fn a_values_detail_is_its_types_name() {
     let c = complete_with(src, src.len(), &c, false, &[], d, LexState::default(), &|_, _| Some(&[][..]), false);
     assert_eq!(c.completion.unwrap().items[0].detail.as_deref(), Some("enum"));
 }
+
+/// With `quote_always` (a table's filter), columns are written as the filter writes them: on
+/// MySQL and MariaDB always quoted, after `WHERE` and after `ORDER BY`; on PostgreSQL bare where
+/// that reads back the same, as without it.
+#[test]
+fn a_filters_completion_writes_names_as_the_filter_does() {
+    use crate::sql::dialect::MySqlMode;
+    let mut c = cat();
+    c.relations.push(Relation {
+        schema: "shop".into(),
+        name: "roles".into(),
+        is_view: false,
+        columns: vec![ColumnInfo::new("name", "text"), ColumnInfo::new("current_role", "text")],
+    });
+    let label = |src: &str, d: Dialect, always: bool| {
+        let none = |_: &str, _: &str| Some(&[][..]);
+        let out = complete_with(src, src.len(), &c, true, &[], d, LexState::default(), &none, always);
+        out.completion.map(|c| c.items[0].label.clone())
+    };
+    let family = [Dialect::MySql(MySqlMode::default()), Dialect::MariaDb(MySqlMode::default())];
+    for src in ["SELECT * FROM shop.roles WHERE na", "SELECT * FROM shop.roles ORDER BY na"] {
+        for d in family {
+            assert_eq!(label(src, d, true).as_deref(), Some("`name`"), "{d:?} {src}");
+            assert_eq!(label(src, d, false).as_deref(), Some("name"), "{d:?} {src}: the editor's");
+        }
+        assert_eq!(label(src, Dialect::Postgres, true).as_deref(), Some("name"), "{src}");
+    }
+    for src in ["SELECT * FROM shop.roles WHERE current_r", "SELECT * FROM shop.roles ORDER BY current_r"] {
+        for d in family {
+            assert_eq!(label(src, d, true).as_deref(), Some("`current_role`"), "{d:?} {src}");
+        }
+    }
+}
