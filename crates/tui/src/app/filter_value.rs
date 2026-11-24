@@ -283,9 +283,10 @@ impl App {
             .is_some_and(|c| !c.enum_labels.is_empty());
         by_value_compared(query::filter_sql(d), m, enum_known, !distinct.is_empty()).map_err(|e| {
             Box::new(match e {
-                NotCompared::Engine(why) => {
-                    Off::new(Label::EngineWhyNotBuilt, Notice::new(super::engine_why::why_text(&why), Level::Warning))
-                }
+                NotCompared::Engine(why) => Off::new(
+                    super::engine_why::why_label(&why),
+                    Notice::new(super::engine_why::why_text(&why), Level::Warning),
+                ),
                 NotCompared::NoEquality => Off::new(Label::TableFilterByValueOffType, self.by_value_type_notice(m)),
             })
         })?;
@@ -379,7 +380,9 @@ impl App {
                 Label::TableFilterByValueOffCollationUnknown,
                 warn(Msg::TableFilterByValueLikeUnknown { column }),
             ),
-            RenderError::Engine(why) => Off::new(Label::EngineWhyNotBuilt, warn(super::engine_why::why_text(&why))),
+            RenderError::Engine(why) => {
+                Off::new(super::engine_why::why_label(&why), warn(super::engine_why::why_text(&why)))
+            }
             _ => Off::new(Label::TableFilterByValueOffType, self.by_value_type_notice(m)),
         }
     }

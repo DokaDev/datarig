@@ -8,6 +8,8 @@
 "engine.why.not_built" = "이 엔진에서는 지원하지 않는 기능"
 "engine.why.version_too_old" = "서버 버전이 {needed}보다 낮음"
 "engine.why.feature_off" = "서버에서 {feature}이(가) 꺼져 있음"
+"engine.why.version_too_old_short" = "서버 버전이 너무 낮음"
+"engine.why.feature_off_short" = "필요한 서버 기능이 꺼져 있음"
 "engine.why.marker_unconfirmed" = "이 탭의 세션을 서버에서 확인할 수 없음"
 "engine.why.sessions_differ" = "이 연결의 세션들이 같은 엔진과 버전을 보고한다고 datarig가 확인할 수 없습니다"
 "engine.why.edit_format_differs" = "이 편집 방식이 적용할 세션이 쓰는 방식과 다릅니다"

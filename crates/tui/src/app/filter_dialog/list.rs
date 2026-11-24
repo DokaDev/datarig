@@ -298,7 +298,7 @@ impl App {
             Some(Label::TableDialogCountUnknown)
         } else {
             equality.as_ref().err().map(|e| match e {
-                NotTicked::Engine(_) => Label::EngineWhyNotBuilt,
+                NotTicked::Engine(why) => crate::app::engine_why::why_label(why),
                 _ => Label::TableDialogOpOffNoEquality,
             })
         };

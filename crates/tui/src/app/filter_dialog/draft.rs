@@ -27,7 +27,9 @@ use datarig_core::query::{
 };
 use datarig_core::sql::dialect::Dialect;
 
+use crate::app::engine_why::why_label;
 use crate::app::table_query::{self, LimitProblem};
+use datarig_i18n::Label;
 
 /// The most steps [`Undo`] keeps; the oldest goes first.
 pub(crate) const UNDO_STEPS: usize = 100;
@@ -173,8 +175,8 @@ pub(crate) enum OpOff {
     LikeRefused,
     /// Neither the column's collation nor the server is known to take `LIKE` here.
     LikeUnknown,
-    /// The engine has no rules a filter is written by.
-    NoFilterRules,
+    /// The engine has no rules a filter is written by: why, as a label names it.
+    NoFilterRules(Label),
 }
 
 /// What the dialog knows of a column of the table.
@@ -360,18 +362,18 @@ pub(crate) fn ops_for(c: &ColumnInfo, target: &Target) -> Vec<(Op, Result<(), Op
 }
 
 /// [`ops_for`] by the filter rules `filter` (as [`query::filter_sql`] answers): on an engine
-/// without them every operator that takes a value is dimmed with the engine's reason.
+/// without them every operator is dimmed with the engine's reason.
 pub(crate) fn ops_by(
     c: &ColumnInfo,
     target: &Target,
     filter: Result<&'static dyn FilterSql, Why>,
 ) -> Vec<(Op, Result<(), OpOff>)> {
-    let known = filter.is_ok();
+    let engine = filter.as_ref().err().map(|why| OpOff::NoFilterRules(why_label(why)));
     let compares = c.meta.as_ref().map(|m| compared(filter.clone(), m, c.enum_known));
     Op::ALL
         .into_iter()
         .filter(|op| *op != Op::Between || c.ranged())
-        .map(|op| (op, op_allowed(op, c, known, compares.clone(), target)))
+        .map(|op| (op, op_allowed(op, c, engine, compares.clone(), target)))
         .collect()
 }
 
@@ -398,18 +400,19 @@ pub(crate) fn compared(
 fn op_allowed(
     op: Op,
     c: &ColumnInfo,
-    known: bool,
+    engine: Option<OpOff>,
     compares: Option<Result<Compares, NotCompared>>,
     target: &Target,
 ) -> Result<(), OpOff> {
+    // Nothing is written without the engine's filter rules, not even `IS NULL`.
+    if let Some(off) = engine {
+        return Err(off);
+    }
     if op.arity() == Arity::Zero {
         return Ok(());
     }
-    if !known {
-        return Err(OpOff::NoFilterRules);
-    }
     match compares {
-        Some(Err(NotCompared::Engine(_))) => return Err(OpOff::NoFilterRules),
+        Some(Err(NotCompared::Engine(why))) => return Err(OpOff::NoFilterRules(why_label(&why))),
         Some(Err(NotCompared::NoEquality)) => return Err(OpOff::NoEquality),
         Some(Ok(Compares::Equality)) if op.ordered() => return Err(OpOff::NoOrder),
         _ => {}
@@ -445,7 +448,7 @@ pub(crate) fn render_off(e: RenderError) -> OpOff {
         | RenderError::NotNumber(_)
         | RenderError::NotExact(_)
         | RenderError::NotInstant(_) => OpOff::LikeUnknown,
-        RenderError::Engine(_) => OpOff::NoFilterRules,
+        RenderError::Engine(why) => OpOff::NoFilterRules(why_label(&why)),
     }
 }
 

@@ -962,39 +962,44 @@ fn a_timestamp_instant_is_a_row_only_on_a_timestamp() {
 }
 
 /// A pattern operator the renderer refuses because the engine has no rules a filter is written
-/// by is dimmed with the engine's words, not a collation's. No engine of the registry is such an
-/// engine.
+/// by is dimmed with the engine's reason, not a collation's: the label of that reason. No engine
+/// of the registry is such an engine.
 #[test]
 fn no_filter_rules_dims_the_operator_with_the_engines_words() {
+    use crate::app::engine_why::why_label;
     use datarig_core::engine::Why;
-    for why in [Why::NotBuilt, Why::NotChecked] {
-        assert_eq!(render_off(RenderError::Engine(why)), OpOff::NoFilterRules);
+    use datarig_i18n::Label;
+    for (why, label) in [(Why::NotBuilt, Label::EngineWhyNotBuilt), (Why::NotChecked, Label::EngineWhyNotChecked)] {
+        assert_eq!(why_label(&why), label);
+        assert_eq!(render_off(RenderError::Engine(why)), OpOff::NoFilterRules(label));
+        assert_eq!(super::super::keys::op_off_label(OpOff::NoFilterRules(label)), label);
     }
-    assert_eq!(super::super::keys::op_off_label(OpOff::NoFilterRules), datarig_i18n::Label::EngineWhyNotBuilt);
     // The renderer's other refusals keep their own words.
     assert_eq!(render_off(RenderError::LikeRefused("name".into())), OpOff::LikeRefused);
     assert_eq!(render_off(RenderError::NotNumber("id".into())), OpOff::LikeUnknown);
 }
 
 /// On an engine without rules a filter is written by, every path that would compare a column's
-/// values gives the engine's reason before the column's type: the dialog's operators (also on a
-/// text column whose type is known, and on one whose type is not), the list's ticks, and a
+/// values gives the engine's own reason before the column's type: the dialog's operators (all of
+/// them, on a text column whose type is known and on one whose type is not), the list's ticks, and a
 /// filter by a cell's value (with values, and NULL alone). With the registry's rules the
 /// column's type decides, as before.
 #[test]
 fn a_missing_filter_group_is_said_as_the_engines_reason() {
+    use crate::app::engine_why::why_label;
     use crate::app::filter_dialog::list::{NotTicked, ticks};
     use crate::app::filter_value::by_value_compared;
     use datarig_core::engine::Why;
-    let why = Why::NotBuilt;
-    for d in [PG, MY] {
+    for (d, why) in [(PG, Why::NotBuilt), (MY, Why::NotChecked)] {
         let t = target(d);
         let text = meta("name", "text", ValueKind::Text);
         let json = meta("born", "json", ValueKind::Json);
         for c in [ColumnInfo::from_meta(&text), ColumnInfo::from_meta(&json), info("born", ColumnKind::Other)] {
-            for (op, off) in ops_by(&c, &t, Err(why.clone())) {
-                let want = if op.arity() == Arity::Zero { Ok(()) } else { Err(OpOff::NoFilterRules) };
-                assert_eq!(off, want, "{d:?} {} {op:?}", c.name);
+            // Every operator, `IS NULL` and `IS NOT NULL` too: the renderer writes none.
+            let ops = ops_by(&c, &t, Err(why.clone()));
+            assert!(ops.iter().any(|(op, _)| op.arity() == Arity::Zero));
+            for (op, off) in ops {
+                assert_eq!(off, Err(OpOff::NoFilterRules(why_label(&why))), "{d:?} {} {op:?}", c.name);
             }
             assert_eq!(ops_by(&c, &t, query::filter_sql(d)), ops_for(&c, &t), "{d:?} {}", c.name);
         }
