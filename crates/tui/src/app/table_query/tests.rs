@@ -403,3 +403,35 @@ fn error_offsets_answer_as_today() {
         assert_eq!(mark(Dialect::MariaDb(Default::default()), filter, &m), on_family, "MariaDB: {what}");
     }
 }
+
+/// The place a server's error marks in any filter text, wherever the server points (each
+/// character of the filter by PostgreSQL's position, each part of it quoted as MySQL quotes
+/// it), never panics: the token there is found by lexing the filter.
+#[test]
+fn the_error_mark_never_panics() {
+    use crate::app::filter_dialog::tests::{dialects, texts};
+    use datarig_core::driver::ServerMessage;
+    let table = TableName { database: None, schema: "shop".into(), name: "users".into() };
+    for text in texts() {
+        for d in dialects() {
+            let mut tq = TableQuery::new(table.clone());
+            let q = filtered(&text, None);
+            let c = query::compile(&q, &Target::new(d, Vec::new()));
+            let sql = c.sql.clone();
+            // A blank filter is no filter: nothing to mark.
+            let Some(span) = c.filter_span.clone() else { continue };
+            tq.pending = Some(Statement::of(q, c));
+            tq.sent(1, std::slice::from_ref(&sql));
+            let before = sql[..span.start].chars().count() as u32;
+            for p in before..=before + text.chars().count() as u32 + 2 {
+                let m = ServerMessage { text: "ERROR".into(), position: Some(p), hint: None };
+                tq.run_failed(1, &ServerError::Message(&m), d);
+            }
+            for (at, _) in sql[span.clone()].char_indices() {
+                let quoted = format!("ERROR 1064 (42000): x near '{}' at line 1", &sql[span.start + at..]);
+                let m = ServerMessage { text: quoted, ..Default::default() };
+                tq.run_failed(1, &ServerError::Message(&m), d);
+            }
+        }
+    }
+}

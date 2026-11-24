@@ -289,3 +289,6 @@ pub fn order_completion(text: &str, cursor: usize, target: &Target, force: bool)
     };
     (!items.is_empty()).then_some(Completion { items, replace_start: start, trail })
 }
+
+#[cfg(test)]
+mod tests;
