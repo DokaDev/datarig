@@ -14,7 +14,7 @@
 //! 64 KiB, or more than 1000 cells. Nothing is added while the query applied is one whose run
 //! brought no rows (refused, cancelled), over the earlier rows still shown.
 
-use super::filter_dialog::draft::{Op, Row, Where};
+use super::filter_dialog::draft::{NotCompared, Op, Row, Where, compared};
 use super::menu::Off;
 use super::table_query::{FIELD_CAP, filter_text};
 use super::*;
@@ -274,16 +274,21 @@ impl App {
         let mut seen = std::collections::HashSet::new();
         let distinct: Vec<&str> = read.iter().flatten().map(String::as_str).filter(|v| seen.insert(*v)).collect();
         let null = read.iter().any(Option::is_none);
-        // A value compares only on a column whose values have equality; NULL alone is tested
-        // with `IS NULL`, whatever the type.
-        if !distinct.is_empty() {
-            let enum_known = self
-                .table_structure_of(id)
-                .and_then(|s| s.columns.iter().find(|c| c.name == column))
-                .is_some_and(|c| !c.enum_labels.is_empty());
-            query::compares(d, m, enum_known)
-                .map_err(|_| Box::new(Off::new(Label::TableFilterByValueOffType, self.by_value_type_notice(m))))?;
-        }
+        // Nothing is written without the engine's filter rules. A value compares only on a
+        // column whose values have equality; NULL alone is tested with `IS NULL`, whatever the
+        // type.
+        let enum_known = self
+            .table_structure_of(id)
+            .and_then(|s| s.columns.iter().find(|c| c.name == column))
+            .is_some_and(|c| !c.enum_labels.is_empty());
+        by_value_compared(query::filter_sql(d), m, enum_known, !distinct.is_empty()).map_err(|e| {
+            Box::new(match e {
+                NotCompared::Engine(why) => {
+                    Off::new(Label::EngineWhyNotBuilt, Notice::new(super::engine_why::why_text(&why), Level::Warning))
+                }
+                NotCompared::NoEquality => Off::new(Label::TableFilterByValueOffType, self.by_value_type_notice(m)),
+            })
+        })?;
         let mut values = distinct.iter().map(|v| self.by_value_value(t, rs, col, v)).collect::<Result<Vec<_>, _>>()?;
         let row = match (pick, values.len(), null) {
             (Pick::Only, 0, _) => Row::new(column.clone(), Op::IsNull),
@@ -413,6 +418,23 @@ impl App {
     fn by_value_type_notice(&self, m: &ColumnMeta) -> Notice {
         let (column, ty) = (m.name.clone(), m.type_name.clone());
         Notice::new(Msg::TableFilterByValueType { column, ty }, Level::Warning)
+    }
+}
+
+/// Whether a column `m` is filtered by value with the rules `filter` (as [`query::filter_sql`]
+/// answers): never on an engine without them (its reason); its values (`values`: non-NULL ones
+/// are taken) only when its type has equality. NULL alone is tested with `IS NULL`, whatever the
+/// type.
+pub(crate) fn by_value_compared(
+    filter: Result<&'static dyn datarig_core::engine::FilterSql, datarig_core::engine::Why>,
+    m: &ColumnMeta,
+    enum_known: bool,
+    values: bool,
+) -> Result<(), NotCompared> {
+    match (filter, values) {
+        (Err(why), _) => Err(NotCompared::Engine(why)),
+        (filter @ Ok(_), true) => compared(filter, m, enum_known).map(|_| ()),
+        (Ok(_), false) => Ok(()),
     }
 }
 

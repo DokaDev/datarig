@@ -975,3 +975,50 @@ fn no_filter_rules_dims_the_operator_with_the_engines_words() {
     assert_eq!(render_off(RenderError::LikeRefused("name".into())), OpOff::LikeRefused);
     assert_eq!(render_off(RenderError::NotNumber("id".into())), OpOff::LikeUnknown);
 }
+
+/// On an engine without rules a filter is written by, every path that would compare a column's
+/// values gives the engine's reason before the column's type: the dialog's operators (also on a
+/// text column whose type is known, and on one whose type is not), the list's ticks, and a
+/// filter by a cell's value (with values, and NULL alone). With the registry's rules the
+/// column's type decides, as before.
+#[test]
+fn a_missing_filter_group_is_said_as_the_engines_reason() {
+    use crate::app::filter_dialog::list::{NotTicked, ticks};
+    use crate::app::filter_value::by_value_compared;
+    use datarig_core::engine::Why;
+    let why = Why::NotBuilt;
+    for d in [PG, MY] {
+        let t = target(d);
+        let text = meta("name", "text", ValueKind::Text);
+        let json = meta("born", "json", ValueKind::Json);
+        for c in [ColumnInfo::from_meta(&text), ColumnInfo::from_meta(&json), info("born", ColumnKind::Other)] {
+            for (op, off) in ops_by(&c, &t, Err(why.clone())) {
+                let want = if op.arity() == Arity::Zero { Ok(()) } else { Err(OpOff::NoFilterRules) };
+                assert_eq!(off, want, "{d:?} {} {op:?}", c.name);
+            }
+            assert_eq!(ops_by(&c, &t, query::filter_sql(d)), ops_for(&c, &t), "{d:?} {}", c.name);
+        }
+        for m in [&text, &json] {
+            assert_eq!(compared(Err(why.clone()), m, false), Err(NotCompared::Engine(why.clone())));
+            assert_eq!(ticks(Err(why.clone()), Some(m), false), Err(NotTicked::Engine(why.clone())));
+            for values in [true, false] {
+                assert_eq!(
+                    by_value_compared(Err(why.clone()), m, false, values),
+                    Err(NotCompared::Engine(why.clone())),
+                    "{d:?} {values}"
+                );
+            }
+        }
+        assert_eq!(ticks(Err(why.clone()), None, false), Err(NotTicked::Engine(why.clone())));
+        // The registry's rules: the column's type decides.
+        let rules = || query::filter_sql(d);
+        assert_eq!(compared(rules(), &text, false), Ok(Compares::Order));
+        assert_eq!(compared(rules(), &json, false), Err(NotCompared::NoEquality));
+        assert_eq!(ticks(rules(), Some(&text), false), Ok(()));
+        assert_eq!(ticks(rules(), Some(&json), false), Err(NotTicked::NoEquality));
+        assert_eq!(ticks(rules(), None, false), Ok(()));
+        assert_eq!(by_value_compared(rules(), &json, false, true), Err(NotCompared::NoEquality));
+        assert_eq!(by_value_compared(rules(), &json, false, false), Ok(()));
+        assert_eq!(by_value_compared(rules(), &text, false, true), Ok(()));
+    }
+}

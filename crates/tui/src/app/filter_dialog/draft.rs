@@ -20,6 +20,7 @@ use std::ops::Range;
 
 use datarig_core::driver::keys::CatalogColumn;
 use datarig_core::driver::{ColumnMeta, ValueKind};
+use datarig_core::engine::{FilterSql, Why};
 use datarig_core::query::{
     self, CaseMode, CmpOp, ColName, ColumnKind, Compares, Cond, Dir, Filter, KeyOrigin, LikeKind, NoEquality, OrderKey,
     Query, RenderError, Target, Value,
@@ -355,25 +356,61 @@ fn temporal_type(type_name: &str) -> bool {
 /// a pattern needs a column known to hold text, and one the collation rules let it be written
 /// for.
 pub(crate) fn ops_for(c: &ColumnInfo, target: &Target) -> Vec<(Op, Result<(), OpOff>)> {
-    let compares = c.meta.as_ref().map(|m| query::compares(target.dialect, m, c.enum_known));
+    ops_by(c, target, query::filter_sql(target.dialect))
+}
+
+/// [`ops_for`] by the filter rules `filter` (as [`query::filter_sql`] answers): on an engine
+/// without them every operator that takes a value is dimmed with the engine's reason.
+pub(crate) fn ops_by(
+    c: &ColumnInfo,
+    target: &Target,
+    filter: Result<&'static dyn FilterSql, Why>,
+) -> Vec<(Op, Result<(), OpOff>)> {
+    let known = filter.is_ok();
+    let compares = c.meta.as_ref().map(|m| compared(filter.clone(), m, c.enum_known));
     Op::ALL
         .into_iter()
         .filter(|op| *op != Op::Between || c.ranged())
-        .map(|op| (op, op_allowed(op, c, compares, target)))
+        .map(|op| (op, op_allowed(op, c, known, compares.clone(), target)))
         .collect()
+}
+
+/// Why a filter compares no value of a column ([`compared`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum NotCompared {
+    /// The engine has no rules a filter is written by: why.
+    Engine(Why),
+    /// The column's type has no equality a literal reaches.
+    NoEquality,
+}
+
+/// How a filter by the rules `filter` (as [`query::filter_sql`] answers) compares the values of
+/// column `m`, or why it compares none: the engine's reason before the column's type.
+pub(crate) fn compared(
+    filter: Result<&'static dyn FilterSql, Why>,
+    m: &ColumnMeta,
+    enum_known: bool,
+) -> Result<Compares, NotCompared> {
+    let rules = filter.map_err(NotCompared::Engine)?;
+    rules.compares(m, enum_known).map_err(|NoEquality| NotCompared::NoEquality)
 }
 
 fn op_allowed(
     op: Op,
     c: &ColumnInfo,
-    compares: Option<Result<Compares, NoEquality>>,
+    known: bool,
+    compares: Option<Result<Compares, NotCompared>>,
     target: &Target,
 ) -> Result<(), OpOff> {
     if op.arity() == Arity::Zero {
         return Ok(());
     }
+    if !known {
+        return Err(OpOff::NoFilterRules);
+    }
     match compares {
-        Some(Err(NoEquality)) => return Err(OpOff::NoEquality),
+        Some(Err(NotCompared::Engine(_))) => return Err(OpOff::NoFilterRules),
+        Some(Err(NotCompared::NoEquality)) => return Err(OpOff::NoEquality),
         Some(Ok(Compares::Equality)) if op.ordered() => return Err(OpOff::NoOrder),
         _ => {}
     }
