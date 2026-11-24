@@ -20,6 +20,7 @@ mod flows_dialog_mouse;
 mod flows_edit_apply_ask;
 mod flows_edit_cells;
 mod flows_edit_changes;
+mod flows_edit_duplicates;
 mod flows_edit_format;
 mod flows_edit_paste;
 mod flows_edit_popup;
