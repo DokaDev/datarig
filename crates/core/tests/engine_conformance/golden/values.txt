@@ -59,15 +59,15 @@ input Pg "time of day": NotTime
 input MySql "time of day": NotTime
 input MariaDb "time of day": NotTime
 input Pg "postgres bytes": ok
-input MySql "postgres bytes": NotBytes { mysql: true }
-input MariaDb "postgres bytes": NotBytes { mysql: true }
-input Pg "mysql bytes": NotBytes { mysql: false }
+input MySql "postgres bytes": NotBytes { form: ZeroX }
+input MariaDb "postgres bytes": NotBytes { form: ZeroX }
+input Pg "mysql bytes": NotBytes { form: BackslashX }
 input MySql "mysql bytes": ok
 input MariaDb "mysql bytes": ok
 input Pg "bits": ok
-input MySql "bits": NotBits { mysql: true }
-input MariaDb "bits": NotBits { mysql: true }
-input Pg "mysql bits": NotBits { mysql: false }
+input MySql "bits": NotBits { form: BQuoted }
+input MariaDb "bits": NotBits { form: BQuoted }
+input Pg "mysql bits": NotBits { form: Digits }
 input MySql "mysql bits": ok
 input MariaDb "mysql bits": ok
 input Pg "text too long": TooLong { max: 3 }

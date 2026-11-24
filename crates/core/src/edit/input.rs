@@ -37,11 +37,10 @@ pub enum Invalid {
     TooPrecise { digits: u32 },
     /// Not a UUID (`8-4-4-4-12` hexadecimal digits).
     NotUuid,
-    /// Not bytes as the result shows them: `\x` and hexadecimal digits in pairs; MySQL's `0x`
-    /// and upper-case hexadecimal digits in pairs.
-    NotBytes { mysql: bool },
-    /// Not bits as the result shows them: binary digits; MySQL's `b'…'`.
-    NotBits { mysql: bool },
+    /// Not bytes as the result shows them, in the form `form`.
+    NotBytes { form: BytesForm },
+    /// Not bits as the result shows them, in the form `form`.
+    NotBits { form: BitsForm },
     /// Not as many bits as the column takes: exactly `count`, or at most `count`.
     BitCount { count: u32, exact: bool },
     /// Longer than the column's `max` characters.
@@ -51,6 +50,24 @@ pub enum Invalid {
     Rounded { type_name: String, stored: String },
     /// Text ending in spaces for a MySQL `CHAR` column, which drops them.
     TrailingSpaces,
+}
+
+/// The form a result shows bytes in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BytesForm {
+    /// `\x` and hexadecimal digits in pairs, either case.
+    BackslashX,
+    /// `0x` and upper-case hexadecimal digits in pairs.
+    ZeroX,
+}
+
+/// The form a result shows bits in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BitsForm {
+    /// Binary digits.
+    Digits,
+    /// Binary digits in `b'…'`.
+    BQuoted,
 }
 
 /// Whether `text`, typed for table column `c` on a server of dialect `d`, is a value of the

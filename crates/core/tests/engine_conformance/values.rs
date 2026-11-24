@@ -171,22 +171,22 @@ pub fn input_cases() -> Vec<Case<Typed>> {
         Case {
             name: "postgres bytes",
             input: typed("bytea", V::Bytes, "\\x0a"),
-            expect: &[(Pg, "ok"), (MySql, "NotBytes { mysql: true }"), (MariaDb, "NotBytes { mysql: true }")],
+            expect: &[(Pg, "ok"), (MySql, "NotBytes { form: ZeroX }"), (MariaDb, "NotBytes { form: ZeroX }")],
         },
         Case {
             name: "mysql bytes",
             input: typed("varbinary(4)", V::Bytes, "0x0A"),
-            expect: &[(Pg, "NotBytes { mysql: false }"), (MySql, "ok"), (MariaDb, "ok")],
+            expect: &[(Pg, "NotBytes { form: BackslashX }"), (MySql, "ok"), (MariaDb, "ok")],
         },
         Case {
             name: "bits",
             input: typed("bit(3)", V::Bit, "101"),
-            expect: &[(Pg, "ok"), (MySql, "NotBits { mysql: true }"), (MariaDb, "NotBits { mysql: true }")],
+            expect: &[(Pg, "ok"), (MySql, "NotBits { form: BQuoted }"), (MariaDb, "NotBits { form: BQuoted }")],
         },
         Case {
             name: "mysql bits",
             input: typed("bit(3)", V::Bit, "b'101'"),
-            expect: &[(Pg, "NotBits { mysql: false }"), (MySql, "ok"), (MariaDb, "ok")],
+            expect: &[(Pg, "NotBits { form: Digits }"), (MySql, "ok"), (MariaDb, "ok")],
         },
         Case {
             name: "text too long",

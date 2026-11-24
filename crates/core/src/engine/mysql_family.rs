@@ -8,7 +8,7 @@ use super::{
 };
 use crate::driver::{SessionRole, ValueKind};
 use crate::edit::input::{self, TypeName};
-use crate::edit::{Invalid, TableColumn};
+use crate::edit::{BitsForm, BytesForm, Invalid, TableColumn};
 use crate::sql::dialect::{Dialect, DollarQuotes, Language};
 use crate::sql::risk::mysql::Judged;
 use crate::sql::risk::{Class, Classifier, Danger};
@@ -420,7 +420,7 @@ impl InputRules for FamilyInput {
     /// string of that text).
     fn bytes(&self, s: &str) -> Result<(), Invalid> {
         let hex = s.strip_prefix("0x").filter(|h| h.bytes().all(|b| matches!(b, b'0'..=b'9' | b'A'..=b'F')));
-        hex.is_some_and(|h| h.len() % 2 == 0).then_some(()).ok_or(Invalid::NotBytes { mysql: true })
+        hex.is_some_and(|h| h.len() % 2 == 0).then_some(()).ok_or(Invalid::NotBytes { form: BytesForm::ZeroX })
     }
 
     /// `b'…'`, no more significant digits than `bit(n)` has.
@@ -428,7 +428,7 @@ impl InputRules for FamilyInput {
         let ty = TypeName::read(&c.column.type_name);
         let digits =
             s.strip_prefix("b'").and_then(|r| r.strip_suffix('\'')).filter(|d| !d.is_empty() && input::binary(d));
-        let digits = digits.ok_or(Invalid::NotBits { mysql: true })?;
+        let digits = digits.ok_or(Invalid::NotBits { form: BitsForm::BQuoted })?;
         match ty.args[..] {
             [n] if digits.trim_start_matches('0').len() > n as usize => {
                 Err(Invalid::BitCount { count: n, exact: false })
