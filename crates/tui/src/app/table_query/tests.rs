@@ -359,3 +359,56 @@ fn a_page_past_the_cap_is_cut_there() {
     let mut rows = vec![4, 5, 6];
     assert_eq!(cap_page(&mut rows, 3, Some(9), true), None);
 }
+
+/// Where a server's error marks the filter today on each engine (bytes of the filter, `None`:
+/// not marked): PostgreSQL by the character position it gives, MySQL and MariaDB by the text
+/// they quote, found once in the statement and starting in the filter.
+#[test]
+fn error_offsets_answer_as_today() {
+    use datarig_core::driver::ServerMessage;
+    let table = TableName { database: None, schema: "shop".into(), name: "users".into() };
+    let mark = |d: Dialect, filter: &str, m: &ServerMessage| {
+        let mut tq = TableQuery::new(table.clone());
+        let q = filtered(filter, None);
+        let c = query::compile(&q, &Target::new(d, Vec::new()));
+        let sql = c.sql.clone();
+        tq.pending = Some(Statement::of(q, c));
+        tq.sent(1, &[sql]);
+        tq.run_failed(1, &ServerError::Message(m), d);
+        tq.failure().expect("failed").at.clone()
+    };
+    // `SELECT * FROM "shop"."users" WHERE (` is 36 characters: the filter's first is the 37th.
+    let pg = |position| ServerMessage { text: "ERROR".into(), position: Some(position), hint: None };
+    let near =
+        |s: &str| ServerMessage { text: format!("ERROR 1064 (42000): x near '{s}' at line 1"), ..Default::default() };
+    let wide = "\u{e9} = 1 OR idd = 2";
+    // The case, the filter, the message, the mark on PostgreSQL and on MySQL and MariaDB.
+    type Mark = Option<Range<usize>>;
+    let cases: Vec<(&str, &str, ServerMessage, Mark, Mark)> = vec![
+        ("a position in the filter", wide, pg(37 + 9), Some(10..13), None),
+        ("a position on a blank", wide, pg(37 + 8), Some(9..10), None),
+        ("a position before the filter", wide, pg(3), None, None),
+        ("a position past the statement", wide, pg(999), None, None),
+        ("quoted once, in the filter", wide, near("idd = 2)"), None, Some(10..17)),
+        ("quoted twice", wide, near("= "), None, None),
+        ("quoted, not found", wide, near("zzz"), None, None),
+        ("quoted, starting before the filter", wide, near("WHERE (\u{e9}"), None, None),
+        ("nothing quoted", wide, near(""), None, None),
+        ("found again overlapping", "name = 'aaa'", near("aa"), None, None),
+        (
+            "no quote at all",
+            wide,
+            ServerMessage {
+                text: "ERROR 1054 (42S22): Unknown column 'x' in 'where clause'".into(),
+                ..Default::default()
+            },
+            None,
+            None,
+        ),
+    ];
+    for (what, filter, m, on_pg, on_family) in cases {
+        assert_eq!(mark(Dialect::Postgres, filter, &m), on_pg, "PostgreSQL: {what}");
+        assert_eq!(mark(Dialect::MySql(Default::default()), filter, &m), on_family, "MySQL: {what}");
+        assert_eq!(mark(Dialect::MariaDb(Default::default()), filter, &m), on_family, "MariaDB: {what}");
+    }
+}
