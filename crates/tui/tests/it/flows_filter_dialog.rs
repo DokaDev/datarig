@@ -1008,3 +1008,57 @@ fn undo_keeps_the_value_field_on_its_own_condition() {
     h.type_text("5");
     assert_eq!(h.app.filter_dialog_draft().unwrap().0, "id > 77 AND id < 425");
 }
+
+/// A PostgreSQL server whose version did not parse (`18beta1`, `17devel`) is judged for `LIKE`
+/// on a nondeterministic collation by the number its metadata session read (180000 takes it,
+/// 170000 refuses it), as before: "starts with" is offered on the first and written with
+/// `LIKE`, dimmed on the second; "contains" (`ILIKE`) is refused on both.
+#[test]
+fn a_pg_18_beta_server_still_takes_like_on_a_nondeterministic_collation() {
+    use datarig_core::engine::{EngineFacts, Fact, PgFacts, ServerFacts, Topology, Why};
+    // `shop.users` open on a server that says `line` and whose key-only read says whether it
+    // takes `LIKE` on a nondeterministic collation (`takes`), `name` of such a collation; the
+    // dialog open on `name`.
+    let open_on = |line: &str, takes: bool| {
+        let mut h = users();
+        let facts = || {
+            DbEvent::Server(std::sync::Arc::new(ServerFacts {
+                version: Fact::Unknown(Why::VersionUnknown),
+                version_text: Some(line.into()),
+                provider: Fact::Unknown(Why::NotChecked),
+                topology: Fact::Known(Topology::Direct),
+                detail: EngineFacts::Postgres(PgFacts::default()),
+            }))
+        };
+        h.meta_db("local-pg", facts());
+        let index = h.app.tabs.active_index();
+        h.tab_db(index, facts());
+        let keys = datarig_core::driver::keys::OrderKeys {
+            primary_key: vec!["id".into()],
+            deterministic: [("name".to_string(), false)].into(),
+            like_nondeterministic: Some(takes),
+            ..Default::default()
+        };
+        keys_came_with(&mut h, "local-pg", keys);
+        h.key(KeyCode::Right);
+        h.keys("f");
+        h
+    };
+    for (line, takes) in [("18beta1", true), ("17devel", false)] {
+        let mut h = open_on(line, takes);
+        h.key(KeyCode::Right);
+        h.key(KeyCode::Char(' '));
+        let offers = h.app.filter_dialog_offers().expect("the operators of the condition");
+        let why =
+            |op: &str| offers.iter().find(|(o, _)| o == op).unwrap_or_else(|| panic!("{op}: {offers:?}")).1.clone();
+        assert_eq!(why("contains").as_deref(), Some("PostgreSQL refuses ILIKE on the column's collation"), "{line}");
+        let refused = (!takes).then_some("The server refuses LIKE on the column's collation");
+        assert_eq!(why("starts with").as_deref(), refused, "{line}");
+        if takes {
+            let mut h = open_on(line, takes);
+            condition(&mut h, 8, "a_b");
+            h.key(KeyCode::Enter);
+            assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (name LIKE 'a!_b%' ESCAPE '!')")]], "{line}");
+        }
+    }
+}

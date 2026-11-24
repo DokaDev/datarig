@@ -225,6 +225,18 @@ pub fn filter_sql(d: Dialect) -> Result<&'static dyn FilterSql, Why> {
     known(&d.engine().spec().filter)
 }
 
+/// A type name as a catalogue writes it, lower case, without its arguments (`(20)`,
+/// `('a','b')`), MySQL's `unsigned` and `zerofill`, and with single spaces: `character
+/// varying(20)` is `character varying`.
+pub fn base_type(type_name: &str) -> String {
+    let lower = type_name.to_ascii_lowercase();
+    let rest = match (lower.find('('), lower.rfind(')')) {
+        (Some(open), Some(close)) if open < close => format!("{} {}", &lower[..open], &lower[close + 1..]),
+        _ => lower,
+    };
+    rest.split_whitespace().filter(|w| !matches!(*w, "unsigned" | "zerofill")).collect::<Vec<_>>().join(" ")
+}
+
 /// The filter rules of `group`, an engine's filter group, or why there are none.
 fn known(group: &Fact<&'static dyn FilterSql>) -> Result<&'static dyn FilterSql, Why> {
     match group {

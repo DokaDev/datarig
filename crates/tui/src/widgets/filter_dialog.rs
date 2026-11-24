@@ -61,40 +61,12 @@ pub(super) fn key(app: &App, a: DialogAction) -> String {
     app.key_for(Action::FilterDialog(a), Ctx::FilterDialog)
 }
 
-/// `ty` as the column list writes it: a PostgreSQL type by its short name where it has one
-/// (`timestamptz`, `varchar(20)`, `float8`), so a cut does not take what tells types apart;
-/// anything else as written.
+/// `ty` as the column list writes it on dialect `d`: by a shorter name where the engine has one
+/// ([`datarig_core::engine::CatalogueRules::short_type`]: a PostgreSQL type's, `timestamptz`,
+/// `varchar(20)`, `float8`), so a cut does not take what tells types apart; anything else as
+/// written.
 pub(crate) fn short_type(d: Dialect, ty: &str) -> String {
-    if d != Dialect::Postgres {
-        return ty.to_string();
-    }
-    let base = ty.trim_end_matches("[]");
-    let arrays = &ty[base.len()..];
-    for head in ["timestamp", "time"] {
-        let Some(rest) = base.strip_prefix(head) else { continue };
-        let (precision, zone) = rest.split_at(rest.find(' ').unwrap_or(rest.len()));
-        if !(precision.is_empty() || precision.starts_with('(')) {
-            continue;
-        }
-        match zone {
-            " with time zone" => return format!("{head}tz{precision}{arrays}"),
-            " without time zone" => return format!("{head}{precision}{arrays}"),
-            _ => {}
-        }
-    }
-    for (long, short) in [
-        ("character varying", "varchar"),
-        ("character", "char"),
-        ("double precision", "float8"),
-        ("bit varying", "varbit"),
-    ] {
-        if let Some(rest) = base.strip_prefix(long)
-            && (rest.is_empty() || rest.starts_with('('))
-        {
-            return format!("{short}{rest}{arrays}");
-        }
-    }
-    ty.to_string()
+    d.engine().spec().catalogue.short_type(ty)
 }
 
 /// Where the whole dialog is drawn on screen `area`: centred, 92% of its width and 90% of its

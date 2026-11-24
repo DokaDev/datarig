@@ -7,13 +7,14 @@ use super::{
     OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, ResultTables, ServerFacts, SessionRules, SortRules, Support,
     TextRules, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, ValueRules, Version, Why,
 };
-use crate::driver::{ColumnMeta, ReadIn, SessionRole, SessionValues, ValueKind};
+use crate::driver::{ColumnMeta, ReadIn, ServerMessage, SessionRole, SessionValues, ValueKind};
 use crate::edit::input::{self, TypeName};
 use crate::edit::{BitsForm, BytesForm, Invalid, TableColumn};
 use crate::export::keyset::{NotKeyset, expanded};
 use crate::export::{self, Kind, NotWhole, Refused, Rule, SqlCells, SqlColumn, fixed_offset};
 use crate::query::{
-    CaseMode, ColumnFacts, Compares, GROUP_PREVIEW, LINE_BREAKS, NoEquality, Nulls, RenderError, Target, hex,
+    CaseMode, ColumnFacts, ColumnKind, Compares, GROUP_PREVIEW, LINE_BREAKS, NoEquality, Nulls, RenderError, Target,
+    base_type, hex,
 };
 use crate::sql::dialect::{Dialect, DollarQuotes, Language};
 use crate::sql::risk::mysql::Judged;
@@ -64,6 +65,28 @@ impl TextRules for FamilyText {
             EngineFacts::Postgres(_) => DollarQuotes::NotRead,
         }
     }
+
+    /// Where the text the server quotes from where it stopped reading (`… near 'x = = 1)' at
+    /// line 1`) is, to its end, when it is found once in the statement: found again from the
+    /// next character on (an overlapping match counts), it is not located.
+    fn error_offset(&self, sql: &str, m: &ServerMessage) -> Option<(usize, Option<usize>)> {
+        let near = mysql_near(&m.text)?;
+        let at = sql.find(near)?;
+        let next = at + sql[at..].chars().next().map_or(1, char::len_utf8);
+        if sql[next..].contains(near) {
+            return None;
+        }
+        Some((at, Some(at + near.len())))
+    }
+}
+
+/// The text MySQL and MariaDB quote from where they stopped reading (`… near 'x = = 1)' at line
+/// 1`), when they quote any.
+pub(super) fn mysql_near(message: &str) -> Option<&str> {
+    let from = message.find(" near '")? + " near '".len();
+    let rest = &message[from..];
+    let to = rest.rfind("' at line ")?;
+    Some(&rest[..to]).filter(|s| !s.is_empty())
 }
 
 /// Whether a server of `engine` at version `v` reads dollar quotes, as a report of it says. A
@@ -322,6 +345,11 @@ impl ValueRules for FamilyValues {
         "0x"
     }
 
+    /// `0x` and upper-case digits.
+    fn bytes_shown(&self, b: &[u8]) -> String {
+        format!("0x{}", b.iter().map(|b| format!("{b:02X}")).collect::<String>())
+    }
+
     /// Bytes shown as `0x…` and bits as `b'…'` (every byte, every bit) as their hexadecimal and
     /// bit literals, which are the value itself (a string literal of that text would be the
     /// text); any other value as a string that reads the same whatever the session's
@@ -409,6 +437,11 @@ impl CatalogueRules for FamilyCatalogue {
     /// connect.
     fn result_tables(&self) -> ResultTables {
         ResultTables::ByName
+    }
+
+    /// As written.
+    fn short_type(&self, ty: &str) -> String {
+        ty.to_string()
     }
 }
 
@@ -668,6 +701,7 @@ static FAMILY_FILTER_SYNTAX: FilterSyntax = FilterSyntax {
     plans_subqueries: true,
     m_bang: true,
     shape: FilterShape::Tokens,
+    ci_collations: true,
 };
 
 impl FilterSql for FamilyFilter {
@@ -747,7 +781,113 @@ impl FilterSql for FamilyFilter {
         let len = format!("OCTET_LENGTH({c})");
         GroupParts { preview: format!("IF({len} <= {GROUP_PREVIEW}, {c}, NULL)"), length: len, count: "COUNT(*)" }
     }
+
+    /// When the session's character set is known to be `utf8mb4`, which holds every character.
+    fn plain_text(&self, values: Option<&SessionValues>) -> bool {
+        values.is_some_and(|v| v.charset.eq_ignore_ascii_case("utf8mb4"))
+    }
+
+    fn keywords(&self) -> &'static [&'static str] {
+        MYSQL_CONDITION_KEYWORDS
+    }
+
+    /// The catalogue type (`COLUMN_TYPE`) named and of the kind the MySQL driver gives a result
+    /// column of that type: for a column no result describes (an `INVISIBLE` one, which `SELECT
+    /// *` leaves out). A type not named here is of no kind of its own ([`ValueKind::Other`]),
+    /// whose values are not compared.
+    fn catalogue_meta(&self, name: &str, type_name: &str) -> Option<ColumnMeta> {
+        let lower = type_name.to_ascii_lowercase();
+        let base = base_type(type_name);
+        let unsigned = lower.split_whitespace().any(|w| w == "unsigned");
+        let numeric = |n: &str| if unsigned { format!("{n} unsigned") } else { n.to_string() };
+        let (ty, kind) = match base.as_str() {
+            "tinyint" if lower.starts_with("tinyint(1)") => (numeric("tinyint(1)"), ValueKind::Integer),
+            "tinyint" | "smallint" | "mediumint" | "int" | "bigint" => (numeric(&base), ValueKind::Integer),
+            "year" => (base.clone(), ValueKind::Integer),
+            "decimal" => (numeric("decimal"), ValueKind::Decimal),
+            "float" | "double" => (numeric(&base), ValueKind::Float),
+            "bit" => (base.clone(), ValueKind::Bit),
+            "date" => (base.clone(), ValueKind::Date),
+            "time" => (base.clone(), ValueKind::Interval),
+            "datetime" => (base.clone(), ValueKind::Timestamp),
+            "timestamp" => (base.clone(), ValueKind::TimestampTz),
+            "json" => (base.clone(), ValueKind::Json),
+            "char" | "varchar" | "tinytext" | "text" | "mediumtext" | "longtext" | "enum" | "set" => {
+                (base.clone(), ValueKind::Text)
+            }
+            "binary" | "varbinary" | "tinyblob" | "blob" | "mediumblob" | "longblob" => {
+                (base.clone(), ValueKind::Bytes)
+            }
+            "geometry" | "point" | "linestring" | "polygon" | "multipoint" | "multilinestring" | "multipolygon"
+            | "geometrycollection" | "geomcollection" => ("geometry".to_string(), ValueKind::Bytes),
+            "vector" => (base.clone(), ValueKind::Bytes),
+            _ => (base.clone(), ValueKind::Other),
+        };
+        Some(ColumnMeta::new(name.to_string(), ty, kind, None))
+    }
+
+    /// A `TIMESTAMP`.
+    fn catalogue_zoned(&self, type_name: &str) -> bool {
+        base_type(type_name) == "timestamp"
+    }
+
+    /// By the catalogue type (`COLUMN_TYPE`); an array (no column of the engine has one), dates
+    /// and a type not named here are [`ColumnKind::Other`].
+    fn catalogue_kind(&self, type_name: &str) -> ColumnKind {
+        let base = base_type(type_name);
+        if base.ends_with("[]") {
+            return ColumnKind::Other;
+        }
+        match base.as_str() {
+            "float" => ColumnKind::Real,
+            "tinyint" | "smallint" | "mediumint" | "int" | "integer" | "bigint" | "year" | "decimal" | "numeric"
+            | "dec" | "fixed" | "double" | "double precision" | "real" => ColumnKind::Number,
+            "char" | "varchar" | "tinytext" | "text" | "mediumtext" | "longtext" | "enum" | "set" => ColumnKind::Text,
+            "binary" | "varbinary" | "tinyblob" | "blob" | "mediumblob" | "longblob" => ColumnKind::Bytes,
+            _ => ColumnKind::Other,
+        }
+    }
 }
+
+/// The keywords a condition is written with on MySQL and MariaDB, sorted
+/// ([`FilterSql::keywords`]).
+const MYSQL_CONDITION_KEYWORDS: &[&str] = &[
+    "ALL",
+    "AND",
+    "ANY",
+    "AS",
+    "BETWEEN",
+    "BINARY",
+    "CASE",
+    "CAST",
+    "COLLATE",
+    "CURRENT_DATE",
+    "CURRENT_TIME",
+    "CURRENT_TIMESTAMP",
+    "DIV",
+    "ELSE",
+    "END",
+    "ESCAPE",
+    "EXISTS",
+    "FALSE",
+    "FROM",
+    "IN",
+    "INTERVAL",
+    "IS",
+    "LIKE",
+    "MOD",
+    "NOT",
+    "NULL",
+    "OR",
+    "REGEXP",
+    "RLIKE",
+    "SOME",
+    "THEN",
+    "TRUE",
+    "UNKNOWN",
+    "WHEN",
+    "XOR",
+];
 
 /// A collation that compares without case (`utf8mb4_0900_ai_ci`).
 fn case_insensitive(c: &ColumnFacts) -> bool {

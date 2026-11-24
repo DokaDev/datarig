@@ -205,15 +205,6 @@ fn every_order_problem_has_its_own_words() {
 }
 
 #[test]
-fn mysql_quotes_the_text_from_where_it_stopped() {
-    let m = "ERROR 1064 (42000): You have an error in your SQL syntax; check the manual that corresponds to \
-             your MySQL server version for the right syntax to use near 'name = 'x')' at line 1";
-    assert_eq!(mysql_near(m), Some("name = 'x')"));
-    assert_eq!(mysql_near("ERROR 1064 (42000): ... near '' at line 1"), None, "nothing quoted");
-    assert_eq!(mysql_near("ERROR 1054 (42S22): Unknown column 'x' in 'where clause'"), None);
-}
-
-#[test]
 fn a_server_error_marks_the_filter_where_it_points() {
     use datarig_core::driver::ServerMessage;
     let table = TableName { database: None, schema: "shop".into(), name: "users".into() };

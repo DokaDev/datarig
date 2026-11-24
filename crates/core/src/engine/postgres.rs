@@ -7,13 +7,17 @@ use super::{
     SessionRules, SortRules, Support, TextRules, Transport, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict,
     ValueRules,
 };
-use crate::driver::{ArrayElement, ColumnMeta, EditFormat, Hierarchy, ReadIn, SessionRole, SessionValues, ValueKind};
+use crate::driver::{
+    ArrayElement, ColumnMeta, EditFormat, Hierarchy, ReadIn, ServerMessage, SessionRole, SessionValues, ValueKind,
+};
 use crate::edit::input::{self, TypeName};
 use crate::edit::{BitsForm, BytesForm, Invalid, TableColumn};
 use crate::export::keyset::NotKeyset;
 use crate::export::{self, Kind, Refused, Rule, SqlCells, SqlColumn};
 use crate::profile::dsn::Scheme;
-use crate::query::{CaseMode, Compares, GROUP_PREVIEW, LINE_BREAKS, NoEquality, Nulls, RenderError, Target, hex};
+use crate::query::{
+    CaseMode, ColumnKind, Compares, GROUP_PREVIEW, LINE_BREAKS, NoEquality, Nulls, RenderError, Target, base_type, hex,
+};
 use crate::sql::dialect::{Dialect, DollarQuotes, Language, LiteralOpen};
 use crate::sql::risk::mysql::Judged;
 use crate::sql::risk::{Class, Classifier, TxStep};
@@ -51,6 +55,13 @@ impl TextRules for PgText {
     /// Always: `$$…$$` and `$tag$…$tag$` are string constants on every PostgreSQL.
     fn dollar_quotes(&self, _: &ServerFacts) -> DollarQuotes {
         DollarQuotes::Read
+    }
+
+    /// The character the message's position counts to (1-based, characters of the statement as
+    /// sent); how far the error goes is not said.
+    fn error_offset(&self, sql: &str, m: &ServerMessage) -> Option<(usize, Option<usize>)> {
+        let at = ServerMessage::byte_offset(sql, m.position?)?;
+        Some((at, None))
     }
 }
 
@@ -414,6 +425,11 @@ impl ValueRules for PgValues {
         "\\x"
     }
 
+    /// `\x` and lower-case digits.
+    fn bytes_shown(&self, b: &[u8]) -> String {
+        format!("\\x{}", b.iter().map(|b| format!("{b:02x}")).collect::<String>())
+    }
+
     /// Any other value as a string literal, which PostgreSQL reads in the column's type: bytes
     /// (`\x…`) and bits too.
     fn literal(&self, kind: Kind, v: Option<&str>) -> String {
@@ -465,6 +481,38 @@ impl CatalogueRules for PgCatalogue {
     /// By the table's number (a result column's table OID).
     fn result_tables(&self) -> ResultTables {
         ResultTables::ByNumber
+    }
+
+    /// A type by its short name where it has one (`timestamptz`, `varchar(20)`, `float8`), so a
+    /// cut does not take what tells types apart; anything else as written.
+    fn short_type(&self, ty: &str) -> String {
+        let base = ty.trim_end_matches("[]");
+        let arrays = &ty[base.len()..];
+        for head in ["timestamp", "time"] {
+            let Some(rest) = base.strip_prefix(head) else { continue };
+            let (precision, zone) = rest.split_at(rest.find(' ').unwrap_or(rest.len()));
+            if !(precision.is_empty() || precision.starts_with('(')) {
+                continue;
+            }
+            match zone {
+                " with time zone" => return format!("{head}tz{precision}{arrays}"),
+                " without time zone" => return format!("{head}{precision}{arrays}"),
+                _ => {}
+            }
+        }
+        for (long, short) in [
+            ("character varying", "varchar"),
+            ("character", "char"),
+            ("double precision", "float8"),
+            ("bit varying", "varbit"),
+        ] {
+            if let Some(rest) = base.strip_prefix(long)
+                && (rest.is_empty() || rest.starts_with('('))
+            {
+                return format!("{short}{rest}{arrays}");
+            }
+        }
+        ty.to_string()
     }
 }
 
@@ -695,6 +743,7 @@ static PG_FILTER_SYNTAX: FilterSyntax = FilterSyntax {
     plans_subqueries: false,
     m_bang: false,
     shape: FilterShape::ParseTree,
+    ci_collations: false,
 };
 
 impl FilterSql for PgFilter {
@@ -805,7 +854,84 @@ impl FilterSql for PgFilter {
         };
         GroupParts { preview, length, count: "pg_catalog.count(*)" }
     }
+
+    /// Never: text is written as `'…'` or `E'…'`, read as written in any session.
+    fn plain_text(&self, _: Option<&SessionValues>) -> bool {
+        false
+    }
+
+    fn keywords(&self) -> &'static [&'static str] {
+        PG_CONDITION_KEYWORDS
+    }
+
+    /// None: every column of a table is in a result of `SELECT *`.
+    fn catalogue_meta(&self, _: &str, _: &str) -> Option<ColumnMeta> {
+        None
+    }
+
+    /// Never: a `timestamp with time zone` is shown with its offset.
+    fn catalogue_zoned(&self, _: &str) -> bool {
+        false
+    }
+
+    /// By the name `format_type` gives; a domain, an array, dates and a type not named here are
+    /// [`ColumnKind::Other`].
+    fn catalogue_kind(&self, type_name: &str) -> ColumnKind {
+        let base = base_type(type_name);
+        if base.ends_with("[]") {
+            return ColumnKind::Other;
+        }
+        match base.as_str() {
+            "real" | "float4" => ColumnKind::Real,
+            "smallint" | "integer" | "int" | "bigint" | "int2" | "int4" | "int8" | "oid" | "double precision"
+            | "float8" | "numeric" | "decimal" => ColumnKind::Number,
+            "text" | "character varying" | "varchar" | "character" | "char" | "bpchar" | "name" => ColumnKind::Text,
+            "bytea" => ColumnKind::Bytes,
+            _ => ColumnKind::Other,
+        }
+    }
 }
+
+/// The keywords a condition is written with on PostgreSQL, sorted ([`FilterSql::keywords`]).
+const PG_CONDITION_KEYWORDS: &[&str] = &[
+    "ALL",
+    "AND",
+    "ANY",
+    "ARRAY",
+    "AS",
+    "BETWEEN",
+    "CASE",
+    "CAST",
+    "COALESCE",
+    "COLLATE",
+    "CURRENT_DATE",
+    "CURRENT_TIMESTAMP",
+    "DISTINCT",
+    "ELSE",
+    "END",
+    "ESCAPE",
+    "EXISTS",
+    "EXTRACT",
+    "FALSE",
+    "FROM",
+    "ILIKE",
+    "IN",
+    "INTERVAL",
+    "IS",
+    "LIKE",
+    "NOT",
+    "NULL",
+    "NULLIF",
+    "OR",
+    "SIMILAR",
+    "SOME",
+    "SYMMETRIC",
+    "THEN",
+    "TO",
+    "TRUE",
+    "UNKNOWN",
+    "WHEN",
+];
 
 /// PostgreSQL types of no kind of their own whose values compare as their text reads back
 /// (equality and order).

@@ -1,12 +1,12 @@
 //! What is fixed per engine, known without a connection: one [`EngineSpec`] per engine.
 
 use super::{CountInTx, EngineId, Fact, OpenVerdict, ReadOnlyProof, ServerFacts, Support, TxStatement, TxVerdict};
-use crate::driver::{ColumnMeta, EditFormat, Hierarchy, ReadIn, SessionRole, SessionValues, ValueKind};
+use crate::driver::{ColumnMeta, EditFormat, Hierarchy, ReadIn, ServerMessage, SessionRole, SessionValues, ValueKind};
 use crate::edit::{Invalid, TableColumn};
 use crate::export::keyset::NotKeyset;
 use crate::export::{Kind, Refused, SqlCells, SqlColumn};
 use crate::profile::dsn::Scheme;
-use crate::query::{CaseMode, ColumnFacts, Compares, NoEquality, Nulls, RenderError, Target};
+use crate::query::{CaseMode, ColumnFacts, ColumnKind, Compares, NoEquality, Nulls, RenderError, Target};
 use crate::sql::dialect::{Dialect, DollarQuotes};
 use crate::sql::risk::Classifier;
 use crate::sql::risk::mysql::Judged;
@@ -70,6 +70,11 @@ pub struct EngineSpec {
 pub trait TextRules: Sync {
     /// Whether a session on the server of `f` reads `$$…$$` as a quote.
     fn dollar_quotes(&self, f: &ServerFacts) -> DollarQuotes;
+
+    /// Where in statement `sql`, as sent, the server's message `m` says its error is: the byte
+    /// it starts at and, when the message says how far it goes, the byte it ends at. `None`
+    /// when the message does not point into the statement.
+    fn error_offset(&self, sql: &str, m: &ServerMessage) -> Option<(usize, Option<usize>)>;
 }
 
 /// How an engine's statements are judged.
@@ -154,6 +159,10 @@ pub trait ValueRules: Sync {
     /// What the text of a bytes value starts with in a result, before its hexadecimal digits.
     fn bytes_shown_prefix(&self) -> &'static str;
 
+    /// Bytes `b` as a result shows them: [`ValueRules::bytes_shown_prefix`], then their
+    /// hexadecimal digits.
+    fn bytes_shown(&self, b: &[u8]) -> String;
+
     /// Value `v` (`None`: NULL) of a column of `kind` as an SQL literal: NULL, a number or a
     /// boolean bare, anything else a literal the server reads as the value.
     fn literal(&self, kind: Kind, v: Option<&str>) -> String;
@@ -219,6 +228,10 @@ pub trait CatalogueRules: Sync {
     /// How a result names the table its columns come from: by the table's number, or by its
     /// name, found only in the cache of keys read when the profile connected.
     fn result_tables(&self) -> ResultTables;
+
+    /// Type name `ty`, as the catalogue writes it, as a list of columns shows it: by a shorter
+    /// name where the engine has one that keeps what tells types apart.
+    fn short_type(&self, ty: &str) -> String;
 }
 
 /// How a result names the table its columns come from ([`CatalogueRules::result_tables`]).
@@ -351,6 +364,27 @@ pub trait FilterSql: Sync {
 
     /// The three items a group count reads of `column` (`quoted`, its name as written).
     fn group_parts(&self, column: &ColumnMeta, quoted: &str) -> GroupParts;
+
+    /// Whether text may be written as a plain string literal in a session of `values` (`None`:
+    /// not known): the session reads every character of such a literal as written.
+    fn plain_text(&self, values: Option<&SessionValues>) -> bool;
+
+    /// The keywords a condition is written with, sorted: its operators, `CASE`, literals, and
+    /// the functions and casts the lexer reads as keywords (no statement's words).
+    fn keywords(&self) -> &'static [&'static str];
+
+    /// What a column `name` whose catalogue type is `type_name` would be described as in a
+    /// result, for a column no result describes; `None` where the engine has no such column.
+    fn catalogue_meta(&self, name: &str, type_name: &str) -> Option<ColumnMeta>;
+
+    /// Whether a column whose catalogue type is `type_name` is shown in the session's time
+    /// zone ([`ColumnFacts::zoned`]).
+    fn catalogue_zoned(&self, type_name: &str) -> bool;
+
+    /// What literals are written as for a column whose catalogue type is `type_name`, as a
+    /// result would say: numbers, text and bytes of the built-in types; anything else is
+    /// [`ColumnKind::Other`], whose values are written as strings.
+    fn catalogue_kind(&self, type_name: &str) -> ColumnKind;
 }
 
 /// What an engine's filter text means, as data: each engine writes every field.
@@ -391,6 +425,9 @@ pub struct FilterSyntax {
     pub m_bang: bool,
     /// How the shape of a filter's statement is checked.
     pub shape: FilterShape,
+    /// A collation whose name ends in `_ci` compares without case: `LIKE` on such a column is
+    /// already a pattern without case.
+    pub ci_collations: bool,
 }
 
 /// How a NULL-safe equality is written ([`FilterSyntax::null_safe`]).

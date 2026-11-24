@@ -336,23 +336,9 @@ impl TableQuery {
         let Some((_, s)) = self.statement.as_ref().filter(|(id, _)| *id == qid) else { return };
         let ordered = !s.order.is_empty();
         let at = s.filter_span.as_ref().and_then(|span| {
-            let (start, end) = match (error, d) {
-                (ServerError::Message(m), Dialect::Postgres) => {
-                    let at = datarig_core::driver::ServerMessage::byte_offset(&s.sql, m.position?)?;
-                    (at, None)
-                }
-                (ServerError::Message(m), Dialect::MySql(_) | Dialect::MariaDb(_)) => {
-                    let near = mysql_near(&m.text)?;
-                    let at = s.sql.find(near)?;
-                    // Found again from the next character on (an overlapping match counts):
-                    // unknown, not located.
-                    let next = at + s.sql[at..].chars().next().map_or(1, char::len_utf8);
-                    if s.sql[next..].contains(near) {
-                        return None;
-                    }
-                    (at, Some(at + near.len()))
-                }
-                (ServerError::Other, _) => return None,
+            let (start, end) = match error {
+                ServerError::Message(m) => d.engine().spec().text.error_offset(&s.sql, m)?,
+                ServerError::Other => return None,
             };
             if !span.contains(&start) {
                 return None;
@@ -492,9 +478,9 @@ pub(crate) fn column_kind(c: &ColumnMeta) -> ColumnKind {
     }
 }
 
-/// A result column of dialect `d` that is a MySQL `TIMESTAMP` ([`ColumnFacts::zoned`]).
+/// A result column of dialect `d` shown in the session's time zone ([`ColumnFacts::zoned`]).
 fn zoned(d: Dialect, c: &ColumnMeta) -> bool {
-    matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)) && c.kind == ValueKind::TimestampTz
+    d.engine().spec().values.shown_in_session_zone(c.kind)
 }
 
 /// Why the bar refuses a filter, in words (the part in parentheses of the refusal).
@@ -544,15 +530,6 @@ pub(super) enum ServerError<'a> {
     Message(&'a datarig_core::driver::ServerMessage),
     /// Anything else (a lost session, a lock wait): no place in the text.
     Other,
-}
-
-/// The text MySQL quotes from where it stopped reading (`… near 'x = = 1)' at line 1`), when
-/// it quotes any.
-pub(super) fn mysql_near(message: &str) -> Option<&str> {
-    let from = message.find(" near '")? + " near '".len();
-    let rest = &message[from..];
-    let to = rest.rfind("' at line ")?;
-    Some(&rest[..to]).filter(|s| !s.is_empty())
 }
 
 /// Where the token that starts at byte `from` of `text` ends (one character for a blank or the
@@ -721,8 +698,7 @@ impl App {
             target.primary_key = k.primary_key.clone();
             target.unique_keys = k.unique_not_null.clone();
         }
-        target.utf8mb4 = matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_))
-            && t.exec.values.as_ref().is_some_and(|v| v.charset.eq_ignore_ascii_case("utf8mb4"));
+        target.utf8mb4 = query::filter_sql(d).is_ok_and(|f| f.plain_text(t.exec.values.as_ref()));
         Some(target)
     }
 
