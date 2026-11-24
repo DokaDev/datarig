@@ -93,6 +93,10 @@ impl EditSql for MySql {
         &[Offer::Primary, Offer::Unique, Offer::Values]
     }
 
+    fn edit_format(&self) -> crate::driver::EditFormat {
+        crate::driver::EditFormat::MySql(self.0)
+    }
+
     /// The types of [`EXACT`] (a text in a character set of its own included: it is compared
     /// as UTF-8); floats, JSON, spatial types and any other are not.
     fn exactness(&self, c: &ColumnInfo) -> Exactness {

@@ -12,8 +12,8 @@ use datarig_core::config::Config;
 use datarig_core::driver::keys::{KeyCatalog, NameRule};
 use datarig_core::driver::structure::{Collation, ColumnFill, StructureColumn, TableStructure};
 use datarig_core::driver::{
-    ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, EditFormat, MySqlEdit, SessionContext, SessionValues,
-    ValueKind,
+    AppliedStep, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, EditFormat, MySqlEdit, SessionContext,
+    SessionValues, ValueKind,
 };
 use datarig_core::edit::Expect;
 use datarig_core::engine::{EngineFacts, EngineId, Fact, MyFacts, ServerFacts, Topology, Version, Why};
@@ -35,7 +35,7 @@ const TEXT_SQL: &str = "SELECT a, b, c FROM shop.items";
 const SESSIONS_DIFFER: &str = "matches 2 rows that look the same, but datarig cannot confirm that the session that read the table and the one that would change them report the same engine and version, so they may differ";
 const FORMAT_DIFFERS: &str = "matches 2 rows that look the same, but this edit format differs from the one the session that would change them takes, so one or all cannot be offered";
 const TOO_OLD: &str = "matches 2 rows that look the same, but this session's server is older than MySQL 8.0.17, which changing one of them or all needs";
-const NOT_CHECKED: &str = "matches 2 rows that look the same, but the server version of the session that read the table or of the one that would change them is not known, so they may differ";
+const NOT_CHECKED: &str = "matches 2 rows that look the same, but the server version of the session that read the table or of the one that would change them is not known, so they may differ. Run the query again to edit these rows.";
 const NOT_BUILT: &str = "matches 2 rows that look the same, but datarig does not change rows on this server yet";
 
 fn v(major: u16, minor: u16, patch: u16) -> Version {
@@ -492,6 +492,8 @@ fn a_format_change_with_the_preview_open_applies_nothing() {
 fn the_metadata_session_lost_and_opened_again_with_the_preview_open_applies_nothing() {
     let mut h = previewed();
     meta_db(&mut h, DbEvent::Lost { error: DbError::Closed });
+    assert!(h.app.edit_preview_view().is_none(), "the preview is closed");
+    assert_eq!(said_text(&mut h), Some(format!("Can't apply yet: {NOT_CHECKED}")));
     h.ctrl('t');
     h.app.focus = Focus::Editor;
     h.app.run(vec!["SELECT 1".to_string()]);
@@ -502,6 +504,61 @@ fn the_metadata_session_lost_and_opened_again_with_the_preview_open_applies_noth
     meta_db(&mut h, DbEvent::Connected);
     h.app.transient = None;
     all_then_yes_sends_nothing(&mut h);
+    // The same server again, but not the session that read the structure: asked again, the
+    // change of the two rows is still refused.
+    h.advance(Duration::from_secs(2));
+    h.app.transient = None;
+    apply_counted(&mut h, 2);
+    withheld(&mut h, NOT_CHECKED);
+}
+
+/// An Apply sent from the preview is reported when its answer comes, whatever the sessions
+/// say meanwhile (the change may be committed).
+#[test]
+fn an_apply_in_flight_is_reported_whatever_the_sessions_say_meanwhile() {
+    let mut h = previewed();
+    h.key(KeyCode::Char('a'));
+    h.key(KeyCode::Char('y'));
+    let sent: Vec<(u64, Vec<datarig_core::edit::Step>)> = h
+        .sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::ApplyEdits { id, steps, .. } => Some((id, steps)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sent.len(), 1, "one Apply sent");
+    meta_db(&mut h, edits(false));
+    h.tab_db(0, mysql(v(8, 4, 7)));
+    assert!(h.app.edit_preview_view().is_some(), "the preview still says it applies");
+    let (id, steps) = sent.into_iter().next().unwrap();
+    let stood = steps
+        .iter()
+        .map(|s| {
+            let count = match s.expect {
+                Expect::Rows(n) | Expect::Affected(n) => n,
+            };
+            AppliedStep { count, ..AppliedStep::default() }
+        })
+        .collect();
+    h.db(DbEvent::Applied { id, result: Ok(stood) });
+    assert!(rows(&h).edit.applied.is_some(), "the changes are applied");
+    assert!(rows(&h).edit.batch.is_empty());
+}
+
+/// The preview closes by itself after `a` was pressed: the `y` meant for it is not taken by the
+/// grid (which would copy a cell over the clipboard); it is ignored, said so.
+#[test]
+fn the_answer_key_after_the_preview_closed_by_itself_is_not_taken_by_the_grid() {
+    let mut h = previewed();
+    let clipboard = FakeClipboard::attach(&mut h, false, &[]);
+    h.key(KeyCode::Char('a'));
+    meta_db(&mut h, edits(false));
+    assert!(h.app.edit_preview_view().is_none(), "the preview is closed");
+    h.key(KeyCode::Char('y'));
+    assert!(clipboard.all().is_empty(), "nothing copied: {:?}", clipboard.all());
+    assert!(matches!(said(&mut h), Some(Msg::EditAskIgnored { .. })));
+    assert!(no_apply_sent(&mut h));
 }
 
 /// The structure came from another database's session, which is lost while the preview is open.

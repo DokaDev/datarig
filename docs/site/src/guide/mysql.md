@@ -235,9 +235,10 @@ their results read-only ("this connection type can't edit data").
   may reach different servers, behind a proxy for instance). This is judged again when the Apply
   is asked for and when `y` sends it, from what the sessions say then: the Apply dialog closes,
   saying why, when that session is lost or either session reports another server, and when the
-  edit format changes; a row refused before its session said what its server is is offered once
-  it has. When the edit format changes while an Apply counts its rows, the Apply is cancelled:
-  apply again.
+  edit format changes (an Apply already sent is still reported when its answer comes); a row
+  refused before its session said what its server is is offered once it has. After the session
+  that read the structure is lost, run the query again to edit such rows. When the edit format
+  changes while an Apply counts its rows, the Apply is cancelled: apply again.
 - **Grants by column.** The server lists a table's columns to a user only as far as the user's
   grants go: one granted single columns sees just those, and rows that look the same may differ
   in the others. Unless the user's own grants include `SELECT`, `INSERT`, `UPDATE` or

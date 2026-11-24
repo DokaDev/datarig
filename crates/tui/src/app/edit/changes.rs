@@ -708,7 +708,7 @@ impl App {
 /// Why a row that matches `count` identical rows is not offered one or all of them, in words
 /// for `why`. `EditRules::duplicates_choice` gives only the first five reasons, and an engine
 /// that takes no edits its own; any other is said as the nearest of them.
-fn withheld_text(count: u64, why: &datarig_core::engine::Why) -> Msg {
+pub(super) fn withheld_text(count: u64, why: &datarig_core::engine::Why) -> Msg {
     use datarig_core::engine::Why as W;
     match why {
         W::SessionsDiffer | W::VersionsDisagree | W::EnginesDisagree => {

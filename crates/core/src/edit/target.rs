@@ -258,6 +258,16 @@ impl EditTarget {
         }
     }
 
+    /// Whether the choice among rows the same in every column was checked
+    /// ([`EditTarget::choice_on`]) for edits written in format `f`, and why not.
+    pub fn choice_checked_for(&self, f: EditFormat) -> Result<(), Why> {
+        match self.choice_format {
+            Some(checked) if checked == f => Ok(()),
+            Some(_) => Err(Why::EditFormatDiffers),
+            None => Err(Why::NotChecked),
+        }
+    }
+
     /// The target as it stands for edits written in format `f`: a choice checked for another
     /// format (or not checked) is withheld.
     pub fn for_format(&self, f: EditFormat) -> Cow<'_, EditTarget> {

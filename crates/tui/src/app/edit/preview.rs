@@ -197,21 +197,34 @@ impl App {
     }
 
     /// After every event: the preview closes when it is no longer current, or no longer stands
-    /// for what it would apply, and says why.
+    /// for what it would apply, and says why; an answer key pressed for it is then ignored a
+    /// while, never taken by the grid ([`super::ask::ANSWER_GUARD`]). While an Apply it sent is
+    /// not answered, what the sessions say does not close it: the answer is reported.
     pub(super) fn sweep_edit_preview(&mut self) {
-        if self.overlays.edit_preview().is_none() {
-            return;
-        }
-        let said: Msg = match self.edit_preview_choice_gone() {
+        let Some(p) = self.overlays.edit_preview() else { return };
+        let applying = self.applying(p.tab, p.result);
+        let gone = if applying { None } else { self.edit_preview_choice_gone() };
+        let said: Msg = match gone {
             Some(why) => {
-                let reason = self.i18n.msg(&crate::app::engine_why::why_text(&why)).to_string();
+                let reason = self.i18n.msg(&self.edit_preview_gone_words(&why)).to_string();
                 Msg::EditPreviewCantApply { reason }
             }
             None if !self.edit_preview_current() => Label::EditPreviewClosed.into(),
             None => return,
         };
         self.overlays.close(OverlayKind::EditPreview);
-        self.flash(Notice::new(said, Level::Info));
+        self.ask_ended(said);
+    }
+
+    /// Why the open preview's choice among identical rows is gone, as the Changes tab words it
+    /// for the most rows one of its rows matches.
+    fn edit_preview_gone_words(&self, why: &datarig_core::engine::Why) -> Msg {
+        let rs = self
+            .overlays
+            .edit_preview()
+            .and_then(|p| self.tabs.get(p.tab).and_then(rows_of).filter(|rs| rs.id == p.result));
+        let count = rs.and_then(|rs| rs.edit.checks.matches().values().copied().max()).unwrap_or(0);
+        super::changes::withheld_text(count, why)
     }
 
     /// How an Apply in tab `tab` stands to a transaction now, in words: inside the open one,

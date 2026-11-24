@@ -277,6 +277,25 @@ fn an_unchecked_choice_among_identical_rows_is_refused() {
     assert!(plan_with(&t, &b, &ALL, &[(3, 1)], &[]).is_ok(), "one match is the row");
 }
 
+/// A choice among identical rows checked for one format is not one in another: planned with a
+/// writer of another format, it is refused, whatever was chosen.
+#[test]
+fn a_choice_checked_for_another_format_is_refused() {
+    use crate::driver::{EditFormat, MySqlEdit};
+    use crate::engine::Why;
+    let t = EditTarget {
+        choice_format: Some(EditFormat::MySql(MySqlEdit { nowait: true })),
+        ..by_values(Duplicates::Choose)
+    };
+    let mut b = EditBatch::new();
+    b.set(&[(3, 1)], &text("x"), orig);
+    for choice in [None, Some(Choice::One), Some(Choice::All)] {
+        let choices: Vec<(usize, Choice)> = choice.map(|c| (3, c)).into_iter().collect();
+        let got = plan_with(&t, &b, &ALL, &[(3, 3)], &choices);
+        assert_eq!(got, Err(PlanError::Withheld { row: 3, matches: 3, why: Why::EditFormatDiffers }), "{choice:?}");
+    }
+}
+
 /// Identical rows whose choice was withheld: an update or a delete of a row that matches several
 /// is refused with the count and the cause, whatever was chosen; a row that matches one is
 /// planned as before.

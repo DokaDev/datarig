@@ -348,9 +348,10 @@ fn row_checks(
                     return Err(PlanError::Withheld { row, matches: k, why });
                 }
                 // A choice never checked against the sessions that read and apply it
-                // ([`EditTarget::choice_on`]) is not offered.
-                (Duplicates::Choose, _) if t.choice_format.is_none() => {
-                    return Err(PlanError::Withheld { row, matches: k, why: Why::NotChecked });
+                // ([`EditTarget::choice_on`]), or checked for another format, is not offered.
+                (Duplicates::Choose, _) if t.choice_checked_for(f.edit_format()).is_err() => {
+                    let why = t.choice_checked_for(f.edit_format()).err().unwrap_or(Why::NotChecked);
+                    return Err(PlanError::Withheld { row, matches: k, why });
                 }
                 (Duplicates::Choose, None) => return Err(PlanError::Choose { row, matches: k }),
                 (Duplicates::Choose, Some(Choice::All)) => (k, Scope::All),
