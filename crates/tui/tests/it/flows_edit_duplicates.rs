@@ -73,24 +73,12 @@ fn edits(nowait: bool) -> DbEvent {
 /// A MySQL profile, connected, the keys of `shop.items` read (no key): `meta` is what its
 /// metadata session says first.
 fn profile(meta: Vec<DbEvent>) -> Harness {
-    profile_in(meta, false)
-}
-
-/// [`profile`], its environment confirming every write when `confirm` (an Apply shows the
-/// preview first).
-fn profile_in(meta: Vec<DbEvent>, confirm: bool) -> Harness {
-    use datarig_core::policy::{Confirm, Policy};
     let driver = FakeDriver::default();
     driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
-    let mut cfg = Config {
-        connections: vec![ConnectionConfig {
-            driver: "mysql".into(),
-            policy: confirm.then(|| "stg".into()),
-            ..ConnectionConfig::test_db()
-        }],
+    let cfg = Config {
+        connections: vec![ConnectionConfig { driver: "mysql".into(), ..ConnectionConfig::test_db() }],
         ..Config::default()
     };
-    cfg.policies.insert("stg", Policy { confirm: Confirm::Writes, ..Policy::default() });
     let mut h = Harness::with_driver(&cfg, Lang::En, driver);
     // A key that lands in the grid copies there: never to the system's clipboard.
     FakeClipboard::attach(&mut h, false, &[]);
@@ -241,7 +229,12 @@ fn no_apply_sent(h: &mut Harness) -> bool {
 /// The duplicate-row change is refused for `words`: the Changes tab shows it on the row (no
 /// preview, no one or all to pick), and nothing is applied, `y` included.
 fn withheld(h: &mut Harness, words: &str) {
-    assert!(h.app.overlays.top().is_none(), "no preview: {:?}", h.app.edit_preview_view().map(|v| v.lines));
+    assert!(
+        h.app.overlays.top().is_none(),
+        "no preview: {:?} {:?}",
+        h.app.edit_preview_view().map(|v| v.lines),
+        h.overlay_kind()
+    );
     assert!(h.app.ask.is_none(), "nothing asked");
     assert_eq!(h.app.key_context(), Ctx::Changes);
     let m = h.app.shown_changes().expect("a model");
@@ -462,7 +455,7 @@ fn a_mariadb_tab_withholds_duplicates_when_a_mysql_tab_set_the_format() {
     assert!(h.sent().iter().any(|c| matches!(c, DbCommand::ApplyEdits { .. })), "the Apply sent");
 }
 
-// ── Judged when applied: what changes while the preview is open ────────────────────────────
+// ── Judged at `y`: what changes while the preview is open ──────────────────────────────────
 
 /// One greeting everywhere, the change of a row that matches two identical rows asked with
 /// `:apply`: the preview offers one or all, nothing sent yet.
@@ -475,18 +468,16 @@ fn previewed() -> Harness {
     h
 }
 
-/// `a` (all of them) then `y`, wherever the keys land: nothing is applied.
-fn all_then_yes_sends_nothing(h: &mut Harness) {
+/// The preview is still open (nothing closes it by itself); `a` (all of them) then `y` in it:
+/// nothing is applied, and the preview closes saying `words`.
+fn all_then_yes_refused(h: &mut Harness, words: &str) {
+    assert!(h.app.edit_preview_view().is_some(), "the preview is open");
+    h.app.transient = None;
     h.key(KeyCode::Char('a'));
     h.key(KeyCode::Char('y'));
     assert!(no_apply_sent(h), "nothing applied");
-}
-
-/// The preview is closed, saying why one or all is no longer offered.
-fn closed_saying(h: &mut Harness, words: &str) {
     assert!(h.app.edit_preview_view().is_none(), "the preview is closed");
-    let said = said_text(h).unwrap_or_default();
-    assert!(said.contains(words), "{said}");
+    assert_eq!(said_text(h), Some(format!("Can't apply yet: {words}")));
 }
 
 /// Another session says another edit format while the preview offers one or all.
@@ -494,18 +485,18 @@ fn closed_saying(h: &mut Harness, words: &str) {
 fn a_format_change_with_the_preview_open_applies_nothing() {
     let mut h = previewed();
     meta_db(&mut h, edits(false));
-    closed_saying(&mut h, "edit format");
-    all_then_yes_sends_nothing(&mut h);
+    all_then_yes_refused(&mut h, FORMAT_DIFFERS);
 }
 
-/// The metadata session that read the structure is lost while the preview is open, and another
-/// tab's run opens it again (the same server): the structure's session is not the one now.
+/// The metadata session that read the structure is lost while the preview is open: `y` sends
+/// nothing. Another tab's run opens it again (the same server): it is not the session that read
+/// the structure, so `:apply` again still refuses the change.
 #[test]
 fn the_metadata_session_lost_and_opened_again_with_the_preview_open_applies_nothing() {
     let mut h = previewed();
     meta_db(&mut h, DbEvent::Lost { error: DbError::Closed });
-    assert!(h.app.edit_preview_view().is_none(), "the preview is closed");
-    assert_eq!(said_text(&mut h), Some(format!("Can't apply yet: {NOT_CHECKED}")));
+    all_then_yes_refused(&mut h, NOT_CHECKED);
+    // Another tab's run opens it again, on the same server.
     h.ctrl('t');
     h.app.focus = Focus::Editor;
     h.app.run(vec!["SELECT 1".to_string()]);
@@ -514,63 +505,12 @@ fn the_metadata_session_lost_and_opened_again_with_the_preview_open_applies_noth
     meta_db(&mut h, mysql(v(8, 4, 6)));
     meta_db(&mut h, edits(true));
     meta_db(&mut h, DbEvent::Connected);
-    h.app.transient = None;
-    all_then_yes_sends_nothing(&mut h);
     // The same server again, but not the session that read the structure: asked again, the
     // change of the two rows is still refused.
     h.advance(Duration::from_secs(2));
     h.app.transient = None;
     apply_counted(&mut h, 2);
     withheld(&mut h, NOT_CHECKED);
-}
-
-/// An Apply sent from the preview is reported when its answer comes, whatever the sessions
-/// say meanwhile (the change may be committed).
-#[test]
-fn an_apply_in_flight_is_reported_whatever_the_sessions_say_meanwhile() {
-    let mut h = previewed();
-    h.key(KeyCode::Char('a'));
-    h.key(KeyCode::Char('y'));
-    let sent: Vec<(u64, Vec<datarig_core::edit::Step>)> = h
-        .sent()
-        .into_iter()
-        .filter_map(|c| match c {
-            DbCommand::ApplyEdits { id, steps, .. } => Some((id, steps)),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(sent.len(), 1, "one Apply sent");
-    meta_db(&mut h, edits(false));
-    h.tab_db(0, mysql(v(8, 4, 7)));
-    assert!(h.app.edit_preview_view().is_some(), "the preview still says it applies");
-    let (id, steps) = sent.into_iter().next().unwrap();
-    let stood = steps
-        .iter()
-        .map(|s| {
-            let count = match s.expect {
-                Expect::Rows(n) | Expect::Affected(n) => n,
-            };
-            AppliedStep { count, ..AppliedStep::default() }
-        })
-        .collect();
-    h.db(DbEvent::Applied { id, result: Ok(stood) });
-    assert!(rows(&h).edit.applied.is_some(), "the changes are applied");
-    assert!(rows(&h).edit.batch.is_empty());
-}
-
-/// The preview closes by itself after `a` was pressed: the `y` meant for it is not taken by the
-/// grid (which would copy a cell over the clipboard); it is ignored, said so.
-#[test]
-fn the_answer_key_after_the_preview_closed_by_itself_is_not_taken_by_the_grid() {
-    let mut h = previewed();
-    let clipboard = FakeClipboard::attach(&mut h, false, &[]);
-    h.key(KeyCode::Char('a'));
-    meta_db(&mut h, edits(false));
-    assert!(h.app.edit_preview_view().is_none(), "the preview is closed");
-    h.key(KeyCode::Char('y'));
-    assert!(clipboard.all().is_empty(), "nothing copied: {:?}", clipboard.all());
-    assert!(matches!(said(&mut h), Some(Msg::EditAskIgnored { .. })));
-    assert!(no_apply_sent(&mut h));
 }
 
 /// The structure came from another database's session, which is lost while the preview is open.
@@ -586,8 +526,7 @@ fn the_other_databases_session_lost_with_the_preview_open_applies_nothing() {
     apply_counted(&mut h, 2);
     offered(&h);
     aux_db(&mut h, "sales", DbEvent::Lost { error: DbError::Closed });
-    h.app.transient = None;
-    all_then_yes_sends_nothing(&mut h);
+    all_then_yes_refused(&mut h, NOT_CHECKED);
 }
 
 /// The tab's own session says late that its server is another version than the structure's.
@@ -595,8 +534,54 @@ fn the_other_databases_session_lost_with_the_preview_open_applies_nothing() {
 fn a_late_word_of_another_version_with_the_preview_open_applies_nothing() {
     let mut h = previewed();
     h.tab_db(0, mysql(v(8, 4, 7)));
-    closed_saying(&mut h, "same engine and version");
-    all_then_yes_sends_nothing(&mut h);
+    all_then_yes_refused(&mut h, SESSIONS_DIFFER);
+}
+
+/// An Apply sent from the preview: while it is not answered the preview shows, and `c` copies,
+/// the statements sent, whatever the sessions say meanwhile; its answer is reported when it
+/// comes.
+#[test]
+fn an_apply_in_flight_is_reported_whatever_the_sessions_say_meanwhile() {
+    let mut h = previewed();
+    let clipboard = FakeClipboard::attach(&mut h, false, &[]);
+    h.key(KeyCode::Char('a'));
+    h.key(KeyCode::Char('y'));
+    let sent: Vec<(u64, Vec<datarig_core::edit::Step>)> = h
+        .sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::ApplyEdits { id, steps, .. } => Some((id, steps)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sent.len(), 1, "one Apply sent");
+    meta_db(&mut h, edits(false));
+    h.tab_db(0, mysql(v(8, 4, 7)));
+    let (id, steps) = sent.into_iter().next().unwrap();
+    let lines = h.app.edit_preview_view().expect("the preview still says it applies").lines;
+    let shown: Vec<&str> = lines
+        .iter()
+        .filter_map(|l| match l {
+            PreviewLine::Step { sql, .. } => Some(sql.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(shown, steps.iter().map(|s| s.sql.as_str()).collect::<Vec<_>>(), "{lines:?}");
+    h.key(KeyCode::Char('c'));
+    let copied: String = steps.iter().map(|s| format!("{};\n", s.sql)).collect();
+    assert_eq!(clipboard.last(), Some(copied), "what was sent is copied");
+    let stood = steps
+        .iter()
+        .map(|s| {
+            let count = match s.expect {
+                Expect::Rows(n) | Expect::Affected(n) => n,
+            };
+            AppliedStep { count, ..AppliedStep::default() }
+        })
+        .collect();
+    h.db(DbEvent::Applied { id, result: Ok(stood) });
+    assert!(rows(&h).edit.applied.is_some(), "the changes are applied");
+    assert!(rows(&h).edit.batch.is_empty());
 }
 
 /// The structure comes before the metadata session says what its server is: refused while not
@@ -613,100 +598,6 @@ fn a_choice_refused_before_the_facts_came_is_offered_once_they_do() {
     apply_counted(&mut h, 2);
     offered(&h);
     all_applied(&mut h);
-}
-
-/// `a` then `y` in the preview: the one Apply sent, its id.
-fn all_sent(h: &mut Harness) -> u64 {
-    h.key(KeyCode::Char('a'));
-    h.key(KeyCode::Char('y'));
-    let ids: Vec<u64> = h
-        .sent()
-        .into_iter()
-        .filter_map(|c| match c {
-            DbCommand::ApplyEdits { id, .. } => Some(id),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(ids.len(), 1, "one Apply sent");
-    ids[0]
-}
-
-/// The edit format changes after `y` sent the Apply, then the Apply fails: what the answer says
-/// stands (its commit not known, or the failure), never covered by the preview's closing words.
-#[test]
-fn a_sent_edits_answer_is_never_covered_by_the_preview_closing() {
-    use datarig_core::driver::{ApplyError, ApplyFailure};
-    let unknown = ApplyError::Db(DbError::CommitUnknown);
-    let failed = ApplyError::Db(DbError::Server("ERROR 1205: Lock wait timeout exceeded".into()));
-    for why in [unknown, failed] {
-        let mut h = previewed();
-        let clipboard = FakeClipboard::attach(&mut h, false, &[]);
-        let id = all_sent(&mut h);
-        meta_db(&mut h, edits(false));
-        h.app.transient = None;
-        h.db(DbEvent::Applied { id, result: Err(ApplyFailure { step: None, why: why.clone() }) });
-        let want = match why {
-            ApplyError::Db(DbError::CommitUnknown) => {
-                h.app.i18n.label(datarig_i18n::Label::EditFailedUnknown).to_string()
-            }
-            _ => "ERROR 1205: Lock wait timeout exceeded. Nothing was applied.".to_string(),
-        };
-        assert_eq!(said_text(&mut h), Some(want), "{why:?}");
-        // The dialog closed (the format changed): its answer key is not taken by the grid.
-        assert!(h.app.edit_preview_view().is_none(), "the preview is closed");
-        h.key(KeyCode::Char('y'));
-        assert!(clipboard.all().is_empty(), "nothing copied: {:?}", clipboard.all());
-        assert!(matches!(said(&mut h), Some(Msg::EditAskIgnored { .. })), "{why:?}");
-        assert!(no_apply_sent(&mut h));
-    }
-}
-
-/// An Apply sent from the preview failed; the preview stays as an unsent one would: a change of
-/// the edit format then closes it, saying why.
-#[test]
-fn a_preview_whose_apply_failed_closes_on_a_format_change() {
-    use datarig_core::driver::{ApplyError, ApplyFailure};
-    let mut h = previewed();
-    let id = all_sent(&mut h);
-    let why = ApplyError::Db(DbError::Server("ERROR 1205: Lock wait timeout exceeded".into()));
-    h.db(DbEvent::Applied { id, result: Err(ApplyFailure { step: None, why }) });
-    assert!(h.app.edit_preview_view().is_some(), "the preview says why nothing was applied");
-    h.app.transient = None;
-    meta_db(&mut h, edits(false));
-    assert!(h.app.edit_preview_view().is_none(), "the preview is closed");
-    let said = said_text(&mut h).unwrap_or_default();
-    assert!(said.starts_with("Can't apply yet: ") && said.contains("edit format differs"), "{said}");
-}
-
-/// After the preview closed by itself, its choice keys (`a`, `1`) are not taken by the grid
-/// either: ignored a while, said so.
-#[test]
-fn the_choice_keys_after_the_preview_closed_by_itself_are_ignored() {
-    for key in ['a', '1'] {
-        let mut h = previewed();
-        meta_db(&mut h, edits(false));
-        assert!(h.app.edit_preview_view().is_none(), "the preview is closed");
-        h.app.transient = None;
-        h.key(KeyCode::Char(key));
-        assert!(matches!(said(&mut h), Some(Msg::EditAskIgnored { .. })), "{key}");
-    }
-}
-
-/// A preview opened to confirm a write of a row that matches one row closes on a format change
-/// saying only that the format changed (no count of identical rows).
-#[test]
-fn a_format_change_closes_a_confirming_preview_with_the_format_words_only() {
-    let mut h = profile_in(vec![mysql(v(8, 4, 6)), edits(true)], true);
-    read(&mut h, vec![mysql(v(8, 4, 6)), edits(true)], false);
-    change(&mut h, false);
-    apply_counted(&mut h, 1);
-    assert!(h.app.edit_preview_view().is_some(), "the preview confirms the write");
-    meta_db(&mut h, edits(false));
-    assert!(h.app.edit_preview_view().is_none(), "the preview is closed");
-    assert_eq!(
-        said_text(&mut h).as_deref(),
-        Some("Can't apply yet: this edit format differs from the one the applying session takes")
-    );
 }
 
 // ── Offered: the sessions agree ─────────────────────────────────────────────────────────────

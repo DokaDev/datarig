@@ -251,7 +251,6 @@ impl App {
         if self.tab().id == tab {
             self.edit_grid_sync();
             self.flash(notice.clone());
-            self.apply_said = true;
         }
         self.tab_status(tab, notice);
     }

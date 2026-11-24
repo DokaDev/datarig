@@ -193,6 +193,8 @@ struct ModelKey {
     zone: Option<String>,
     /// Made from what an Apply changed (no change pending).
     applied: bool,
+    /// Made from the statements of an Apply of the changes that is sent and not answered.
+    sending: bool,
     /// The tab's dialect and the session's values the rows were read in: whether a value as read
     /// is shown whole.
     dialect: Dialect,
@@ -426,6 +428,7 @@ impl App {
             before_new: rs.rows.len() + rs.edit.applied_new(),
             zone: zone.map(str::to_string),
             applied: rs.edit.batch.is_empty() && rs.edit.applied.is_some(),
+            sending: sending(rs),
             dialect: self.tab_dialect(t.id),
             read_in: rs.read_in.clone(),
             text: t.exec.text.clone(),
@@ -481,6 +484,15 @@ impl App {
         let f = edit::format(format);
         let dialect = f.language().dialect();
         let names: Vec<String> = rs.columns.iter().map(|c| c.meta.name.clone()).collect();
+        // Sent and not answered: the statements sent, as they were judged when sent.
+        if let Some(a) = rs.edit.applying.as_deref().filter(|_| sending(rs)) {
+            let list = list_lines(target, batch, &names);
+            let entries = entries(&[], &list, |at| or_unknown(row_pointer(Some(target), batch, &names, at)));
+            let sql = self.step_lines(&a.steps, dialect);
+            let planned = Planned::Sent(a.steps.clone());
+            let problems = Vec::new();
+            return ChangesModel { title, summary, problems, list, entries, sql, dialect, planned, why_not: None };
+        }
         if let Some(a) = applied {
             let list = list_lines(target, batch, &names);
             let entries = entries(&[], &list, |at| or_unknown(row_pointer(Some(target), batch, &names, at)));
@@ -703,6 +715,11 @@ impl App {
         let values = literals::text_literals(sql, d);
         (!values.is_empty()).then(|| self.values_text(&values))
     }
+}
+
+/// An Apply of `rs`'s changes as they are is sent and not answered yet.
+fn sending(rs: &ResultSet) -> bool {
+    rs.edit.applying.as_ref().is_some_and(|a| a.batch == rs.edit.batch)
 }
 
 /// Why a row that matches `count` identical rows is not offered one or all of them, in words

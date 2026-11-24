@@ -28,9 +28,6 @@ pub const ANSWER_GUARD: Duration = Duration::from_secs(1);
 /// The keys that answer a question of the status bar (as typed on QWERTY).
 const ANSWER_KEYS: [char; 4] = ['y', 'n', 'c', '1'];
 
-/// The Apply dialog's choice key beside them: `a`, all of identical rows (`1` is one of them).
-const DIALOG_KEYS: [char; 1] = ['a'];
-
 /// The key `key` types as QWERTY has it (a jamo typed with a Korean input source: its key),
 /// without Ctrl, Alt or Super.
 fn typed_key(key: &KeyEvent) -> Option<char> {
@@ -291,30 +288,15 @@ impl App {
     /// A question (or an Apply waiting for its counts) ended without its answer: `said` is
     /// said, and its answer keys are ignored for [`ANSWER_GUARD`].
     pub(in crate::app) fn ask_ended(&mut self, said: impl Into<Msg>) {
-        self.question_ended(said.into(), false);
-    }
-
-    /// The Apply dialog closed by itself: as [`App::ask_ended`], its choice keys ignored too.
-    pub(in crate::app) fn dialog_ended(&mut self, said: impl Into<Msg>) {
-        self.question_ended(said.into(), true);
-    }
-
-    /// The Apply dialog closed by itself in the event that said its Apply's answer: its keys are
-    /// ignored as after [`App::dialog_ended`], and that answer stands.
-    pub(in crate::app) fn dialog_guarded(&mut self) {
-        let said = self.transient.as_ref().map_or_else(|| Label::EditPreviewClosed.into(), |(n, _)| n.msg.clone());
-        self.ask_gone = Some((self.now() + ANSWER_GUARD, said, true));
-    }
-
-    fn question_ended(&mut self, said: Msg, dialog: bool) {
-        self.ask_gone = Some((self.now() + ANSWER_GUARD, said.clone(), dialog));
+        let said = said.into();
+        self.ask_gone = Some((self.now() + ANSWER_GUARD, said.clone()));
         self.flash(Notice::new(said, Level::Info));
     }
 
     /// `key` is an answer key pressed in the results within [`ANSWER_GUARD`] of a question that
     /// ended without its answer: taken, said, doing nothing else.
     pub(in crate::app) fn answer_swallowed(&mut self, key: &KeyEvent) -> bool {
-        let Some((until, said, dialog)) = &self.ask_gone else { return false };
+        let Some((until, said)) = &self.ask_gone else { return false };
         if self.now() >= *until {
             self.ask_gone = None;
             return false;
@@ -325,8 +307,7 @@ impl App {
             Focus::Inspector => true,
             Focus::Tree | Focus::Editor => false,
         };
-        let answers = |k: &char| ANSWER_KEYS.contains(k) || (*dialog && DIALOG_KEYS.contains(k));
-        let Some(k) = typed_key(key).filter(|k| results && answers(k)) else { return false };
+        let Some(k) = typed_key(key).filter(|k| results && ANSWER_KEYS.contains(k)) else { return false };
         let said = self.i18n.msg(said).to_string();
         self.flash(Notice::new(Msg::EditAskIgnored { said, key: k.to_string() }, Level::Info));
         true
