@@ -15,6 +15,8 @@
 //! Every expectation is today's output, as it is, right or wrong: the table pins it, and a
 //! change that moves it updates the table in the same change. No server is needed.
 
+#[path = "engine_conformance/catalogue.rs"]
+mod catalogue;
 #[path = "engine_conformance/context.rs"]
 mod context;
 #[path = "engine_conformance/export.rs"]
@@ -305,6 +307,31 @@ fn read_only_open_on_every_engine() {
     run("read-only open", &read_only::cases(), read_only::verdict);
 }
 
+/// The engines of [`ENGINES`] are every engine of the registry, each once, in its order: a
+/// table that names each of [`ENGINES`] names every engine.
+fn engines_are_the_registrys() {
+    use datarig_core::engine::EngineId;
+    assert_eq!(ENGINES.map(|e| e.dialect().engine()), EngineId::ALL);
+}
+
+#[test]
+fn catalogue_rules_on_every_engine() {
+    engines_are_the_registrys();
+    run("catalogue rules", &catalogue::catalogue_cases(), catalogue::result_tables);
+}
+
+#[test]
+fn ddl_rules_on_every_engine() {
+    engines_are_the_registrys();
+    run("ddl rules", &catalogue::ddl_cases(), catalogue::ddl);
+}
+
+#[test]
+fn hierarchy_on_every_engine() {
+    engines_are_the_registrys();
+    run("hierarchy", &catalogue::hierarchy_cases(), catalogue::hierarchy);
+}
+
 #[test]
 fn every_case_names_every_engine() {
     let all: Vec<Named> = [
@@ -322,6 +349,9 @@ fn every_case_names_every_engine() {
         named("tx statement", &tx::statement_cases()),
         named_versioned("session rules", &session::cases()),
         named("read-only open", &read_only::cases()),
+        named("catalogue rules", &catalogue::catalogue_cases()),
+        named("ddl rules", &catalogue::ddl_cases()),
+        named("hierarchy", &catalogue::hierarchy_cases()),
     ]
     .into_iter()
     .flatten()

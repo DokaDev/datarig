@@ -620,6 +620,31 @@ fn mysql_rows_copy_as_mysql_sql_or_say_why_not() {
     refused(&mut h, "the tables' columns could not be read (ERROR 1142 (42000): denied)");
 }
 
+/// A MariaDB session's result is refused in the same words as a MySQL one's: its tables are
+/// named in the result and looked up in the keys read at connect, so a table is missing while
+/// they are still being read, or when it is not in the key cache.
+#[test]
+fn a_mariadb_session_words_the_key_cache_as_mysql() {
+    let mut h = mysql();
+    h.db(DbEvent::Connected);
+    h.tab_db(0, session("+00:00", "utf8mb4"));
+    let mariadb = || server_said(true, Some((11, 4, 13)));
+    items_result_said(&mut h, mariadb(), "Items", "7", "x", 4);
+    assert_eq!(h.app.tab().exec.prepared.language(), Language::Sql(Dialect::MariaDb(MySqlMode::default())));
+    h.command("copy insert");
+    let status = h.status(200, 45);
+    assert!(status.contains("Not copied as INSERT: the tables' keys are still being read"), "{status}");
+    assert!(!status.contains("not known yet, or could not be read"), "{status}");
+    h.db(DbEvent::Keys(Ok(items_keys())));
+    items_result_said(&mut h, mariadb(), "Later", "1", "x", 4);
+    h.command("copy insert");
+    let status = h.status(240, 45);
+    assert!(
+        status.contains("Not copied as INSERT: its table or one of its columns is not in the key cache"),
+        "{status}"
+    );
+}
+
 /// `SELECT <cols> FROM shop.Items` run (columns of `items_result`'s types, by name), the session
 /// saying `said` before its rows `rows` come; the grid focused.
 fn items_rows(h: &mut Harness, said: Vec<DbEvent>, cols: &[&str], rows: &[&[Option<&str>]]) {

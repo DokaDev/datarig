@@ -19,8 +19,9 @@ use super::*;
 use datarig_core::driver::ddl::{DdlObject, DdlSource};
 use datarig_core::driver::structure::StructureGroup;
 use datarig_core::driver::{DbError, SessionContext};
+use datarig_core::engine::{DdlOfIndex, DdlRules, DdlToConsole, Fact};
 use datarig_core::sql::ddl::ddl_text;
-use datarig_core::sql::dialect::{Dialect, Language};
+use datarig_core::sql::dialect::Language;
 
 /// What a DDL read gave a tab: its name, its text, and for the server's own text the database it
 /// runs in and the dialect it is written in.
@@ -32,14 +33,39 @@ struct Read {
 }
 
 impl App {
-    /// Profile `id`'s driver reads an object's DDL (`Capabilities::ddl`).
+    /// Profile `id`'s driver reads an object's DDL (`Capabilities::ddl`) and its engine says how
+    /// it is shown ([`App::ddl_rules`]).
     pub(super) fn ddl_on(&self, id: ProfileId) -> bool {
-        self.profile(id).and_then(|p| self.driver(&p.driver)).is_some_and(|d| d.capabilities().ddl)
+        let read = self.profile(id).and_then(|p| self.driver(&p.driver)).is_some_and(|d| d.capabilities().ddl);
+        let shown = match self.ddl_rules(id) {
+            Fact::Known(_) => true,
+            Fact::No(_) | Fact::Unknown(_) => false,
+        };
+        read && shown
     }
 
-    /// Profile `id`'s sessions speak MySQL.
-    fn mysql_profile(&self, id: ProfileId) -> bool {
-        matches!(self.profile_language(Some(id)), Language::Sql(Dialect::MySql(_) | Dialect::MariaDb(_)))
+    /// How the DDL of profile `id`'s objects is shown and opened in a console: the rules of the
+    /// engine whose language its sessions speak.
+    fn ddl_rules(&self, id: ProfileId) -> &'static Fact<&'static dyn DdlRules> {
+        &self.profile_language(Some(id)).dialect().engine().spec().ddl
+    }
+
+    /// What the DDL of an index of profile `id` is ([`DdlRules::index_ddl`]); its own where
+    /// the engine has no DDL rules ([`App::ddl_on`] says no DDL is read there).
+    fn index_ddl(&self, id: ProfileId) -> DdlOfIndex {
+        match self.ddl_rules(id) {
+            Fact::Known(rules) => rules.index_ddl(),
+            Fact::No(_) | Fact::Unknown(_) => DdlOfIndex::Own,
+        }
+    }
+
+    /// How a DDL tab's text of profile `id` opens in a console ([`DdlRules::to_console`]); as
+    /// read where the engine has no DDL rules ([`App::ddl_on`] says no DDL is read there).
+    fn ddl_console(&self, id: ProfileId) -> DdlToConsole {
+        match self.ddl_rules(id) {
+            Fact::Known(rules) => rules.to_console(),
+            Fact::No(_) | Fact::Unknown(_) => DdlToConsole::AsRead,
+        }
     }
 
     /// The object explorer row `row` stands for, and where: its profile and database (`None`: the
@@ -89,11 +115,11 @@ impl App {
                 }
             }
             _ if function => return None,
-            // MySQL has no DDL of an index of its own: its table's `CREATE TABLE` defines it.
-            Some((StructureGroup::Indexes, _)) if self.mysql_profile(id) => DdlObject::Relation { schema, name },
-            Some((StructureGroup::Indexes, k)) => {
-                DdlObject::Index { schema, name: structure()?.indexes.get(k)?.name.clone() }
-            }
+            Some((StructureGroup::Indexes, k)) => match self.index_ddl(id) {
+                // Its table's `CREATE TABLE` defines it.
+                DdlOfIndex::Table => DdlObject::Relation { schema, name },
+                DdlOfIndex::Own => DdlObject::Index { schema, name: structure()?.indexes.get(k)?.name.clone() },
+            },
             _ => DdlObject::Relation { schema, name },
         };
         Some((id, database, object))
@@ -318,7 +344,7 @@ impl App {
             return self.flash(Notice::new(Label::DdlNothingRead, Level::Info));
         };
         let (mut text, profile, mut context) = (t.editor.text(), t.profile, t.context.clone());
-        if let Some(id) = profile.filter(|id| self.mysql_profile(*id)) {
+        if let Some(id) = profile.filter(|id| self.ddl_console(*id) == DdlToConsole::Requoted) {
             let (database, written_in) = (d.database.clone(), d.written_in);
             let Some(from) = written_in else {
                 return self.flash(Notice::new(Label::DdlTextModeUnknown, Level::Warning));
@@ -397,9 +423,9 @@ impl App {
             return Err(Notice::new(Label::DdlNoConnection, Level::Error));
         };
         let SessionContext { database, schema } = t.context.clone();
-        // MySQL: the tab's database by name (its own when it names none), never what the shared
-        // metadata session has current.
-        let schema = match self.mysql_profile(id) {
+        // One level of namespaces (MySQL): the tab's database by name (its own when it names
+        // none), never what the shared metadata session has current.
+        let schema = match self.schema_only(Some(id)) {
             true => schema.or_else(|| Some(self.own_database(id)).filter(|d| !d.is_empty())),
             false => schema,
         };

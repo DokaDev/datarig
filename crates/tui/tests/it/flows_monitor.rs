@@ -2238,6 +2238,52 @@ fn mysql_rows(q: &str) -> Vec<SessionRow> {
     rows
 }
 
+/// A connected profile of the MySQL family (its driver named `driver`), its Monitor tab on a
+/// MySQL server listing the usual sessions, each in database `database`, session 4211 selected.
+fn family_selected(driver: &str, database: &str) -> Harness {
+    let mut p = datarig_core::profile::ConnectionConfig::test_db();
+    p.name = "local-my".into();
+    p.driver = driver.into();
+    let cfg = datarig_core::config::Config { connections: vec![p], ..Default::default() };
+    let fake = FakeDriver::default();
+    fake.mysql.store(true, Ordering::SeqCst);
+    let mut h = Harness::with_driver(&cfg, Lang::En, fake);
+    h.db(DbEvent::Connected);
+    let mut rows = mysql_rows("SELECT count(*) FROM order_items");
+    for r in &mut rows {
+        r.database = Some(database.into());
+    }
+    let mut h = sessions_on(h, mysql_format(), rows);
+    select(&mut h, 4211);
+    h
+}
+
+/// `o` on a `driver` profile: the session's statement in a new console whose schema is the
+/// session's database (none when it is the profile's own, `datarig`), never run.
+fn o_opens_with_the_database_as_the_schema(driver: &str) {
+    for (database, schema) in [("shop", Some("shop")), ("datarig", None)] {
+        let mut h = family_selected(driver, database);
+        let tabs = h.app.tabs.len();
+        h.keys("o");
+        assert_eq!(h.app.tabs.len(), tabs + 1, "{driver} {database}");
+        assert_eq!(h.app.tab().kind, TabKind::Console);
+        assert_eq!(h.app.tab().editor.text(), "UPDATE orders SET status = 'paid' WHERE id = 7");
+        assert_eq!(h.app.tab().context.database, None, "{driver} {database}");
+        assert_eq!(h.app.tab().context.schema.as_deref(), schema, "{driver} {database}");
+        assert!(!h.sent().iter().any(|c| matches!(c, DbCommand::Execute { .. })), "the statement is never run");
+    }
+}
+
+#[test]
+fn o_opens_a_mysql_sessions_statement_with_its_database_as_the_schema() {
+    o_opens_with_the_database_as_the_schema("mysql");
+}
+
+#[test]
+fn o_opens_a_mariadb_profiles_statement_as_mysql_does() {
+    o_opens_with_the_database_as_the_schema("mariadb");
+}
+
 #[test]
 fn a_mysql_cancel_asks_a_line_for_a_plain_read_and_a_dialog_with_the_warning_otherwise() {
     let mysql = |q: &str| {

@@ -1610,12 +1610,9 @@ impl App {
             return self.flash(Notice::new(Label::MonitorNoQuery, Level::Info));
         };
         let Some(id) = self.tab().profile else { return };
-        use datarig_core::sql::dialect::{Dialect, Language};
-        let mysql = matches!(self.profile_language(Some(id)), Language::Sql(Dialect::MySql(_) | Dialect::MariaDb(_)));
-        let context = match mysql {
-            true => self.session_context(id, None, database.clone()),
-            false => self.session_context(id, database.clone(), None),
-        };
+        // On one level of namespaces (MySQL) the session's database is the schema, which
+        // `session_context` reads it as.
+        let context = self.session_context(id, database.clone(), None);
         self.console_with(&text, Some(id), context);
         let database = database.unwrap_or_default();
         let note = match shortened {

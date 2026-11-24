@@ -1,8 +1,8 @@
 //! MySQL's row of the registry.
 
 use super::mysql_family::{
-    FamilyCancel, FamilyExport, FamilySession, FamilyText, FamilyTx, FamilyValues, family_classifier,
-    family_filter_calls, family_read_only_calls,
+    FamilyCancel, FamilyCatalogue, FamilyDdl, FamilyExport, FamilySession, FamilyText, FamilyTx, FamilyValues,
+    family_classifier, family_filter_calls, family_read_only_calls,
 };
 use super::{
     EditRules, EngineFacts, EngineId, EngineSpec, Fact, FilterCalls, MYSQL_FAMILY, RiskRules, ServerFacts, Support,
@@ -32,6 +32,8 @@ pub static SPEC: EngineSpec = EngineSpec {
     values: &FamilyValues { offsets_since: Some(Version::new(8, 0, 19)) },
     export: Fact::Known(&FamilyExport),
     edit: Fact::Known(&MysqlEdits),
+    catalogue: &FamilyCatalogue,
+    ddl: Fact::Known(&FamilyDdl),
 };
 
 /// How MySQL's statements are judged: the family's classifier of the text's dialect
