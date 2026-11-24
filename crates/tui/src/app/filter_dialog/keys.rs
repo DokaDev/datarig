@@ -629,5 +629,6 @@ pub(crate) fn op_off_label(off: draft::OpOff) -> Label {
         draft::OpOff::CollationUnknown => Label::TableDialogOpOffCollationUnknown,
         draft::OpOff::LikeRefused => Label::TableDialogOpOffLikeRefused,
         draft::OpOff::LikeUnknown => Label::TableDialogOpOffLikeUnknown,
+        draft::OpOff::NoFilterRules(why) => why,
     }
 }

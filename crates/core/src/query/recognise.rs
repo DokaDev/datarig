@@ -301,7 +301,8 @@ impl Reader<'_> {
             return None;
         }
         let number = |v: &Value| matches!(v, Value::Number(_));
-        let numeric = |col: &str| self.target.column(col).is_some_and(|f| super::render::bare_numbers(self.d, f.kind));
+        let doubles = super::filter_sql(self.d).ok()?.syntax().numbers_as_doubles;
+        let numeric = |col: &str| self.target.column(col).is_some_and(|f| super::render::bare_numbers(doubles, f.kind));
         let keeps = match &c {
             Cond::Cmp { col, value, .. } | Cond::NotDistinct { col, value, .. } => !number(value) || numeric(col),
             Cond::In { col, values, .. } => !values.iter().any(number) || numeric(col),

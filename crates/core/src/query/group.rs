@@ -20,7 +20,8 @@
 
 use super::check::{BarRefusal, FilterVerdict, check_filter};
 use super::{TableName, Target};
-use crate::driver::{ArrayElement, ColumnMeta, ValueKind};
+use crate::driver::ColumnMeta;
+use crate::engine::{Fact, FilterSql, GroupParts};
 use crate::sql::dialect::Dialect;
 use crate::sql::risk::repeat::NotRepeatable;
 use crate::sql::risk::{Class, Classifier, Danger};
@@ -47,81 +48,13 @@ pub enum Compares {
 pub struct NoEquality;
 
 /// How a filter compares the values of a result column `m` of dialect `d`, as its type says:
-/// with an order, for equality only, or not at all ([`NoEquality`]). `enum_known`: the
-/// column's type is known to be a PostgreSQL enum (no kind of its own, ordered by its labels).
+/// with an order, or for equality only, by the engine's filter rules
+/// ([`FilterSql::compares`]); not at all ([`NoEquality`]) on an engine without them.
+/// `enum_known`: the column's type is known to be a PostgreSQL enum (no kind of its own,
+/// ordered by its labels).
 pub fn compares(d: Dialect, m: &ColumnMeta, enum_known: bool) -> Result<Compares, NoEquality> {
-    let mysql = matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_));
-    let ty = m.type_name.to_ascii_lowercase();
-    match m.kind {
-        ValueKind::Integer
-        | ValueKind::Decimal
-        | ValueKind::Float
-        | ValueKind::Text
-        | ValueKind::Bool
-        | ValueKind::Date
-        | ValueKind::Time
-        | ValueKind::Timestamp
-        | ValueKind::TimestampTz
-        | ValueKind::Interval => Ok(Compares::Order),
-        // MySQL's spatial and vector types come as bytes but do not compare as such.
-        ValueKind::Bytes if mysql && matches!(ty.as_str(), "geometry" | "vector") => Err(NoEquality),
-        ValueKind::Bytes => Ok(Compares::Order),
-        // MySQL shows bits as `b'…'`, which is no string literal of them.
-        ValueKind::Bit if mysql => Err(NoEquality),
-        ValueKind::Bit => Ok(Compares::Order),
-        // `jsonb` has equality; `json` has none, and MySQL compares JSON with a string as a
-        // JSON string.
-        ValueKind::Json if !mysql && ty == "jsonb" => Ok(Compares::Equality),
-        ValueKind::Json => Err(NoEquality),
-        // An array compares through its element type's equality: only one known to have it.
-        ValueKind::Array(ArrayElement::Number | ArrayElement::Bool | ArrayElement::Text)
-            if !mysql && ty.strip_suffix("[]").is_some_and(|e| PG_ELEMENT_EQ.contains(&e)) =>
-        {
-            Ok(Compares::Equality)
-        }
-        ValueKind::Array(_) => Err(NoEquality),
-        ValueKind::Other if !mysql && (enum_known || PG_ORDERED.contains(&ty.as_str())) => Ok(Compares::Order),
-        ValueKind::Other => Err(NoEquality),
-    }
+    super::filter_sql(d).map_err(|_| NoEquality)?.compares(m, enum_known)
 }
-
-/// PostgreSQL types of no kind of their own whose values compare as their text reads back
-/// (equality and order).
-const PG_ORDERED: &[&str] = &["uuid", "inet", "cidr", "macaddr", "macaddr8", "citext"];
-
-/// Built-in PostgreSQL element types (as an array's type names them, `text` of `text[]`) known
-/// to have the equality an array's `=` compares its elements with. Any other (`xml`, `json`,
-/// `point` and the other geometric types have none) is not compared.
-const PG_ELEMENT_EQ: &[&str] = &[
-    "int2",
-    "int4",
-    "int8",
-    "float4",
-    "float8",
-    "numeric",
-    "oid",
-    "money",
-    "text",
-    "varchar",
-    "bpchar",
-    "char",
-    "name",
-    "bool",
-    "date",
-    "time",
-    "timetz",
-    "timestamp",
-    "timestamptz",
-    "interval",
-    "uuid",
-    "bytea",
-    "inet",
-    "cidr",
-    "macaddr",
-    "macaddr8",
-    "bit",
-    "varbit",
-];
 
 /// What a group count is asked for.
 #[derive(Clone, Copy, Debug)]
@@ -163,13 +96,20 @@ pub enum GroupRefusal {
 /// The statement that counts the rows of each value of `g.column` (see the module docs), or why
 /// it is not written.
 pub fn group_count(g: &GroupCount<'_>) -> Result<String, GroupRefusal> {
+    counted(g, &g.target.dialect.engine().spec().filter)
+}
+
+/// [`group_count`] by the filter rules of `group`, the engine's filter group: refused as the
+/// filter bar refuses a filter where it has none.
+pub(super) fn counted(g: &GroupCount<'_>, group: &Fact<&'static dyn FilterSql>) -> Result<String, GroupRefusal> {
     let t = g.target;
     let d = t.dialect;
     let name = g.column.name.as_str();
     if t.column(name).is_none() {
         return Err(GroupRefusal::UnknownColumn);
     }
-    compares(d, g.column, g.enum_known).map_err(|_| GroupRefusal::NoEquality)?;
+    let rules = super::known(group).map_err(|why| GroupRefusal::Filter(BarRefusal::Engine(why)))?;
+    rules.compares(g.column, g.enum_known).map_err(|_| GroupRefusal::NoEquality)?;
     let other = g.other.filter(|o| !o.trim().is_empty());
     if let Some(text) = other {
         match check_filter(text, g.table, t, g.classifier, g.read_only).map_err(GroupRefusal::Filter)? {
@@ -182,7 +122,7 @@ pub fn group_count(g: &GroupCount<'_>) -> Result<String, GroupRefusal> {
             }
         }
     }
-    let sql = statement(d, g.table, g.column, other);
+    let sql = statement(d, rules, g.table, g.column, other);
     let risk = g.classifier.clone().classify(&sql);
     if risk.class != Class::Read || risk.danger.is_some() || risk.read_write {
         return Err(GroupRefusal::NotRead { class: risk.class, danger: risk.danger });
@@ -194,59 +134,13 @@ pub fn group_count(g: &GroupCount<'_>) -> Result<String, GroupRefusal> {
     Ok(sql)
 }
 
-/// The statement of [`group_count`], `other` checked already.
-fn statement(d: Dialect, table: &TableName, column: &ColumnMeta, other: Option<&str>) -> String {
+/// The statement of [`group_count`], `other` checked already: the items `rules` read of the
+/// column ([`FilterSql::group_parts`]) around one grouped read of the table.
+fn statement(d: Dialect, rules: &dyn FilterSql, table: &TableName, column: &ColumnMeta, other: Option<&str>) -> String {
     let c = d.force_quote_ident(&column.name);
     let from = format!("{}.{}", d.force_quote_ident(&table.schema), d.force_quote_ident(&table.name));
     let filter = other.map_or(String::new(), |o| format!(" WHERE ({o})"));
-    let (preview, length) = match (d, length(d, column, &c)) {
-        (_, None) => (c.clone(), "NULL".to_string()),
-        (Dialect::Postgres, Some(len)) => {
-            (format!("CASE WHEN {len} OPERATOR(pg_catalog.<=) {GROUP_PREVIEW} THEN {c} END"), len)
-        }
-        (Dialect::MySql(_) | Dialect::MariaDb(_), Some(len)) => {
-            (format!("IF({len} <= {GROUP_PREVIEW}, {c}, NULL)"), len)
-        }
-    };
-    let count = match d {
-        Dialect::Postgres => "pg_catalog.count(*)",
-        Dialect::MySql(_) | Dialect::MariaDb(_) => "COUNT(*)",
-    };
+    let GroupParts { preview, length, count } = rules.group_parts(column, &c);
     let limit = GROUP_VALUES + 1;
     format!("SELECT {preview}, {length}, {count} FROM {from}{filter} GROUP BY {c} ORDER BY {count} DESC LIMIT {limit}")
-}
-
-/// The byte length of value `c` (column `column` quoted) when its type may hold a long one; `None`
-/// for a type whose values are short (a number, a date, …). PostgreSQL measures text and bytes
-/// as they are; JSON, arrays and `numeric` (a domain over it too) by their text, written by the
-/// type's own output function (no cast, which could be one of the user's).
-///
-/// The column's type is the one its metadata says, which may be older than the table. The
-/// PostgreSQL driver checks the statement's columns as the server prepares it, and refuses a value
-/// of a type that is not short sent without its length. On MySQL, whose answer comes with the
-/// rows it describes, every value is measured (`OCTET_LENGTH` of a number or a date is that of its
-/// text, which the server sends): what is sent is bounded by the statement itself, and the value
-/// keeps its column's type (and so the grid's reading of it).
-fn length(d: Dialect, column: &ColumnMeta, c: &str) -> Option<String> {
-    let ty = column.type_name.to_ascii_lowercase();
-    match d {
-        Dialect::Postgres => match column.kind {
-            ValueKind::Text | ValueKind::Bytes | ValueKind::Bit => Some(format!("pg_catalog.octet_length({c})")),
-            ValueKind::Other if ty == "citext" => Some(format!("pg_catalog.octet_length({c})")),
-            ValueKind::Json if ty == "jsonb" => {
-                Some(format!("pg_catalog.octet_length(pg_catalog.textin(pg_catalog.jsonb_out({c})))"))
-            }
-            ValueKind::Array(_) => {
-                Some(format!("pg_catalog.octet_length(pg_catalog.textin(pg_catalog.array_out({c})))"))
-            }
-            // `numeric` and a domain over it (by its own name): its text has no bound of its
-            // own. `money` is short.
-            ValueKind::Decimal if ty != "money" => {
-                Some(format!("pg_catalog.octet_length(pg_catalog.textin(pg_catalog.numeric_out({c})))"))
-            }
-            _ => None,
-        },
-        // Bytes in every mode: `LENGTH` counts characters under MariaDB's `sql_mode=ORACLE`.
-        Dialect::MySql(_) | Dialect::MariaDb(_) => Some(format!("OCTET_LENGTH({c})")),
-    }
 }

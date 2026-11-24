@@ -35,6 +35,8 @@ mod read_only;
 mod risk;
 #[path = "engine_conformance/session.rs"]
 mod session;
+#[path = "engine_conformance/sort.rs"]
+mod sort;
 #[path = "engine_conformance/text.rs"]
 mod text;
 #[path = "engine_conformance/tx.rs"]
@@ -270,6 +272,16 @@ fn compares_cases_on_every_engine() {
 }
 
 #[test]
+fn group_count_cases_on_every_engine() {
+    run("group count", &filter::group_count_cases(), filter::group_count);
+}
+
+#[test]
+fn sort_rules_on_every_engine() {
+    run("sort rules", &sort::sort_cases(), sort::sort);
+}
+
+#[test]
 fn edit_input_cases_on_every_engine() {
     run("edit input", &values::input_cases(), values::input);
 }
@@ -348,6 +360,8 @@ fn every_case_names_every_engine() {
         named_text("split", &text::split_cases()),
         named("filter render", &filter::render_cases()),
         named("compares", &filter::compares_cases()),
+        named("group count", &filter::group_count_cases()),
+        named("sort rules", &sort::sort_cases()),
         named("edit input", &values::input_cases()),
         named("sql cells", &values::cells_cases()),
         named_versioned("sql literal", &values::literal_cases()),

@@ -35,7 +35,7 @@
 //! attribute notation (`t.f`), a user-defined operator, and code a view or a policy runs.
 
 use super::{Filter, Query, Source, TableName, Target, compile};
-use crate::engine::FilterCalls;
+use crate::engine::{FilterCalls, Why};
 use crate::sql::dialect::Dialect;
 use crate::sql::lexer::{Tok, Token, lex_backslash_strings, lex_in};
 use crate::sql::risk::{self, Class, Classifier, Danger, ReadOnlyBlock};
@@ -78,6 +78,8 @@ pub enum BarRefusal {
     UncheckedCalls(Vec<String>),
     /// A read-only profile refuses the statement.
     ReadOnly(ReadOnlyBlock),
+    /// The engine has no rules a filter is written and checked by: why.
+    Engine(Why),
 }
 
 /// Why a filter gets no planner estimate ([`estimate_allowed`]).

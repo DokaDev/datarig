@@ -20,6 +20,7 @@ use super::values::{Counted, Counter, LIST_VALUES, TALLY_ROWS};
 use super::*;
 use crate::app::filter_value::{NotAdmitted, ValuesFrom, admit};
 use datarig_core::driver::{ColumnMeta, ValueKind};
+use datarig_core::engine::{FilterSql, Why};
 use datarig_core::query::{self, Value};
 
 /// What a count of the rows loaded is of: the column, the tab's run and the rows it held.
@@ -43,6 +44,8 @@ pub(crate) enum Source {
 /// Why a value of the list is not ticked.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum NotTicked {
+    /// The engine has no rules a filter is written by: why.
+    Engine(Why),
     /// The column's type has no equality a value is compared with.
     NoEquality,
     /// Not taken as a filter's literal ([`admit`]).
@@ -284,10 +287,8 @@ impl App {
             && t.exec.running.is_some_and(|r| d.counting.as_ref().is_some_and(|k| k.id == r.id));
         // A column with no equality ticks nothing; one whose type is not known yet ticks as its
         // values are judged.
-        let equality = match c.meta.clone().or_else(|| held.cloned()).or_else(|| c.count_meta(dialect)).as_ref() {
-            Some(m) if query::compares(dialect, m, c.enum_known).is_err() => Err(NotTicked::NoEquality),
-            _ => Ok(()),
-        };
+        let meta = c.meta.clone().or_else(|| held.cloned()).or_else(|| c.count_meta(dialect));
+        let equality = ticks(query::filter_sql(dialect), meta.as_ref(), c.enum_known);
         let judge = |meta: &ColumnMeta, read_in: &datarig_core::driver::ReadIn, v: &str| {
             equality.clone()?;
             admit(&ValuesFrom { dialect, meta, read_in }, zone, now, v).map_err(NotTicked::NotAdmitted)
@@ -296,7 +297,10 @@ impl App {
         let count_off = if c.meta.is_none() && c.count_meta(dialect).is_none() {
             Some(Label::TableDialogCountUnknown)
         } else {
-            equality.as_ref().err().map(|_| Label::TableDialogOpOffNoEquality)
+            equality.as_ref().err().map(|e| match e {
+                NotTicked::Engine(why) => crate::app::engine_why::why_label(why),
+                _ => Label::TableDialogOpOffNoEquality,
+            })
         };
         let mut view = ValuesView {
             heading: Heading::Nothing(Label::TableDialogValuesNoRows),
@@ -464,6 +468,7 @@ impl App {
     pub(crate) fn not_ticked_notice(&self, why: &NotTicked) -> Notice {
         let warn = |l: Label| Notice::new(l, Level::Warning);
         match why {
+            NotTicked::Engine(why) => Notice::new(crate::app::engine_why::why_text(why), Level::Warning),
             NotTicked::NoEquality => warn(Label::TableDialogOpOffNoEquality),
             NotTicked::NotAdmitted(NotAdmitted::NotWhole(r)) => {
                 let reason = self.not_whole_reason(&r.why);
@@ -521,5 +526,24 @@ impl App {
         let _ = rs.rows.for_each_chunk(from..rs.rows.len(), 256, |rows| memory.add(&load, rows));
         drop(load);
         self.value_memory = memory;
+    }
+}
+
+/// Whether the values of a column (`meta`, when its type is known) may be ticked in a filter by
+/// the rules `filter` (as [`query::filter_sql`] answers): the engine's reason first, then the
+/// column's type; a column whose type is not known yet ticks as its values are judged.
+pub(crate) fn ticks(
+    filter: Result<&'static dyn FilterSql, Why>,
+    meta: Option<&ColumnMeta>,
+    enum_known: bool,
+) -> Result<(), NotTicked> {
+    match (filter, meta) {
+        (Err(why), _) => Err(NotTicked::Engine(why)),
+        (filter @ Ok(_), Some(m)) => match super::draft::compared(filter, m, enum_known) {
+            Ok(_) => Ok(()),
+            Err(super::draft::NotCompared::Engine(why)) => Err(NotTicked::Engine(why)),
+            Err(super::draft::NotCompared::NoEquality) => Err(NotTicked::NoEquality),
+        },
+        (Ok(_), None) => Ok(()),
     }
 }

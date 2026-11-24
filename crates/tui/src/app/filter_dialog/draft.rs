@@ -20,13 +20,16 @@ use std::ops::Range;
 
 use datarig_core::driver::keys::CatalogColumn;
 use datarig_core::driver::{ColumnMeta, ValueKind};
+use datarig_core::engine::{FilterSql, Why};
 use datarig_core::query::{
     self, CaseMode, CmpOp, ColName, ColumnKind, Compares, Cond, Dir, Filter, KeyOrigin, LikeKind, NoEquality, OrderKey,
     Query, RenderError, Target, Value,
 };
 use datarig_core::sql::dialect::Dialect;
 
+use crate::app::engine_why::why_label;
 use crate::app::table_query::{self, LimitProblem};
+use datarig_i18n::Label;
 
 /// The most steps [`Undo`] keeps; the oldest goes first.
 pub(crate) const UNDO_STEPS: usize = 100;
@@ -172,6 +175,8 @@ pub(crate) enum OpOff {
     LikeRefused,
     /// Neither the column's collation nor the server is known to take `LIKE` here.
     LikeUnknown,
+    /// The engine has no rules a filter is written by: why, as a label names it.
+    NoFilterRules(Label),
 }
 
 /// What the dialog knows of a column of the table.
@@ -353,25 +358,62 @@ fn temporal_type(type_name: &str) -> bool {
 /// a pattern needs a column known to hold text, and one the collation rules let it be written
 /// for.
 pub(crate) fn ops_for(c: &ColumnInfo, target: &Target) -> Vec<(Op, Result<(), OpOff>)> {
-    let compares = c.meta.as_ref().map(|m| query::compares(target.dialect, m, c.enum_known));
+    ops_by(c, target, query::filter_sql(target.dialect))
+}
+
+/// [`ops_for`] by the filter rules `filter` (as [`query::filter_sql`] answers): on an engine
+/// without them every operator is dimmed with the engine's reason.
+pub(crate) fn ops_by(
+    c: &ColumnInfo,
+    target: &Target,
+    filter: Result<&'static dyn FilterSql, Why>,
+) -> Vec<(Op, Result<(), OpOff>)> {
+    let engine = filter.as_ref().err().map(|why| OpOff::NoFilterRules(why_label(why)));
+    let compares = c.meta.as_ref().map(|m| compared(filter.clone(), m, c.enum_known));
     Op::ALL
         .into_iter()
         .filter(|op| *op != Op::Between || c.ranged())
-        .map(|op| (op, op_allowed(op, c, compares, target)))
+        .map(|op| (op, op_allowed(op, c, engine, compares.clone(), target)))
         .collect()
+}
+
+/// Why a filter compares no value of a column ([`compared`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum NotCompared {
+    /// The engine has no rules a filter is written by: why.
+    Engine(Why),
+    /// The column's type has no equality a literal reaches.
+    NoEquality,
+}
+
+/// How a filter by the rules `filter` (as [`query::filter_sql`] answers) compares the values of
+/// column `m`, or why it compares none: the engine's reason before the column's type.
+pub(crate) fn compared(
+    filter: Result<&'static dyn FilterSql, Why>,
+    m: &ColumnMeta,
+    enum_known: bool,
+) -> Result<Compares, NotCompared> {
+    let rules = filter.map_err(NotCompared::Engine)?;
+    rules.compares(m, enum_known).map_err(|NoEquality| NotCompared::NoEquality)
 }
 
 fn op_allowed(
     op: Op,
     c: &ColumnInfo,
-    compares: Option<Result<Compares, NoEquality>>,
+    engine: Option<OpOff>,
+    compares: Option<Result<Compares, NotCompared>>,
     target: &Target,
 ) -> Result<(), OpOff> {
+    // Nothing is written without the engine's filter rules, not even `IS NULL`.
+    if let Some(off) = engine {
+        return Err(off);
+    }
     if op.arity() == Arity::Zero {
         return Ok(());
     }
     match compares {
-        Some(Err(NoEquality)) => return Err(OpOff::NoEquality),
+        Some(Err(NotCompared::Engine(why))) => return Err(OpOff::NoFilterRules(why_label(&why))),
+        Some(Err(NotCompared::NoEquality)) => return Err(OpOff::NoEquality),
         Some(Ok(Compares::Equality)) if op.ordered() => return Err(OpOff::NoOrder),
         _ => {}
     }
@@ -390,7 +432,12 @@ fn op_allowed(
     // The collation rules are the renderer's: what it refuses to write is dimmed.
     let row = Row { col: c.name.clone(), op, values: vec![Value::Text("x".into())], keep_nulls: false };
     let Some(cond) = row.cond() else { return Ok(()) };
-    query::render(&cond, target).map(|_| ()).map_err(|e| match e {
+    query::render(&cond, target).map(|_| ()).map_err(render_off)
+}
+
+/// Why a pattern operator is dimmed, by why the renderer refuses to write it.
+pub(crate) fn render_off(e: RenderError) -> OpOff {
+    match e {
         RenderError::CaseInsensitiveRefused(_) => OpOff::CaseInsensitiveRefused,
         RenderError::CollationUnknown(_) => OpOff::CollationUnknown,
         RenderError::LikeRefused(_) => OpOff::LikeRefused,
@@ -401,7 +448,8 @@ fn op_allowed(
         | RenderError::NotNumber(_)
         | RenderError::NotExact(_)
         | RenderError::NotInstant(_) => OpOff::LikeUnknown,
-    })
+        RenderError::Engine(why) => OpOff::NoFilterRules(why_label(&why)),
+    }
 }
 
 /// One condition of one column, as a row of the dialog edits it.

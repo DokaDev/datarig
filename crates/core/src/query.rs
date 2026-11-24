@@ -38,9 +38,11 @@ pub use compile::{Compiled, capped, compile, compile_capped};
 pub use group::{Compares, GROUP_PREVIEW, GROUP_VALUES, GroupCount, GroupRefusal, NoEquality, compares, group_count};
 pub use order::{OrderError, OrderProblem, SortStep, order_text, parse_order, sort_column};
 pub use recognise::recognise;
+pub(crate) use render::{LINE_BREAKS, hex};
 pub use render::{RenderError, and_filter, like_contains, like_starts_with, render};
 pub use terms::{LikeKind, join_terms, like_kind, split_terms};
 
+use crate::engine::{Fact, FilterSql, Why};
 use crate::sql::dialect::Dialect;
 use serde::{Deserialize, Serialize};
 
@@ -201,7 +203,7 @@ impl OrderKey {
     pub fn nulls_first(&self, d: Dialect) -> bool {
         match self.nulls {
             Some(n) => n == Nulls::First,
-            None => (self.dir == Dir::Asc) == matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)),
+            None => (self.dir == Dir::Asc) == d.engine().spec().sort.nulls_low(),
         }
     }
 }
@@ -216,6 +218,19 @@ pub enum Dir {
 pub enum Nulls {
     First,
     Last,
+}
+
+/// The rules a table's filter is written by on dialect `d`'s engine, or why it has none.
+pub fn filter_sql(d: Dialect) -> Result<&'static dyn FilterSql, Why> {
+    known(&d.engine().spec().filter)
+}
+
+/// The filter rules of `group`, an engine's filter group, or why there are none.
+fn known(group: &Fact<&'static dyn FilterSql>) -> Result<&'static dyn FilterSql, Why> {
+    match group {
+        Fact::Known(rules) => Ok(*rules),
+        Fact::No(why) | Fact::Unknown(why) => Err(why.clone()),
+    }
 }
 
 /// Who put a sort key there.

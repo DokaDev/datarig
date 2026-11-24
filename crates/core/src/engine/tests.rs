@@ -527,3 +527,18 @@ fn duplicates_choice_on_every_engine() {
         assert_eq!(my.duplicates_choice(read, applies, format), want, "row {i}");
     }
 }
+
+/// Every engine of the registry writes a table's filter by its own rules: the filter group is
+/// known on each, and the rules of each answer the syntax its servers read.
+#[test]
+fn the_filter_group_is_known_on_every_engine() {
+    for &id in EngineId::ALL {
+        let Fact::Known(rules) = id.spec().filter else { panic!("{id:?}: a table's filter is written there") };
+        let family = match id {
+            EngineId::Postgres => false,
+            EngineId::MySql | EngineId::MariaDb => true,
+        };
+        let syntax = rules.syntax();
+        assert_eq!((syntax.numbers_as_doubles, syntax.zoned_instants), (family, family), "{id:?}");
+    }
+}

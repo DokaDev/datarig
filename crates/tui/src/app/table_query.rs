@@ -534,6 +534,7 @@ pub(super) fn refusal_why(i18n: &I18n, r: &BarRefusal) -> String {
             let what = i18n.msg(&super::safety::blocked_msg(why)).to_string();
             i18n.msg(&Msg::TableFilterWhyReadOnly { what }).to_string()
         }
+        BarRefusal::Engine(why) => i18n.msg(&super::engine_why::why_text(why)).to_string(),
     }
 }
 
