@@ -1636,5 +1636,15 @@ fn a_csv_export_takes_its_last_rows_whatever_columns_come_with_them() {
     pump_until(&mut h, "the end", done);
     feeder.join().unwrap();
     assert!(status(&h).starts_with("Exported 5 rows to "), "{}", status(&h));
-    assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 6);
+    // Every row in order, the header of the result's own columns: row 0's NULL name empty, the
+    // names quoted (a comma and quotes in them, the quotes doubled).
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "id,name\n\
+         0,\n\
+         1,\"n\u{d55c}1, \"\"q\"\"\"\n\
+         2,\"n\u{d55c}2, \"\"q\"\"\"\n\
+         3,\"n\u{d55c}3, \"\"q\"\"\"\n\
+         4,\"n\u{d55c}4, \"\"q\"\"\"\n"
+    );
 }
