@@ -170,8 +170,8 @@ fn the_filter_dialogs_lexer_callers_never_panic() {
     }
 }
 
-/// A bare name the engine may read as a call names no column of that name; quoted it does, and
-/// other bare names do as before.
+/// A bare name the engine may read as a call names no column of that name; quoted or qualified
+/// it does, and other bare names do as before.
 #[test]
 fn a_bare_call_name_mentions_no_column() {
     let (my, maria) = (Dialect::MySql(MySqlMode::default()), Dialect::MariaDb(MySqlMode::default()));
@@ -180,6 +180,10 @@ fn a_bare_call_name_mentions_no_column() {
         assert!(!mentions("CURRENT_ROLE IS NULL", "current_role", d), "{d:?}");
         assert!(mentions("`current_role` IS NULL", "current_role", d), "{d:?}");
         assert!(mentions("LENGTH(date) > 1", "date", d), "{d:?}");
+        // Qualified, it is a column reference.
+        assert!(mentions("users.current_date IS NULL", "current_date", d), "{d:?}");
+        assert!(mentions("users . current_role IS NULL", "current_role", d), "{d:?}");
+        assert!(!mentions("current_date IS NULL", "current_date", d), "{d:?}");
     }
     assert!(mentions("current_role IS NULL", "current_role", Dialect::Postgres));
 }
