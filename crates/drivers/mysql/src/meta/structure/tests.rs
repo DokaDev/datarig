@@ -438,8 +438,6 @@ fn expressions_are_unescaped_once_on_mysql() {
     assert_eq!(parse_my(&plain).unwrap().checks[0].expression, r"`s` <> 'a\b'");
 }
 
-/// Reading a table's estimates opens the table when the server has none cached: the structure
-/// does not ask for them, and has none of its own (the schema's listing has them).
 /// A session whose facts know no version reads the statement of its greeting's number, as one
 /// that knows it does; on MySQL that number decides which newer parts the read names, on
 /// MariaDB it decides none.
@@ -470,6 +468,8 @@ fn an_unknown_version_reads_the_greetings_form() {
     assert_eq!(unknown, 7, "every unknown version is read");
 }
 
+/// Reading a table's estimates opens the table when the server has none cached: the structure
+/// does not ask for them, and has none of its own (the schema's listing has them).
 #[test]
 fn the_estimates_are_not_read_with_the_structure() {
     let sql = statement(Greeting { mariadb: false, handshake: Version::new(8, 4, 6) }, Dialect::MySql(MY), "s", "t");

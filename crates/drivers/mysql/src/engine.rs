@@ -253,10 +253,13 @@ pub(crate) fn session_version(facts: &ServerFacts) -> Fact<Version> {
 /// ([`Family::structure`]): the version the facts know, which is then the greeting's number;
 /// when they know none (the greeting and the version line give two numbers, the line has none,
 /// or they name two engines), the greeting's number, so the read is the one the greeting
-/// implies. Its limit: behind something that greets with an older MySQL than the server's, the
-/// parts the newer server adds (functional key parts, CHECK constraints, partial revokes) are
-/// not read; with a newer one, the read names parts the server lacks and fails with the
-/// server's error.
+/// implies. Its limit, behind something that greets with another MySQL than the server's: with
+/// an older greeting, below 8.0.13 a table with a functional key part fails the read (the part
+/// reads as a key part of nothing), and below 8.0.16 no CHECK constraints are listed, a global
+/// grant is counted though `partial_revokes` may take it back, and schema grants are compared
+/// by pattern; with a newer greeting, the read fails with the server's error only when the
+/// greeting's form names a catalogue part the server lacks (`EXPRESSION` from 8.0.13;
+/// `CHECK_CONSTRAINTS`, `ENFORCED` and `partial_revokes` from 8.0.16).
 pub(crate) fn structure_version(facts: &ServerFacts) -> Version {
     match &facts.version {
         Fact::Known(v) => *v,

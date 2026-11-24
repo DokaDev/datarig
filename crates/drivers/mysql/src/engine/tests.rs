@@ -471,68 +471,58 @@ fn session_variables_follow_the_facts() {
     }
 }
 
-/// What the facts of a session say of its version.
-fn version_kind(f: &ServerFacts) -> &'static str {
-    match &f.version {
-        Fact::Known(_) => "known",
-        Fact::No(_) => "no",
-        Fact::Unknown(Why::VersionUnknown) => "line without a number",
-        Fact::Unknown(Why::VersionsDisagree) => "two numbers",
-        Fact::Unknown(Why::EnginesDisagree) => "two engines",
-        Fact::Unknown(_) => "unknown otherwise",
-    }
-}
-
 /// Sessions of each kind of version the facts can hold, per engine of the greeting: known,
 /// a line whose number is not the greeting's, a line with no number and a line naming the other
-/// engine; with the version a structure read takes on each.
-pub(crate) fn structure_version_rows() -> Vec<(Greeting, Arc<ServerFacts>, Version)> {
+/// engine; with the version the facts hold on each.
+pub(crate) fn structure_version_rows() -> Vec<(Greeting, Arc<ServerFacts>, Fact<Version>)> {
     let session = |g: Greeting, line: &str| {
         let report = judge(&g, Some(Value::Bytes(line.as_bytes().to_vec()))).expect("a line");
         facts(&g, &report, None)
     };
     let agreeing = |g: Greeting| facts(&g, &VersionReport::agreeing(&g), None);
+    let known = |(a, b, c)| Fact::Known(Version::new(a, b, c));
+    let (two_numbers, no_number, two_engines) =
+        (Fact::Unknown(Why::VersionsDisagree), Fact::Unknown(Why::VersionUnknown), Fact::Unknown(Why::EnginesDisagree));
     vec![
-        (my(8, 0, 12), agreeing(my(8, 0, 12)), Version::new(8, 0, 12)),
-        (my(8, 0, 15), agreeing(my(8, 0, 15)), Version::new(8, 0, 15)),
-        (my(8, 0, 16), agreeing(my(8, 0, 16)), Version::new(8, 0, 16)),
-        (my(8, 4, 6), agreeing(my(8, 4, 6)), Version::new(8, 4, 6)),
-        (maria(11, 4, 13), agreeing(maria(11, 4, 13)), Version::new(11, 4, 13)),
+        (my(8, 0, 12), agreeing(my(8, 0, 12)), known((8, 0, 12))),
+        (my(8, 0, 15), agreeing(my(8, 0, 15)), known((8, 0, 15))),
+        (my(8, 0, 16), agreeing(my(8, 0, 16)), known((8, 0, 16))),
+        (my(8, 4, 6), agreeing(my(8, 4, 6)), known((8, 4, 6))),
+        (maria(11, 4, 13), agreeing(maria(11, 4, 13)), known((11, 4, 13))),
         // A server behind something that greets with another number of its engine.
-        (my(8, 0, 12), session(my(8, 0, 12), "8.4.6"), Version::new(8, 0, 12)),
-        (my(8, 0, 16), session(my(8, 0, 16), "8.0.15-log"), Version::new(8, 0, 16)),
-        (maria(11, 4, 13), session(maria(11, 4, 13), "10.6.0-MariaDB"), Version::new(11, 4, 13)),
+        (my(8, 0, 12), session(my(8, 0, 12), "8.4.6"), two_numbers.clone()),
+        (my(8, 0, 16), session(my(8, 0, 16), "8.0.15-log"), two_numbers.clone()),
+        (maria(11, 4, 13), session(maria(11, 4, 13), "10.6.0-MariaDB"), two_numbers),
         // A line with no number the driver reads.
-        (my(8, 0, 15), session(my(8, 0, 15), "unknown-build"), Version::new(8, 0, 15)),
-        (maria(10, 6, 0), session(maria(10, 6, 0), "MariaDB-custom"), Version::new(10, 6, 0)),
+        (my(8, 0, 15), session(my(8, 0, 15), "unknown-build"), no_number.clone()),
+        (maria(10, 6, 0), session(maria(10, 6, 0), "MariaDB-custom"), no_number),
         // A line naming the other engine of the family.
-        (my(8, 0, 16), session(my(8, 0, 16), "11.4.13-MariaDB-ubu2404"), Version::new(8, 0, 16)),
-        (maria(11, 4, 13), session(maria(11, 4, 13), "8.4.6"), Version::new(11, 4, 13)),
+        (my(8, 0, 16), session(my(8, 0, 16), "11.4.13-MariaDB-ubu2404"), two_engines.clone()),
+        (maria(11, 4, 13), session(maria(11, 4, 13), "8.4.6"), two_engines),
     ]
 }
 
 #[test]
 fn the_structure_version_is_the_facts_when_known_and_the_greetings_otherwise() {
-    let mut seen = Vec::new();
-    for (g, f, want) in structure_version_rows() {
-        assert_eq!(Greeting::of(&f), g, "{f:?}");
-        assert_eq!(structure_version(&f), want, "{f:?}");
+    let rows = structure_version_rows();
+    for (g, f, version) in &rows {
+        assert_eq!(Greeting::of(f), *g, "{f:?}");
+        assert_eq!(&f.version, version, "{f:?}");
         // As every structure read was written before the facts were asked: by the greeting.
-        assert_eq!(structure_version(&f), g.handshake, "{f:?}");
-        if let Fact::Known(v) = f.version {
-            assert_eq!(structure_version(&f), v, "{f:?}");
-        }
-        seen.push((g.label().split(' ').next().expect("an engine").to_string(), version_kind(&f)));
-    }
-    seen.sort();
-    seen.dedup();
-    let mut want = Vec::new();
-    for engine in ["MariaDB", "MySQL"] {
-        for kind in ["known", "line without a number", "two engines", "two numbers"] {
-            want.push((engine.to_string(), kind));
+        assert_eq!(structure_version(f), g.handshake, "{f:?}");
+        if let Fact::Known(v) = version {
+            assert_eq!(structure_version(f), *v, "{f:?}");
         }
     }
-    assert_eq!(seen, want, "every kind of version on both engines");
+    // Every kind of version on both engines: known (the greeting's number), two numbers, a line
+    // with no number and two engines.
+    for mariadb in [false, true] {
+        let on = |want: &Fact<Version>| rows.iter().any(|(g, f, _)| g.mariadb == mariadb && &f.version == want);
+        assert!(rows.iter().any(|(g, f, _)| g.mariadb == mariadb && f.version == Fact::Known(g.handshake)));
+        for why in [Why::VersionsDisagree, Why::VersionUnknown, Why::EnginesDisagree] {
+            assert!(on(&Fact::Unknown(why.clone())), "mariadb {mariadb}: {why:?}");
+        }
+    }
 }
 
 /// The servers the reads of the app's own are recorded for: those of the session's set-up, and
