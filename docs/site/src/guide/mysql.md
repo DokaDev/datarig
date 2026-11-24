@@ -232,8 +232,12 @@ their results read-only ("this connection type can't edit data").
   the table's structure and the tab's own session, which applies the change, both report one
   engine at the same known version, and the tab's session takes the edit format in use. Else such
   a row is refused before anything is written, its reason in the Changes tab (the two sessions
-  may reach different servers, behind a proxy for instance). When the edit format changes while
-  an Apply counts its rows, the Apply is cancelled: apply again.
+  may reach different servers, behind a proxy for instance). This is judged again when the Apply
+  is asked for and when `y` sends it, from what the sessions say then: the Apply dialog closes,
+  saying why, when that session is lost or either session reports another server, and when the
+  edit format changes; a row refused before its session said what its server is is offered once
+  it has. When the edit format changes while an Apply counts its rows, the Apply is cancelled:
+  apply again.
 - **Grants by column.** The server lists a table's columns to a user only as far as the user's
   grants go: one granted single columns sees just those, and rows that look the same may differ
   in the others. Unless the user's own grants include `SELECT`, `INSERT`, `UPDATE` or

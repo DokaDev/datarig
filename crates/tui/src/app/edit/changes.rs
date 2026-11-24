@@ -414,6 +414,8 @@ impl App {
         let t = self.tabs.get(tab)?;
         let rs = rows_of(t).filter(|rs| rs.id == result)?;
         let Target::Ready(target) = &rs.edit.target else { return None };
+        // One or all of identical rows, as the sessions stand now.
+        let target = self.judged_target(t, rs, target, format);
         let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
         let key = ModelKey {
             result,
@@ -434,13 +436,13 @@ impl App {
         let cache = &rs.edit.changes;
         if let Some((k, x, m)) = &*cache.made.borrow()
             && *k == key
-            && *x == **target
+            && *x == *target
         {
             return Some(m.clone());
         }
-        let m = Arc::new(self.make_changes(t, rs, target, format, zone));
+        let m = Arc::new(self.make_changes(t, rs, &target, format, zone));
         cache.builds.set(cache.builds.get() + 1);
-        *cache.made.borrow_mut() = Some((key, (**target).clone(), m.clone()));
+        *cache.made.borrow_mut() = Some((key, target.into_owned(), m.clone()));
         Some(m)
     }
 
@@ -476,8 +478,6 @@ impl App {
         .map(|m| i18n.msg(&m).to_string())
         .collect::<Vec<_>>()
         .join(" · ");
-        // A choice among identical rows checked for another format is not one in this.
-        let target = &*target.for_format(format);
         let f = edit::format(format);
         let dialect = f.language().dialect();
         let names: Vec<String> = rs.columns.iter().map(|c| c.meta.name.clone()).collect();

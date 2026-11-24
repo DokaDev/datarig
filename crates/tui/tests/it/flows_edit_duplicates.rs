@@ -80,6 +80,8 @@ fn profile(meta: Vec<DbEvent>) -> Harness {
         ..Config::default()
     };
     let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    // A key that lands in the grid copies there: never to the system's clipboard.
+    FakeClipboard::attach(&mut h, false, &[]);
     for ev in meta {
         meta_db(&mut h, ev);
     }
@@ -446,6 +448,102 @@ fn a_mariadb_tab_withholds_duplicates_when_a_mysql_tab_set_the_format() {
     assert!(h.app.ask.is_some(), "asked in the status bar");
     h.key(KeyCode::Char('y'));
     assert!(h.sent().iter().any(|c| matches!(c, DbCommand::ApplyEdits { .. })), "the Apply sent");
+}
+
+// ── Judged when applied: what changes while the preview is open ────────────────────────────
+
+/// One greeting everywhere, the change of a row that matches two identical rows asked with
+/// `:apply`: the preview offers one or all, nothing sent yet.
+fn previewed() -> Harness {
+    let mut h = profile(vec![mysql(v(8, 4, 6)), edits(true)]);
+    read(&mut h, vec![mysql(v(8, 4, 6)), edits(true)], false);
+    change(&mut h, false);
+    apply_counted(&mut h, 2);
+    offered(&h);
+    h
+}
+
+/// `a` (all of them) then `y`, wherever the keys land: nothing is applied.
+fn all_then_yes_sends_nothing(h: &mut Harness) {
+    h.key(KeyCode::Char('a'));
+    h.key(KeyCode::Char('y'));
+    assert!(no_apply_sent(h), "nothing applied");
+}
+
+/// The preview is closed, saying why one or all is no longer offered.
+fn closed_saying(h: &mut Harness, words: &str) {
+    assert!(h.app.edit_preview_view().is_none(), "the preview is closed");
+    let said = said_text(h).unwrap_or_default();
+    assert!(said.contains(words), "{said}");
+}
+
+/// Another session says another edit format while the preview offers one or all.
+#[test]
+fn a_format_change_with_the_preview_open_applies_nothing() {
+    let mut h = previewed();
+    meta_db(&mut h, edits(false));
+    closed_saying(&mut h, "edit format");
+    all_then_yes_sends_nothing(&mut h);
+}
+
+/// The metadata session that read the structure is lost while the preview is open, and another
+/// tab's run opens it again (the same server): the structure's session is not the one now.
+#[test]
+fn the_metadata_session_lost_and_opened_again_with_the_preview_open_applies_nothing() {
+    let mut h = previewed();
+    meta_db(&mut h, DbEvent::Lost { error: DbError::Closed });
+    h.ctrl('t');
+    h.app.focus = Focus::Editor;
+    h.app.run(vec!["SELECT 1".to_string()]);
+    h.app.tabs.activate(0);
+    h.app.focus = Focus::Results;
+    meta_db(&mut h, mysql(v(8, 4, 6)));
+    meta_db(&mut h, edits(true));
+    meta_db(&mut h, DbEvent::Connected);
+    h.app.transient = None;
+    all_then_yes_sends_nothing(&mut h);
+}
+
+/// The structure came from another database's session, which is lost while the preview is open.
+#[test]
+fn the_other_databases_session_lost_with_the_preview_open_applies_nothing() {
+    let mut h = profile(vec![mysql(v(8, 4, 6)), edits(true)]);
+    h.app.tab_mut().context = SessionContext { database: Some("sales".into()), schema: None };
+    read(&mut h, vec![mysql(v(8, 4, 6)), edits(true)], false);
+    aux_db(&mut h, "sales", mysql(v(8, 4, 6)));
+    aux_db(&mut h, "sales", DbEvent::Connected);
+    aux_db(&mut h, "sales", DbEvent::Keys(Ok(items_keys())));
+    change_b(&mut h, |h| aux_db(h, "sales", structure_answer(false)));
+    apply_counted(&mut h, 2);
+    offered(&h);
+    aux_db(&mut h, "sales", DbEvent::Lost { error: DbError::Closed });
+    h.app.transient = None;
+    all_then_yes_sends_nothing(&mut h);
+}
+
+/// The tab's own session says late that its server is another version than the structure's.
+#[test]
+fn a_late_word_of_another_version_with_the_preview_open_applies_nothing() {
+    let mut h = previewed();
+    h.tab_db(0, mysql(v(8, 4, 7)));
+    closed_saying(&mut h, "same engine and version");
+    all_then_yes_sends_nothing(&mut h);
+}
+
+/// The structure comes before the metadata session says what its server is: refused while not
+/// known, offered once it is (a normal setup is not left without the choice).
+#[test]
+fn a_choice_refused_before_the_facts_came_is_offered_once_they_do() {
+    let mut h = profile(Vec::new());
+    read(&mut h, vec![mysql(v(8, 4, 6)), edits(true)], false);
+    change(&mut h, false);
+    apply_counted(&mut h, 2);
+    withheld(&mut h, NOT_CHECKED);
+    meta_db(&mut h, mysql(v(8, 4, 6)));
+    h.app.focus = Focus::Results;
+    apply_counted(&mut h, 2);
+    offered(&h);
+    all_applied(&mut h);
 }
 
 // ── Offered: the sessions agree ─────────────────────────────────────────────────────────────
