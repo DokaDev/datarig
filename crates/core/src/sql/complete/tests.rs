@@ -393,7 +393,7 @@ fn values_in(d: Dialect, src_with_bar: &str, checks: Option<&[CheckValues]>) -> 
     let cursor = src_with_bar.find('|').unwrap();
     let src = src_with_bar.replacen('|', "", 1);
     let lookup = |s: &str, t: &str| if (s, t) == ("shop", "orders") { checks } else { Some(&[][..]) };
-    complete_with(&src, cursor, &enums(), false, &default_path(), d, LexState::default(), &lookup)
+    complete_with(&src, cursor, &enums(), false, &default_path(), d, LexState::default(), &lookup, false)
 }
 
 fn value_labels(d: Dialect, src_with_bar: &str) -> Vec<String> {
@@ -649,12 +649,11 @@ fn the_innermost_query_names_an_unqualified_column() {
     let at = |src: &str| {
         let cursor = src.find('|').unwrap();
         let text = src.replacen('|', "", 1);
-        complete_with(&text, cursor, &c, false, &default_path(), Dialect::Postgres, LexState::default(), &|_, _| {
-            Some(&[][..])
-        })
-        .completion
-        .map(|c| c.items.into_iter().map(|i| i.label).collect::<Vec<_>>())
-        .unwrap_or_default()
+        let none = |_: &str, _: &str| Some(&[][..]);
+        complete_with(&text, cursor, &c, false, &default_path(), Dialect::Postgres, LexState::default(), &none, false)
+            .completion
+            .map(|c| c.items.into_iter().map(|i| i.label).collect::<Vec<_>>())
+            .unwrap_or_default()
     };
     let inner = "SELECT * FROM shop.orders WHERE id IN (SELECT order_id FROM shop.tickets WHERE status = '|')";
     assert_eq!(at(inner), ["open", "closed"]);
@@ -675,6 +674,6 @@ fn a_values_detail_is_its_types_name() {
         "enum('pending','paid','shipped','cancelled')".into();
     let src = "SELECT * FROM shop.orders WHERE status = '";
     let d = Dialect::MySql(MySqlMode::default());
-    let c = complete_with(src, src.len(), &c, false, &[], d, LexState::default(), &|_, _| Some(&[][..]));
+    let c = complete_with(src, src.len(), &c, false, &[], d, LexState::default(), &|_, _| Some(&[][..]), false);
     assert_eq!(c.completion.unwrap().items[0].detail.as_deref(), Some("enum"));
 }

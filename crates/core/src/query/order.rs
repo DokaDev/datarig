@@ -160,8 +160,10 @@ fn column(text: &str, tok: &Token, t: &Target) -> Result<String, OrderError> {
 }
 
 /// The user's keys of `keys` as `ORDER BY` text of dialect `d`, the way [`parse_order`] reads it
-/// back: each name quoted only when it must be, its direction always written. Tie-breaker keys
-/// ([`KeyOrigin::TieBreak`]) are left out: the app adds them.
+/// back: each name as the engine's sort writes it ([`SortRules::name`]), its direction always
+/// written. Tie-breaker keys ([`KeyOrigin::TieBreak`]) are left out: the app adds them.
+///
+/// [`SortRules::name`]: crate::engine::SortRules::name
 pub fn order_text(keys: &[OrderKey], d: Dialect) -> String {
     let mut parts = Vec::new();
     for k in keys.iter().filter(|k| k.origin == KeyOrigin::User) {
@@ -169,7 +171,7 @@ pub fn order_text(keys: &[OrderKey], d: Dialect) -> String {
             Dir::Asc => "ASC",
             Dir::Desc => "DESC",
         };
-        let mut part = format!("{} {dir}", d.quote_ident(&k.col));
+        let mut part = format!("{} {dir}", d.engine().spec().sort.name(d, &k.col));
         match k.nulls {
             Some(Nulls::First) => part.push_str(" NULLS FIRST"),
             Some(Nulls::Last) => part.push_str(" NULLS LAST"),

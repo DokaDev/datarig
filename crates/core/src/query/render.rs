@@ -123,7 +123,7 @@ pub(super) fn written(c: &Cond, t: &Target, group: &Fact<&'static dyn FilterSql>
 
 fn render_at(c: &Cond, t: &Target, f: &dyn FilterSql, place: Place) -> Result<String, RenderError> {
     let d = t.dialect;
-    let col = |name: &str| d.quote_ident(name);
+    let col = |name: &str| d.engine().spec().sort.name(d, name);
     let lit = |name: &str, v: &Value| literal(t, f, t.column(name), v);
     let not = |negated: bool| if negated { "NOT " } else { "" };
     if let Some(e) = refused_values(c, t, f) {

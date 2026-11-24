@@ -327,6 +327,14 @@ pub trait SortRules: Sync {
     /// The clause (with a leading space) that skips the first `offset` rows and reads every
     /// row after them.
     fn offset_alone(&self, offset: u64) -> String;
+
+    /// Column `name` as the table's filter, value filter, order and their completions write it
+    /// in dialect `d`: read back by the server as that column, never as anything else.
+    fn name(&self, d: Dialect, name: &str) -> String;
+
+    /// Whether the server may read `name`, written bare (without parentheses), as a call
+    /// rather than as a column of that name. Compared without case.
+    fn bare_call(&self, name: &str) -> bool;
 }
 
 /// How a server matches an unquoted name with a column ([`SortRules::names`]).

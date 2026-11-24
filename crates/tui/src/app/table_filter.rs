@@ -145,7 +145,7 @@ impl App {
                 // The statement as the run writes it, up to the condition.
                 let head = format!("{} WHERE ", query::compile(&Query::table(name), &target).sql);
                 let full =
-                    self.complete_text(&format!("{head}{text}"), head.len() + cursor, LexState::default(), force);
+                    self.complete_text(&format!("{head}{text}"), head.len() + cursor, LexState::default(), force, true);
                 let completion = full.completion.filter(|c| c.replace_start >= head.len()).map(|mut c| {
                     c.replace_start -= head.len();
                     c
@@ -220,8 +220,8 @@ fn condition_keywords(
 /// Completion of an `ORDER BY` text (the cursor at byte `cursor`) from `target`'s columns: a
 /// column at the start or after a comma, then its direction (`ASC`, `DESC`, and on PostgreSQL
 /// `NULLS FIRST`, `NULLS LAST`), after a direction `NULLS FIRST`/`NULLS LAST`, after `NULLS` its
-/// two words. Names are written as the dialect reads them back (quoted only when needed); a
-/// name being typed in quotes is completed in quotes. `None` when nothing is typed and `force`
+/// two words. Names are written as the engine's sort writes them (`SortRules::name`); a name
+/// being typed in quotes is completed in quotes. `None` when nothing is typed and `force`
 /// is not set, or nothing fits.
 pub fn order_completion(text: &str, cursor: usize, target: &Target, force: bool) -> Option<Completion> {
     let d = target.dialect;
@@ -262,7 +262,7 @@ pub fn order_completion(text: &str, cursor: usize, target: &Target, force: bool)
         let lower = typed.to_lowercase();
         let fits = |n: &str| if quoted { n.starts_with(&typed) } else { n.to_lowercase().starts_with(&lower) };
         for c in target.columns.iter().filter(|c| fits(&c.name)) {
-            let label = if quoted { d.force_quote_ident(&c.name) } else { d.quote_ident(&c.name) };
+            let label = if quoted { d.force_quote_ident(&c.name) } else { d.engine().spec().sort.name(d, &c.name) };
             items.push(Candidate {
                 label,
                 kind: datarig_core::sql::complete::Kind::Column,

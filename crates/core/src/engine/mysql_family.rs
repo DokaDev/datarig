@@ -683,7 +683,35 @@ impl SortRules for FamilySort {
     fn offset_alone(&self, offset: u64) -> String {
         format!(" LIMIT {} OFFSET {offset}", u64::MAX)
     }
+
+    /// Always quoted: a bare name may be a function the server calls without parentheses
+    /// (`current_role`) or a reserved word (`offset`).
+    fn name(&self, d: Dialect, name: &str) -> String {
+        d.force_quote_ident(name)
+    }
+
+    /// The names of [`BARE_CALLS`]: both engines' on every session, whichever engine it is.
+    fn bare_call(&self, name: &str) -> bool {
+        BARE_CALLS.iter().any(|c| c.eq_ignore_ascii_case(name))
+    }
 }
+
+/// The words MySQL 8.4 or MariaDB 11.4 reads, written bare, as a call that answers a value
+/// (the first nine on both, `CURRENT_ROLE` on MariaDB only). Other function names (`NOW`,
+/// `USER`, `DATABASE`, `SYSDATE`, ...) and type names (`DATE`, `CHAR`) are an error bare, so a
+/// bare one is the column of that name.
+const BARE_CALLS: [&str; 10] = [
+    "CURRENT_DATE",
+    "CURRENT_TIME",
+    "CURRENT_TIMESTAMP",
+    "CURRENT_USER",
+    "LOCALTIME",
+    "LOCALTIMESTAMP",
+    "UTC_DATE",
+    "UTC_TIME",
+    "UTC_TIMESTAMP",
+    "CURRENT_ROLE",
+];
 
 /// How MySQL's and MariaDB's filter text is written.
 pub(super) struct FamilyFilter;
@@ -739,7 +767,7 @@ impl FilterSql for FamilyFilter {
         let d = t.dialect;
         let p = self.text_literal(t, c.pattern);
         let e = d.quote_literal(&c.escape.to_string());
-        let col = d.quote_ident(c.col);
+        let col = FamilySort.name(d, c.col);
         let not = if c.negated { "NOT " } else { "" };
         Ok(match c.case {
             CaseMode::Server => format!("{col} {not}LIKE {p} ESCAPE {e}"),

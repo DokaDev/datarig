@@ -13,6 +13,10 @@
 //! model's value would be written back as a string), a NULL in an `IN` list or as a `BETWEEN`
 //! bound (SQL's three-valued logic).
 //!
+//! A bare name the engine may read as a call rather than a column
+//! ([`SortRules::bare_call`](crate::engine::SortRules::bare_call)) names no column, so a part
+//! comparing it stays as written; quoted, it is the column of that name.
+//!
 //! A list with its own test of NULL, as [`render`](super::render) writes it in parentheses
 //! (`(c IN (…) OR c IS NULL)`, `(c NOT IN (…) AND c IS NOT NULL)`), reads as the one
 //! [`Cond::In`] it is, NULL among its values.
@@ -32,7 +36,7 @@ use std::cell::Cell;
 
 use super::check::lexical;
 use super::{CaseMode, CmpOp, ColName, Cond, Target, Value, filter_sql};
-use crate::engine::{FilterSyntax, NameMatch, NullSafe};
+use crate::engine::{FilterSyntax, NameMatch, NullSafe, SortRules};
 use crate::export::{negative_zero, sql_number};
 use crate::sql::dialect::Dialect;
 use crate::sql::lexer::{Tok, Token, lex_in};
@@ -45,8 +49,8 @@ pub fn recognise(text: &str, target: &Target) -> Option<Cond> {
     lexical(text, d).ok()?;
     let toks: Vec<Token> = lex_in(text, d).into_iter().filter(|t| !t.is_trivia()).collect();
     let cols = target.names();
-    let names = d.engine().spec().sort.names();
-    Reader { src: text, d, syntax, names, cols: &cols, target, depth: Cell::new(0) }.or(&toks)
+    let sort = d.engine().spec().sort;
+    Reader { src: text, d, syntax, sort, cols: &cols, target, depth: Cell::new(0) }.or(&toks)
 }
 
 /// How many `OR` levels and `NOT`s deep a text is read at most.
@@ -57,8 +61,8 @@ struct Reader<'a> {
     d: Dialect,
     /// What the engine's filter text means.
     syntax: &'static FilterSyntax,
-    /// How the engine matches an unquoted name with a column.
-    names: NameMatch,
+    /// How the engine matches an unquoted name with a column, and which bare names it may call.
+    sort: &'static dyn SortRules,
     cols: &'a [ColName],
     target: &'a Target,
     depth: Cell<usize>,
@@ -179,7 +183,8 @@ impl Reader<'_> {
     }
 
     /// The column `t` names, as the catalog has it: a quoted name exactly, a bare one as the
-    /// server folds it (MySQL: column names compare without case, the first that matches).
+    /// server folds it (MySQL: column names compare without case, the first that matches), and
+    /// none for a bare name the server may read as a call ([`SortRules::bare_call`]).
     fn column(&self, t: &Token) -> Option<ColName> {
         let text = self.text(t);
         let name = match t.kind {
@@ -190,10 +195,11 @@ impl Reader<'_> {
             {
                 return None;
             }
+            Tok::Ident | Tok::Keyword if self.sort.bare_call(text) => return None,
             Tok::Ident | Tok::Keyword => self.d.fold(text),
             _ => return None,
         };
-        match self.names {
+        match self.sort.names() {
             NameMatch::Exact => self.cols.iter().find(|c| **c == name).cloned(),
             NameMatch::AnyCase => self.cols.iter().find(|c| c.eq_ignore_ascii_case(&name)).cloned(),
         }

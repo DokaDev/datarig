@@ -725,6 +725,16 @@ impl SortRules for PgSort {
     fn offset_alone(&self, offset: u64) -> String {
         format!(" OFFSET {offset}")
     }
+
+    /// Quoted only when a bare name would not read back as the same column.
+    fn name(&self, d: Dialect, name: &str) -> String {
+        d.quote_ident(name)
+    }
+
+    /// No: a name the reader takes bare stays the column's, as it always has.
+    fn bare_call(&self, _: &str) -> bool {
+        false
+    }
 }
 
 /// How PostgreSQL's filter text is written.
