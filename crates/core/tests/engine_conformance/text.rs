@@ -2,6 +2,7 @@
 
 use crate::Engine::{MariaDb, MySql, MySqlAnsiQuotes, MySqlDollarNotKnown, MySqlNoBackslashEscapes, Pg};
 use crate::{Case, Engine};
+use datarig_core::driver::ServerMessage;
 use datarig_core::sql::dialect::Dialect;
 use datarig_core::sql::lexer::{Tok, lex_in};
 use datarig_core::sql::split::split_in;
@@ -268,6 +269,101 @@ pub fn split_cases() -> Vec<Case<&'static str>> {
                 (MySql, "SELECT 1 | */ | SELECT 2 / BlockComment \"/* a /* b */\""),
                 (MariaDb, "SELECT 1 | */ | SELECT 2 / BlockComment \"/* a /* b */\""),
             ],
+        },
+    ]
+}
+
+/// A server's message `text` (with its character `position`, when it gives one) of statement
+/// `sql`, as sent.
+pub struct ErrorAt {
+    pub sql: &'static str,
+    pub text: &'static str,
+    pub position: Option<u32>,
+}
+
+/// Where engine `e`'s text rules find the error of `m` in its statement: `at` or `at..end`
+/// (bytes), `-` when not found (`TextRules::error_offset`).
+pub fn error_offset(e: Engine, m: &ErrorAt) -> String {
+    let message = ServerMessage { text: m.text.to_string(), position: m.position, hint: None };
+    match e.dialect().engine().spec().text.error_offset(m.sql, &message) {
+        Some((at, Some(end))) => format!("{at}..{end}"),
+        Some((at, None)) => at.to_string(),
+        None => "-".to_string(),
+    }
+}
+
+/// A statement whose filter starts after a two-byte character, at byte 36.
+const PG_SQL: &str = "SELECT * FROM \"shop\".\"users\" WHERE (\u{e9} = 1 OR idd = 2)";
+const MY_SQL: &str = "SELECT * FROM `shop`.`users` WHERE (\u{e9} = 1 OR idd = 2)";
+
+pub fn error_offset_cases() -> Vec<Case<ErrorAt>> {
+    vec![
+        Case {
+            name: "a position in the filter, after a wide character",
+            input: ErrorAt { sql: PG_SQL, text: "ERROR: column \"idd\" does not exist", position: Some(37 + 9) },
+            expect: &[(Pg, "46"), (MySql, "-"), (MariaDb, "-")],
+        },
+        Case {
+            name: "a position before the filter",
+            input: ErrorAt { sql: PG_SQL, text: "ERROR: permission denied", position: Some(15) },
+            expect: &[(Pg, "14"), (MySql, "-"), (MariaDb, "-")],
+        },
+        Case {
+            name: "a position past the statement",
+            input: ErrorAt { sql: PG_SQL, text: "ERROR", position: Some(999) },
+            expect: &[(Pg, "-"), (MySql, "-"), (MariaDb, "-")],
+        },
+        Case {
+            name: "position 0",
+            input: ErrorAt { sql: PG_SQL, text: "ERROR", position: Some(0) },
+            expect: &[(Pg, "-"), (MySql, "-"), (MariaDb, "-")],
+        },
+        Case {
+            name: "quoted once",
+            input: ErrorAt {
+                sql: MY_SQL,
+                text: "ERROR 1064 (42000): You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'idd = 2)' at line 1",
+                position: None,
+            },
+            expect: &[(Pg, "-"), (MySql, "46..54"), (MariaDb, "46..54")],
+        },
+        Case {
+            name: "quoted twice",
+            input: ErrorAt { sql: MY_SQL, text: "ERROR 1064 (42000): x near '= ' at line 1", position: None },
+            expect: &[(Pg, "-"), (MySql, "-"), (MariaDb, "-")],
+        },
+        Case {
+            name: "quoted, not found",
+            input: ErrorAt { sql: MY_SQL, text: "ERROR 1064 (42000): x near 'zzz' at line 1", position: None },
+            expect: &[(Pg, "-"), (MySql, "-"), (MariaDb, "-")],
+        },
+        Case {
+            name: "quoted, found again overlapping",
+            input: ErrorAt {
+                sql: "SELECT * FROM `shop`.`users` WHERE (name = 'aaa')",
+                text: "ERROR 1064 (42000): x near 'aa' at line 1",
+                position: None,
+            },
+            expect: &[(Pg, "-"), (MySql, "-"), (MariaDb, "-")],
+        },
+        Case {
+            name: "nothing quoted",
+            input: ErrorAt { sql: MY_SQL, text: "ERROR 1064 (42000): x near '' at line 1", position: None },
+            expect: &[(Pg, "-"), (MySql, "-"), (MariaDb, "-")],
+        },
+        Case {
+            name: "no quote",
+            input: ErrorAt {
+                sql: MY_SQL,
+                text: "ERROR 1054 (42S22): Unknown column 'x' in 'where clause'",
+                position: None,
+            },
+            expect: &[(Pg, "-"), (MySql, "-"), (MariaDb, "-")],
+        },
+        Case {
+            name: "a position and a quote",
+            input: ErrorAt { sql: MY_SQL, text: "ERROR 1064 (42000): x near 'idd = 2)' at line 1", position: Some(3) },
+            expect: &[(Pg, "2"), (MySql, "46..54"), (MariaDb, "46..54")],
         },
     ]
 }

@@ -28,6 +28,9 @@ mod popups;
 pub(crate) mod values;
 pub mod view;
 
+#[cfg(test)]
+pub(super) mod tests;
+
 pub use apply::DialogAction;
 pub(crate) use keys::op_off_label;
 

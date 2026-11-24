@@ -164,94 +164,9 @@ impl App {
     }
 }
 
-/// The keywords a condition is written with, sorted: its operators, `CASE`, literals, and the
-/// functions and casts the lexer reads as keywords. Statement words (`ALTER`, `SELECT`, …) are
-/// not offered in a condition.
-const PG_CONDITION_KEYWORDS: &[&str] = &[
-    "ALL",
-    "AND",
-    "ANY",
-    "ARRAY",
-    "AS",
-    "BETWEEN",
-    "CASE",
-    "CAST",
-    "COALESCE",
-    "COLLATE",
-    "CURRENT_DATE",
-    "CURRENT_TIMESTAMP",
-    "DISTINCT",
-    "ELSE",
-    "END",
-    "ESCAPE",
-    "EXISTS",
-    "EXTRACT",
-    "FALSE",
-    "FROM",
-    "ILIKE",
-    "IN",
-    "INTERVAL",
-    "IS",
-    "LIKE",
-    "NOT",
-    "NULL",
-    "NULLIF",
-    "OR",
-    "SIMILAR",
-    "SOME",
-    "SYMMETRIC",
-    "THEN",
-    "TO",
-    "TRUE",
-    "UNKNOWN",
-    "WHEN",
-];
-
-/// [`PG_CONDITION_KEYWORDS`] of MySQL.
-const MYSQL_CONDITION_KEYWORDS: &[&str] = &[
-    "ALL",
-    "AND",
-    "ANY",
-    "AS",
-    "BETWEEN",
-    "BINARY",
-    "CASE",
-    "CAST",
-    "COLLATE",
-    "CURRENT_DATE",
-    "CURRENT_TIME",
-    "CURRENT_TIMESTAMP",
-    "DIV",
-    "ELSE",
-    "END",
-    "ESCAPE",
-    "EXISTS",
-    "FALSE",
-    "FROM",
-    "IN",
-    "INTERVAL",
-    "IS",
-    "LIKE",
-    "MOD",
-    "NOT",
-    "NULL",
-    "OR",
-    "REGEXP",
-    "RLIKE",
-    "SOME",
-    "THEN",
-    "TRUE",
-    "UNKNOWN",
-    "WHEN",
-    "XOR",
-];
-
-/// The keywords of a condition of dialect `d`.
+/// The keywords of a condition of dialect `d` (none on an engine without filter rules).
 pub(crate) fn condition_keywords_of(d: Dialect) -> &'static [&'static str] {
-    match d {
-        Dialect::Postgres => PG_CONDITION_KEYWORDS,
-        Dialect::MySql(_) | Dialect::MariaDb(_) => MYSQL_CONDITION_KEYWORDS,
-    }
+    query::filter_sql(d).map_or(&[], |f| f.keywords())
 }
 
 /// `completion` of condition `text` (the cursor at byte `cursor`) with its keywords those of a
@@ -326,14 +241,18 @@ pub fn order_completion(text: &str, cursor: usize, target: &Target, force: bool)
     let before: Vec<&datarig_core::sql::lexer::Token> =
         toks.iter().filter(|t| t.end <= start && !t.is_trivia()).collect();
     let last = before.last().map(|t| (t.kind, t.text(text).to_ascii_uppercase()));
-    let pg = matches!(d, Dialect::Postgres);
+    let typed_nulls = d.engine().spec().sort.typed_nulls();
     let words: &[&str] = match &last {
         None | Some((Tok::Comma, _)) => &[],
         Some((Tok::Keyword | Tok::Ident, w)) if w == "NULLS" => &["FIRST", "LAST"],
         Some((Tok::Keyword | Tok::Ident, w)) if w == "FIRST" || w == "LAST" => return None,
-        Some((Tok::Keyword | Tok::Ident, w)) if (w == "ASC" || w == "DESC") && pg => &["NULLS FIRST", "NULLS LAST"],
+        Some((Tok::Keyword | Tok::Ident, w)) if (w == "ASC" || w == "DESC") && typed_nulls => {
+            &["NULLS FIRST", "NULLS LAST"]
+        }
         Some((Tok::Keyword | Tok::Ident, w)) if w == "ASC" || w == "DESC" => return None,
-        Some((Tok::Keyword | Tok::Ident | Tok::QuotedIdent, _)) if pg => &["ASC", "DESC", "NULLS FIRST", "NULLS LAST"],
+        Some((Tok::Keyword | Tok::Ident | Tok::QuotedIdent, _)) if typed_nulls => {
+            &["ASC", "DESC", "NULLS FIRST", "NULLS LAST"]
+        }
         Some((Tok::Keyword | Tok::Ident | Tok::QuotedIdent, _)) => &["ASC", "DESC"],
         _ => return None,
     };
@@ -370,3 +289,6 @@ pub fn order_completion(text: &str, cursor: usize, target: &Target, force: bool)
     };
     (!items.is_empty()).then_some(Completion { items, replace_start: start, trail })
 }
+
+#[cfg(test)]
+mod tests;

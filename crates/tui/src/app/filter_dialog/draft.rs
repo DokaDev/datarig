@@ -20,7 +20,7 @@ use std::ops::Range;
 
 use datarig_core::driver::keys::CatalogColumn;
 use datarig_core::driver::{ColumnMeta, ValueKind};
-use datarig_core::engine::{FilterSql, Why};
+use datarig_core::engine::{FilterSql, NullSafe, Why};
 use datarig_core::query::{
     self, CaseMode, CmpOp, ColName, ColumnKind, Compares, Cond, Dir, Filter, KeyOrigin, LikeKind, NoEquality, OrderKey,
     Query, RenderError, Target, Value,
@@ -100,15 +100,17 @@ impl Op {
         }
     }
 
-    /// The SQL shown beside an operator in words (`BETWEEN a AND b`); `None` for one shown as
-    /// a symbol.
+    /// The SQL shown beside an operator in words (`BETWEEN a AND b`) on dialect `d`; `None` for
+    /// one shown as a symbol, and on an engine without filter rules.
     pub(crate) fn sql_hint(self, d: Dialect) -> Option<&'static str> {
-        let pg = d == Dialect::Postgres;
+        let syntax = query::filter_sql(d).ok()?.syntax();
         Some(match self {
             Op::Between => "BETWEEN a AND b",
-            Op::NeOrNull if pg => "IS DISTINCT FROM",
-            Op::NeOrNull => "NOT (… <=> …)",
-            Op::Contains if pg => "ILIKE '%…%'",
+            Op::NeOrNull => match syntax.null_safe {
+                NullSafe::DistinctFrom => "IS DISTINCT FROM",
+                NullSafe::Spaceship => "NOT (… <=> …)",
+            },
+            Op::Contains if syntax.ilike => "ILIKE '%…%'",
             Op::Contains => "LIKE '%…%'",
             Op::StartsWith => "LIKE '…%'",
             Op::InList => "IN (a, b, …)",
@@ -261,93 +263,32 @@ impl ColumnInfo {
     }
 }
 
-/// What a MySQL column whose catalogue type (`COLUMN_TYPE`) is `type_name` would be described
-/// as in a result: its type named and its kind as the MySQL driver names them for a result
-/// column of that type. For a column no result describes (an `INVISIBLE` one, which `SELECT *`
-/// leaves out). `None` on PostgreSQL, which has no such column. A type not named here is of no
-/// kind of its own ([`ValueKind::Other`]), whose values are not compared.
+/// What a column whose catalogue type is `type_name` would be described as in a result on
+/// dialect `d`, for a column no result describes (a MySQL `INVISIBLE` one, which `SELECT *`
+/// leaves out): as the engine's filter rules say ([`FilterSql::catalogue_meta`]); `None` on an
+/// engine without them.
 pub(crate) fn catalogue_meta(d: Dialect, name: &str, type_name: &str) -> Option<ColumnMeta> {
-    if !matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)) {
-        return None;
-    }
-    let lower = type_name.to_ascii_lowercase();
-    let base = base_type(type_name);
-    let unsigned = lower.split_whitespace().any(|w| w == "unsigned");
-    let numeric = |n: &str| if unsigned { format!("{n} unsigned") } else { n.to_string() };
-    let (ty, kind) = match base.as_str() {
-        "tinyint" if lower.starts_with("tinyint(1)") => (numeric("tinyint(1)"), ValueKind::Integer),
-        "tinyint" | "smallint" | "mediumint" | "int" | "bigint" => (numeric(&base), ValueKind::Integer),
-        "year" => (base.clone(), ValueKind::Integer),
-        "decimal" => (numeric("decimal"), ValueKind::Decimal),
-        "float" | "double" => (numeric(&base), ValueKind::Float),
-        "bit" => (base.clone(), ValueKind::Bit),
-        "date" => (base.clone(), ValueKind::Date),
-        "time" => (base.clone(), ValueKind::Interval),
-        "datetime" => (base.clone(), ValueKind::Timestamp),
-        "timestamp" => (base.clone(), ValueKind::TimestampTz),
-        "json" => (base.clone(), ValueKind::Json),
-        "char" | "varchar" | "tinytext" | "text" | "mediumtext" | "longtext" | "enum" | "set" => {
-            (base.clone(), ValueKind::Text)
-        }
-        "binary" | "varbinary" | "tinyblob" | "blob" | "mediumblob" | "longblob" => (base.clone(), ValueKind::Bytes),
-        "geometry" | "point" | "linestring" | "polygon" | "multipoint" | "multilinestring" | "multipolygon"
-        | "geometrycollection" | "geomcollection" => ("geometry".to_string(), ValueKind::Bytes),
-        "vector" => (base.clone(), ValueKind::Bytes),
-        _ => (base.clone(), ValueKind::Other),
-    };
-    Some(ColumnMeta::new(name.to_string(), ty, kind, None))
+    query::filter_sql(d).ok()?.catalogue_meta(name, type_name)
 }
 
-/// A type name lower case, without its arguments (`(20)`, `('a','b')`), MySQL's `unsigned`
-/// and `zerofill`, and with single spaces: `character varying(20)` is `character varying`.
-/// A catalogue type of dialect `d` that is a MySQL `TIMESTAMP` ([`ColumnFacts::zoned`]).
+/// A catalogue type of dialect `d` shown in the session's time zone ([`ColumnFacts::zoned`]),
+/// as the engine's filter rules say; never on an engine without them.
 ///
 /// [`ColumnFacts::zoned`]: datarig_core::query::ColumnFacts::zoned
 pub(crate) fn zoned_type(d: Dialect, type_name: &str) -> bool {
-    matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)) && base_type(type_name) == "timestamp"
-}
-
-fn base_type(type_name: &str) -> String {
-    let lower = type_name.to_ascii_lowercase();
-    let rest = match (lower.find('('), lower.rfind(')')) {
-        (Some(open), Some(close)) if open < close => format!("{} {}", &lower[..open], &lower[close + 1..]),
-        _ => lower,
-    };
-    rest.split_whitespace().filter(|w| !matches!(*w, "unsigned" | "zerofill")).collect::<Vec<_>>().join(" ")
+    query::filter_sql(d).is_ok_and(|f| f.catalogue_zoned(type_name))
 }
 
 /// What literals are written as for a column whose type the catalogue of dialect `d` names
-/// `type_name` (PostgreSQL `format_type`, MySQL `COLUMN_TYPE`), as the held result would say:
-/// numbers, text and bytes of the built-in types; anything else (a domain, an array, dates, a
-/// type not named here) is [`ColumnKind::Other`], whose values are written as strings.
+/// `type_name` (PostgreSQL `format_type`, MySQL `COLUMN_TYPE`), as the engine's filter rules
+/// say ([`FilterSql::catalogue_kind`]); [`ColumnKind::Other`] on an engine without them.
 pub(crate) fn kind_of_type(d: Dialect, type_name: &str) -> ColumnKind {
-    let base = base_type(type_name);
-    if base.ends_with("[]") {
-        return ColumnKind::Other;
-    }
-    match d {
-        Dialect::Postgres => match base.as_str() {
-            "real" | "float4" => ColumnKind::Real,
-            "smallint" | "integer" | "int" | "bigint" | "int2" | "int4" | "int8" | "oid" | "double precision"
-            | "float8" | "numeric" | "decimal" => ColumnKind::Number,
-            "text" | "character varying" | "varchar" | "character" | "char" | "bpchar" | "name" => ColumnKind::Text,
-            "bytea" => ColumnKind::Bytes,
-            _ => ColumnKind::Other,
-        },
-        Dialect::MySql(_) | Dialect::MariaDb(_) => match base.as_str() {
-            "float" => ColumnKind::Real,
-            "tinyint" | "smallint" | "mediumint" | "int" | "integer" | "bigint" | "year" | "decimal" | "numeric"
-            | "dec" | "fixed" | "double" | "double precision" | "real" => ColumnKind::Number,
-            "char" | "varchar" | "tinytext" | "text" | "mediumtext" | "longtext" | "enum" | "set" => ColumnKind::Text,
-            "binary" | "varbinary" | "tinyblob" | "blob" | "mediumblob" | "longblob" => ColumnKind::Bytes,
-            _ => ColumnKind::Other,
-        },
-    }
+    query::filter_sql(d).map_or(ColumnKind::Other, |f| f.catalogue_kind(type_name))
 }
 
 /// A type of dates or times, by its name.
 fn temporal_type(type_name: &str) -> bool {
-    let base = base_type(type_name);
+    let base = query::base_type(type_name);
     let first = base.split(' ').next().unwrap_or_default();
     matches!(first, "date" | "time" | "timetz" | "timestamp" | "timestamptz" | "datetime" | "interval")
 }
@@ -369,11 +310,12 @@ pub(crate) fn ops_by(
     filter: Result<&'static dyn FilterSql, Why>,
 ) -> Vec<(Op, Result<(), OpOff>)> {
     let engine = filter.as_ref().err().map(|why| OpOff::NoFilterRules(why_label(why)));
+    let doubles = filter.as_ref().is_ok_and(|f| f.syntax().numbers_as_doubles);
     let compares = c.meta.as_ref().map(|m| compared(filter.clone(), m, c.enum_known));
     Op::ALL
         .into_iter()
         .filter(|op| *op != Op::Between || c.ranged())
-        .map(|op| (op, op_allowed(op, c, engine, compares.clone(), target)))
+        .map(|op| (op, op_allowed(op, c, engine, doubles, compares.clone(), target)))
         .collect()
 }
 
@@ -397,10 +339,13 @@ pub(crate) fn compared(
     rules.compares(m, enum_known).map_err(|NoEquality| NotCompared::NoEquality)
 }
 
+/// Whether operator `op` is offered for column `c`, or why not. `doubles`: the server compares
+/// a number column with a string as two doubles ([`datarig_core::engine::FilterSyntax`]).
 fn op_allowed(
     op: Op,
     c: &ColumnInfo,
     engine: Option<OpOff>,
+    doubles: bool,
     compares: Option<Result<Compares, NotCompared>>,
     target: &Target,
 ) -> Result<(), OpOff> {
@@ -418,7 +363,7 @@ fn op_allowed(
         _ => {}
     }
     let equality = matches!(op, Op::Eq | Op::Ne | Op::NeOrNull | Op::InList | Op::NotInList);
-    if equality && c.kind == ColumnKind::Real && matches!(target.dialect, Dialect::MySql(_) | Dialect::MariaDb(_)) {
+    if equality && c.kind == ColumnKind::Real && doubles {
         return Err(OpOff::InexactEquality);
     }
     if !op.pattern() {
@@ -586,9 +531,10 @@ impl Row {
     }
 }
 
-/// A MySQL column whose collation compares without case (`utf8mb4_0900_ai_ci`).
+/// A column whose collation compares without case (MySQL's `utf8mb4_0900_ai_ci`), where the
+/// engine's collations say so by their name.
 fn ignores_case(target: &Target, col: &str) -> bool {
-    matches!(target.dialect, Dialect::MySql(_) | Dialect::MariaDb(_))
+    query::filter_sql(target.dialect).is_ok_and(|f| f.syntax().ci_collations)
         && target
             .column(col)
             .and_then(|f| f.collation.as_deref())
@@ -602,12 +548,7 @@ pub(crate) fn value_text(v: &Value, d: Dialect) -> String {
         Value::Null => "NULL".to_string(),
         Value::Bool(b) => b.to_string(),
         Value::Number(s) | Value::Text(s) => s.clone(),
-        Value::Bytes(b) => match d {
-            Dialect::Postgres => format!("\\x{}", b.iter().map(|b| format!("{b:02x}")).collect::<String>()),
-            Dialect::MySql(_) | Dialect::MariaDb(_) => {
-                format!("0x{}", b.iter().map(|b| format!("{b:02X}")).collect::<String>())
-            }
-        },
+        Value::Bytes(b) => d.engine().spec().values.bytes_shown(b),
     }
 }
 

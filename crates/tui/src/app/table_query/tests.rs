@@ -205,15 +205,6 @@ fn every_order_problem_has_its_own_words() {
 }
 
 #[test]
-fn mysql_quotes_the_text_from_where_it_stopped() {
-    let m = "ERROR 1064 (42000): You have an error in your SQL syntax; check the manual that corresponds to \
-             your MySQL server version for the right syntax to use near 'name = 'x')' at line 1";
-    assert_eq!(mysql_near(m), Some("name = 'x')"));
-    assert_eq!(mysql_near("ERROR 1064 (42000): ... near '' at line 1"), None, "nothing quoted");
-    assert_eq!(mysql_near("ERROR 1054 (42S22): Unknown column 'x' in 'where clause'"), None);
-}
-
-#[test]
 fn a_server_error_marks_the_filter_where_it_points() {
     use datarig_core::driver::ServerMessage;
     let table = TableName { database: None, schema: "shop".into(), name: "users".into() };
@@ -358,4 +349,89 @@ fn a_page_past_the_cap_is_cut_there() {
     assert_eq!(rows, vec![4, 5]);
     let mut rows = vec![4, 5, 6];
     assert_eq!(cap_page(&mut rows, 3, Some(9), true), None);
+}
+
+/// Where a server's error marks the filter today on each engine (bytes of the filter, `None`:
+/// not marked): PostgreSQL by the character position it gives, MySQL and MariaDB by the text
+/// they quote, found once in the statement and starting in the filter.
+#[test]
+fn error_offsets_answer_as_today() {
+    use datarig_core::driver::ServerMessage;
+    let table = TableName { database: None, schema: "shop".into(), name: "users".into() };
+    let mark = |d: Dialect, filter: &str, m: &ServerMessage| {
+        let mut tq = TableQuery::new(table.clone());
+        let q = filtered(filter, None);
+        let c = query::compile(&q, &Target::new(d, Vec::new()));
+        let sql = c.sql.clone();
+        tq.pending = Some(Statement::of(q, c));
+        tq.sent(1, &[sql]);
+        tq.run_failed(1, &ServerError::Message(m), d);
+        tq.failure().expect("failed").at.clone()
+    };
+    // `SELECT * FROM "shop"."users" WHERE (` is 36 characters: the filter's first is the 37th.
+    let pg = |position| ServerMessage { text: "ERROR".into(), position: Some(position), hint: None };
+    let near =
+        |s: &str| ServerMessage { text: format!("ERROR 1064 (42000): x near '{s}' at line 1"), ..Default::default() };
+    let wide = "\u{e9} = 1 OR idd = 2";
+    // The case, the filter, the message, the mark on PostgreSQL and on MySQL and MariaDB.
+    type Mark = Option<Range<usize>>;
+    let cases: Vec<(&str, &str, ServerMessage, Mark, Mark)> = vec![
+        ("a position in the filter", wide, pg(37 + 9), Some(10..13), None),
+        ("a position on a blank", wide, pg(37 + 8), Some(9..10), None),
+        ("a position before the filter", wide, pg(3), None, None),
+        ("a position past the statement", wide, pg(999), None, None),
+        ("quoted once, in the filter", wide, near("idd = 2)"), None, Some(10..17)),
+        ("quoted twice", wide, near("= "), None, None),
+        ("quoted, not found", wide, near("zzz"), None, None),
+        ("quoted, starting before the filter", wide, near("WHERE (\u{e9}"), None, None),
+        ("nothing quoted", wide, near(""), None, None),
+        ("found again overlapping", "name = 'aaa'", near("aa"), None, None),
+        (
+            "no quote at all",
+            wide,
+            ServerMessage {
+                text: "ERROR 1054 (42S22): Unknown column 'x' in 'where clause'".into(),
+                ..Default::default()
+            },
+            None,
+            None,
+        ),
+    ];
+    for (what, filter, m, on_pg, on_family) in cases {
+        assert_eq!(mark(Dialect::Postgres, filter, &m), on_pg, "PostgreSQL: {what}");
+        assert_eq!(mark(Dialect::MySql(Default::default()), filter, &m), on_family, "MySQL: {what}");
+        assert_eq!(mark(Dialect::MariaDb(Default::default()), filter, &m), on_family, "MariaDB: {what}");
+    }
+}
+
+/// The place a server's error marks in any filter text, wherever the server points (each
+/// character of the filter by PostgreSQL's position, each part of it quoted as MySQL quotes
+/// it), never panics: the token there is found by lexing the filter.
+#[test]
+fn the_error_mark_never_panics() {
+    use crate::app::filter_dialog::tests::{dialects, texts};
+    use datarig_core::driver::ServerMessage;
+    let table = TableName { database: None, schema: "shop".into(), name: "users".into() };
+    for text in texts() {
+        for d in dialects() {
+            let mut tq = TableQuery::new(table.clone());
+            let q = filtered(&text, None);
+            let c = query::compile(&q, &Target::new(d, Vec::new()));
+            let sql = c.sql.clone();
+            // A blank filter is no filter: nothing to mark.
+            let Some(span) = c.filter_span.clone() else { continue };
+            tq.pending = Some(Statement::of(q, c));
+            tq.sent(1, std::slice::from_ref(&sql));
+            let before = sql[..span.start].chars().count() as u32;
+            for p in before..=before + text.chars().count() as u32 + 2 {
+                let m = ServerMessage { text: "ERROR".into(), position: Some(p), hint: None };
+                tq.run_failed(1, &ServerError::Message(&m), d);
+            }
+            for (at, _) in sql[span.clone()].char_indices() {
+                let quoted = format!("ERROR 1064 (42000): x near '{}' at line 1", &sql[span.start + at..]);
+                let m = ServerMessage { text: quoted, ..Default::default() };
+                tq.run_failed(1, &ServerError::Message(&m), d);
+            }
+        }
+    }
 }

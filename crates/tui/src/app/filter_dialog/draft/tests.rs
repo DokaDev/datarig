@@ -1027,3 +1027,37 @@ fn a_missing_filter_group_is_said_as_the_engines_reason() {
         assert_eq!(by_value_compared(rules(), &text, false, true), Ok(()));
     }
 }
+
+/// What a catalogue type answers today on each engine: the result column it is described as
+/// (`-`: none), whether it is shown in the session's zone, and the kind its literals are written
+/// for.
+#[test]
+fn catalogue_types_answer_as_today() {
+    let maria = Dialect::MariaDb(MySqlMode::default());
+    let answer = |d: Dialect, ty: &str| {
+        let meta = catalogue_meta(d, "c", ty).map_or("-".to_string(), |m| format!("{} {:?}", m.type_name, m.kind));
+        format!("{meta} | {} | {:?}", zoned_type(d, ty), kind_of_type(d, ty))
+    };
+    let cases: [(&str, &str, &str); 15] = [
+        ("tinyint(1)", "- | false | Other", "tinyint(1) Integer | false | Number"),
+        ("int unsigned", "- | false | Number", "int unsigned Integer | false | Number"),
+        ("timestamp", "- | false | Other", "timestamp TimestampTz | true | Other"),
+        ("datetime", "- | false | Other", "datetime Timestamp | false | Other"),
+        ("float", "- | false | Other", "float Float | false | Real"),
+        ("double precision", "- | false | Number", "double precision Other | false | Number"),
+        ("real", "- | false | Real", "real Other | false | Number"),
+        ("bytea", "- | false | Bytes", "bytea Other | false | Other"),
+        ("varchar(20)", "- | false | Text", "varchar Text | false | Text"),
+        ("character varying(20)", "- | false | Text", "character varying Other | false | Other"),
+        ("numeric", "- | false | Number", "numeric Other | false | Number"),
+        ("point", "- | false | Other", "geometry Bytes | false | Other"),
+        ("vector", "- | false | Other", "vector Bytes | false | Other"),
+        ("text[]", "- | false | Other", "text[] Other | false | Other"),
+        ("my_domain", "- | false | Other", "my_domain Other | false | Other"),
+    ];
+    for (ty, pg, family) in cases {
+        assert_eq!(answer(PG, ty), pg, "PostgreSQL {ty}");
+        assert_eq!(answer(MY, ty), family, "MySQL {ty}");
+        assert_eq!(answer(maria, ty), family, "MariaDB {ty}");
+    }
+}

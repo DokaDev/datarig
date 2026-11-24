@@ -265,6 +265,11 @@ fn split_cases_on_every_engine() {
 }
 
 #[test]
+fn error_offset_cases_on_every_engine() {
+    run("error position", &text::error_offset_cases(), text::error_offset);
+}
+
+#[test]
 fn filter_render_cases_on_every_engine() {
     run("filter render", &filter::render_cases(), filter::render);
 }
@@ -353,6 +358,12 @@ fn catalogue_rules_on_every_engine() {
 }
 
 #[test]
+fn filter_type_cases_on_every_engine() {
+    engines_are_the_registrys();
+    run("filter types", &catalogue::filter_type_cases(), catalogue::filter_types);
+}
+
+#[test]
 fn ddl_rules_on_every_engine() {
     engines_are_the_registrys();
     run("ddl rules", &catalogue::ddl_cases(), catalogue::ddl);
@@ -371,6 +382,7 @@ fn every_case_names_every_engine() {
         named("function verdicts", &context::cases()),
         named("quoting", &text::quoting_cases()),
         named_text("split", &text::split_cases()),
+        named("error position", &text::error_offset_cases()),
         named("filter render", &filter::render_cases()),
         named("compares", &filter::compares_cases()),
         named("group count", &filter::group_count_cases()),
@@ -388,6 +400,7 @@ fn every_case_names_every_engine() {
         named("catalogue rules", &catalogue::catalogue_cases()),
         named("ddl rules", &catalogue::ddl_cases()),
         named("hierarchy", &catalogue::hierarchy_cases()),
+        named("filter types", &catalogue::filter_type_cases()),
         named("duplicates choice", &edit::cases()),
     ]
     .into_iter()

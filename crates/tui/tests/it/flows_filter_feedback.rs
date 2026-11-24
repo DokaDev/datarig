@@ -264,6 +264,54 @@ fn a_mysql_snippet_marks_the_condition_only_when_found_once() {
     assert!(h.status(120, 30).contains("ERROR 1064"), "{}", h.status(120, 30));
 }
 
+/// A MariaDB profile marks the condition by the text the server quotes as a MySQL one does:
+/// found once and starting in the condition, else not located.
+#[test]
+fn a_mariadb_snippet_marks_the_condition_as_mysql_does() {
+    let driver = FakeDriver::default();
+    driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut p = datarig_core::profile::ConnectionConfig::test_db();
+    (p.name, p.driver) = ("local-maria".into(), "mariadb".into());
+    let cfg = datarig_core::config::Config { connections: vec![p], ..Default::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["shop".into()])));
+    h.db(DbEvent::Catalog(Ok(catalog())));
+    open(&mut h, "users");
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Language(Language::Sql(Dialect::MariaDb(MySqlMode::default()))));
+    h.tab_db(index, DbEvent::Connected);
+    answer(&mut h);
+    h.sent();
+    h.key(KeyCode::Tab);
+    let maria = "SELECT * FROM `shop`.`users`";
+    let near = |s: &str| {
+        DbError::Server(
+            format!("ERROR 1064 (42000): You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near '{s}' at line 1").into(),
+        )
+    };
+    h.command("where id = 1 AND name = 'x'");
+    assert_eq!(runs(&mut h), vec![vec![format!("{maria} WHERE (id = 1 AND name = 'x')")]], "{}", h.status(120, 30));
+    // Once in the statement, from inside the condition: marked up to the condition's end.
+    fail(&mut h, near("name = 'x')"));
+    let tq = h.app.tab().doc.table_query.as_ref().unwrap();
+    assert_eq!(tq.failure().and_then(|f| f.at.clone()), Some(11..21));
+    // Twice: not located, the message only.
+    h.command("where id = 1 OR id = 1");
+    assert_eq!(runs(&mut h).len(), 1);
+    fail(&mut h, near("id = 1"));
+    let tq = h.app.tab().doc.table_query.as_ref().unwrap();
+    assert_eq!(tq.failure().map(|f| f.at.clone()), Some(None));
+    // After the condition (the statement's closing parenthesis): the message only.
+    h.keys("f");
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h).len(), 1);
+    fail(&mut h, near(")"));
+    let tq = h.app.tab().doc.table_query.as_ref().unwrap();
+    assert_eq!(tq.failure().map(|f| f.at.clone()), Some(None));
+    assert!(h.status(120, 30).contains("ERROR 1064"), "{}", h.status(120, 30));
+}
+
 #[test]
 fn a_failed_filter_keeps_the_earlier_rows_dimmed() {
     let mut h = users();
