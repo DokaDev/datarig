@@ -254,6 +254,33 @@ fn legacy_answers_follow_the_greeting_when_the_line_names_the_other_engine() {
     }
 }
 
+/// The edits a session takes follow MySQL's edit rules on the greeting's number even when the
+/// version line names MariaDB, whose own rules would refuse them.
+#[test]
+fn the_mysql_edit_writer_reads_the_greeting_whatever_the_line_names() {
+    let Fact::Known(rules) = EngineId::MySql.spec().edit else { panic!("MySQL takes edits") };
+    let line = "11.4.13-MariaDB-ubu2404";
+    let cases = [
+        (my(8, 0, 17), Fact::Known(EditFormat::MySql(MySqlEdit { nowait: true }))),
+        (my(8, 0, 16), Fact::No(Why::VersionTooOld { needed: Version::new(8, 0, 17) })),
+    ];
+    for (g, want) in cases {
+        let report = judge(&g, Some(Value::Bytes(line.as_bytes().to_vec()))).expect("a line");
+        for own in [Some(true), Some(false), None] {
+            let f = facts(&g, &report, own);
+            assert_eq!(f.engine(), EngineId::MariaDb, "{g:?}");
+            assert!(matches!(f.engine().spec().edit, Fact::No(Why::NotBuilt)), "{g:?}");
+            assert_eq!(rules.writer(&f), want, "{g:?} {own:?}");
+            let derived = match &want {
+                Fact::Known(format) => Some(*format),
+                Fact::No(_) | Fact::Unknown(_) => None,
+            };
+            let d = derive(&f, &Tracked::default());
+            assert_eq!((d.edit, d.capabilities.edit), (derived, derived), "{g:?} {own:?}");
+        }
+    }
+}
+
 /// The servers the session's set-up is recorded for: MySQL and MariaDB around each version its
 /// statements depend on.
 const SET_UP_SERVERS: [(bool, (u16, u16, u16)); 7] = [

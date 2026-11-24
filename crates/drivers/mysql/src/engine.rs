@@ -264,9 +264,10 @@ pub(crate) struct Derived {
     /// `EXPLAIN ANALYZE` from 8.0.18, an older one's error is the server's), none on MariaDB
     /// (its plans are shaped otherwise).
     pub(crate) explain: Option<ExplainFormat>,
-    /// The edits the server takes: MySQL's from 8.0.17 on (`utf8mb4_0900_bin` compares text
-    /// exactly, `FOR UPDATE NOWAIT` locks without waiting), none on MariaDB (its collations and
-    /// row locks differ).
+    /// The edits the server takes, as the edit rules of the greeting's engine answer
+    /// ([`datarig_core::engine::EditRules`]): MySQL's from 8.0.17 on (`utf8mb4_0900_bin`
+    /// compares text exactly, `FOR UPDATE NOWAIT` locks without waiting), none on MariaDB (its
+    /// collations and row locks differ).
     pub(crate) edit: Option<EditFormat>,
     /// The driver's capabilities with the server's answers in them.
     #[cfg_attr(not(test), allow(dead_code))]
@@ -280,13 +281,17 @@ pub(crate) fn derive(facts: &ServerFacts, tracked: &Tracked) -> Derived {
     // The greeting's engine and number, whichever engine the version line names.
     let greeting = Greeting::of(facts);
     let language = Language::Sql(dialect(&greeting, tracked.mode(dollar_quotes(facts))));
-    let version = greeting.handshake;
-    let (explain, edit) = match greeting.mariadb {
-        false => (
-            (version >= Version::new(8, 0, 16)).then_some(ExplainFormat::MySqlTree),
-            (version >= Version::new(8, 0, 17)).then_some(EditFormat::MySql(MySqlEdit { nowait: true })),
-        ),
-        true => (None, None),
+    let explain = match greeting.mariadb {
+        false => (greeting.handshake >= Version::new(8, 0, 16)).then_some(ExplainFormat::MySqlTree),
+        true => None,
+    };
+    // The edit rules of the greeting's engine, which read the greeting's number.
+    let edit = match engine_of(greeting.mariadb).spec().edit {
+        Fact::Known(rules) => match rules.writer(facts) {
+            Fact::Known(format) => Some(format),
+            Fact::No(_) | Fact::Unknown(_) => None,
+        },
+        Fact::No(_) | Fact::Unknown(_) => None,
     };
     Derived { language, explain, edit, capabilities: Capabilities { language, explain, edit, ..CAPABILITIES } }
 }

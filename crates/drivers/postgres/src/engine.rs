@@ -69,3 +69,6 @@ fn version(text: Option<&str>) -> Fact<Version> {
         None => Fact::Unknown(Why::VersionUnknown),
     }
 }
+
+#[cfg(test)]
+mod tests;

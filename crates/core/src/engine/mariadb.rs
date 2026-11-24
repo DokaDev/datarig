@@ -5,7 +5,7 @@ use super::mysql_family::{
     FamilyCancel, FamilyExport, FamilySession, FamilyText, FamilyTx, FamilyValues, family_classifier,
     family_filter_calls, family_read_only_calls,
 };
-use super::{EngineId, EngineSpec, Fact, FilterCalls, MYSQL_FAMILY, RiskRules, Support, Transport};
+use super::{EngineId, EngineSpec, Fact, FilterCalls, MYSQL_FAMILY, RiskRules, Support, Transport, Why};
 use crate::driver::Hierarchy;
 use crate::profile::dsn::Scheme;
 use crate::sql::dialect::Dialect;
@@ -29,6 +29,8 @@ pub static SPEC: EngineSpec = EngineSpec {
     cancel: &FamilyCancel,
     values: &FamilyValues,
     export: Fact::Known(&FamilyExport),
+    // Its collations and row locks differ from MySQL's.
+    edit: Fact::No(Why::NotBuilt),
 };
 
 /// How MariaDB's statements are judged: the family's classifier of the text's dialect

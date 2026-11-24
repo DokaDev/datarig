@@ -580,3 +580,47 @@ fn export_rules_on_every_engine() {
         assert_eq!(rules.drops_slow_readers(), !pg, "{id:?}");
     }
 }
+
+/// Which edits of a result's rows each engine's servers take, by the version of the server's
+/// greeting: the format, or why there is none (MariaDB's, for the engine). The answer is the
+/// same when the version the facts know is not (the rules read the greeting's number).
+#[test]
+fn edit_rules_on_every_engine() {
+    use datarig_core::engine::{EngineFacts, EngineId, Fact, MyFacts, PgFacts, ServerFacts, Topology, Version, Why};
+    let facts = |id: EngineId, v: Version, version: Fact<Version>| ServerFacts {
+        version,
+        version_text: None,
+        provider: Fact::Unknown(Why::NotChecked),
+        topology: Fact::Known(Topology::Direct),
+        detail: match id {
+            EngineId::Postgres => EngineFacts::Postgres(PgFacts::default()),
+            EngineId::MySql => EngineFacts::MySql(MyFacts::new(v, id)),
+            EngineId::MariaDb => EngineFacts::MariaDb(MyFacts::new(v, id)),
+        },
+    };
+    let mysql = "Known(MySql(MySqlEdit { nowait: true }))";
+    for id in EngineId::ALL {
+        // The servers asked, each with the engine's answer.
+        let servers: &[((u16, u16, u16), &str)] = match id {
+            EngineId::Postgres => &[((17, 2, 0), "Known(Postgres)")],
+            EngineId::MySql => &[
+                ((8, 0, 16), "No(VersionTooOld { needed: Version { major: 8, minor: 0, patch: 17 } })"),
+                ((8, 0, 17), mysql),
+                ((8, 4, 6), mysql),
+            ],
+            EngineId::MariaDb => &[((11, 4, 13), "No(NotBuilt)")],
+        };
+        for &((major, minor, patch), want) in servers {
+            let v = Version::new(major, minor, patch);
+            for version in [Fact::Known(v), Fact::Unknown(Why::VersionUnknown), Fact::Unknown(Why::VersionsDisagree)] {
+                let f = facts(*id, v, version.clone());
+                let got = match &id.spec().edit {
+                    Fact::Known(rules) => format!("{:?}", rules.writer(&f)),
+                    Fact::No(why) => format!("No({why:?})"),
+                    Fact::Unknown(why) => format!("Unknown({why:?})"),
+                };
+                assert_eq!(got, want, "{id:?} {v:?} {version:?}");
+            }
+        }
+    }
+}

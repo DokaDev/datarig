@@ -11,6 +11,10 @@ pub fn why_text(why: &Why) -> Msg {
         Why::VersionsDisagree => Label::EngineWhyVersionsDisagree.into(),
         Why::EnginesDisagree => Label::EngineWhyEnginesDisagree.into(),
         Why::NotOnEngine => Label::EngineWhyNotOnEngine.into(),
+        Why::NotBuilt => Label::EngineWhyNotBuilt.into(),
+        Why::VersionTooOld { needed } => {
+            Msg::EngineWhyVersionTooOld { needed: format!("{}.{}.{}", needed.major, needed.minor, needed.patch) }
+        }
         Why::FeatureOff(feature) => Msg::EngineWhyFeatureOff { feature: feature.name().to_string() },
         Why::MarkerUnconfirmed => Label::EngineWhyMarkerUnconfirmed.into(),
     }
