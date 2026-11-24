@@ -3,6 +3,78 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.42.0 (2026-11-24)
+
+On MySQL and MariaDB, every session now reads the server's version line, and a session whose greeting and version line name different engines is checked by the rules of both; this release also changes how cancels and counts behave and fixes the table filter, MariaDB sequences and SQL export.
+
+### Changed
+
+- On MySQL and MariaDB with `performance_schema` off (MariaDB's default), cancelling a statement
+  that is running now says in the run's Messages, when you cancel, that it closes the
+  connection, as the server cannot stop the statement there.
+- On MySQL and MariaDB, a row count or a count of a column's values with
+  `[results] count_timeout = "off"` no longer waits without end for a lock another session
+  holds: it gives up after waiting 1 second for each lock, as a count with a time limit does.
+  `"off"` still removes the time limit on the count itself.
+- A profile whose `driver` is written in another case, such as `MySQL`, `PG` or `MariaDB`,
+  now shows its database's icon instead of the unknown one, as it already connected and
+  offered its presets as that database.
+- On MariaDB, and on a session whose greeting and `VERSION()` name different engines, a statement
+  whose text holds the characters `/*M!` (a MariaDB-only executable comment, with or without a
+  version) is now refused before anything of it is sent, with a message that says why; so is
+  such text in a string or a quoted name. Write the comment as `/*! … */` instead. Values datarig
+  writes itself, such as an edited cell, are not affected. On MySQL such text runs as before,
+  since MySQL reads it as a plain comment.
+- On MySQL and MariaDB, a server whose greeting and `VERSION()` disagree on whether it reads
+  dollar quotes (`$$…$$`; a proxy in between may write the greeting) no longer has them read
+  as the greeting says. On such a session, text that could open one (a `$`, letters, digits or
+  `_`, then a `$`, even inside a string or a comment) is not sent: the run fails with a message
+  that says why; a Startup SQL statement that could open one fails the connection the same
+  way, before anything else of the session is set up. Text with a single `$`, and every
+  session whose greeting and `VERSION()` agree, run as before.
+- On MySQL and MariaDB, every session now reads the server's own version line (`VERSION()`)
+  before anything that depends on the engine. When it gives no answer (no row, `NULL`, or a
+  blank line), the connection fails with an error that names what the server's greeting says,
+  and nothing else is run on the session: not its settings, its read-only check or its
+  start-up statements. The test connection fails the same way. A server whose greeting and
+  version line name different engines (a proxy in between may write the greeting) connects as
+  before.
+- On MySQL and MariaDB, a session whose server's greeting names one engine and whose
+  `VERSION()` names the other (a proxy in between may write the greeting) now has its
+  statements checked by the rules of both engines, and the stricter answer counts. On such a
+  session a read-only profile refuses a call either engine would look up as a stored function
+  (`BIN_TO_UUID` on MariaDB, `DATABASE()` with its name in backticks on MySQL), a statement
+  either engine finds dangerous asks before it runs, results are run again or counted only
+  when both engines allow it, the filter bar lets a call run only when both do, and a MySQL version
+  comment (`/*!80000 … */`) counts as possibly setting the next transaction. Once any
+  session of a connection found this, every statement of that connection is checked by both
+  engines' rules until it connects again. A statement that waited (for its connection, or for
+  an answer to a question about it) is checked again right before it is sent, and asks again
+  for anything the earlier answer did not cover; waiting statements of several tabs are asked
+  about one at a time. A statement checked before its session said its server names two
+  engines is not sent once the session finds that: it fails with a message that says to run it
+  again, and run again it is checked by both engines' rules.
+  Sessions whose greeting and `VERSION()` name the same engine are checked as before.
+
+### Fixed
+
+- On a MySQL or MariaDB table tab, a filter that ends in a backslash outside a string (for
+  example `:where id = 1 \`) no longer closes the app. It is refused with the backslash
+  marked, as is a quoted variable name left open (`@'x`).
+- On MariaDB, a statement that takes or sets a sequence value (`NEXT VALUE FOR`, `NEXTVAL()`,
+  `SETVAL()`, `s.nextval`) is treated as a change: a read-only profile refuses it before it is
+  sent, and a result's next page never runs it again.
+- A MariaDB session whose version cannot be read now uses the `tx_` session variable names.
+- On MySQL, editing rows that share the same values no longer offers to change one or all of
+  them when the structure was read by a session that reports a different server or version than
+  the one that would apply the edit; such an edit is refused with the reason.
+- Copying rows as SQL and exporting them as SQL no longer write a TIMESTAMP with a time zone
+  offset for a server that does not read one (MariaDB, MySQL before 8.0.19), or when the server
+  version is not known (a proxy that rewrites the server's version line, or a version line
+  datarig cannot read): such a value is refused with the reason (Aurora MySQL 3 reports a MySQL
+  8.0 version, so it still writes the offset), and CSV or JSON export still works. An SQL export
+  that reads the table again also stops when a column's type changes while it runs.
+
 ## 0.41.7 (2026-11-22)
 
 A patch release with one fix to how statements are judged on MariaDB.
