@@ -249,6 +249,21 @@ pub(crate) fn session_version(facts: &ServerFacts) -> Fact<Version> {
     }
 }
 
+/// The version a table's structure on the server of `facts` is read for
+/// ([`Family::structure`]): the version the facts know, which is then the greeting's number;
+/// when they know none (the greeting and the version line give two numbers, the line has none,
+/// or they name two engines), the greeting's number, so the read is the one the greeting
+/// implies. Its limit: behind something that greets with an older MySQL than the server's, the
+/// parts the newer server adds (functional key parts, CHECK constraints, partial revokes) are
+/// not read; with a newer one, the read names parts the server lacks and fails with the
+/// server's error.
+pub(crate) fn structure_version(facts: &ServerFacts) -> Version {
+    match &facts.version {
+        Fact::Known(v) => *v,
+        Fact::No(_) | Fact::Unknown(_) => Greeting::of(facts).handshake,
+    }
+}
+
 /// What a test connection to the server of greeting `g` and version line `report` says of it.
 pub(crate) fn identity(g: &Greeting, report: &VersionReport) -> PingIdentity {
     let facts = facts(g, report, None);
@@ -364,4 +379,4 @@ pub(crate) fn skips_mysql_version_comments(d: Dialect) -> bool {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

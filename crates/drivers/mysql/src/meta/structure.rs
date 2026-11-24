@@ -42,6 +42,7 @@ use datarig_core::driver::structure::{
     CheckConstraint, Collation, ColumnFill, FkAction, ForeignKey, Index, KeyConstraint, RelationKind, StructureColumn,
     StructureGroup, TableStructure, Trigger, TriggerEvent, TriggerTiming,
 };
+use datarig_core::engine::Version;
 use datarig_core::sql::dialect::Dialect;
 use mysql_async::Conn;
 use serde::Deserialize;
@@ -125,10 +126,17 @@ const GRANTEE: &str = "CONCAT('''', LEFT(CURRENT_USER(), CHAR_LENGTH(CURRENT_USE
      - CHAR_LENGTH(SUBSTRING_INDEX(CURRENT_USER(), '@', -1)) - 1), \
      '''@''', SUBSTRING_INDEX(CURRENT_USER(), '@', -1), '''')";
 
-/// The statement for `schema.table` on the server of greeting `g` (what it reads, by the
-/// greeting's version), the names written as `d` reads literals.
+/// The statement for `schema.table` on the server of greeting `g` by the greeting's version, the
+/// names written as `d` reads literals.
+#[cfg(test)]
 pub(crate) fn statement(g: Greeting, d: Dialect, schema: &str, table: &str) -> String {
-    let shape = g.family().structure(g.handshake);
+    statement_at(g, g.handshake, d, schema, table)
+}
+
+/// The statement for `schema.table` on the server of greeting `g` (what its engine reads at
+/// version `v`, [`crate::engine::structure_version`]), the names written as `d` reads literals.
+pub(crate) fn statement_at(g: Greeting, v: Version, d: Dialect, schema: &str, table: &str) -> String {
+    let shape = g.family().structure(v);
     let names = [("schema", d.quote_literal(schema)), ("table", d.quote_literal(table))];
     let names = names.each_ref().map(|(k, v)| (*k, v.as_str()));
     // The checks' subquery names the table too; it is filled first, as a value of the
@@ -157,15 +165,17 @@ pub(crate) fn statement(g: Greeting, d: Dialect, schema: &str, table: &str) -> S
 }
 
 /// Read the structure of `schema.table` in one round trip: [`DbError::NotFound`] when the
-/// server lists no such table (or view) to the user.
+/// server lists no such table (or view) to the user. The statement is the one for version `v`
+/// ([`statement_at`]).
 pub(crate) async fn load_structure(
     conn: &mut Conn,
     g: Greeting,
+    v: Version,
     d: Dialect,
     schema: &str,
     table: &str,
 ) -> Result<TableStructure, DbError> {
-    let rows: Vec<String> = super::rows_of(conn, statement(g, d, schema, table)).await?;
+    let rows: Vec<String> = super::rows_of(conn, statement_at(g, v, d, schema, table)).await?;
     match rows.first() {
         Some(json) => parse(json, g.family(), d, schema, table),
         None => Err(DbError::NotFound),
