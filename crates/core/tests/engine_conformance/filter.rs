@@ -1,7 +1,9 @@
 //! A table's filter and order as each engine's SQL, which column types a filter compares, and
 //! the statement that counts the rows of each value of a column.
 
-use crate::Engine::{MariaDb, MySql, MySqlAnsiQuotes, MySqlDollarNotKnown, MySqlNoBackslashEscapes, Pg};
+use crate::Engine::{
+    MariaDb, MySql, MySqlAnsiQuotes, MySqlDollarNotKnown, MySqlIgnoreSpace, MySqlNoBackslashEscapes, Pg,
+};
 use crate::{Case, Engine};
 use datarig_core::driver::{ArrayElement, ColumnMeta, ValueKind};
 use datarig_core::query::{
@@ -1404,6 +1406,42 @@ pub fn read_cases() -> Vec<Case<Read>> {
                 ),
             ],
         },
+        Case {
+            name: "dollar-quoted text with a quote",
+            input: read_case("name = $$a'b$$"),
+            expect: &[
+                (Pg, "Some(Raw(\"name = $$a'b$$\")) | terms Some([0..14])"),
+                (MySql, "None | terms None"),
+                (MariaDb, "None | terms None"),
+                (MySqlAnsiQuotes, "None | terms None"),
+                (MySqlNoBackslashEscapes, "None | terms None"),
+                (MySqlDollarNotKnown, "None | terms None"),
+            ],
+        },
+        Case {
+            name: "tagged dollar quote",
+            input: read_case("name = $t$a$t$"),
+            expect: &[
+                (Pg, "Some(Raw(\"name = $t$a$t$\")) | terms Some([0..14])"),
+                (MySql, "Some(Raw(\"name = $t$a$t$\")) | terms Some([0..14])"),
+                (MariaDb, "Some(Raw(\"name = $t$a$t$\")) | terms Some([0..14])"),
+                (MySqlAnsiQuotes, "Some(Raw(\"name = $t$a$t$\")) | terms Some([0..14])"),
+                (MySqlNoBackslashEscapes, "Some(Raw(\"name = $t$a$t$\")) | terms Some([0..14])"),
+                (MySqlDollarNotKnown, "Some(Raw(\"name = $t$a$t$\")) | terms Some([0..14])"),
+            ],
+        },
+        Case {
+            name: "dollar in a name",
+            input: read_case("a$b = 1"),
+            expect: &[
+                (Pg, "Some(Raw(\"a$b = 1\")) | terms Some([0..7])"),
+                (MySql, "Some(Raw(\"a$b = 1\")) | terms Some([0..7])"),
+                (MariaDb, "Some(Raw(\"a$b = 1\")) | terms Some([0..7])"),
+                (MySqlAnsiQuotes, "Some(Raw(\"a$b = 1\")) | terms Some([0..7])"),
+                (MySqlNoBackslashEscapes, "Some(Raw(\"a$b = 1\")) | terms Some([0..7])"),
+                (MySqlDollarNotKnown, "Some(Raw(\"a$b = 1\")) | terms Some([0..7])"),
+            ],
+        },
     ]
 }
 
@@ -1794,6 +1832,99 @@ pub fn check_cases() -> Vec<Case<Check>> {
                     MySqlNoBackslashEscapes,
                     "Err(Shape { problem: Assignment, at: Some(4..5) }) | estimate - | subquery false",
                 ),
+            ],
+        },
+        Case {
+            name: "call with a blank before its parenthesis",
+            input: check_case("NOW () > id"),
+            expect: &[
+                (Pg, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySql, "Ok(NeedsConfirm([Calls([\"NOW\"])])) | estimate Err(Calls) | subquery false"),
+                (MariaDb, "Ok(NeedsConfirm([Calls([\"NOW\"])])) | estimate Err(Calls) | subquery false"),
+                (MySqlAnsiQuotes, "Ok(NeedsConfirm([Calls([\"NOW\"])])) | estimate Err(Calls) | subquery false"),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Ok(NeedsConfirm([Calls([\"NOW\"])])) | estimate Err(Calls) | subquery false",
+                ),
+                (MySqlIgnoreSpace, "Ok(Clear) | estimate Ok(()) | subquery false"),
+            ],
+        },
+        Case {
+            name: "call without a blank",
+            input: check_case("NOW() > id"),
+            expect: &[
+                (Pg, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySql, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MariaDb, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlAnsiQuotes, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlNoBackslashEscapes, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlIgnoreSpace, "Ok(Clear) | estimate Ok(()) | subquery false"),
+            ],
+        },
+        Case {
+            name: "dollar quote hiding a call",
+            input: check_case("name = $$ OR SLEEP(1) = 0 OR $$ = name"),
+            expect: &[
+                (Pg, "Err(NotRead { class: Unknown, danger: Some(Unparsed) }) | estimate - | subquery false"),
+                (MySql, "Err(Lexical { problem: Ambiguous, at: 7..9 }) | estimate - | subquery true"),
+                (MariaDb, "Err(Lexical { problem: Ambiguous, at: 7..9 }) | estimate - | subquery true"),
+                (MySqlAnsiQuotes, "Err(Lexical { problem: Ambiguous, at: 7..9 }) | estimate - | subquery true"),
+                (MySqlNoBackslashEscapes, "Err(Lexical { problem: Ambiguous, at: 7..9 }) | estimate - | subquery true"),
+                (MySqlDollarNotKnown, "Err(Lexical { problem: Ambiguous, at: 7..9 }) | estimate - | subquery true"),
+            ],
+        },
+        Case {
+            name: "dollar quote with a quote",
+            input: check_case("name = $$a'b$$"),
+            expect: &[
+                (Pg, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySql, "Err(Lexical { problem: Unterminated, at: 10..14 }) | estimate - | subquery true"),
+                (MariaDb, "Err(Lexical { problem: Unterminated, at: 10..14 }) | estimate - | subquery true"),
+                (MySqlAnsiQuotes, "Err(Lexical { problem: Unterminated, at: 10..14 }) | estimate - | subquery true"),
+                (
+                    MySqlNoBackslashEscapes,
+                    "Err(Lexical { problem: Unterminated, at: 10..14 }) | estimate - | subquery true",
+                ),
+                (
+                    MySqlDollarNotKnown,
+                    "Err(Lexical { problem: Unterminated, at: 10..14 }) | estimate - | subquery true",
+                ),
+            ],
+        },
+        Case {
+            name: "dollar quote hiding a comment",
+            input: check_case("name = $$a -- b$$"),
+            expect: &[
+                (Pg, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySql, "Err(Lexical { problem: Comment, at: 11..17 }) | estimate - | subquery true"),
+                (MariaDb, "Err(Lexical { problem: Comment, at: 11..17 }) | estimate - | subquery true"),
+                (MySqlAnsiQuotes, "Err(Lexical { problem: Comment, at: 11..17 }) | estimate - | subquery true"),
+                (MySqlNoBackslashEscapes, "Err(Lexical { problem: Comment, at: 11..17 }) | estimate - | subquery true"),
+                (MySqlDollarNotKnown, "Err(Lexical { problem: Comment, at: 11..17 }) | estimate - | subquery true"),
+            ],
+        },
+        Case {
+            name: "tagged dollar quote",
+            input: check_case("name = $t$a$t$"),
+            expect: &[
+                (Pg, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySql, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MariaDb, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlAnsiQuotes, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlNoBackslashEscapes, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlDollarNotKnown, "Ok(Clear) | estimate Ok(()) | subquery false"),
+            ],
+        },
+        Case {
+            name: "dollar in a name",
+            input: check_case("a$b = 1"),
+            expect: &[
+                (Pg, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySql, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MariaDb, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlAnsiQuotes, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlNoBackslashEscapes, "Ok(Clear) | estimate Ok(()) | subquery false"),
+                (MySqlDollarNotKnown, "Ok(Clear) | estimate Ok(()) | subquery false"),
             ],
         },
     ]

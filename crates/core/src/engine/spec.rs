@@ -385,7 +385,9 @@ pub struct FilterSyntax {
     /// The planner may run a subquery while it plans a statement: no estimate of a filter that
     /// may hold one.
     pub plans_subqueries: bool,
-    /// `/*M! … */` is a comment whose content the server runs.
+    /// The filter refuses `/*M! … */` as an executable comment, not as a plain one. MariaDB runs
+    /// what it holds; MySQL reads it as a plain comment, and its filter says the same as
+    /// MariaDB's.
     pub m_bang: bool,
     /// How the shape of a filter's statement is checked.
     pub shape: FilterShape,

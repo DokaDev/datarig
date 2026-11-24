@@ -5,7 +5,7 @@
 //! engines are PostgreSQL ([`Dialect::Postgres`]), MySQL ([`Dialect::MySql`] in the default
 //! [`MySqlMode`]) and MariaDB ([`Dialect::MariaDb`], what a MariaDB session says). A case may
 //! also pin a MySQL sql mode where it changes the output (`ANSI_QUOTES`,
-//! `NO_BACKSLASH_ESCAPES`). A case without an expectation for one of the three engines fails
+//! `NO_BACKSLASH_ESCAPES`, `IGNORE_SPACE`). A case without an expectation for one of the three engines fails
 //! ([`every_case_names_every_engine`]): adding an engine means answering every case for it. A
 //! case of the classifier or split table whose text has a `$` must also answer for a MySQL
 //! session that does not know whether its server reads dollar quotes
@@ -61,6 +61,8 @@ pub enum Engine {
     MySqlNoBackslashEscapes,
     /// MySQL whose server's own reports disagree on whether it reads dollar quotes.
     MySqlDollarNotKnown,
+    /// MySQL with `IGNORE_SPACE`.
+    MySqlIgnoreSpace,
     /// PostgreSQL whose version did not parse.
     PgVersionUnknown,
     /// MySQL whose version did not parse.
@@ -116,6 +118,7 @@ impl Engine {
             Engine::MySqlDollarNotKnown => {
                 Dialect::MySql(MySqlMode { dollar_quotes: DollarQuotes::NotKnown, ..MySqlMode::default() })
             }
+            Engine::MySqlIgnoreSpace => Dialect::MySql(MySqlMode { ignore_space: true, ..MySqlMode::default() }),
         }
     }
 }
