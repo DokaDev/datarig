@@ -41,12 +41,7 @@ pub fn default_shown(c: &StructureColumn, d: Dialect) -> DefaultShown {
     }
     let Some(sql) = c.default.as_deref() else { return DefaultShown::Null };
     let sql = d.insert_default(sql);
-    // MySQL: an expression default (the driver puts it in parentheses) is the server's own
-    // text, in its default mode; a literal one the driver wrote in the session's mode.
-    let d = match d {
-        Dialect::MySql(_) | Dialect::MariaDb(_) if sql.trim_start().starts_with('(') => d.printed(),
-        _ => d,
-    };
+    let d = d.default_reading(sql);
     if d.draws_number(sql) {
         return DefaultShown::Generated;
     }

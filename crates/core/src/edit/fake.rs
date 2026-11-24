@@ -2,6 +2,8 @@
 //! "one of several", floats, JSON and unknown types inexact. Its statements may be broken on
 //! purpose ([`Fake::broken`]) to show the planner refuses them.
 
+#![cfg(test)]
+
 use super::*;
 use crate::driver::ValueKind;
 use crate::sql::dialect::{Dialect, Language};

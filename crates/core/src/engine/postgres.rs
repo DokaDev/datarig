@@ -1,15 +1,18 @@
 //! PostgreSQL's row of the registry.
 
 use super::{
-    CancelRules, CountInTx, DdlLock, EngineId, EngineSpec, Fact, FilterCalls, OpenVerdict, READ_ONLY_NOT_PROVEN,
-    ReadOnlyProof, RiskRules, ServerFacts, SessionRules, Support, TextRules, Transport, TxAsk, TxNote, TxRefusal,
-    TxRules, TxStatement, TxVerdict,
+    CancelRules, CountInTx, DdlLock, EngineId, EngineSpec, Fact, FilterCalls, InputRules, OpenVerdict,
+    READ_ONLY_NOT_PROVEN, ReadOnlyProof, RiskRules, ServerFacts, SessionRules, Support, TextRules, Transport, TxAsk,
+    TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, ValueRules,
 };
-use crate::driver::{Hierarchy, SessionRole};
+use crate::driver::{Hierarchy, SessionRole, ValueKind};
+use crate::edit::input::{self, TypeName};
+use crate::edit::{Invalid, TableColumn};
 use crate::profile::dsn::Scheme;
 use crate::sql::dialect::{Dialect, DollarQuotes, Language};
 use crate::sql::risk::mysql::Judged;
 use crate::sql::risk::{Class, Classifier, TxStep};
+use std::ops::RangeInclusive;
 use std::time::Duration;
 
 pub static SPEC: EngineSpec = EngineSpec {
@@ -27,6 +30,7 @@ pub static SPEC: EngineSpec = EngineSpec {
     tx: &PgTx,
     session: &PgSession,
     cancel: &PgCancel,
+    values: &PgValues,
 };
 
 /// How PostgreSQL's text is read.
@@ -380,3 +384,150 @@ pub const PG_REFUSED_CALLS: &[&str] = &[
     "setseed",
     "setval",
 ];
+
+/// How PostgreSQL's values are typed and shown.
+struct PgValues;
+
+impl ValueRules for PgValues {
+    fn input(&self) -> &'static dyn InputRules {
+        &PgInput
+    }
+
+    /// Never: a `timestamp with time zone` is shown with its offset.
+    fn shown_in_session_zone(&self, _: ValueKind) -> bool {
+        false
+    }
+
+    /// `\x`.
+    fn bytes_shown_prefix(&self) -> &'static str {
+        "\\x"
+    }
+}
+
+/// PostgreSQL's checks of a typed value.
+struct PgInput;
+
+/// The digits of a year PostgreSQL shows (past 9999 too).
+const PG_YEAR_DIGITS: RangeInclusive<usize> = 4..=7;
+
+/// The digits of a second PostgreSQL keeps when the type says none.
+const PG_FRACTION_DIGITS: u32 = 6;
+
+impl InputRules for PgInput {
+    fn integer(&self, c: &TableColumn, s: &str) -> Result<(), Invalid> {
+        let ty = TypeName::read(&c.column.type_name);
+        let digits = input::whole_digits(s)?;
+        let range: Option<(i128, i128)> = match ty.name.as_str() {
+            "smallint" | "int2" => Some((i16::MIN.into(), i16::MAX.into())),
+            "integer" | "int" | "int4" => Some((i32::MIN.into(), i32::MAX.into())),
+            "bigint" | "int8" => Some((i64::MIN.into(), i64::MAX.into())),
+            "oid" => Some((0, u32::MAX.into())),
+            _ => None,
+        };
+        input::whole_in(s, digits, range, &c.column.type_name)
+    }
+
+    /// `numeric` and `decimal`; `money` and types this code does not know are left to the
+    /// server. A `numeric` shows `NaN` and, without a precision, `Infinity` and `-Infinity`.
+    fn decimal(&self, c: &TableColumn, s: &str) -> Result<(), Invalid> {
+        let ty = TypeName::read(&c.column.type_name);
+        if !matches!(ty.name.as_str(), "numeric" | "decimal") {
+            return Ok(());
+        }
+        if s == "NaN" || (ty.args.is_empty() && matches!(s, "Infinity" | "-Infinity")) {
+            return Ok(());
+        }
+        let (_, int, frac) = input::plain_decimal(s).ok_or(Invalid::NotNumber)?;
+        input::decimal_digits(&ty, int, frac)
+    }
+
+    /// Also `NaN`, `Infinity` and `-Infinity`. A `float(p)` is `real` up to 24 bits; a type
+    /// this code does not know is taken as the narrower one.
+    fn float(&self, c: &TableColumn, s: &str) -> Result<(), Invalid> {
+        if matches!(s, "NaN" | "Infinity" | "-Infinity") {
+            return Ok(());
+        }
+        let ty = TypeName::read(&c.column.type_name);
+        let type_name = &c.column.type_name;
+        input::float_form(s)?;
+        let single = match (ty.name.as_str(), &ty.args[..]) {
+            ("float", [p]) => *p <= 24,
+            ("float" | "double precision" | "float8", _) => false,
+            _ => true,
+        };
+        let (_, stored) = input::float_read(s, single, type_name)?;
+        let typed = input::digits_of(s);
+        let rounded = |stored: String| Invalid::Rounded { type_name: type_name.to_string(), stored };
+        if typed.is_none() || typed != input::digits_of(&stored) {
+            return Err(rounded(input::plain_float(&stored)));
+        }
+        Ok(())
+    }
+
+    /// Also `infinity`, `-infinity` and years `BC` (and past 9999); no year 0.
+    fn date(&self, s: &str) -> Result<(), Invalid> {
+        if matches!(s, "infinity" | "-infinity") {
+            return Ok(());
+        }
+        let (s, bc) = s.strip_suffix(" BC").map_or((s, false), |d| (d, true));
+        input::ymd(s, bc, PG_YEAR_DIGITS, false).then_some(()).ok_or(Invalid::NotDate)
+    }
+
+    /// A `timestamp with time zone` with the offset it is shown in, a year `BC` after it,
+    /// `infinity` and `-infinity`.
+    fn timestamp(&self, c: &TableColumn, zoned: bool, s: &str) -> Result<(), Invalid> {
+        if matches!(s, "infinity" | "-infinity") {
+            return Ok(());
+        }
+        let ty = TypeName::read(&c.column.type_name);
+        let (s, bc) = s.strip_suffix(" BC").map_or((s, false), |t| (t, true));
+        let (date, rest) = s.split_once(' ').ok_or(Invalid::NotTimestamp)?;
+        let (time, offset) = input::split_offset(rest);
+        let offset_ok = match offset {
+            Some(o) => zoned && input::utc_offset(o),
+            None => !zoned,
+        };
+        if !offset_ok || !input::ymd(date, bc, PG_YEAR_DIGITS, false) {
+            return Err(Invalid::NotTimestamp);
+        }
+        input::hms(time, input::fraction_digits(&ty, PG_FRACTION_DIGITS), true).ok_or(Invalid::NotTimestamp)?
+    }
+
+    /// `\x` and hexadecimal digits in pairs, either case.
+    fn bytes(&self, s: &str) -> Result<(), Invalid> {
+        let hex = s.strip_prefix("\\x").filter(|h| h.bytes().all(|b| b.is_ascii_hexdigit()));
+        hex.is_some_and(|h| h.len() % 2 == 0).then_some(()).ok_or(Invalid::NotBytes { mysql: false })
+    }
+
+    /// Binary digits, exactly `n` for `bit(n)` and at most `n` for `bit varying(n)`.
+    fn bits(&self, c: &TableColumn, s: &str) -> Result<(), Invalid> {
+        let ty = TypeName::read(&c.column.type_name);
+        if !input::binary(s) {
+            return Err(Invalid::NotBits { mysql: false });
+        }
+        let exact = ty.name == "bit";
+        match ty.args[..] {
+            [n] if (exact && s.len() != n as usize) || s.len() > n as usize => {
+                Err(Invalid::BitCount { count: n, exact })
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn text(&self, c: &TableColumn, s: &str) -> Result<(), Invalid> {
+        input::text_length(&TypeName::read(&c.column.type_name), s)
+    }
+
+    /// A `uuid`: `8-4-4-4-12` hexadecimal digits. Other types are left to the server.
+    fn other(&self, c: &TableColumn, s: &str) -> Result<(), Invalid> {
+        if TypeName::read(&c.column.type_name).name != "uuid" {
+            return Ok(());
+        }
+        input::uuid(s).then_some(()).ok_or(Invalid::NotUuid)
+    }
+
+    /// Left to the server.
+    fn interval(&self, _: &TableColumn, _: &str) -> Result<(), Invalid> {
+        Ok(())
+    }
+}

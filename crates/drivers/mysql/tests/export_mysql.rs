@@ -55,6 +55,24 @@ async fn side(url: &str) -> mysql_async::Conn {
     let opts = mysql_async::OptsBuilder::from_opts(opts).prefer_socket(false);
     mysql_async::Conn::new(opts).await.expect("the side connection opens")
 }
+/// Runs the drop `sql` on a connection of its own to `url` (the server that made the object), on
+/// a thread of its own (the test's runtime may be shutting down), and writes a warning on stderr
+/// when it fails, also when the connection does not open.
+fn drop_or_warn(url: &str, sql: &str) {
+    let (url, owned) = (url.to_string(), sql.to_string());
+    let done = std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+        rt.block_on(async move {
+            let mut c = side(&url).await;
+            c.query_drop(owned).await.map_err(|e| e.to_string())?;
+            c.disconnect().await.map_err(|e| e.to_string())
+        })
+    })
+    .join();
+    if !matches!(done, Ok(Ok(()))) {
+        let _ = writeln!(std::io::stderr(), "warning: {sql}: {done:?}");
+    }
+}
 
 /// Whether the server is MariaDB, from its own version line (asked once per process).
 async fn mariadb(url: &str) -> bool {
@@ -99,16 +117,7 @@ impl Table {
 
 impl Drop for Table {
     fn drop(&mut self) {
-        let (url, name) = (self.url.clone(), self.name.clone());
-        let _ = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-            rt.block_on(async {
-                let mut c = side(&url).await;
-                let _ = c.query_drop(format!("DROP TABLE IF EXISTS shop.{name}")).await;
-                let _ = c.disconnect().await;
-            });
-        })
-        .join();
+        drop_or_warn(&self.url, &format!("DROP TABLE IF EXISTS shop.{}", self.name));
     }
 }
 
@@ -389,6 +398,7 @@ async fn an_export_never_writes_through_a_function() {
     let f = format!("shop.zz_it_export_fn_{}", std::process::id());
     let _drop = FunctionGuard(admin.clone(), f.clone());
     let mut a = side(&admin).await;
+    a.query_drop(format!("DROP FUNCTION IF EXISTS {f}")).await.unwrap();
     a.query_drop(format!(
         "CREATE FUNCTION {f}(x INT) RETURNS INT DETERMINISTIC MODIFIES SQL DATA \
          BEGIN INSERT INTO {} VALUES (x + 1000, 'w'); RETURN x; END",
@@ -440,16 +450,7 @@ struct FunctionGuard(String, String);
 
 impl Drop for FunctionGuard {
     fn drop(&mut self) {
-        let (url, f) = (self.0.clone(), self.1.clone());
-        let _ = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-            rt.block_on(async {
-                let mut c = side(&url).await;
-                let _ = c.query_drop(format!("DROP FUNCTION IF EXISTS {f}")).await;
-                let _ = c.disconnect().await;
-            });
-        })
-        .join();
+        drop_or_warn(&self.0, &format!("DROP FUNCTION IF EXISTS {}", self.1));
     }
 }
 

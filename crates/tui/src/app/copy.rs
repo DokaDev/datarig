@@ -909,15 +909,14 @@ impl App {
                 export::sql_cells(d, &[col], &rs.read_in, zone)
             })
             .collect();
-        // A MySQL `TIMESTAMP` is shown in the session's time zone: the offset it was read in
-        // goes with it (one not fixed refused it above, through `sql_cells`).
+        // A value shown in the session's time zone (a MySQL `TIMESTAMP`): the offset it was read
+        // in goes with it (one not fixed refused it above, through `sql_cells`).
+        let values = d.engine().spec().values;
         let offsets: Vec<Option<String>> = b
             .cols
             .iter()
-            .map(|&c| match (&rs.read_in, rs.columns[c].meta.kind) {
-                (datarig_core::driver::ReadIn::Values(v), datarig_core::driver::ValueKind::TimestampTz)
-                    if matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_)) =>
-                {
+            .map(|&c| match &rs.read_in {
+                datarig_core::driver::ReadIn::Values(v) if values.shown_in_session_zone(rs.columns[c].meta.kind) => {
                     export::fixed_offset(&v.time_zone, zone)
                 }
                 _ => None,
@@ -1009,10 +1008,7 @@ impl App {
         }
         // A pending value of a MySQL `TIMESTAMP` read in a zone without a fixed offset (or one not
         // known) is no instant either: its text is read in the zone it lands in.
-        let zoned = |j: usize| {
-            matches!(d, Dialect::MySql(_) | Dialect::MariaDb(_))
-                && rs.columns[b.cols[j]].meta.kind == datarig_core::driver::ValueKind::TimestampTz
-        };
+        let zoned = |j: usize| values.shown_in_session_zone(rs.columns[b.cols[j]].meta.kind);
         let refused = refused.or_else(|| {
             (0..b.cols.len())
                 .filter(|&j| zoned(j) && offsets_none(&offsets, j))

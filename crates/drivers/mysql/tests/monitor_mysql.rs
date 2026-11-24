@@ -1,6 +1,6 @@
 //! The monitor session (`SessionRole::Monitor`) against a real MySQL (`DATARIG_TEST_MYSQL_URL`
 //! and `DATARIG_TEST_MYSQL_ADMIN_URL`, see `integration_mysql.rs`). In a binary of its own: it
-//! makes an account (`zz_mon_<pid>`, dropped when the test ends).
+//! makes an account (`zz_it_mon_u_<pid>`, dropped when the test ends).
 //!
 //! The monitor only reads. The tests make what it should see with sessions of their own: a
 //! table `zz_it_mon_<pid>` (dropped when the test ends), a transaction holding a row of it, an
@@ -356,6 +356,9 @@ async fn sessions_show_row_and_metadata_lock_waits() {
     let myisam = format!("zz_it_mon_m_{pid}");
     let _drop = Cleanup { url: url.clone(), sql: format!("DROP TABLE IF EXISTS {table}, {myisam}") };
     let tag = format!("mon{pid}");
+    let mut first = side(&url).await;
+    first.query_drop(format!("DROP TABLE IF EXISTS {table}, {myisam}")).await.expect("start drop");
+    first.disconnect().await.expect("disconnect");
     let mut holder = Conn::open(&url, SessionRole::Query, &format!("{tag}h")).await;
     holder.run(&format!("CREATE TABLE {table} (id INT PRIMARY KEY, v INT) ENGINE=InnoDB")).await;
     holder.run(&format!("INSERT INTO {table} VALUES (1, 0)")).await;
@@ -455,10 +458,11 @@ async fn what_an_account_cannot_see_names_the_privilege() {
         return;
     }
     let pid = std::process::id();
-    let user = format!("zz_mon_{pid}");
+    let user = format!("zz_it_mon_u_{pid}");
     let password = format!("zz-{pid}");
     let _drop = Cleanup { url: admin_url.clone(), sql: format!("DROP USER IF EXISTS '{user}'@'%'") };
     let mut admin = side(&admin_url).await;
+    admin.query_drop(format!("DROP USER IF EXISTS '{user}'@'%'")).await.expect("start drop");
     admin.query_drop(format!("CREATE USER '{user}'@'%' IDENTIFIED BY '{password}'")).await.expect("user");
 
     let (mut monitor, my) = Conn::monitor(&as_user(&url, &user, &password), &format!("monu{pid}")).await;
@@ -623,6 +627,7 @@ async fn statements_by_type_leave_out_our_own_selects() {
     }
     assert_eq!(quiet, Some(Rate::PerSecond(0.0)), "an idle server reads 0 SELECT/s");
     let mut client = side(&url).await;
+    client.query_drop(format!("DROP TABLE IF EXISTS {table}_b, {table}")).await.expect("start drop");
     let before = monitor.tick(TICK).await.expect("tick");
     for sql in [
         format!("CREATE TABLE {table} (id INT PRIMARY KEY, v INT)"),
@@ -660,6 +665,7 @@ fn target_of(my: &MySqlMonitor, row: &SessionRow) -> ActionTarget {
 /// would return 1 and no error).
 async fn sleep_table(url: &str, table: &str) {
     let mut c = side(url).await;
+    c.query_drop(format!("DROP TABLE IF EXISTS {table}")).await.expect("start drop");
     c.query_drop(format!("CREATE TABLE {table} (id INT PRIMARY KEY) ENGINE=InnoDB")).await.expect("table");
     c.query_drop(format!("INSERT INTO {table} VALUES (1)")).await.expect("row");
 }
@@ -811,7 +817,7 @@ async fn a_refusal_names_what_would_allow_it() {
         return;
     }
     let pid = std::process::id();
-    let (plain, admin_user) = (format!("zz_mon_act_{pid}"), format!("zz_mon_a_{pid}"));
+    let (plain, admin_user) = (format!("zz_it_mon_act_{pid}"), format!("zz_it_mon_a_{pid}"));
     let password = format!("zz-{pid}");
     let table = format!("zz_it_mon_g_{pid}");
     let _drop_table = Cleanup { url: url.clone(), sql: format!("DROP TABLE IF EXISTS {table}") };
@@ -819,6 +825,7 @@ async fn a_refusal_names_what_would_allow_it() {
         Cleanup { url: admin_url.clone(), sql: format!("DROP USER IF EXISTS '{plain}'@'%', '{admin_user}'@'%'") };
     let mut admin = side(&admin_url).await;
     for user in [&plain, &admin_user] {
+        admin.query_drop(format!("DROP USER IF EXISTS '{user}'@'%'")).await.expect("start drop");
         admin.query_drop(format!("CREATE USER '{user}'@'%' IDENTIFIED BY '{password}'")).await.expect("user");
         admin.query_drop(format!("GRANT PROCESS ON *.* TO '{user}'@'%'")).await.expect("grant");
         admin.query_drop(format!("GRANT SELECT ON performance_schema.* TO '{user}'@'%'")).await.expect("grant");

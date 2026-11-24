@@ -28,7 +28,10 @@ pub use postgres::TX_ROLLBACK_ANSWER_WAIT;
 pub use postgres::{PG_FILTER_CALLS, PG_REFUSED_CALLS};
 pub use rules::{Rules, UNBOUND_TAB_DIALECT};
 pub use session::{OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof};
-pub use spec::{CancelRules, EngineSpec, FilterCalls, RiskRules, SessionRules, TextRules, Transport, TxRules};
+pub use spec::{
+    CancelRules, EngineSpec, FilterCalls, InputRules, RiskRules, SessionRules, TextRules, Transport, TxRules,
+    ValueRules,
+};
 pub use tx::{CountInTx, DdlLock, TxAsk, TxNote, TxRefusal, TxStatement, TxVerdict};
 pub use why::{Feature, Why};
 

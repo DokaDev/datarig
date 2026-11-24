@@ -954,16 +954,17 @@ impl App {
     fn copy_zone_refused(&self, copy: &GridCopy, plan: &PastePlan) -> Option<String> {
         let t = self.tab();
         let rs = rows_of(t)?;
-        let mysql = matches!(self.tab_dialect(t.id), Dialect::MySql(_) | Dialect::MariaDb(_));
+        let values = self.tab_dialect(t.id).engine().spec().values;
         let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
         plan.map.iter().find_map(|&(j, c)| {
             let from = copy.offsets.get(j)?.as_ref()?;
             let valued = copy.rows.iter().any(|r| matches!(r.get(j), Some(Value::Text(_))));
-            if !valued || rs.columns.get(c)?.meta.kind != ValueKind::TimestampTz {
+            let kind = rs.columns.get(c)?.meta.kind;
+            if !valued || kind != ValueKind::TimestampTz {
                 return None;
             }
             let column = copy.columns.get(j).map(|m| m.name.clone()).unwrap_or_default();
-            if !mysql {
+            if !values.shown_in_session_zone(kind) {
                 let msg = Msg::EditPasteRegisterZoneOther { column, from: from.clone() };
                 return Some(self.i18n.msg(&msg).to_string());
             }
