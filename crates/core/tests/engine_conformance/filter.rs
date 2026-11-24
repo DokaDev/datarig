@@ -34,10 +34,16 @@ pub struct Like {
 }
 
 /// The table every case reads: a number key, text (of a deterministic collation), a float,
-/// bytes and a date.
+/// bytes and a date; then columns named like a call the server may make bare (`current_role`,
+/// text), like reserved words (`offset`, a number, and `returning`, text) and with a quote
+/// character in the name (`` a`b ``, a number).
 fn target(d: Dialect, utf8mb4: bool) -> Target {
     let mut name = ColumnFacts::new("name", ColumnKind::Text);
     name.deterministic = Some(true);
+    let mut role = ColumnFacts::new("current_role", ColumnKind::Text);
+    role.deterministic = Some(true);
+    let mut returning = ColumnFacts::new("returning", ColumnKind::Text);
+    returning.deterministic = Some(true);
     let mut t = Target::new(
         d,
         vec![
@@ -46,6 +52,10 @@ fn target(d: Dialect, utf8mb4: bool) -> Target {
             ColumnFacts::new("price", ColumnKind::Real),
             ColumnFacts::new("data", ColumnKind::Bytes),
             ColumnFacts::new("born", ColumnKind::Other),
+            role,
+            ColumnFacts::new("offset", ColumnKind::Number),
+            returning,
+            ColumnFacts::new("a`b", ColumnKind::Number),
         ],
     );
     t.primary_key = vec!["id".to_string()];
@@ -110,15 +120,15 @@ pub fn render_cases() -> Vec<Case<Input>> {
         Case {
             name: "equal text",
             input: cond(Cond::Cmp { col: "name".into(), op: CmpOp::Eq, value: text("x") }),
-            expect: &[(Pg, "name = 'x'"), (MySql, "name = _utf8mb4 X'78'"), (MariaDb, "name = _utf8mb4 X'78'")],
+            expect: &[(Pg, "name = 'x'"), (MySql, "`name` = _utf8mb4 X'78'"), (MariaDb, "`name` = _utf8mb4 X'78'")],
         },
         Case {
             name: "null-safe equal",
             input: cond(Cond::NotDistinct { col: "name".into(), value: text("x"), negated: false }),
             expect: &[
                 (Pg, "name IS NOT DISTINCT FROM 'x'"),
-                (MySql, "name <=> _utf8mb4 X'78'"),
-                (MariaDb, "name <=> _utf8mb4 X'78'"),
+                (MySql, "`name` <=> _utf8mb4 X'78'"),
+                (MariaDb, "`name` <=> _utf8mb4 X'78'"),
             ],
         },
         Case {
@@ -126,14 +136,14 @@ pub fn render_cases() -> Vec<Case<Input>> {
             input: cond(Cond::NotDistinct { col: "name".into(), value: text("x"), negated: true }),
             expect: &[
                 (Pg, "name IS DISTINCT FROM 'x'"),
-                (MySql, "NOT (name <=> _utf8mb4 X'78')"),
-                (MariaDb, "NOT (name <=> _utf8mb4 X'78')"),
+                (MySql, "NOT (`name` <=> _utf8mb4 X'78')"),
+                (MariaDb, "NOT (`name` <=> _utf8mb4 X'78')"),
             ],
         },
         Case {
             name: "is null",
             input: cond(Cond::IsNull { col: "name".into(), negated: false }),
-            expect: &[(Pg, "name IS NULL"), (MySql, "name IS NULL"), (MariaDb, "name IS NULL")],
+            expect: &[(Pg, "name IS NULL"), (MySql, "`name` IS NULL"), (MariaDb, "`name` IS NULL")],
         },
         Case {
             name: "in with null",
@@ -144,8 +154,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             }),
             expect: &[
                 (Pg, "(id IN (1) OR id IS NULL)"),
-                (MySql, "(id IN (1) OR id IS NULL)"),
-                (MariaDb, "(id IN (1) OR id IS NULL)"),
+                (MySql, "(`id` IN (1) OR `id` IS NULL)"),
+                (MariaDb, "(`id` IN (1) OR `id` IS NULL)"),
             ],
         },
         Case {
@@ -155,7 +165,7 @@ pub fn render_cases() -> Vec<Case<Input>> {
                 values: vec![Value::Number("1".into()), Value::Number("2".into())],
                 negated: true,
             }),
-            expect: &[(Pg, "id NOT IN (1, 2)"), (MySql, "id NOT IN (1, 2)"), (MariaDb, "id NOT IN (1, 2)")],
+            expect: &[(Pg, "id NOT IN (1, 2)"), (MySql, "`id` NOT IN (1, 2)"), (MariaDb, "`id` NOT IN (1, 2)")],
         },
         Case {
             name: "like",
@@ -167,8 +177,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             }),
             expect: &[
                 (Pg, "name LIKE 'a!%%' ESCAPE '!'"),
-                (MySql, "name LIKE _utf8mb4 X'61212525' ESCAPE '!'"),
-                (MariaDb, "name LIKE _utf8mb4 X'61212525' ESCAPE '!'"),
+                (MySql, "`name` LIKE _utf8mb4 X'61212525' ESCAPE '!'"),
+                (MariaDb, "`name` LIKE _utf8mb4 X'61212525' ESCAPE '!'"),
             ],
         },
         Case {
@@ -181,8 +191,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             }),
             expect: &[
                 (Pg, "name NOT ILIKE 'a%' ESCAPE '!'"),
-                (MySql, "LOWER(name) NOT LIKE LOWER(_utf8mb4 X'6125') ESCAPE '!'"),
-                (MariaDb, "LOWER(name) NOT LIKE LOWER(_utf8mb4 X'6125') ESCAPE '!'"),
+                (MySql, "LOWER(`name`) NOT LIKE LOWER(_utf8mb4 X'6125') ESCAPE '!'"),
+                (MariaDb, "LOWER(`name`) NOT LIKE LOWER(_utf8mb4 X'6125') ESCAPE '!'"),
             ],
         },
         Case {
@@ -195,36 +205,36 @@ pub fn render_cases() -> Vec<Case<Input>> {
             }),
             expect: &[
                 (Pg, "born BETWEEN '2026-01-01' AND '2026-12-31'"),
-                (MySql, "born BETWEEN _utf8mb4 X'323032362D30312D3031' AND _utf8mb4 X'323032362D31322D3331'"),
-                (MariaDb, "born BETWEEN _utf8mb4 X'323032362D30312D3031' AND _utf8mb4 X'323032362D31322D3331'"),
+                (MySql, "`born` BETWEEN _utf8mb4 X'323032362D30312D3031' AND _utf8mb4 X'323032362D31322D3331'"),
+                (MariaDb, "`born` BETWEEN _utf8mb4 X'323032362D30312D3031' AND _utf8mb4 X'323032362D31322D3331'"),
             ],
         },
         Case {
             name: "float",
             input: cond(Cond::Cmp { col: "price".into(), op: CmpOp::Ge, value: Value::Number("0.1".into()) }),
-            expect: &[(Pg, "price >= '0.1'"), (MySql, "price >= 0.1"), (MariaDb, "price >= 0.1")],
+            expect: &[(Pg, "price >= '0.1'"), (MySql, "`price` >= 0.1"), (MariaDb, "`price` >= 0.1")],
         },
         Case {
             name: "bytes",
             input: cond(Cond::Cmp { col: "data".into(), op: CmpOp::Eq, value: Value::Bytes(vec![0, 0xab]) }),
             expect: &[
                 (Pg, "data = E'\\\\x00ab'::pg_catalog.bytea"),
-                (MySql, "data = X'00AB'"),
-                (MariaDb, "data = X'00AB'"),
+                (MySql, "`data` = X'00AB'"),
+                (MariaDb, "`data` = X'00AB'"),
             ],
         },
         Case {
             name: "bool",
             input: cond(Cond::Cmp { col: "id".into(), op: CmpOp::Ne, value: Value::Bool(true) }),
-            expect: &[(Pg, "id <> TRUE"), (MySql, "id <> TRUE"), (MariaDb, "id <> TRUE")],
+            expect: &[(Pg, "id <> TRUE"), (MySql, "`id` <> TRUE"), (MariaDb, "`id` <> TRUE")],
         },
         Case {
             name: "text with a backslash",
             input: cond(Cond::Cmp { col: "name".into(), op: CmpOp::Eq, value: text("a\\b'c") }),
             expect: &[
                 (Pg, "name = E'a\\\\b''c'"),
-                (MySql, "name = _utf8mb4 X'615C622763'"),
-                (MariaDb, "name = _utf8mb4 X'615C622763'"),
+                (MySql, "`name` = _utf8mb4 X'615C622763'"),
+                (MariaDb, "`name` = _utf8mb4 X'615C622763'"),
             ],
         },
         Case {
@@ -235,8 +245,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             },
             expect: &[
                 (Pg, "name = 'café'"),
-                (MySql, "name = _utf8mb4 X'636166C3A9'"),
-                (MariaDb, "name = _utf8mb4 X'636166C3A9'"),
+                (MySql, "`name` = _utf8mb4 X'636166C3A9'"),
+                (MariaDb, "`name` = _utf8mb4 X'636166C3A9'"),
             ],
         },
         Case {
@@ -245,7 +255,7 @@ pub fn render_cases() -> Vec<Case<Input>> {
                 cond: Cond::Cmp { col: "name".into(), op: CmpOp::Eq, value: text("caf\u{e9}") },
                 utf8mb4: true,
             },
-            expect: &[(Pg, "name = 'café'"), (MySql, "name = 'café'"), (MariaDb, "name = 'café'")],
+            expect: &[(Pg, "name = 'café'"), (MySql, "`name` = 'café'"), (MariaDb, "`name` = 'café'")],
         },
         Case {
             name: "ascii text literal, utf8mb4 not known",
@@ -255,14 +265,14 @@ pub fn render_cases() -> Vec<Case<Input>> {
             },
             expect: &[
                 (Pg, "name = 'plain'"),
-                (MySql, "name = _utf8mb4 X'706C61696E'"),
-                (MariaDb, "name = _utf8mb4 X'706C61696E'"),
+                (MySql, "`name` = _utf8mb4 X'706C61696E'"),
+                (MariaDb, "`name` = _utf8mb4 X'706C61696E'"),
             ],
         },
         Case {
             name: "unknown column",
             input: cond(Cond::Cmp { col: "nope".into(), op: CmpOp::Eq, value: text("x") }),
-            expect: &[(Pg, "nope = 'x'"), (MySql, "nope = _utf8mb4 X'78'"), (MariaDb, "nope = _utf8mb4 X'78'")],
+            expect: &[(Pg, "nope = 'x'"), (MySql, "`nope` = _utf8mb4 X'78'"), (MariaDb, "`nope` = _utf8mb4 X'78'")],
         },
         Case {
             name: "all and any",
@@ -272,8 +282,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             ])),
             expect: &[
                 (Pg, "(id IS NOT NULL OR (price > 1)) AND NOT (name IS NULL)"),
-                (MySql, "(id IS NOT NULL OR (price > 1)) AND NOT (name IS NULL)"),
-                (MariaDb, "(id IS NOT NULL OR (price > 1)) AND NOT (name IS NULL)"),
+                (MySql, "(`id` IS NOT NULL OR (price > 1)) AND NOT (`name` IS NULL)"),
+                (MariaDb, "(`id` IS NOT NULL OR (price > 1)) AND NOT (`name` IS NULL)"),
             ],
         },
         Case {
@@ -281,8 +291,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             input: like(CaseMode::Server, Some(true), Some(true)),
             expect: &[
                 (Pg, "name LIKE 'a%' ESCAPE '!'"),
-                (MySql, "name LIKE 'a%' ESCAPE '!'"),
-                (MariaDb, "name LIKE 'a%' ESCAPE '!'"),
+                (MySql, "`name` LIKE 'a%' ESCAPE '!'"),
+                (MariaDb, "`name` LIKE 'a%' ESCAPE '!'"),
             ],
         },
         Case {
@@ -290,8 +300,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             input: like(CaseMode::Server, Some(true), Some(false)),
             expect: &[
                 (Pg, "name LIKE 'a%' ESCAPE '!'"),
-                (MySql, "name LIKE 'a%' ESCAPE '!'"),
-                (MariaDb, "name LIKE 'a%' ESCAPE '!'"),
+                (MySql, "`name` LIKE 'a%' ESCAPE '!'"),
+                (MariaDb, "`name` LIKE 'a%' ESCAPE '!'"),
             ],
         },
         Case {
@@ -299,8 +309,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             input: like(CaseMode::Server, Some(true), None),
             expect: &[
                 (Pg, "name LIKE 'a%' ESCAPE '!'"),
-                (MySql, "name LIKE 'a%' ESCAPE '!'"),
-                (MariaDb, "name LIKE 'a%' ESCAPE '!'"),
+                (MySql, "`name` LIKE 'a%' ESCAPE '!'"),
+                (MariaDb, "`name` LIKE 'a%' ESCAPE '!'"),
             ],
         },
         Case {
@@ -308,8 +318,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             input: like(CaseMode::Server, Some(false), Some(true)),
             expect: &[
                 (Pg, "name LIKE 'a%' ESCAPE '!'"),
-                (MySql, "name LIKE 'a%' ESCAPE '!'"),
-                (MariaDb, "name LIKE 'a%' ESCAPE '!'"),
+                (MySql, "`name` LIKE 'a%' ESCAPE '!'"),
+                (MariaDb, "`name` LIKE 'a%' ESCAPE '!'"),
             ],
         },
         Case {
@@ -317,8 +327,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             input: like(CaseMode::Server, Some(false), Some(false)),
             expect: &[
                 (Pg, "LikeRefused(\"name\")"),
-                (MySql, "name LIKE 'a%' ESCAPE '!'"),
-                (MariaDb, "name LIKE 'a%' ESCAPE '!'"),
+                (MySql, "`name` LIKE 'a%' ESCAPE '!'"),
+                (MariaDb, "`name` LIKE 'a%' ESCAPE '!'"),
             ],
         },
         Case {
@@ -326,8 +336,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             input: like(CaseMode::Server, Some(false), None),
             expect: &[
                 (Pg, "LikeUnknown(\"name\")"),
-                (MySql, "name LIKE 'a%' ESCAPE '!'"),
-                (MariaDb, "name LIKE 'a%' ESCAPE '!'"),
+                (MySql, "`name` LIKE 'a%' ESCAPE '!'"),
+                (MariaDb, "`name` LIKE 'a%' ESCAPE '!'"),
             ],
         },
         Case {
@@ -335,8 +345,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             input: like(CaseMode::Server, None, Some(true)),
             expect: &[
                 (Pg, "name LIKE 'a%' ESCAPE '!'"),
-                (MySql, "name LIKE 'a%' ESCAPE '!'"),
-                (MariaDb, "name LIKE 'a%' ESCAPE '!'"),
+                (MySql, "`name` LIKE 'a%' ESCAPE '!'"),
+                (MariaDb, "`name` LIKE 'a%' ESCAPE '!'"),
             ],
         },
         Case {
@@ -344,8 +354,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             input: like(CaseMode::Server, None, Some(false)),
             expect: &[
                 (Pg, "LikeUnknown(\"name\")"),
-                (MySql, "name LIKE 'a%' ESCAPE '!'"),
-                (MariaDb, "name LIKE 'a%' ESCAPE '!'"),
+                (MySql, "`name` LIKE 'a%' ESCAPE '!'"),
+                (MariaDb, "`name` LIKE 'a%' ESCAPE '!'"),
             ],
         },
         Case {
@@ -353,8 +363,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             input: like(CaseMode::Server, None, None),
             expect: &[
                 (Pg, "LikeUnknown(\"name\")"),
-                (MySql, "name LIKE 'a%' ESCAPE '!'"),
-                (MariaDb, "name LIKE 'a%' ESCAPE '!'"),
+                (MySql, "`name` LIKE 'a%' ESCAPE '!'"),
+                (MariaDb, "`name` LIKE 'a%' ESCAPE '!'"),
             ],
         },
         Case {
@@ -362,8 +372,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             input: like(CaseMode::Insensitive, Some(true), Some(true)),
             expect: &[
                 (Pg, "name ILIKE 'a%' ESCAPE '!'"),
-                (MySql, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
-                (MariaDb, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+                (MySql, "LOWER(`name`) LIKE LOWER('a%') ESCAPE '!'"),
+                (MariaDb, "LOWER(`name`) LIKE LOWER('a%') ESCAPE '!'"),
             ],
         },
         Case {
@@ -371,8 +381,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             input: like(CaseMode::Insensitive, Some(true), Some(false)),
             expect: &[
                 (Pg, "name ILIKE 'a%' ESCAPE '!'"),
-                (MySql, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
-                (MariaDb, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+                (MySql, "LOWER(`name`) LIKE LOWER('a%') ESCAPE '!'"),
+                (MariaDb, "LOWER(`name`) LIKE LOWER('a%') ESCAPE '!'"),
             ],
         },
         Case {
@@ -380,8 +390,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             input: like(CaseMode::Insensitive, Some(true), None),
             expect: &[
                 (Pg, "name ILIKE 'a%' ESCAPE '!'"),
-                (MySql, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
-                (MariaDb, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+                (MySql, "LOWER(`name`) LIKE LOWER('a%') ESCAPE '!'"),
+                (MariaDb, "LOWER(`name`) LIKE LOWER('a%') ESCAPE '!'"),
             ],
         },
         Case {
@@ -389,8 +399,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             input: like(CaseMode::Insensitive, Some(false), Some(true)),
             expect: &[
                 (Pg, "CaseInsensitiveRefused(\"name\")"),
-                (MySql, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
-                (MariaDb, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+                (MySql, "LOWER(`name`) LIKE LOWER('a%') ESCAPE '!'"),
+                (MariaDb, "LOWER(`name`) LIKE LOWER('a%') ESCAPE '!'"),
             ],
         },
         Case {
@@ -398,8 +408,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             input: like(CaseMode::Insensitive, Some(false), Some(false)),
             expect: &[
                 (Pg, "CaseInsensitiveRefused(\"name\")"),
-                (MySql, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
-                (MariaDb, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+                (MySql, "LOWER(`name`) LIKE LOWER('a%') ESCAPE '!'"),
+                (MariaDb, "LOWER(`name`) LIKE LOWER('a%') ESCAPE '!'"),
             ],
         },
         Case {
@@ -407,8 +417,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             input: like(CaseMode::Insensitive, Some(false), None),
             expect: &[
                 (Pg, "CaseInsensitiveRefused(\"name\")"),
-                (MySql, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
-                (MariaDb, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+                (MySql, "LOWER(`name`) LIKE LOWER('a%') ESCAPE '!'"),
+                (MariaDb, "LOWER(`name`) LIKE LOWER('a%') ESCAPE '!'"),
             ],
         },
         Case {
@@ -416,8 +426,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             input: like(CaseMode::Insensitive, None, Some(true)),
             expect: &[
                 (Pg, "CollationUnknown(\"name\")"),
-                (MySql, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
-                (MariaDb, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+                (MySql, "LOWER(`name`) LIKE LOWER('a%') ESCAPE '!'"),
+                (MariaDb, "LOWER(`name`) LIKE LOWER('a%') ESCAPE '!'"),
             ],
         },
         Case {
@@ -425,8 +435,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             input: like(CaseMode::Insensitive, None, Some(false)),
             expect: &[
                 (Pg, "CollationUnknown(\"name\")"),
-                (MySql, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
-                (MariaDb, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+                (MySql, "LOWER(`name`) LIKE LOWER('a%') ESCAPE '!'"),
+                (MariaDb, "LOWER(`name`) LIKE LOWER('a%') ESCAPE '!'"),
             ],
         },
         Case {
@@ -434,8 +444,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             input: like(CaseMode::Insensitive, None, None),
             expect: &[
                 (Pg, "CollationUnknown(\"name\")"),
-                (MySql, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
-                (MariaDb, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+                (MySql, "LOWER(`name`) LIKE LOWER('a%') ESCAPE '!'"),
+                (MariaDb, "LOWER(`name`) LIKE LOWER('a%') ESCAPE '!'"),
             ],
         },
         Case {
@@ -448,8 +458,8 @@ pub fn render_cases() -> Vec<Case<Input>> {
             }),
             expect: &[
                 (Pg, "name ILIKE 'a%' ESCAPE '!'"),
-                (MySql, "name LIKE 'a%' ESCAPE '!'"),
-                (MariaDb, "name LIKE 'a%' ESCAPE '!'"),
+                (MySql, "`name` LIKE 'a%' ESCAPE '!'"),
+                (MariaDb, "`name` LIKE 'a%' ESCAPE '!'"),
             ],
         },
         Case {
@@ -462,8 +472,57 @@ pub fn render_cases() -> Vec<Case<Input>> {
             }),
             expect: &[
                 (Pg, "name ILIKE 'a%' ESCAPE '!'"),
-                (MySql, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
-                (MariaDb, "LOWER(name) LIKE LOWER('a%') ESCAPE '!'"),
+                (MySql, "LOWER(`name`) LIKE LOWER('a%') ESCAPE '!'"),
+                (MariaDb, "LOWER(`name`) LIKE LOWER('a%') ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "a column named like a call",
+            input: cond(Cond::IsNull { col: "current_role".into(), negated: false }),
+            expect: &[
+                (Pg, "\"current_role\" IS NULL"),
+                (MySql, "`current_role` IS NULL"),
+                (MariaDb, "`current_role` IS NULL"),
+                (MySqlAnsiQuotes, "`current_role` IS NULL"),
+            ],
+        },
+        Case {
+            name: "a column named like a reserved word",
+            input: cond(Cond::Cmp { col: "offset".into(), op: CmpOp::Eq, value: Value::Number("1".into()) }),
+            expect: &[
+                (Pg, "\"offset\" = 1"),
+                (MySql, "`offset` = 1"),
+                (MariaDb, "`offset` = 1"),
+                (MySqlAnsiQuotes, "`offset` = 1"),
+            ],
+        },
+        Case {
+            name: "a pattern on a column named like a reserved word",
+            input: cond(Cond::Like {
+                col: "returning".into(),
+                pattern: "a%".into(),
+                negated: false,
+                case: CaseMode::Server,
+            }),
+            expect: &[
+                (Pg, "\"returning\" LIKE 'a%' ESCAPE '!'"),
+                (MySql, "`returning` LIKE _utf8mb4 X'6125' ESCAPE '!'"),
+                (MariaDb, "`returning` LIKE _utf8mb4 X'6125' ESCAPE '!'"),
+                (MySqlAnsiQuotes, "`returning` LIKE _utf8mb4 X'6125' ESCAPE '!'"),
+            ],
+        },
+        Case {
+            name: "a column with a quote character in its name",
+            input: cond(Cond::In {
+                col: "a`b".into(),
+                values: vec![Value::Number("1".into()), Value::Number("2".into())],
+                negated: false,
+            }),
+            expect: &[
+                (Pg, "\"a`b\" IN (1, 2)"),
+                (MySql, "`a``b` IN (1, 2)"),
+                (MariaDb, "`a``b` IN (1, 2)"),
+                (MySqlAnsiQuotes, "`a``b` IN (1, 2)"),
             ],
         },
         Case {
@@ -834,8 +893,9 @@ pub struct Read {
 }
 
 /// The table filter text is read for: numbers `id`, `x` and `y`, text `name`, a float `price`,
-/// bytes `data`, a date `d` and an instant `at` shown in the session's zone; with `mixed`, the
-/// columns `aB` and `Ab` (in that order).
+/// bytes `data`, a date `d`, an instant `at` shown in the session's zone, text `current_role`
+/// (named like a call the server may make bare) and a number `offset` (a reserved word); with
+/// `mixed`, the columns `aB` and `Ab` (in that order).
 fn read_target(d: Dialect, mixed: bool) -> Target {
     if mixed {
         return Target::new(
@@ -856,6 +916,8 @@ fn read_target(d: Dialect, mixed: bool) -> Target {
             ColumnFacts::new("y", ColumnKind::Number),
             ColumnFacts::new("d", ColumnKind::Other),
             at,
+            ColumnFacts::new("current_role", ColumnKind::Text),
+            ColumnFacts::new("offset", ColumnKind::Number),
         ],
     )
 }
@@ -1442,7 +1504,96 @@ pub fn read_cases() -> Vec<Case<Read>> {
                 (MySqlDollarNotKnown, "Some(Raw(\"a$b = 1\")) | terms Some([0..7])"),
             ],
         },
+        Case {
+            name: "a bare name the server may call",
+            input: read_case("current_role IS NULL"),
+            expect: &[
+                (Pg, "Some(IsNull { col: \"current_role\", negated: false }) | terms Some([0..20])"),
+                (MySql, "Some(Raw(\"current_role IS NULL\")) | terms Some([0..20])"),
+                (MariaDb, "Some(Raw(\"current_role IS NULL\")) | terms Some([0..20])"),
+                (MySqlAnsiQuotes, "Some(Raw(\"current_role IS NULL\")) | terms Some([0..20])"),
+            ],
+        },
+        Case {
+            name: "a quoted name the server may call bare",
+            input: read_case("`current_role` IS NULL"),
+            expect: &[
+                (Pg, "Some(Raw(\"`current_role` IS NULL\")) | terms Some([0..22])"),
+                (MySql, "Some(IsNull { col: \"current_role\", negated: false }) | terms Some([0..22])"),
+                (MariaDb, "Some(IsNull { col: \"current_role\", negated: false }) | terms Some([0..22])"),
+                (MySqlAnsiQuotes, "Some(IsNull { col: \"current_role\", negated: false }) | terms Some([0..22])"),
+            ],
+        },
+        Case {
+            name: "a name the server may call bare, in double quotes",
+            input: read_case("\"current_role\" IS NULL"),
+            expect: &[
+                (Pg, "Some(IsNull { col: \"current_role\", negated: false }) | terms Some([0..22])"),
+                (MySql, "Some(Raw(\"\\\"current_role\\\" IS NULL\")) | terms Some([0..22])"),
+                (MariaDb, "Some(Raw(\"\\\"current_role\\\" IS NULL\")) | terms Some([0..22])"),
+                (MySqlAnsiQuotes, "Some(IsNull { col: \"current_role\", negated: false }) | terms Some([0..22])"),
+            ],
+        },
+        Case {
+            name: "a quoted reserved word",
+            input: read_case("`offset` = 1"),
+            expect: &[
+                (Pg, "Some(Raw(\"`offset` = 1\")) | terms Some([0..12])"),
+                (MySql, "Some(Cmp { col: \"offset\", op: Eq, value: Number(\"1\") }) | terms Some([0..12])"),
+                (MariaDb, "Some(Cmp { col: \"offset\", op: Eq, value: Number(\"1\") }) | terms Some([0..12])"),
+                (MySqlAnsiQuotes, "Some(Cmp { col: \"offset\", op: Eq, value: Number(\"1\") }) | terms Some([0..12])"),
+            ],
+        },
     ]
+}
+
+/// Every condition of [`render_cases`] as each MySQL-family session writes it: every column it
+/// names quoted, and read back as the same condition the text with those names bare reads as
+/// (a name the server may call bare excepted: bare it is no column, its own read cases say so;
+/// text that names no column of the table is kept as written either way). The differences
+/// found, or none.
+pub fn read_back_differences() -> Vec<String> {
+    let mut out = Vec::new();
+    for engine in [MySql, MariaDb, MySqlAnsiQuotes, MySqlNoBackslashEscapes] {
+        let d = engine.dialect();
+        for case in render_cases() {
+            let Input::Cond { cond, utf8mb4 } = &case.input else { continue };
+            let t = target(d, *utf8mb4);
+            let Ok(text) = datarig_core::query::render(cond, &t) else { continue };
+            let mut bare = text.clone();
+            for col in columns(cond) {
+                let quoted = format!("`{}`", col.replace('`', "``"));
+                if !text.contains(&quoted) {
+                    out.push(format!("{engine:?} `{}`: {col} is not quoted in {text:?}", case.name));
+                }
+                if !d.needs_quotes(&col) && col != "current_role" {
+                    bare = bare.replace(&quoted, &col);
+                }
+            }
+            let (read, read_bare) =
+                (datarig_core::query::recognise(&text, &t), datarig_core::query::recognise(&bare, &t));
+            let raw_both = matches!((&read, &read_bare), (Some(Cond::Raw(_)), Some(Cond::Raw(_))));
+            if read != read_bare && !raw_both {
+                out.push(format!("{engine:?} `{}`: {text:?} reads as {read:?}, {bare:?} as {read_bare:?}", case.name));
+            }
+        }
+    }
+    out
+}
+
+/// The columns `c` names.
+fn columns(c: &Cond) -> Vec<String> {
+    match c {
+        Cond::All(cs) | Cond::Any(cs) => cs.iter().flat_map(columns).collect(),
+        Cond::Not(c) => columns(c),
+        Cond::Raw(_) => Vec::new(),
+        Cond::Cmp { col, .. }
+        | Cond::IsNull { col, .. }
+        | Cond::NotDistinct { col, .. }
+        | Cond::In { col, .. }
+        | Cond::Like { col, .. }
+        | Cond::Between { col, .. } => vec![col.to_string()],
+    }
 }
 
 /// Filter text checked before it runs, on a session judged on its own engine or, with

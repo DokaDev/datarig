@@ -1071,3 +1071,168 @@ fn a_pg_18_beta_server_still_takes_like_on_a_nondeterministic_collation() {
         }
     }
 }
+
+// ── Column names on MySQL and MariaDB ───────────────────────────────────────────────────────
+
+/// `shop.users` with the columns `id` (a number) and `name` (`date` or `current_role`, of type
+/// `ty`), open on a MySQL profile whose session is MariaDB (`maria`) or MySQL, a row of each
+/// loaded, the grid focused, nothing sent since.
+fn family_table(maria: bool, name: &str, ty: &str) -> Harness {
+    use datarig_core::driver::SessionValues;
+    use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+    let driver = FakeDriver::default();
+    driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut p = datarig_core::profile::ConnectionConfig::test_db();
+    (p.name, p.driver) = ("local-my".into(), "mysql".into());
+    let cfg = datarig_core::config::Config { connections: vec![p], ..Default::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    let lang = Language::Sql(if maria {
+        Dialect::MariaDb(MySqlMode::default())
+    } else {
+        Dialect::MySql(MySqlMode::default())
+    });
+    h.db(DbEvent::Language(lang));
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["shop".into()])));
+    open_users(&mut h);
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Language(lang));
+    h.tab_db(index, DbEvent::Connected);
+    h.tab_db(index, DbEvent::SessionValues(SessionValues { time_zone: "+00:00".into(), charset: "utf8mb4".into() }));
+    family_page(&mut h, name, ty);
+    h.key(KeyCode::Tab);
+    h
+}
+
+/// The page [`family_table`] loads: `id` and `name` of type `ty`.
+fn family_page(h: &mut Harness, name: &str, ty: &str) {
+    use datarig_core::driver::{ColumnMeta, ValueKind};
+    let kind = if ty == "date" { ValueKind::Date } else { ValueKind::Text };
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    let columns = vec![
+        ColumnMeta::new("id".into(), "int".into(), ValueKind::Integer, None),
+        ColumnMeta::new(name.into(), ty.into(), kind, None),
+    ];
+    let rows = vec![vec![Some("1".into()), None], vec![Some("2".into()), Some("2024-01-01".into())]];
+    h.tab_db(index, DbEvent::Page { id, columns: Some(columns), rows, more: false, elapsed: Duration::from_millis(2) });
+    h.sent();
+}
+
+/// `:where text` run on [`family_table`] of column `name` (type `ty`), its rows loaded again.
+fn family_where(h: &mut Harness, name: &str, ty: &str, text: &str) {
+    h.command(&format!("where {text}"));
+    assert_eq!(runs(h).len(), 1, "{text}");
+    family_page(h, name, ty);
+}
+
+/// The dialog opened on column `col` of the grid: its count of the column's values (`#`), as
+/// the statement sent.
+fn family_count(h: &mut Harness, col: usize) -> String {
+    h.app.tab_mut().grid.col = col;
+    h.keys("f");
+    assert!(open(h), "{}", h.screen(120, 34));
+    h.keys("#");
+    h.sent()
+        .into_iter()
+        .find_map(|c| match c {
+            DbCommand::GroupCount { sql, .. } => Some(sql),
+            _ => None,
+        })
+        .expect("a count is sent")
+}
+
+/// In the dialog opened on the grid's `id` column: the first value of its list ticked, the
+/// draft's `WHERE` text then (the dialog stays open).
+fn family_tick_id(h: &mut Harness, conditions: usize) -> String {
+    h.app.tab_mut().grid.col = 0;
+    h.keys("f");
+    h.key(KeyCode::Right);
+    for _ in 0..=conditions {
+        h.key(KeyCode::Down);
+    }
+    h.key(KeyCode::Char(' '));
+    h.app.filter_dialog_draft().expect("the dialog is open").0
+}
+
+/// MariaDB reads a bare `current_role` as its function: filter text naming it bare is kept as
+/// written (a row of another column changed leaves it as it is, and a count of the column's
+/// values keeps it among the other conditions); quoted, it is the column's condition.
+#[test]
+fn a_bare_name_the_server_may_call_stays_as_written() {
+    let mut h = family_table(true, "current_role", "varchar(20)");
+    family_where(&mut h, "current_role", "varchar(20)", "current_role IS NULL AND id > 0");
+    let ticked = family_tick_id(&mut h, 1);
+    assert_eq!(ticked, "current_role IS NULL AND id > 0 AND `id` = 1");
+    let mut h = family_table(true, "current_role", "varchar(20)");
+    family_where(&mut h, "current_role", "varchar(20)", "current_role IS NULL AND id > 0");
+    let count = family_count(&mut h, 1);
+    assert!(count.contains(" WHERE (current_role IS NULL AND id > 0) GROUP BY `current_role`"), "{count}");
+    // Quoted: the column's condition, left out of its own count.
+    let mut h = family_table(true, "current_role", "varchar(20)");
+    family_where(&mut h, "current_role", "varchar(20)", "`current_role` IS NULL AND id > 0");
+    let count = family_count(&mut h, 1);
+    assert!(count.contains(" WHERE (id > 0) GROUP BY `current_role`"), "{count}");
+}
+
+/// The facts a session says whose greeting names MySQL 8.4.6 and whose `VERSION()` line names
+/// MariaDB 11.4.13: its statements are judged on both engines.
+fn two_engines_said() -> DbEvent {
+    use datarig_core::engine::{EngineFacts, EngineId, Fact, MyFacts, ServerFacts, Version, Why};
+    DbEvent::Server(std::sync::Arc::new(ServerFacts {
+        version: Fact::Unknown(Why::EnginesDisagree),
+        version_text: Some("11.4.13-MariaDB".into()),
+        provider: Fact::Unknown(Why::NotChecked),
+        topology: Fact::Unknown(Why::EnginesDisagree),
+        detail: EngineFacts::MariaDb(MyFacts::new(Version::new(8, 4, 6), EngineId::MySql)),
+    }))
+}
+
+/// On a MySQL session, a bare `current_role` reads as MariaDB reads it whatever the profile's
+/// other sessions say of their server: kept as written when another session reports two engines
+/// before the dialog opens, and when the report comes while it is open.
+#[test]
+fn a_bare_current_role_stays_as_written_when_another_session_reports_two_engines() {
+    let kept = " WHERE (current_role IS NULL) GROUP BY `current_role`";
+    // Reported before the dialog opens.
+    let mut h = family_table(false, "current_role", "varchar(20)");
+    h.meta_db("local-my", two_engines_said());
+    family_where(&mut h, "current_role", "varchar(20)", "current_role IS NULL");
+    let count = family_count(&mut h, 1);
+    assert!(count.contains(kept), "{count}");
+    // Reported while it is open.
+    let mut h = family_table(false, "current_role", "varchar(20)");
+    family_where(&mut h, "current_role", "varchar(20)", "current_role IS NULL");
+    h.app.tab_mut().grid.col = 1;
+    h.keys("f");
+    assert!(open(&h));
+    h.meta_db("local-my", two_engines_said());
+    h.keys("#");
+    let count = h
+        .sent()
+        .into_iter()
+        .find_map(|c| match c {
+            DbCommand::GroupCount { sql, .. } => Some(sql),
+            _ => None,
+        })
+        .expect("a count is sent");
+    assert!(count.contains(kept), "{count}");
+    assert_eq!(h.app.filter_dialog_draft().expect("the dialog is open").0, "current_role IS NULL");
+}
+
+/// A bare `date` names the column on MySQL and MariaDB, as before: a condition on it is the
+/// column's (left out of its own count), and a change of another column's row leaves its text
+/// as typed.
+#[test]
+fn a_filter_on_a_bare_date_column_round_trips_as_today() {
+    for maria in [false, true] {
+        let mut h = family_table(maria, "date", "date");
+        family_where(&mut h, "date", "date", "date = '2024-01-01' AND id > 0");
+        let ticked = family_tick_id(&mut h, 1);
+        assert_eq!(ticked, "date = '2024-01-01' AND id > 0 AND `id` = 1", "{maria}");
+        let mut h = family_table(maria, "date", "date");
+        family_where(&mut h, "date", "date", "date = '2024-01-01' AND id > 0");
+        let count = family_count(&mut h, 1);
+        assert!(count.contains(" WHERE (id > 0) GROUP BY `date`"), "{maria}: {count}");
+    }
+}
