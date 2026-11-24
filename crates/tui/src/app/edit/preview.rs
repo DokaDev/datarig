@@ -30,8 +30,6 @@ pub struct EditPreview {
     format: EditFormat,
     /// After an Apply whose result is not known, `y` was pressed once: the next applies again.
     again: bool,
-    /// `y` sent its Apply: what the answer says is never covered by the preview closing.
-    sent: bool,
     /// The first line of the body on screen.
     pub scroll: usize,
     pub buttons: Buttons,
@@ -116,7 +114,6 @@ impl App {
             target,
             format,
             again: false,
-            sent: false,
             scroll: 0,
             buttons: Buttons::default(),
             body: None,
@@ -199,28 +196,30 @@ impl App {
         self.judged_target(t, rs, &p.target, p.format).withheld.clone()
     }
 
-    /// After every event: the preview closes when it is no longer current, or no longer stands
-    /// for what it would apply, and says why; an answer key pressed for it is then ignored a
-    /// while, never taken by the grid ([`super::ask::ANSWER_GUARD`]). Once it sent its Apply,
-    /// what the sessions say does not close it, and it closes without words: the Apply's answer
-    /// is what is said.
+    /// After every event, two rules. While the preview's Apply is sent and not answered, nothing
+    /// closes it: its answer is what it says. Else it closes when it is no longer current, or no
+    /// longer stands for what it would apply; then its answer keys are ignored a while, never
+    /// taken by the grid ([`super::ask::ANSWER_GUARD`]), and it says why, unless an Apply's
+    /// answer was said in the same event (that answer stands).
     pub(super) fn sweep_edit_preview(&mut self) {
+        let answered = std::mem::take(&mut self.apply_said);
         let Some(p) = self.overlays.edit_preview() else { return };
-        // Once `y` sent its Apply, the preview says what became of it (`y` checks again before
-        // sending anything more), and closes without words of its own.
-        let sent = p.sent;
-        let gone = if sent { None } else { self.edit_preview_choice_gone() };
-        let said: Msg = match gone {
+        if self.applying(p.tab, p.result) {
+            return;
+        }
+        let said: Msg = match self.edit_preview_choice_gone() {
             Some(why) => {
                 let reason = self.i18n.msg(&self.edit_preview_gone_words(&why)).to_string();
                 Msg::EditPreviewCantApply { reason }
             }
             None if self.edit_preview_current() => return,
-            None if sent => return self.overlays.close(OverlayKind::EditPreview),
             None => Label::EditPreviewClosed.into(),
         };
         self.overlays.close(OverlayKind::EditPreview);
-        self.dialog_ended(said);
+        match answered {
+            true => self.dialog_guarded(),
+            false => self.dialog_ended(said),
+        }
     }
 
     /// Why the open preview's choice among identical rows is gone, as the Changes tab words it
@@ -396,9 +395,6 @@ impl App {
             Some(t) if self.manual_commit(tab) => ApplyTx::Keep { idle_timeout: self.manual_idle_timeout(t) },
             _ => ApplyTx::Commit,
         };
-        if let Some(p) = self.overlays.edit_preview_mut() {
-            p.sent = true;
-        }
         self.send_apply(tab, result, plan.steps.clone(), tx);
     }
 

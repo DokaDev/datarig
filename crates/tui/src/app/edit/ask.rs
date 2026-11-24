@@ -299,6 +299,13 @@ impl App {
         self.question_ended(said.into(), true);
     }
 
+    /// The Apply dialog closed by itself in the event that said its Apply's answer: its keys are
+    /// ignored as after [`App::dialog_ended`], and that answer stands.
+    pub(in crate::app) fn dialog_guarded(&mut self) {
+        let said = self.transient.as_ref().map_or_else(|| Label::EditPreviewClosed.into(), |(n, _)| n.msg.clone());
+        self.ask_gone = Some((self.now() + ANSWER_GUARD, said, true));
+    }
+
     fn question_ended(&mut self, said: Msg, dialog: bool) {
         self.ask_gone = Some((self.now() + ANSWER_GUARD, said.clone(), dialog));
         self.flash(Notice::new(said, Level::Info));

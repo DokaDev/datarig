@@ -640,17 +640,42 @@ fn a_sent_edits_answer_is_never_covered_by_the_preview_closing() {
     let failed = ApplyError::Db(DbError::Server("ERROR 1205: Lock wait timeout exceeded".into()));
     for why in [unknown, failed] {
         let mut h = previewed();
+        let clipboard = FakeClipboard::attach(&mut h, false, &[]);
         let id = all_sent(&mut h);
         meta_db(&mut h, edits(false));
         h.app.transient = None;
         h.db(DbEvent::Applied { id, result: Err(ApplyFailure { step: None, why: why.clone() }) });
-        let said = said(&mut h);
-        assert!(!matches!(said, Some(Msg::EditPreviewCantApply { .. }) | None), "{why:?}: {said:?}");
-        if matches!(why, ApplyError::Db(DbError::CommitUnknown)) {
-            assert_eq!(said, Some(datarig_i18n::Label::EditFailedUnknown.into()));
-        }
+        let want = match why {
+            ApplyError::Db(DbError::CommitUnknown) => {
+                h.app.i18n.label(datarig_i18n::Label::EditFailedUnknown).to_string()
+            }
+            _ => "ERROR 1205: Lock wait timeout exceeded. Nothing was applied.".to_string(),
+        };
+        assert_eq!(said_text(&mut h), Some(want), "{why:?}");
+        // The dialog closed (the format changed): its answer key is not taken by the grid.
+        assert!(h.app.edit_preview_view().is_none(), "the preview is closed");
+        h.key(KeyCode::Char('y'));
+        assert!(clipboard.all().is_empty(), "nothing copied: {:?}", clipboard.all());
+        assert!(matches!(said(&mut h), Some(Msg::EditAskIgnored { .. })), "{why:?}");
         assert!(no_apply_sent(&mut h));
     }
+}
+
+/// An Apply sent from the preview failed; the preview stays as an unsent one would: a change of
+/// the edit format then closes it, saying why.
+#[test]
+fn a_preview_whose_apply_failed_closes_on_a_format_change() {
+    use datarig_core::driver::{ApplyError, ApplyFailure};
+    let mut h = previewed();
+    let id = all_sent(&mut h);
+    let why = ApplyError::Db(DbError::Server("ERROR 1205: Lock wait timeout exceeded".into()));
+    h.db(DbEvent::Applied { id, result: Err(ApplyFailure { step: None, why }) });
+    assert!(h.app.edit_preview_view().is_some(), "the preview says why nothing was applied");
+    h.app.transient = None;
+    meta_db(&mut h, edits(false));
+    assert!(h.app.edit_preview_view().is_none(), "the preview is closed");
+    let said = said_text(&mut h).unwrap_or_default();
+    assert!(said.starts_with("Can't apply yet: ") && said.contains("edit format differs"), "{said}");
 }
 
 /// After the preview closed by itself, its choice keys (`a`, `1`) are not taken by the grid

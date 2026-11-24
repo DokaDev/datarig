@@ -493,6 +493,9 @@ pub struct App {
     /// A question (or a waiting Apply) ended without its answer: until when its answer keys are
     /// ignored, what it said, and whether it was the Apply dialog (its choice keys too).
     pub(crate) ask_gone: Option<(Instant, Msg, bool)>,
+    /// An Apply's answer was said in this event: the Apply dialog closing in it says nothing
+    /// over it.
+    pub(crate) apply_said: bool,
     /// Text pasted into the grid, waiting for its result's table to be known.
     pub(crate) paste_in: Option<edit::PasteIn>,
     /// The last paste into a grid: `space d V` reads it again while it is the newest change.
@@ -812,6 +815,7 @@ impl App {
             ask: None,
             apply_wait: None,
             ask_gone: None,
+            apply_said: false,
             paste_in: None,
             last_paste: None,
             grid_copy: None,
