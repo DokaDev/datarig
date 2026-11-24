@@ -2,9 +2,10 @@
 //! the rules the two engines share.
 
 use super::{
-    CancelRules, CountInTx, EngineFacts, EngineId, ExportRules, Fact, FilterCalls, InputRules, OpenVerdict,
-    READ_ONLY_NOT_PROVEN, ReadOnlyProof, ServerFacts, SessionRules, Support, TextRules, TxAsk, TxNote, TxRefusal,
-    TxRules, TxStatement, TxVerdict, ValueRules, Version, Why,
+    CancelRules, CatalogueRules, CountInTx, DdlOfIndex, DdlRules, DdlToConsole, EngineFacts, EngineId, ExportRules,
+    Fact, FilterCalls, InputRules, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, ResultTables, ServerFacts,
+    SessionRules, Support, TextRules, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, ValueRules, Version,
+    Why,
 };
 use crate::driver::{ColumnMeta, ReadIn, SessionRole, SessionValues, ValueKind};
 use crate::edit::input::{self, TypeName};
@@ -394,6 +395,34 @@ impl ValueRules for FamilyValues {
             (EngineFacts::MariaDb(_), _) => Fact::No(Why::NotOnEngine),
             (EngineFacts::Postgres(_), _) => Fact::Unknown(Why::EnginesDisagree),
         }
+    }
+}
+
+/// How MySQL's and MariaDB's catalogue names what a result reads.
+pub(super) struct FamilyCatalogue;
+
+impl CatalogueRules for FamilyCatalogue {
+    /// By name: a result says the name of its column's table, looked up in the keys read at
+    /// connect.
+    fn result_tables(&self) -> ResultTables {
+        ResultTables::ByName
+    }
+}
+
+/// How the DDL of MySQL's and MariaDB's objects is shown and opened in a console.
+pub(super) struct FamilyDdl;
+
+impl DdlRules for FamilyDdl {
+    /// Its table's: an index has no DDL of its own, its table's `CREATE TABLE` defines it.
+    fn index_ddl(&self) -> DdlOfIndex {
+        DdlOfIndex::Table
+    }
+
+    /// Requoted: the text is the server's own (`SHOW CREATE …`), its strings written for the
+    /// sql mode it was read in, so they are written again for the console's, in the object's
+    /// database.
+    fn to_console(&self) -> DdlToConsole {
+        DdlToConsole::Requoted
     }
 }
 

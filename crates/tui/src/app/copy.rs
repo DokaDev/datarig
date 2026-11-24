@@ -32,7 +32,7 @@ use datarig_core::driver::keys::{
 };
 use datarig_core::edit::Value;
 use datarig_core::edit::paste::MAX_ROWS as MAX_PASTE_ROWS;
-use datarig_core::engine::Why;
+use datarig_core::engine::{ResultTables, Why};
 use datarig_core::export::{self, Kind, Target};
 use datarig_core::fault::{ErrorLog, Fault};
 use datarig_core::sql::dialect::Dialect;
@@ -1314,14 +1314,15 @@ impl App {
         if let (NoCatalog, Some(error)) = (why, failed) {
             return self.i18n.msg(&Msg::CopyInsertWhyKeysFailed { error }).to_string();
         }
-        // MySQL's reasons in its own words: the keys are read at connect, so a missing table is
-        // one created later or one the user may not see.
-        if matches!(self.tab_dialect(self.tab().id), Dialect::MySql(_) | Dialect::MariaDb(_)) {
-            match why {
+        // Where a result names its tables by name (MySQL), they are looked up in the keys read at
+        // connect, so a missing table is one created later or one the user may not see: said so.
+        match self.tab_dialect(self.tab().id).engine().spec().catalogue.result_tables() {
+            ResultTables::ByName => match why {
                 NoCatalog => return self.i18n.label(Label::CopyInsertWhyKeysLoading).to_string(),
                 UnknownTable => return self.i18n.label(Label::CopyInsertWhyNotInKeys).to_string(),
                 _ => {}
-            }
+            },
+            ResultTables::ByNumber => {}
         }
         let label = match why {
             NotSelect => Label::CopyInsertWhyNotSelect,

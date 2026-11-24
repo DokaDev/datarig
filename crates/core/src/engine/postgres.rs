@@ -1,9 +1,10 @@
 //! PostgreSQL's row of the registry.
 
 use super::{
-    CancelRules, CountInTx, DdlLock, EditRules, EngineId, EngineSpec, ExportRules, Fact, FilterCalls, InputRules,
-    OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, RiskRules, ServerFacts, SessionRules, Support, TextRules,
-    Transport, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, ValueRules,
+    CancelRules, CatalogueRules, CountInTx, DdlLock, DdlOfIndex, DdlRules, DdlToConsole, EditRules, EngineId,
+    EngineSpec, ExportRules, Fact, FilterCalls, InputRules, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof,
+    ResultTables, RiskRules, ServerFacts, SessionRules, Support, TextRules, Transport, TxAsk, TxNote, TxRefusal,
+    TxRules, TxStatement, TxVerdict, ValueRules,
 };
 use crate::driver::{ColumnMeta, EditFormat, Hierarchy, ReadIn, SessionRole, SessionValues, ValueKind};
 use crate::edit::input::{self, TypeName};
@@ -35,6 +36,8 @@ pub static SPEC: EngineSpec = EngineSpec {
     values: &PgValues,
     export: Fact::Known(&PgExport),
     edit: Fact::Known(&PgEdits),
+    catalogue: &PgCatalogue,
+    ddl: Fact::Known(&PgDdl),
 };
 
 /// How PostgreSQL's text is read.
@@ -442,6 +445,31 @@ impl EditRules for PgEdits {
     /// PostgreSQL's, on every version.
     fn writer(&self, _: &ServerFacts) -> Fact<EditFormat> {
         Fact::Known(EditFormat::Postgres)
+    }
+}
+
+/// How PostgreSQL's catalogue names what a result reads.
+struct PgCatalogue;
+
+impl CatalogueRules for PgCatalogue {
+    /// By the table's number (a result column's table OID).
+    fn result_tables(&self) -> ResultTables {
+        ResultTables::ByNumber
+    }
+}
+
+/// How the DDL of PostgreSQL's objects is shown and opened in a console.
+struct PgDdl;
+
+impl DdlRules for PgDdl {
+    /// Its own: `CREATE INDEX`, or the constraint it backs.
+    fn index_ddl(&self) -> DdlOfIndex {
+        DdlOfIndex::Own
+    }
+
+    /// As read: the text is rebuilt from the catalogue's parts.
+    fn to_console(&self) -> DdlToConsole {
+        DdlToConsole::AsRead
     }
 }
 

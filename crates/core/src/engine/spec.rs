@@ -55,6 +55,10 @@ pub struct EngineSpec {
     pub export: Fact<&'static dyn ExportRules>,
     /// Which edits of a result's rows its servers take.
     pub edit: Fact<&'static dyn EditRules>,
+    /// How its catalogue names what a result reads.
+    pub catalogue: &'static dyn CatalogueRules,
+    /// How the DDL of its objects is shown and opened in a console.
+    pub ddl: Fact<&'static dyn DdlRules>,
 }
 
 /// How an engine's text is read on a server.
@@ -192,6 +196,52 @@ pub trait EditRules: Sync {
     /// The SQL a session on the server of `f` takes for edits of a result's rows, or why it
     /// takes none.
     fn writer(&self, f: &ServerFacts) -> Fact<EditFormat>;
+}
+
+/// How an engine's catalogue names what a result reads.
+pub trait CatalogueRules: Sync {
+    /// How a result names the table its columns come from: by the table's number, or by its
+    /// name, found only in the cache of keys read when the profile connected.
+    fn result_tables(&self) -> ResultTables;
+}
+
+/// How a result names the table its columns come from ([`CatalogueRules::result_tables`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResultTables {
+    /// By the table's number in the catalogue.
+    ByNumber,
+    /// By its name, looked up in the cache of keys read at connect: a table created later, or
+    /// one the user may not see, is not there.
+    ByName,
+}
+
+/// How the DDL of an engine's objects is shown and opened in a console.
+pub trait DdlRules: Sync {
+    /// What the DDL of an index is: its own statement, or its table's (where the table's
+    /// `CREATE TABLE` defines the index).
+    fn index_ddl(&self) -> DdlOfIndex;
+
+    /// How the text of a DDL tab opens in a console.
+    fn to_console(&self) -> DdlToConsole;
+}
+
+/// What the DDL of an index is ([`DdlRules::index_ddl`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DdlOfIndex {
+    /// The index's own statement.
+    Own,
+    /// The statement of its table, which defines it.
+    Table,
+}
+
+/// How the text of a DDL tab opens in a console ([`DdlRules::to_console`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DdlToConsole {
+    /// As read, in the tab's context.
+    AsRead,
+    /// The server's own text with its strings written as the console's sql mode reads them, in
+    /// the object's database.
+    Requoted,
 }
 
 /// Whether a value typed into a cell is a value of its column's type, in the form the result

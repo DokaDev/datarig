@@ -29,8 +29,8 @@ pub use postgres::{PG_FILTER_CALLS, PG_REFUSED_CALLS};
 pub use rules::{Rules, UNBOUND_TAB_DIALECT};
 pub use session::{OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof};
 pub use spec::{
-    CancelRules, EditRules, EngineSpec, ExportRules, FilterCalls, InputRules, RiskRules, SessionRules, TextRules,
-    Transport, TxRules, ValueRules,
+    CancelRules, CatalogueRules, DdlOfIndex, DdlRules, DdlToConsole, EditRules, EngineSpec, ExportRules, FilterCalls,
+    InputRules, ResultTables, RiskRules, SessionRules, TextRules, Transport, TxRules, ValueRules,
 };
 pub use tx::{CountInTx, DdlLock, TxAsk, TxNote, TxRefusal, TxStatement, TxVerdict};
 pub use why::{Feature, Why};

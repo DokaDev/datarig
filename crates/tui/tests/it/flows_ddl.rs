@@ -596,11 +596,16 @@ fn verbatim(name: &str, text: &str, database: &str) -> DdlSource {
 /// A MySQL profile (its databases are the schemas), the explorer focused, `shop` open with
 /// `items`.
 fn mysql_shop_open() -> Harness {
-    let driver = FakeDriver::default();
-    driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
+    family_shop_open("mysql")
+}
+
+/// [`mysql_shop_open`] with the profile's driver named `driver` (`mysql` or `mariadb`).
+fn family_shop_open(driver: &str) -> Harness {
     let mut p = datarig_core::profile::ConnectionConfig::test_db();
     p.name = "local-my".into();
-    p.driver = "mysql".into();
+    p.driver = driver.into();
+    let driver = FakeDriver::default();
+    driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
     let cfg = datarig_core::config::Config { connections: vec![p], ..Default::default() };
     let mut h = Harness::with_driver(&cfg, Lang::En, driver);
     h.app.icons = IconsSetting::Off;
@@ -722,6 +727,63 @@ fn mysql_shows_the_servers_own_ddl() {
     h.db(answer(id, Err(DbError::DefinitionHidden)));
     let screen = h.screen(200, 30);
     assert!(screen.contains("the server does not show its definition to this user"), "{screen}");
+}
+
+/// A `mariadb` profile reads DDL as a `mysql` one does: `D` on an index asks for its table's,
+/// `o` writes the strings for the new console's sql_mode in the object's database, and `:ddl
+/// name` looks the name up in the tab's database (the profile's own here).
+#[test]
+fn a_mariadb_profile_reads_ddl_as_a_mysql_profile_does() {
+    let maria = |no_backslash_escapes| {
+        Dialect::MariaDb(MySqlMode {
+            no_backslash_escapes,
+            dollar_quotes: DollarQuotes::NotRead,
+            ..MySqlMode::default()
+        })
+    };
+    let mut h = family_shop_open("mariadb");
+    h.meta_db("local-my", DbEvent::Language(Language::Sql(maria(true))));
+    h.goto("items");
+    h.key(KeyCode::Char('l'));
+    h.sent();
+    h.db(DbEvent::Structure {
+        schema: "shop".into(),
+        table: "items".into(),
+        result: Ok(Box::new(mysql_items_structure())),
+    });
+    h.goto("Indexes");
+    h.key(KeyCode::Char('l'));
+    h.goto("ix_id");
+    h.keys("D");
+    let first = asked(&h.sent());
+    assert_eq!(first.iter().map(|a| a.1.clone()).collect::<Vec<_>>(), [relation("shop", "items")], "the index's table");
+    let table = "CREATE TABLE `t` (\n  `v` varchar(9) DEFAULT 'a\\\\b''c\\'d'\n);\n";
+    let mut source = verbatim("shop.items", table, "shop");
+    if let DdlSource::Verbatim { written_in, .. } = &mut source {
+        *written_in = Some(maria(false));
+    }
+    h.db(answer(first[0].0, Ok(source)));
+    assert_eq!(state(&h), DdlState::Loaded);
+    h.app.focus = Focus::Editor;
+    let tabs = h.app.tabs.len();
+    h.keys("o");
+    assert_eq!(h.app.tabs.len(), tabs + 1, "{}", h.status(200, 30));
+    assert_eq!(h.app.tab().editor.text(), "CREATE TABLE `t` (\n  `v` varchar(9) DEFAULT 'a\\b''c''d'\n);\n");
+    assert_eq!(h.app.tab().context.database, None);
+    assert_eq!(h.app.tab().context.schema.as_deref(), Some("shop"), "the object's database");
+    // From the console in `shop`: the name is looked up in the tab's database.
+    h.command("ddl zz_touch");
+    assert_eq!(
+        asked(&h.sent()).into_iter().map(|a| a.1).collect::<Vec<_>>(),
+        [DdlObject::Named { name: "zz_touch".into(), schema: Some("shop".into()) }]
+    );
+    let ddl = h.app.tabs.iter().position(|t| t.is_ddl()).unwrap();
+    h.app.tabs.activate(ddl);
+    h.command("ddl shop.zz_touch");
+    assert_eq!(
+        asked(&h.sent()).into_iter().map(|a| a.1).collect::<Vec<_>>(),
+        [DdlObject::Named { name: "shop.zz_touch".into(), schema: Some("datarig".into()) }]
+    );
 }
 
 /// On MySQL a locked object says so too, in words of any engine (no PostgreSQL command), and
