@@ -154,7 +154,8 @@ fn a_delete_and_inserts() {
 
 #[test]
 fn one_of_several_identical_rows_is_picked_by_its_place() {
-    let t = target(Identity::Values { columns: vec![0, 1, 2], duplicates: Duplicates::Choose });
+    let mut t = target(Identity::Values { columns: vec![0, 1, 2], duplicates: Duplicates::Choose });
+    t.choice_on(crate::engine::Fact::Known(()), crate::driver::EditFormat::Postgres);
     let mut b = EditBatch::new();
     b.set(&[(1, 1)], &text("x"), orig);
     b.delete(&[2], orig);

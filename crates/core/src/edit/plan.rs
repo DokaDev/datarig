@@ -347,6 +347,11 @@ fn row_checks(
                     let why = t.withheld.clone().unwrap_or(Why::NotChecked);
                     return Err(PlanError::Withheld { row, matches: k, why });
                 }
+                // A choice never checked against the sessions that read and apply it
+                // ([`EditTarget::choice_on`]) is not offered.
+                (Duplicates::Choose, _) if t.choice_format.is_none() => {
+                    return Err(PlanError::Withheld { row, matches: k, why: Why::NotChecked });
+                }
                 (Duplicates::Choose, None) => return Err(PlanError::Choose { row, matches: k }),
                 (Duplicates::Choose, Some(Choice::All)) => (k, Scope::All),
                 (Duplicates::Choose, Some(Choice::One)) => (k, Scope::One),

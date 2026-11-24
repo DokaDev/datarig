@@ -48,7 +48,8 @@ fn facts(line: EngineId, version: Fact<Version>, greeting: EngineId, handshake: 
     let my = MyFacts::new(handshake, greeting);
     let detail = match line {
         EngineId::MariaDb => EngineFacts::MariaDb(my),
-        _ => EngineFacts::MySql(my),
+        EngineId::MySql => EngineFacts::MySql(my),
+        EngineId::Postgres => panic!("a MySQL-family server"),
     };
     Arc::new(ServerFacts {
         version,
@@ -198,10 +199,11 @@ fn apply_counted(h: &mut Harness, n: u64) {
     h.db(DbEvent::Counted { id: asked[0].0, result: Ok(n), snapshot: false });
 }
 
-/// The counts sent, with their ids.
+/// The counts sent, with their ids; no Apply is sent with them.
 fn counts(h: &mut Harness) -> Vec<(u64, String)> {
-    h.sent()
-        .into_iter()
+    let sent = h.sent();
+    assert!(!sent.iter().any(|c| matches!(c, DbCommand::ApplyEdits { .. })), "no Apply with the counts");
+    sent.into_iter()
         .filter_map(|c| match c {
             DbCommand::Count { id, sql, limit: None } => Some((id, sql)),
             _ => None,
@@ -278,13 +280,15 @@ fn a_duplicate_row_edit_is_withheld_when_the_structure_came_from_another_greetin
     withheld(&mut h, SESSIONS_DIFFER);
 }
 
-/// The tab's own session's reports name two engines (its greeting MariaDB, its `VERSION()`
-/// MySQL); the metadata session's agree, at the same greeting.
+/// The tab's own session's reports name two engines (its greeting MySQL 8.4.6, its `VERSION()`
+/// line MariaDB), and it says what such a session says: MySQL's language and edits (by its
+/// greeting); the metadata session's reports agree, at the same greeting.
 #[test]
 fn a_duplicate_row_edit_is_withheld_when_the_tab_reports_two_engines() {
     let mut h = profile(vec![mysql(v(8, 4, 6))]);
-    let two = facts(EngineId::MySql, Fact::Unknown(Why::EnginesDisagree), EngineId::MariaDb, v(8, 4, 6));
-    read(&mut h, vec![DbEvent::Server(two), edits(true)], false);
+    let two = facts(EngineId::MariaDb, Fact::Unknown(Why::EnginesDisagree), EngineId::MySql, v(8, 4, 6));
+    let language = DbEvent::Language(Language::Sql(Dialect::MySql(MySqlMode::default())));
+    read(&mut h, vec![DbEvent::Server(two), language, edits(true)], false);
     change(&mut h, false);
     apply_counted(&mut h, 2);
     withheld(&mut h, SESSIONS_DIFFER);

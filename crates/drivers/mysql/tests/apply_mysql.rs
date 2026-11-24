@@ -11,6 +11,7 @@ use datarig_core::driver::{
     Driver, EditFormat, KeyCatalog, MySqlEdit, PagingMode, Session, SessionRole, TxRule, TxStep,
 };
 use datarig_core::edit::{self, Choice, EditBatch, EditTarget, Expect, Facts, Plan, PlanError, Value};
+use datarig_core::engine::{Fact, ServerFacts};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::{Dialect, Language};
 use datarig_driver_mysql::MyDriver;
@@ -148,6 +149,8 @@ struct Conn {
     id: u64,
     dialect: Dialect,
     edit: Option<EditFormat>,
+    /// What the session found its server to be.
+    facts: Option<std::sync::Arc<ServerFacts>>,
 }
 
 impl Conn {
@@ -161,11 +164,12 @@ impl Conn {
         let tag = format!("it{}-apply", std::process::id());
         let opts = ConnectOptions::new(page, role, &tag).read_only(read_only);
         let session = MyDriver.connect(&profile(url), role, opts, tx);
-        let mut c = Conn { session, rx, id: 0, dialect: Dialect::MySql(Default::default()), edit: None };
+        let mut c = Conn { session, rx, id: 0, dialect: Dialect::MySql(Default::default()), edit: None, facts: None };
         for ev in c.collect(|e| matches!(e, DbEvent::Edit(_)), 15).await {
             match ev {
                 DbEvent::Language(Language::Sql(d)) => c.dialect = d,
                 DbEvent::Edit(f) => c.edit = f,
+                DbEvent::Server(f) => c.facts = Some(f),
                 _ => {}
             }
         }
@@ -284,9 +288,15 @@ impl Editing {
     async fn new(url: &str, c: &mut Conn, t: &Table, select: &str) -> Editing {
         let (keys, structure) = meta(url, t).await;
         let (columns, rows) = c.read(select).await;
-        let format = edit::format(c.edit.expect("the server takes edits"));
+        let f = c.edit.expect("the server takes edits");
+        let format = edit::format(f);
         let source = edit::source(c.dialect, Some(&keys), &columns, select).expect("an editable result");
-        let target = source.target(&structure, &*format).expect("an editable target");
+        let mut target = source.target(&structure, &*format).expect("an editable target");
+        // The structure's session and this one reach one server: one or all of identical rows
+        // is checked as the app checks it.
+        let Fact::Known(rules) = c.dialect.engine().spec().edit else { panic!("the engine takes edits") };
+        let facts = c.facts.as_deref();
+        target.choice_on(rules.duplicates_choice(facts, facts, f), f);
         Editing { target, rows, format }
     }
 

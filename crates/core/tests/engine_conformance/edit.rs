@@ -45,8 +45,8 @@ pub fn choice(e: Engine, s: &Sessions) -> String {
     let (read, applies) = (s.read.map(|v| facts(id, v)), s.applies.map(|v| facts(id, v)));
     let format = match (id, s.its_format) {
         (EngineId::Postgres, _) => EditFormat::Postgres,
-        (_, true) => EditFormat::MySql(MySqlEdit { nowait: true }),
-        (_, false) => EditFormat::MySql(MySqlEdit { nowait: false }),
+        (EngineId::MySql | EngineId::MariaDb, true) => EditFormat::MySql(MySqlEdit { nowait: true }),
+        (EngineId::MySql | EngineId::MariaDb, false) => EditFormat::MySql(MySqlEdit { nowait: false }),
     };
     format!("{:?}", rules.duplicates_choice(read.as_ref(), applies.as_ref(), format))
 }

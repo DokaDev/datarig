@@ -705,7 +705,6 @@ impl App {
     }
 }
 
-/// `p`, or `?` for a row not found.
 /// Why a row that matches `count` identical rows is not offered one or all of them, in words
 /// for `why`. `EditRules::duplicates_choice` gives only the first five reasons, and an engine
 /// that takes no edits its own; any other is said as the nearest of them.
@@ -727,6 +726,7 @@ fn withheld_text(count: u64, why: &datarig_core::engine::Why) -> Msg {
     }
 }
 
+/// `p`, or `?` for a row not found.
 fn or_unknown(p: Option<Pointer>) -> Pointer {
     p.unwrap_or_else(|| Pointer::Key("?".into()))
 }

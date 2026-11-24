@@ -167,7 +167,8 @@ fn without_nowait_the_check_waits_as_the_session_allows() {
 
 #[test]
 fn a_delete_inserts_and_one_of_several_rows() {
-    let t = target(Identity::Values { columns: vec![0, 1, 2, 3, 4], duplicates: Duplicates::Choose });
+    let mut t = target(Identity::Values { columns: vec![0, 1, 2, 3, 4], duplicates: Duplicates::Choose });
+    t.choice_on(crate::engine::Fact::Known(()), crate::driver::EditFormat::MySql(MySqlEdit { nowait: true }));
     let mut b = EditBatch::new();
     b.delete(&[2], orig);
     b.set(&[(3, 1)], &text("z"), orig);
