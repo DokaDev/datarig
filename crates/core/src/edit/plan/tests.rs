@@ -36,6 +36,8 @@ fn target(identity: Identity) -> EditTarget {
         identity,
         all_columns_shown: true,
         unshown_required: Vec::new(),
+        withheld: None,
+        choice_format: None,
     }
 }
 
@@ -43,8 +45,12 @@ fn keyed() -> EditTarget {
     target(Identity::Key { primary: true, columns: vec![0] })
 }
 
+/// Found by its values; a choice among identical rows checked as `EditTarget::choice_on` does.
 fn by_values(duplicates: Duplicates) -> EditTarget {
-    target(Identity::Values { columns: vec![0, 1], duplicates })
+    EditTarget {
+        choice_format: Some(crate::driver::EditFormat::Postgres),
+        ..target(Identity::Values { columns: vec![0, 1], duplicates })
+    }
 }
 
 /// Row `r` as read: (r, "n<r>", 1.5, "N<r>").
@@ -253,6 +259,68 @@ fn identical_rows_change_one_or_all_as_chosen() {
         assert_eq!(plan_with(&t, &b, &ALL, &[(3, 3)], &choices), Err(PlanError::Unseen { row: 3, matches: 3 }));
     }
     assert!(plan_with(&t, &b, &ALL, &[(3, 1)], &[]).is_ok(), "one match is the row");
+}
+
+/// A choice among identical rows that was never checked against the sessions that read and
+/// apply it (a target straight from `EditSource::target`) plans no write, whatever was chosen.
+#[test]
+fn an_unchecked_choice_among_identical_rows_is_refused() {
+    use crate::engine::Why;
+    let t = EditTarget { choice_format: None, ..by_values(Duplicates::Choose) };
+    let mut b = EditBatch::new();
+    b.set(&[(3, 1)], &text("x"), orig);
+    for choice in [None, Some(Choice::One), Some(Choice::All)] {
+        let choices: Vec<(usize, Choice)> = choice.map(|c| (3, c)).into_iter().collect();
+        let got = plan_with(&t, &b, &ALL, &[(3, 3)], &choices);
+        assert_eq!(got, Err(PlanError::Withheld { row: 3, matches: 3, why: Why::NotChecked }), "{choice:?}");
+    }
+    assert!(plan_with(&t, &b, &ALL, &[(3, 1)], &[]).is_ok(), "one match is the row");
+}
+
+/// A choice among identical rows checked for one format is not one in another: planned with a
+/// writer of another format, it is refused, whatever was chosen.
+#[test]
+fn a_choice_checked_for_another_format_is_refused() {
+    use crate::driver::{EditFormat, MySqlEdit};
+    use crate::engine::Why;
+    let t = EditTarget {
+        choice_format: Some(EditFormat::MySql(MySqlEdit { nowait: true })),
+        ..by_values(Duplicates::Choose)
+    };
+    let mut b = EditBatch::new();
+    b.set(&[(3, 1)], &text("x"), orig);
+    for choice in [None, Some(Choice::One), Some(Choice::All)] {
+        let choices: Vec<(usize, Choice)> = choice.map(|c| (3, c)).into_iter().collect();
+        let got = plan_with(&t, &b, &ALL, &[(3, 3)], &choices);
+        assert_eq!(got, Err(PlanError::Withheld { row: 3, matches: 3, why: Why::EditFormatDiffers }), "{choice:?}");
+    }
+}
+
+/// Identical rows whose choice was withheld: an update or a delete of a row that matches several
+/// is refused with the count and the cause, whatever was chosen; a row that matches one is
+/// planned as before.
+#[test]
+fn withheld_duplicates_are_refused_with_their_count_and_cause() {
+    use crate::engine::{Version, Why};
+    let mut t = by_values(Duplicates::Withheld);
+    t.withheld = Some(Why::VersionTooOld { needed: Version::new(8, 0, 17) });
+    let mut u = EditBatch::new();
+    u.set(&[(3, 1)], &text("x"), orig);
+    let mut d = EditBatch::new();
+    d.delete(&[3], orig);
+    let why = Why::VersionTooOld { needed: Version::new(8, 0, 17) };
+    for b in [&u, &d] {
+        for choice in [None, Some(Choice::One), Some(Choice::All)] {
+            let choices: Vec<(usize, Choice)> = choice.map(|c| (3, c)).into_iter().collect();
+            let got = plan_with(&t, b, &ALL, &[(3, 2)], &choices);
+            assert_eq!(got, Err(PlanError::Withheld { row: 3, matches: 2, why: why.clone() }));
+        }
+        assert!(plan_with(&t, b, &ALL, &[(3, 1)], &[]).is_ok(), "one match is the row");
+    }
+    // A withheld choice without its cause is said as not checked.
+    t.withheld = None;
+    let got = plan_with(&t, &u, &ALL, &[(3, 2)], &[]);
+    assert_eq!(got, Err(PlanError::Withheld { row: 3, matches: 2, why: Why::NotChecked }));
 }
 
 #[test]

@@ -266,6 +266,49 @@ fn identical_rows_of_a_keyless_table_are_a_choice_only_when_every_column_is_show
     assert_eq!(resolve(&names, &none, &s), Err(ReadOnly::NoExactColumn));
 }
 
+/// A choice among identical rows is kept only where it is shown to rest on one session; else it
+/// is withheld with the reason. Only a choice changes; the format it was checked for is kept, and
+/// a target asked for another format withholds it.
+#[test]
+fn a_choice_not_shown_to_rest_on_one_session_is_withheld() {
+    use crate::driver::{EditFormat, MySqlEdit};
+    use crate::engine::{Fact, Why};
+    let s = table(&[("a", false), ("b", false)], None);
+    let cols = [int("a", 1), int("b", 2)];
+    let choose = resolve(&["a", "b"], &cols, &s).unwrap();
+    assert_eq!((&choose.withheld, choose.choice_format), (&None, None));
+    let f = EditFormat::MySql(MySqlEdit { nowait: true });
+    let other = EditFormat::MySql(MySqlEdit { nowait: false });
+    let mut t = choose.clone();
+    t.choice_on(Fact::Known(()), f);
+    assert_eq!(t.identity, choose.identity, "kept");
+    assert_eq!((&t.withheld, t.choice_format), (&None, Some(f)));
+    assert_eq!(*t.for_format(f), t, "the same format: as it is");
+    let moved = t.for_format(other);
+    assert_eq!(moved.identity, Identity::Values { columns: vec![0, 1], duplicates: Duplicates::Withheld });
+    assert_eq!(moved.withheld, Some(Why::EditFormatDiffers));
+    for why in [Fact::No(Why::SessionsDiffer), Fact::Unknown(Why::NotChecked), Fact::No(Why::NotBuilt)] {
+        let mut t = choose.clone();
+        t.choice_on(why.clone(), f);
+        assert_eq!(t.identity, Identity::Values { columns: vec![0, 1], duplicates: Duplicates::Withheld });
+        let (Fact::No(w) | Fact::Unknown(w)) = why else { unreachable!() };
+        assert_eq!((t.withheld, t.choice_format), (Some(w), Some(f)));
+    }
+    // A choice never checked is not one in any format.
+    assert_eq!(choose.for_format(f).withheld, Some(Why::EditFormatDiffers));
+    // Refused, unseen and key-found rows stay as they are.
+    let refuse = resolve(&["a", "b"], &[int("a", 1)], &s).unwrap();
+    let unseen =
+        resolve(&["a", "b"], &cols, &TableStructure { hidden: vec![StructureGroup::Columns], ..s.clone() }).unwrap();
+    let keyed = resolve(&["a", "b"], &cols, &table(&[("a", true), ("b", false)], Some(&["a"]))).unwrap();
+    for x in [refuse, unseen, keyed] {
+        let mut t = x.clone();
+        t.choice_on(Fact::No(Why::SessionsDiffer), f);
+        assert_eq!((&t.identity, &t.withheld), (&x.identity, &None));
+        assert_eq!(*t.for_format(other), t);
+    }
+}
+
 #[test]
 fn a_table_keyed_only_by_a_unique_key_the_result_lacks_never_has_duplicates() {
     let s = unique(table(&[("email", true), ("name", false)], None), &["email"]);

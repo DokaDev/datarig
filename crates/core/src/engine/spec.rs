@@ -196,6 +196,17 @@ pub trait EditRules: Sync {
     /// The SQL a session on the server of `f` takes for edits of a result's rows, or why it
     /// takes none.
     fn writer(&self, f: &ServerFacts) -> Fact<EditFormat>;
+
+    /// Whether a choice among rows the same in every column (change one of them, or all) may
+    /// be offered when the table's structure was read by the session of `structure_by`, the
+    /// change is applied by the session of `applied_by`, and it is written in `format`. `None`:
+    /// that session has not said what its server is.
+    fn duplicates_choice(
+        &self,
+        structure_by: Option<&ServerFacts>,
+        applied_by: Option<&ServerFacts>,
+        format: EditFormat,
+    ) -> Support;
 }
 
 /// How an engine's catalogue names what a result reads.

@@ -9,6 +9,8 @@
 "engine.why.version_too_old" = "서버 버전이 {needed}보다 낮음"
 "engine.why.feature_off" = "서버에서 {feature}이(가) 꺼져 있음"
 "engine.why.marker_unconfirmed" = "이 탭의 세션을 서버에서 확인할 수 없음"
+"engine.why.sessions_differ" = "이 연결의 세션들이 같은 엔진과 버전을 보고한다고 datarig가 확인할 수 없습니다"
+"engine.why.edit_format_differs" = "이 편집 방식이 적용할 세션이 쓰는 방식과 다릅니다"
 "engine.unconfirmed" = "서버 엔진을 확인할 수 없습니다: VERSION()이 답하지 않아(인사말로는 {greeting}) 다른 것을 실행하기 전에 세션을 닫았습니다"
 "engine.reports_changed" = "확인한 뒤에 서버 인사말과 VERSION()이 두 엔진을 가리키는 것으로 드러났습니다. 아무것도 보내지 않았습니다. 다시 실행하면 두 엔진의 규칙으로 새로 확인합니다"
 "engine.comment_unsupported" = "MariaDB 전용 실행 주석(`/*M! … */`)은 여기서 지원하지 않습니다. 대신 `/*! … */`를 쓰세요. 아무것도 보내지 않았습니다"

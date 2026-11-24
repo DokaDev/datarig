@@ -19,6 +19,8 @@
 mod catalogue;
 #[path = "engine_conformance/context.rs"]
 mod context;
+#[path = "engine_conformance/edit.rs"]
+mod edit;
 #[path = "engine_conformance/export.rs"]
 mod export;
 #[path = "engine_conformance/filter.rs"]
@@ -303,6 +305,11 @@ fn session_rules_on_every_engine() {
 }
 
 #[test]
+fn duplicates_choice_on_every_engine() {
+    run("duplicates choice", &edit::cases(), edit::choice);
+}
+
+#[test]
 fn read_only_open_on_every_engine() {
     run("read-only open", &read_only::cases(), read_only::verdict);
 }
@@ -352,6 +359,7 @@ fn every_case_names_every_engine() {
         named("catalogue rules", &catalogue::catalogue_cases()),
         named("ddl rules", &catalogue::ddl_cases()),
         named("hierarchy", &catalogue::hierarchy_cases()),
+        named("duplicates choice", &edit::cases()),
     ]
     .into_iter()
     .flatten()

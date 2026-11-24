@@ -193,6 +193,8 @@ struct ModelKey {
     zone: Option<String>,
     /// Made from what an Apply changed (no change pending).
     applied: bool,
+    /// Made from the statements of an Apply of the changes that is sent and not answered.
+    sending: bool,
     /// The tab's dialect and the session's values the rows were read in: whether a value as read
     /// is shown whole.
     dialect: Dialect,
@@ -414,6 +416,8 @@ impl App {
         let t = self.tabs.get(tab)?;
         let rs = rows_of(t).filter(|rs| rs.id == result)?;
         let Target::Ready(target) = &rs.edit.target else { return None };
+        // One or all of identical rows, as the sessions stand now.
+        let target = self.judged_target(t, rs, target, format);
         let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
         let key = ModelKey {
             result,
@@ -424,6 +428,7 @@ impl App {
             before_new: rs.rows.len() + rs.edit.applied_new(),
             zone: zone.map(str::to_string),
             applied: rs.edit.batch.is_empty() && rs.edit.applied.is_some(),
+            sending: sending(rs),
             dialect: self.tab_dialect(t.id),
             read_in: rs.read_in.clone(),
             text: t.exec.text.clone(),
@@ -434,13 +439,13 @@ impl App {
         let cache = &rs.edit.changes;
         if let Some((k, x, m)) = &*cache.made.borrow()
             && *k == key
-            && *x == **target
+            && *x == *target
         {
             return Some(m.clone());
         }
-        let m = Arc::new(self.make_changes(t, rs, target, format, zone));
+        let m = Arc::new(self.make_changes(t, rs, &target, format, zone));
         cache.builds.set(cache.builds.get() + 1);
-        *cache.made.borrow_mut() = Some((key, (**target).clone(), m.clone()));
+        *cache.made.borrow_mut() = Some((key, target.into_owned(), m.clone()));
         Some(m)
     }
 
@@ -479,6 +484,15 @@ impl App {
         let f = edit::format(format);
         let dialect = f.language().dialect();
         let names: Vec<String> = rs.columns.iter().map(|c| c.meta.name.clone()).collect();
+        // Sent and not answered: the statements sent, as they were judged when sent.
+        if let Some(a) = rs.edit.applying.as_deref().filter(|_| sending(rs)) {
+            let list = list_lines(target, batch, &names);
+            let entries = entries(&[], &list, |at| or_unknown(row_pointer(Some(target), batch, &names, at)));
+            let sql = self.step_lines(&a.steps, dialect);
+            let planned = Planned::Sent(a.steps.clone());
+            let problems = Vec::new();
+            return ChangesModel { title, summary, problems, list, entries, sql, dialect, planned, why_not: None };
+        }
         if let Some(a) = applied {
             let list = list_lines(target, batch, &names);
             let entries = entries(&[], &list, |at| or_unknown(row_pointer(Some(target), batch, &names, at)));
@@ -645,6 +659,7 @@ impl App {
             PlanError::Ambiguous { matches, .. } => Msg::EditPreviewAmbiguous { count: *matches },
             PlanError::Unseen { matches, .. } => Msg::EditPreviewUnseen { count: *matches },
             PlanError::Choose { matches, .. } => Msg::EditPreviewChoose { count: *matches },
+            PlanError::Withheld { matches, why, .. } => withheld_text(*matches, why),
             PlanError::NoOneOfK { row: r } => {
                 let count = matches.get(r).copied().unwrap_or(0);
                 Msg::EditPreviewNoOneOfK { count }
@@ -702,6 +717,32 @@ impl App {
     }
 }
 
+/// An Apply of `rs`'s changes as they are is sent and not answered yet.
+fn sending(rs: &ResultSet) -> bool {
+    rs.edit.applying.as_ref().is_some_and(|a| a.batch == rs.edit.batch)
+}
+
+/// Why a row that matches `count` identical rows is not offered one or all of them, in words
+/// for `why`. `EditRules::duplicates_choice` gives only the first five reasons, and an engine
+/// that takes no edits its own; any other is said as the nearest of them.
+pub(super) fn withheld_text(count: u64, why: &datarig_core::engine::Why) -> Msg {
+    use datarig_core::engine::Why as W;
+    match why {
+        W::SessionsDiffer | W::VersionsDisagree | W::EnginesDisagree => {
+            Msg::EditPreviewWithheldSessionsDiffer { count }
+        }
+        W::EditFormatDiffers => Msg::EditPreviewWithheldEditFormatDiffers { count },
+        W::VersionTooOld { needed } => Msg::EditPreviewWithheldVersionTooOld {
+            count,
+            needed: format!("{}.{}.{}", needed.major, needed.minor, needed.patch),
+        },
+        W::NotBuilt | W::NotOnEngine => Msg::EditPreviewWithheldNotBuilt { count },
+        W::NotChecked | W::VersionUnknown | W::FeatureOff(_) | W::MarkerUnconfirmed => {
+            Msg::EditPreviewWithheldNotChecked { count }
+        }
+    }
+}
+
 /// `p`, or `?` for a row not found.
 fn or_unknown(p: Option<Pointer>) -> Pointer {
     p.unwrap_or_else(|| Pointer::Key("?".into()))
@@ -750,6 +791,7 @@ fn problem_at(e: &PlanError) -> Option<(RowAt, Option<usize>)> {
         | PlanError::Ambiguous { row, .. }
         | PlanError::Unseen { row, .. }
         | PlanError::Choose { row, .. }
+        | PlanError::Withheld { row, .. }
         | PlanError::NoOneOfK { row } => Some((RowAt::Read(*row), None)),
         PlanError::Internal(_) => None,
     }

@@ -11,6 +11,7 @@ use datarig_core::driver::{
     Driver, EditFormat, KeyCatalog, MySqlEdit, PagingMode, Session, SessionRole, TxRule, TxStep,
 };
 use datarig_core::edit::{self, Choice, EditBatch, EditTarget, Expect, Facts, Plan, PlanError, Value};
+use datarig_core::engine::{Fact, ServerFacts};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::{Dialect, Language};
 use datarig_driver_mysql::MyDriver;
@@ -148,6 +149,8 @@ struct Conn {
     id: u64,
     dialect: Dialect,
     edit: Option<EditFormat>,
+    /// What the session found its server to be.
+    facts: Option<std::sync::Arc<ServerFacts>>,
 }
 
 impl Conn {
@@ -161,11 +164,12 @@ impl Conn {
         let tag = format!("it{}-apply", std::process::id());
         let opts = ConnectOptions::new(page, role, &tag).read_only(read_only);
         let session = MyDriver.connect(&profile(url), role, opts, tx);
-        let mut c = Conn { session, rx, id: 0, dialect: Dialect::MySql(Default::default()), edit: None };
+        let mut c = Conn { session, rx, id: 0, dialect: Dialect::MySql(Default::default()), edit: None, facts: None };
         for ev in c.collect(|e| matches!(e, DbEvent::Edit(_)), 15).await {
             match ev {
                 DbEvent::Language(Language::Sql(d)) => c.dialect = d,
                 DbEvent::Edit(f) => c.edit = f,
+                DbEvent::Server(f) => c.facts = Some(f),
                 _ => {}
             }
         }
@@ -259,7 +263,12 @@ impl Conn {
     }
 }
 
-async fn meta(url: &str, t: &Table) -> (KeyCatalog, datarig_core::driver::structure::TableStructure) {
+/// The keys and `t`'s structure, read by a metadata session of its own, with what that session
+/// found its server to be.
+async fn meta(
+    url: &str,
+    t: &Table,
+) -> (KeyCatalog, datarig_core::driver::structure::TableStructure, Option<std::sync::Arc<ServerFacts>>) {
     let mut m = Conn::open(url, SessionRole::Meta, false).await;
     m.session.send(DbCommand::LoadKeys);
     let keys = match m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await {
@@ -271,7 +280,7 @@ async fn meta(url: &str, t: &Table) -> (KeyCatalog, datarig_core::driver::struct
         DbEvent::Structure { result, .. } => *result.expect("structure"),
         _ => unreachable!(),
     };
-    (keys, structure)
+    (keys, structure, m.facts)
 }
 
 struct Editing {
@@ -282,11 +291,16 @@ struct Editing {
 
 impl Editing {
     async fn new(url: &str, c: &mut Conn, t: &Table, select: &str) -> Editing {
-        let (keys, structure) = meta(url, t).await;
+        let (keys, structure, structure_by) = meta(url, t).await;
         let (columns, rows) = c.read(select).await;
-        let format = edit::format(c.edit.expect("the server takes edits"));
+        let f = c.edit.expect("the server takes edits");
+        let format = edit::format(f);
         let source = edit::source(c.dialect, Some(&keys), &columns, select).expect("an editable result");
-        let target = source.target(&structure, &*format).expect("an editable target");
+        let mut target = source.target(&structure, &*format).expect("an editable target");
+        // One or all of identical rows, checked as the app checks it: on what the structure's
+        // session and this one found their server to be.
+        let Fact::Known(rules) = c.dialect.engine().spec().edit else { panic!("the engine takes edits") };
+        target.choice_on(rules.duplicates_choice(structure_by.as_deref(), c.facts.as_deref(), f), f);
         Editing { target, rows, format }
     }
 

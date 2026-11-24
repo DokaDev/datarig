@@ -179,11 +179,44 @@ impl App {
             && self.edit_bound(t) == Some(p.bound.clone())
     }
 
+    /// Why the open preview no longer stands for what `y` would apply, asked when `y` is pressed:
+    /// the tab's edit format is not the one it was opened in, or one or all of identical rows it
+    /// offers is not offered now, as the sessions stand ([`App::duplicates_choice_now`]).
+    fn edit_preview_choice_gone(&self) -> Option<datarig_core::engine::Why> {
+        use datarig_core::engine::Why as W;
+        let p = self.overlays.edit_preview()?;
+        if self.tab_edit_format(p.tab) != Some(p.format) {
+            return Some(W::EditFormatDiffers);
+        }
+        let t = self.tabs.get(p.tab)?;
+        let rs = rows_of(t).filter(|rs| rs.id == p.result)?;
+        if !rs.edit.checks.matches().values().any(|&n| n > 1) {
+            return None;
+        }
+        self.judged_target(t, rs, &p.target, p.format).withheld.clone()
+    }
+
     /// After every event: the preview closes when it is no longer current, and says so.
     pub(super) fn sweep_edit_preview(&mut self) {
         if self.overlays.edit_preview().is_some() && !self.edit_preview_current() {
             self.overlays.close(OverlayKind::EditPreview);
             self.flash(Notice::new(Label::EditPreviewClosed, Level::Info));
+        }
+    }
+
+    /// Why the open preview no longer stands for what `y` would apply, as the Changes tab words
+    /// it for the most rows one of its rows matches.
+    fn edit_preview_gone_words(&self, why: &datarig_core::engine::Why) -> Msg {
+        let rs = self
+            .overlays
+            .edit_preview()
+            .and_then(|p| self.tabs.get(p.tab).and_then(rows_of).filter(|rs| rs.id == p.result));
+        let count = rs.and_then(|rs| rs.edit.checks.matches().values().copied().max()).unwrap_or(0);
+        // A preview that offers no choice among identical rows (it confirms a write): the reason
+        // alone.
+        match count > 1 {
+            true => super::changes::withheld_text(count, why),
+            false => crate::app::engine_why::why_text(why),
         }
     }
 
@@ -289,10 +322,13 @@ impl App {
     /// `c`: every statement of the plan, in order, to the clipboard.
     fn edit_preview_copy(&mut self) {
         let Some(m) = self.edit_preview_model() else { return };
-        let Planned::Ready(plan) = &m.planned else {
-            return self.flash(Notice::new(Label::EditPreviewNothingToCopy, Level::Info));
+        let steps = match &m.planned {
+            Planned::Ready(plan) => &plan.steps,
+            // Sent and not answered yet: what was sent.
+            Planned::Sent(steps) => steps,
+            _ => return self.flash(Notice::new(Label::EditPreviewNothingToCopy, Level::Info)),
         };
-        self.copy_steps(&plan.steps);
+        self.copy_steps(steps);
     }
 
     /// Statements `steps`, in order and whole, to the clipboard: each as it is sent, with `;`
@@ -316,11 +352,18 @@ impl App {
         if self.applying(p.tab, p.result) {
             return self.say_cant_apply(self.i18n.label(Label::EditApplying).to_string());
         }
+        // Judged again right before anything is sent: the format, and one or all of identical
+        // rows as the sessions stand now. Nothing is sent; the preview closes, saying why.
+        if let Some(why) = self.edit_preview_choice_gone() {
+            let reason = self.i18n.msg(&self.edit_preview_gone_words(&why)).to_string();
+            self.overlays.close(OverlayKind::EditPreview);
+            return self.say_cant_apply(reason);
+        }
         let Some(m) = self.edit_preview_model() else { return };
         let Planned::Ready(plan) = &m.planned else {
             return self.say_cant_apply(m.why_not.clone().unwrap_or_default());
         };
-        let (tab, result, bound) = (p.tab, p.result, p.bound.clone());
+        let (tab, result, bound, format) = (p.tab, p.result, p.bound.clone(), p.format);
         // A run, a statement waiting for its connection, a commit or rollback not answered (the
         // app's own for an idle transaction too): the Apply would land in what that leaves.
         if self.tab_busy(tab) {
@@ -332,8 +375,8 @@ impl App {
             p.again = true;
             return;
         }
-        // Asked again: the connection, its environment and the rows' binding.
-        if self.edit_gate().is_none_or(|(_, _, b)| b != bound) || !self.edit_preview_current() {
+        // Asked again: the connection, its environment, the format and the rows' binding.
+        if self.edit_gate().is_none_or(|(_, f, b)| b != bound || f != format) || !self.edit_preview_current() {
             return self.overlays.close(OverlayKind::EditPreview);
         }
         let tx = match self.tabs.get(tab) {

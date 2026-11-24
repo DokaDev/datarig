@@ -14,6 +14,7 @@
 use super::batch::{Counts, Draft, EditBatch, RowEdit};
 use super::sql::{EditSql, Exactness, Scope, Value};
 use super::target::{ColumnReason, Duplicates, EditTarget, Identity, TableColumn, TableRef, Write};
+use crate::engine::Why;
 use crate::sql::dialect::Language;
 use crate::sql::lexer::{Tok, Token, lex_in};
 use crate::sql::risk::{Class, Classifier};
@@ -119,6 +120,9 @@ pub enum PlanError {
     Unseen { row: usize, matches: u64 },
     /// The row matches several rows the same in every column: one, or all?
     Choose { row: usize, matches: u64 },
+    /// The row matches several rows the same in every column, but one or all is not offered
+    /// ([`super::Duplicates::Withheld`]), for `why`.
+    Withheld { row: usize, matches: u64, why: Why },
     /// The format cannot change just one of several rows.
     NoOneOfK { row: usize },
     /// A new row leaves a column to its default that has none and takes no NULL: the server
@@ -339,6 +343,16 @@ fn row_checks(
             Some(k) => match (duplicates, facts.choices.get(&row)) {
                 (Duplicates::Refuse, _) => return Err(PlanError::Ambiguous { row, matches: k }),
                 (Duplicates::Unseen, _) => return Err(PlanError::Unseen { row, matches: k }),
+                (Duplicates::Withheld, _) => {
+                    let why = t.withheld.clone().unwrap_or(Why::NotChecked);
+                    return Err(PlanError::Withheld { row, matches: k, why });
+                }
+                // A choice never checked against the sessions that read and apply it
+                // ([`EditTarget::choice_on`]), or checked for another format, is not offered.
+                (Duplicates::Choose, _) if t.choice_checked_for(f.edit_format()).is_err() => {
+                    let why = t.choice_checked_for(f.edit_format()).err().unwrap_or(Why::NotChecked);
+                    return Err(PlanError::Withheld { row, matches: k, why });
+                }
                 (Duplicates::Choose, None) => return Err(PlanError::Choose { row, matches: k }),
                 (Duplicates::Choose, Some(Choice::All)) => (k, Scope::All),
                 (Duplicates::Choose, Some(Choice::One)) => (k, Scope::One),

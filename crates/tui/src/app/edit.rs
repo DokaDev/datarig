@@ -27,9 +27,10 @@ use crate::widgets::text_input::InputResult;
 use datarig_core::driver::structure::{ColumnFill, TableStructure};
 use datarig_core::driver::{ArrayElement, Cell, ColumnMeta, DbError, EditFormat, ValueKind};
 use datarig_core::edit::{
-    self, BitsForm, BytesForm, ColumnReason, EditBatch, EditSource, EditTarget, Expect, Identity, Invalid, ReadOnly,
-    TableColumn, Value, Write,
+    self, BitsForm, BytesForm, ColumnReason, Duplicates, EditBatch, EditSource, EditTarget, Expect, Identity, Invalid,
+    ReadOnly, TableColumn, Value, Write,
 };
+use datarig_core::engine::{Fact, Support, Why as CoreWhy};
 use datarig_core::export;
 use ratatui::style::{Color, Style};
 use std::ops::Range;
@@ -171,6 +172,26 @@ pub struct EditState {
     /// session reads it the same. It is the cell's only while that action gave its pending value
     /// ([`EditState::pasted_style`]).
     pub styled: Vec<PastedStyle>,
+    /// Where the resolved target's table structure was read, and the format it was made in.
+    structure_from: Option<StructureFrom>,
+}
+
+/// The session a result's table structure was read on and the format its target was made in: a
+/// choice among identical rows is judged on what that session and the tab's own session say of
+/// their servers when it is used, not when the structure came.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StructureFrom {
+    profile: ProfileId,
+    session: StructureSession,
+    format: EditFormat,
+}
+
+/// Which session read a structure: the profile's metadata session of one attempt, or another
+/// database's session of one id (a session opened again has another).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum StructureSession {
+    Meta { generation: u64 },
+    Aux { database: String, id: u64 },
 }
 
 /// The text of a value as read that a change writes as it is (a copy in the grid, a clone): an
@@ -1721,7 +1742,16 @@ impl App {
                 rs.edit.target = match result {
                     Err(_) => Target::ReadOnly { why: Why::Structure(error.to_string()), retry: true },
                     Ok(s) => match w.source.target(s, &*edit::format(w.format)) {
-                        Ok(t) => Target::Ready(Box::new(t)),
+                        Ok(t) => {
+                            let session = match (&w.database, w.aux) {
+                                (None, _) => Some(StructureSession::Meta { generation: w.generation }),
+                                (Some(db), Some(id)) => Some(StructureSession::Aux { database: db.clone(), id }),
+                                (Some(_), None) => None,
+                            };
+                            rs.edit.structure_from =
+                                session.map(|session| StructureFrom { profile, session, format: w.format });
+                            Target::Ready(Box::new(t))
+                        }
                         Err(r) => Target::ReadOnly { why: Why::Rows(r), retry: false },
                     },
                 };
@@ -1764,6 +1794,55 @@ impl App {
     fn open_aux(&self, profile: ProfileId, database: Option<&str>) -> Option<u64> {
         let a = self.conns.aux(profile, database?)?;
         a.session.is_some().then_some(a.id)
+    }
+
+    /// Whether one or all of identical rows of `rs` (shown in tab `t`) may be offered for edits
+    /// written in `format` now: by what the session that read its structure (while it is still
+    /// that session) and the tab's own session say of their servers now, and the tab's engine.
+    /// A server whose engine takes no edits (one its profile's other sessions' word let the grid
+    /// edit) gives its reason.
+    pub(super) fn duplicates_choice_now(&self, t: &Tab, rs: &ResultSet, format: EditFormat) -> Support {
+        let Some(from) = &rs.edit.structure_from else { return Fact::Unknown(CoreWhy::NotChecked) };
+        let structure_by = match &from.session {
+            StructureSession::Meta { generation } => self
+                .conns
+                .get(from.profile)
+                .filter(|c| c.generation == *generation && c.meta.is_some())
+                .and_then(|c| c.facts.clone()),
+            StructureSession::Aux { database, id } => self
+                .conns
+                .aux(from.profile, database)
+                .filter(|a| a.id == *id && a.session.is_some())
+                .and_then(|a| a.facts.clone()),
+        };
+        let applied_by = t.exec.current_facts().map(|f| &**f);
+        let choice = match &self.tab_dialect(t.id).engine().spec().edit {
+            Fact::Known(rules) => rules.duplicates_choice(structure_by.as_deref(), applied_by, format),
+            Fact::No(why) => Fact::No(why.clone()),
+            Fact::Unknown(why) => Fact::Unknown(why.clone()),
+        };
+        match choice {
+            // The target was made in another format: what compares exactly may differ.
+            Fact::Known(()) if from.format != format => Fact::No(CoreWhy::EditFormatDiffers),
+            other => other,
+        }
+    }
+
+    /// `target` (of `rs`, shown in tab `t`) with its choice among identical rows judged now for
+    /// edits written in `format` ([`App::duplicates_choice_now`]).
+    pub(super) fn judged_target<'a>(
+        &self,
+        t: &Tab,
+        rs: &ResultSet,
+        target: &'a EditTarget,
+        format: EditFormat,
+    ) -> std::borrow::Cow<'a, EditTarget> {
+        if !matches!(target.identity, Identity::Values { duplicates: Duplicates::Choose, .. }) {
+            return std::borrow::Cow::Borrowed(target);
+        }
+        let mut judged = target.clone();
+        judged.choice_on(self.duplicates_choice_now(t, rs, format), format);
+        std::borrow::Cow::Owned(judged)
     }
 
     /// Why the result's rows cannot be edited, as the status line says it.

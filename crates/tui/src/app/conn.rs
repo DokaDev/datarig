@@ -325,6 +325,10 @@ pub struct AuxMeta {
     /// server reported and answered, for the session view. Cleared when the session ends or
     /// opens again.
     pub read_only_unconfirmed: Option<String>,
+    /// What its current session found its server to be (`DbEvent::Server`); `None` until it
+    /// says, and from when that session ends (lost, failed, closed for being idle) or opens
+    /// again.
+    pub facts: Option<std::sync::Arc<datarig_core::engine::ServerFacts>>,
 }
 
 #[derive(Default)]
@@ -437,6 +441,7 @@ impl ConnectionManager {
             used: now,
             tree: Tree::new(),
             read_only_unconfirmed: None,
+            facts: None,
         });
         id
     }
@@ -449,6 +454,7 @@ impl ConnectionManager {
         let a = self.aux.iter_mut().find(|a| a.id == id)?;
         a.id = next;
         a.read_only_unconfirmed = None;
+        a.facts = None;
         Some(next)
     }
 

@@ -17,6 +17,8 @@ fn every_why_has_a_text_in_en_and_ko() {
         Why::VersionTooOld { needed: Version::new(8, 0, 17) },
         Why::FeatureOff(Feature::PerformanceSchema),
         Why::MarkerUnconfirmed,
+        Why::SessionsDiffer,
+        Why::EditFormatDiffers,
     ];
     // A new reason fails to compile here until it is listed above.
     for why in &all {
@@ -29,7 +31,9 @@ fn every_why_has_a_text_in_en_and_ko() {
             | Why::NotBuilt
             | Why::VersionTooOld { .. }
             | Why::FeatureOff(Feature::PerformanceSchema)
-            | Why::MarkerUnconfirmed => {}
+            | Why::MarkerUnconfirmed
+            | Why::SessionsDiffer
+            | Why::EditFormatDiffers => {}
         }
     }
     for lang in [Lang::En, Lang::Ko] {

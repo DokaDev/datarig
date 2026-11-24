@@ -398,6 +398,11 @@ impl App {
             self.apply_wait = None;
             return self.ask_ended(Label::EditAskCancelled);
         }
+        // One format per Apply: what it decides and what the Changes tab shows are in it.
+        if self.tab_edit_format(w.tab) != Some(w.format) {
+            self.apply_wait = None;
+            return self.ask_ended(Label::EditAskFormatChanged);
+        }
         let Some(rs) = rows_of(self.tab()) else { return };
         // The counts are those of this revision: the Changes tab may have counted it afresh
         // meanwhile, and the Apply then takes those answers.

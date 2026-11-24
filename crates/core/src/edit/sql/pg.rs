@@ -66,6 +66,10 @@ impl EditSql for Postgres {
         &[Offer::Primary, Offer::Unique, Offer::Values]
     }
 
+    fn edit_format(&self) -> crate::driver::EditFormat {
+        crate::driver::EditFormat::Postgres
+    }
+
     /// The types of [`EXACT`]; `numeric` only with a scale (every value has it, so `1.5` is not
     /// also `1.50`); an enum (its labels); arrays, floats, JSON, XML, intervals (`1 day` is
     /// `24 hours`), time zones of times, network addresses, geometry and every other type

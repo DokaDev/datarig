@@ -3,9 +3,11 @@
 use super::sql::{ColumnInfo, EditSql, Exactness, Offer};
 use crate::driver::keys::{NotInsertable, single_table};
 use crate::driver::structure::{ColumnFill, Index, RelationKind, StructureColumn, StructureGroup, TableStructure};
-use crate::driver::{ColumnMeta, KeyCatalog, ValueKind};
+use crate::driver::{ColumnMeta, EditFormat, KeyCatalog, ValueKind};
+use crate::engine::{Fact, Support, Why};
 use crate::sql::dialect::Dialect;
 use crate::sql::lexer::{Tok, Token, lex_in};
+use std::borrow::Cow;
 
 /// A table by schema and name, as the catalog has them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -188,6 +190,9 @@ pub enum Duplicates {
     /// The rows would be [`Duplicates::Choose`], but the server may not list every column of
     /// the table to this user (a grant of single columns): they may differ in the others.
     Unseen,
+    /// The rows would be [`Duplicates::Choose`], but the choice is not shown to rest on the
+    /// session that applies it ([`EditTarget::withheld`] says why): refused.
+    Withheld,
 }
 
 /// How a row of the result is found in the table.
@@ -213,6 +218,11 @@ pub struct EditTarget {
     /// The table's columns the result does not show that a new row must be given a value:
     /// `NOT NULL`, no default expression, neither numbered nor computed by the table.
     pub unshown_required: Vec<String>,
+    /// Why rows the same in every column are [`Duplicates::Withheld`].
+    pub withheld: Option<Why>,
+    /// The format the choice among rows the same in every column was checked for
+    /// ([`EditTarget::choice_on`]); `None` until it is.
+    pub choice_format: Option<EditFormat>,
 }
 
 impl EditTarget {
@@ -229,6 +239,48 @@ impl EditTarget {
     pub fn allows(&self, i: usize, w: Write) -> Result<&TableColumn, ColumnReason> {
         let c = self.columns.get(i).and_then(Option::as_ref).ok_or(ColumnReason::Computed)?;
         c.allows(w).map(|()| c)
+    }
+
+    /// The choice among rows the same in every column, checked for edits written in `format`:
+    /// kept where `s` is known, else withheld with its reason. Nothing else changes.
+    pub fn choice_on(&mut self, s: Support, format: EditFormat) {
+        self.choice_format = Some(format);
+        let Identity::Values { duplicates, .. } = &mut self.identity else { return };
+        if *duplicates != Duplicates::Choose {
+            return;
+        }
+        match s {
+            Fact::Known(()) => {}
+            Fact::No(why) | Fact::Unknown(why) => {
+                *duplicates = Duplicates::Withheld;
+                self.withheld = Some(why);
+            }
+        }
+    }
+
+    /// Whether the choice among rows the same in every column was checked
+    /// ([`EditTarget::choice_on`]) for edits written in format `f`, and why not.
+    pub fn choice_checked_for(&self, f: EditFormat) -> Result<(), Why> {
+        match self.choice_format {
+            Some(checked) if checked == f => Ok(()),
+            Some(_) => Err(Why::EditFormatDiffers),
+            None => Err(Why::NotChecked),
+        }
+    }
+
+    /// The target as it stands for edits written in format `f`: a choice checked for another
+    /// format (or not checked) is withheld.
+    pub fn for_format(&self, f: EditFormat) -> Cow<'_, EditTarget> {
+        let choose = matches!(self.identity, Identity::Values { duplicates: Duplicates::Choose, .. });
+        if !choose || self.choice_format == Some(f) {
+            return Cow::Borrowed(self);
+        }
+        let mut t = self.clone();
+        if let Identity::Values { duplicates, .. } = &mut t.identity {
+            *duplicates = Duplicates::Withheld;
+        }
+        t.withheld = Some(Why::EditFormatDiffers);
+        Cow::Owned(t)
     }
 }
 
@@ -332,6 +384,14 @@ impl EditSource {
             .filter(|c| !shown(&c.name) && c.not_null && c.default.is_none() && c.fill == ColumnFill::Default)
             .map(|c| c.name.clone())
             .collect();
-        Ok(EditTarget { table: self.table.clone(), columns, identity, all_columns_shown, unshown_required })
+        Ok(EditTarget {
+            table: self.table.clone(),
+            columns,
+            identity,
+            all_columns_shown,
+            unshown_required,
+            withheld: None,
+            choice_format: None,
+        })
     }
 }

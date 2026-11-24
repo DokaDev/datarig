@@ -95,6 +95,11 @@ impl EditSql for Fake {
         self.offers
     }
 
+    /// PostgreSQL's, whose language it writes.
+    fn edit_format(&self) -> crate::driver::EditFormat {
+        crate::driver::EditFormat::Postgres
+    }
+
     fn exactness(&self, c: &ColumnInfo) -> Exactness {
         match c.kind {
             ValueKind::Float => Exactness::Inexact(Inexact::Approximate),

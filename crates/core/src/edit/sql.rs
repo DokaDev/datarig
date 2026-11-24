@@ -98,6 +98,9 @@ pub trait EditSql {
     /// The language its statements are written in (the planner reads them back in it).
     fn language(&self) -> Language;
 
+    /// The format it writes ([`format`] gives it back for it).
+    fn edit_format(&self) -> crate::driver::EditFormat;
+
     /// Table `t` as its statements name it, exactly (the planner finds it there).
     fn table(&self, t: &TableRef) -> String;
 

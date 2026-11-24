@@ -16,6 +16,7 @@ use datarig_core::driver::{
     Driver, EditFormat, KeyCatalog, PagingMode, Session, SessionRole, TxRule, TxStep,
 };
 use datarig_core::edit::{self, Choice, EditBatch, EditTarget, Expect, Facts, Plan, Value};
+use datarig_core::engine::{EngineId, Fact};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::Dialect;
 use datarig_driver_postgres::PgDriver;
@@ -204,7 +205,11 @@ impl Editing {
         let (columns, rows) = c.read(select).await;
         let format = edit::format(EditFormat::Postgres);
         let source = edit::source(Dialect::Postgres, Some(&keys), &columns, select).expect("an editable result");
-        let target = source.target(&structure, &*format).expect("an editable target");
+        let mut target = source.target(&structure, &*format).expect("an editable target");
+        // One or all of identical rows, checked as the app checks it (PostgreSQL's answer needs no
+        // facts of the sessions).
+        let Fact::Known(rules) = EngineId::Postgres.spec().edit else { panic!("PostgreSQL takes edits") };
+        target.choice_on(rules.duplicates_choice(None, None, EditFormat::Postgres), EditFormat::Postgres);
         Editing { target, rows, format }
     }
 
