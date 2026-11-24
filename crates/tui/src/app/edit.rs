@@ -27,8 +27,8 @@ use crate::widgets::text_input::InputResult;
 use datarig_core::driver::structure::{ColumnFill, TableStructure};
 use datarig_core::driver::{ArrayElement, Cell, ColumnMeta, DbError, EditFormat, ValueKind};
 use datarig_core::edit::{
-    self, ColumnReason, EditBatch, EditSource, EditTarget, Expect, Identity, Invalid, ReadOnly, TableColumn, Value,
-    Write,
+    self, BitsForm, BytesForm, ColumnReason, EditBatch, EditSource, EditTarget, Expect, Identity, Invalid, ReadOnly,
+    TableColumn, Value, Write,
 };
 use datarig_core::export;
 use ratatui::style::{Color, Style};
@@ -1608,10 +1608,10 @@ impl App {
             I::NotTimestamp => Label::EditInvalidNotTimestamp.into(),
             I::TooPrecise { digits } => Msg::EditInvalidTooPrecise { digits: digits.to_string() },
             I::NotUuid => Label::EditInvalidNotUuid.into(),
-            I::NotBytes { mysql: false } => Label::EditInvalidNotBytes.into(),
-            I::NotBytes { mysql: true } => Label::EditInvalidNotBytesMysql.into(),
-            I::NotBits { mysql: false } => Label::EditInvalidNotBits.into(),
-            I::NotBits { mysql: true } => Label::EditInvalidNotBitsMysql.into(),
+            I::NotBytes { form: BytesForm::BackslashX } => Label::EditInvalidNotBytes.into(),
+            I::NotBytes { form: BytesForm::ZeroX } => Label::EditInvalidNotBytesMysql.into(),
+            I::NotBits { form: BitsForm::Digits } => Label::EditInvalidNotBits.into(),
+            I::NotBits { form: BitsForm::BQuoted } => Label::EditInvalidNotBitsMysql.into(),
             I::BitCount { count, exact: true } => Msg::EditInvalidBitCountExact { bits: count.to_string() },
             I::BitCount { count, exact: false } => Msg::EditInvalidBitCountAtMost { bits: count.to_string() },
             I::TooLong { max } => Msg::EditInvalidTooLong { max: max.to_string() },

@@ -28,7 +28,7 @@ mod sql;
 mod target;
 
 pub use batch::{Counts, Draft, EditBatch, PasteOps, PasteRefused, PasteResult, RowEdit};
-pub use input::{Invalid, check_input};
+pub use input::{BitsForm, BytesForm, Invalid, check_input};
 pub use plan::{
     Choice, Expect, Facts, Origin, Plan, PlanError, Step, Where, count_statements, no_default, not_shown, plan,
     plan_problems,

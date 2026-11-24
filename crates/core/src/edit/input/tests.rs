@@ -352,12 +352,12 @@ fn bytes_are_hexadecimal_as_the_result_shows_them() {
             ("\\x", OK),
             ("\\xdeadbeef", OK),
             ("\\xDEADbeef", OK),
-            ("\\xabc", Err(Invalid::NotBytes { mysql: false })),
-            ("0xab", Err(Invalid::NotBytes { mysql: false })),
-            ("abc", Err(Invalid::NotBytes { mysql: false })),
+            ("\\xabc", Err(Invalid::NotBytes { form: BytesForm::BackslashX })),
+            ("0xab", Err(Invalid::NotBytes { form: BytesForm::BackslashX })),
+            ("abc", Err(Invalid::NotBytes { form: BytesForm::BackslashX })),
         ],
     );
-    let no = || Err(Invalid::NotBytes { mysql: true });
+    let no = || Err(Invalid::NotBytes { form: BytesForm::ZeroX });
     table(
         MY,
         "varbinary(16)",
@@ -376,8 +376,8 @@ fn bits_have_their_column_s_count() {
             ("0101", OK),
             ("010", Err(Invalid::BitCount { count: 4, exact: true })),
             ("01010", Err(Invalid::BitCount { count: 4, exact: true })),
-            ("0102", Err(Invalid::NotBits { mysql: false })),
-            ("b'0101'", Err(Invalid::NotBits { mysql: false })),
+            ("0102", Err(Invalid::NotBits { form: BitsForm::Digits })),
+            ("b'0101'", Err(Invalid::NotBits { form: BitsForm::Digits })),
         ],
     );
     table(
@@ -396,9 +396,9 @@ fn bits_have_their_column_s_count() {
             ("b'101'", OK),
             ("b'00101'", OK),
             ("b'10101'", Err(Invalid::BitCount { count: 4, exact: false })),
-            ("b''", Err(Invalid::NotBits { mysql: true })),
-            ("0101", Err(Invalid::NotBits { mysql: true })),
-            ("b'0102'", Err(Invalid::NotBits { mysql: true })),
+            ("b''", Err(Invalid::NotBits { form: BitsForm::BQuoted })),
+            ("0101", Err(Invalid::NotBits { form: BitsForm::BQuoted })),
+            ("b'0102'", Err(Invalid::NotBits { form: BitsForm::BQuoted })),
         ],
     );
 }

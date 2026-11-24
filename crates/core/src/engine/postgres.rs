@@ -7,7 +7,7 @@ use super::{
 };
 use crate::driver::{Hierarchy, SessionRole, ValueKind};
 use crate::edit::input::{self, TypeName};
-use crate::edit::{Invalid, TableColumn};
+use crate::edit::{BitsForm, BytesForm, Invalid, TableColumn};
 use crate::profile::dsn::Scheme;
 use crate::sql::dialect::{Dialect, DollarQuotes, Language};
 use crate::sql::risk::mysql::Judged;
@@ -496,14 +496,14 @@ impl InputRules for PgInput {
     /// `\x` and hexadecimal digits in pairs, either case.
     fn bytes(&self, s: &str) -> Result<(), Invalid> {
         let hex = s.strip_prefix("\\x").filter(|h| h.bytes().all(|b| b.is_ascii_hexdigit()));
-        hex.is_some_and(|h| h.len() % 2 == 0).then_some(()).ok_or(Invalid::NotBytes { mysql: false })
+        hex.is_some_and(|h| h.len() % 2 == 0).then_some(()).ok_or(Invalid::NotBytes { form: BytesForm::BackslashX })
     }
 
     /// Binary digits, exactly `n` for `bit(n)` and at most `n` for `bit varying(n)`.
     fn bits(&self, c: &TableColumn, s: &str) -> Result<(), Invalid> {
         let ty = TypeName::read(&c.column.type_name);
         if !input::binary(s) {
-            return Err(Invalid::NotBits { mysql: false });
+            return Err(Invalid::NotBits { form: BitsForm::Digits });
         }
         let exact = ty.name == "bit";
         match ty.args[..] {
