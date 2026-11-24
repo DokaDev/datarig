@@ -438,6 +438,36 @@ fn expressions_are_unescaped_once_on_mysql() {
     assert_eq!(parse_my(&plain).unwrap().checks[0].expression, r"`s` <> 'a\b'");
 }
 
+/// A session whose facts know no version reads the statement of its greeting's number, as one
+/// that knows it does; on MySQL that number decides which newer parts the read names, on
+/// MariaDB it decides none.
+#[test]
+fn an_unknown_version_reads_the_greetings_form() {
+    use crate::engine::structure_version;
+    use crate::engine::tests::structure_version_rows;
+    let maria = statement(Greeting { mariadb: true, handshake: Version::new(11, 4, 13) }, Dialect::MySql(MY), "s", "t");
+    let mut unknown = 0;
+    for (g, f, _) in structure_version_rows() {
+        let at = statement_at(g, structure_version(&f), Dialect::MySql(MY), "s", "t");
+        assert_eq!(at, statement(g, Dialect::MySql(MY), "s", "t"), "{f:?}");
+        let parts = ["x.EXPRESSION", "CHECK_CONSTRAINTS", "tc.ENFORCED", "@@GLOBAL.partial_revokes"]
+            .map(|part| at.contains(part));
+        let want = match (g.mariadb, g.handshake) {
+            (true, _) => {
+                // One statement on every version of MariaDB.
+                assert_eq!(at, maria, "{f:?}");
+                [false, true, false, false]
+            }
+            (false, v) if v >= Version::new(8, 0, 16) => [true, true, true, true],
+            (false, v) if v >= Version::new(8, 0, 13) => [true, false, false, false],
+            (false, _) => [false, false, false, false],
+        };
+        assert_eq!(parts, want, "{f:?}");
+        unknown += usize::from(!matches!(f.version, datarig_core::engine::Fact::Known(_)));
+    }
+    assert_eq!(unknown, 7, "every unknown version is read");
+}
+
 /// Reading a table's estimates opens the table when the server has none cached: the structure
 /// does not ask for them, and has none of its own (the schema's listing has them).
 #[test]

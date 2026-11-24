@@ -23,3 +23,11 @@ fn the_static_postgres_edit_is_the_specs() {
         assert_eq!(CAPABILITIES.edit, answer, "{version:?}");
     }
 }
+
+/// The namespaces the driver offers are those of each engine it serves.
+#[test]
+fn the_drivers_hierarchy_is_each_engines() {
+    for e in ENGINES {
+        assert_eq!(CAPABILITIES.hierarchy, e.spec().hierarchy, "{e:?}");
+    }
+}

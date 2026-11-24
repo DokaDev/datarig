@@ -21,6 +21,7 @@ use crate::link::{Link, Next};
 use crate::session::{Tracked, quit};
 use datarig_core::driver::structure::RelationStats;
 use datarig_core::driver::{ApplyError, ApplyFailure, DbCommand, DbError, DbEvent, SchemaObjects};
+use datarig_core::engine::Version;
 use datarig_core::fault::Fault;
 use datarig_core::sql::complete::{Catalog, ColumnInfo, Relation};
 use datarig_core::sql::dialect::{Dialect, DollarQuotes};
@@ -101,6 +102,7 @@ pub(crate) async fn meta_loop(
     events: UnboundedSender<DbEvent>,
     tracked: Tracked,
     greeting: Greeting,
+    version: Version,
     dollar_quotes: DollarQuotes,
 ) {
     let mode = tracked.mode(dollar_quotes);
@@ -145,7 +147,8 @@ pub(crate) async fn meta_loop(
                 }
                 DbCommand::LoadKeys => DbEvent::Keys(keys::load_keys(&mut conn).await),
                 DbCommand::LoadStructure { schema, table } => {
-                    let result = structure::load_structure(&mut conn, greeting, dialect, &schema, &table).await;
+                    let result =
+                        structure::load_structure(&mut conn, greeting, version, dialect, &schema, &table).await;
                     DbEvent::Structure { schema, table, result: result.map(Box::new) }
                 }
                 DbCommand::LoadTableKeys { id, schema, table } => {
