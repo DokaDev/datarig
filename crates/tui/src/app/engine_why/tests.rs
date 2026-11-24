@@ -1,5 +1,5 @@
 use super::*;
-use datarig_core::engine::Feature;
+use datarig_core::engine::{Feature, Version};
 use datarig_i18n::Lang;
 use std::collections::BTreeSet;
 
@@ -13,6 +13,8 @@ fn every_why_has_a_text_in_en_and_ko() {
         Why::VersionsDisagree,
         Why::EnginesDisagree,
         Why::NotOnEngine,
+        Why::NotBuilt,
+        Why::VersionTooOld { needed: Version::new(8, 0, 17) },
         Why::FeatureOff(Feature::PerformanceSchema),
         Why::MarkerUnconfirmed,
     ];
@@ -24,6 +26,8 @@ fn every_why_has_a_text_in_en_and_ko() {
             | Why::VersionsDisagree
             | Why::EnginesDisagree
             | Why::NotOnEngine
+            | Why::NotBuilt
+            | Why::VersionTooOld { .. }
             | Why::FeatureOff(Feature::PerformanceSchema)
             | Why::MarkerUnconfirmed => {}
         }
@@ -39,5 +43,9 @@ fn every_why_has_a_text_in_en_and_ko() {
     assert_eq!(
         why_text(&Why::FeatureOff(Feature::PerformanceSchema)).render(Lang::En),
         "performance_schema is off on the server"
+    );
+    assert_eq!(
+        why_text(&Why::VersionTooOld { needed: Version::new(8, 0, 17) }).render(Lang::En),
+        "the server's version is older than 8.0.17"
     );
 }

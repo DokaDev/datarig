@@ -1,11 +1,11 @@
 //! PostgreSQL's row of the registry.
 
 use super::{
-    CancelRules, CountInTx, DdlLock, EngineId, EngineSpec, ExportRules, Fact, FilterCalls, InputRules, OpenVerdict,
-    READ_ONLY_NOT_PROVEN, ReadOnlyProof, RiskRules, ServerFacts, SessionRules, Support, TextRules, Transport, TxAsk,
-    TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, ValueRules,
+    CancelRules, CountInTx, DdlLock, EditRules, EngineId, EngineSpec, ExportRules, Fact, FilterCalls, InputRules,
+    OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, RiskRules, ServerFacts, SessionRules, Support, TextRules,
+    Transport, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, ValueRules,
 };
-use crate::driver::{ColumnMeta, Hierarchy, ReadIn, SessionRole, SessionValues, ValueKind};
+use crate::driver::{ColumnMeta, EditFormat, Hierarchy, ReadIn, SessionRole, SessionValues, ValueKind};
 use crate::edit::input::{self, TypeName};
 use crate::edit::{BitsForm, BytesForm, Invalid, TableColumn};
 use crate::export::keyset::NotKeyset;
@@ -34,6 +34,7 @@ pub static SPEC: EngineSpec = EngineSpec {
     cancel: &PgCancel,
     values: &PgValues,
     export: Fact::Known(&PgExport),
+    edit: Fact::Known(&PgEdits),
 };
 
 /// How PostgreSQL's text is read.
@@ -426,6 +427,16 @@ impl ValueRules for PgValues {
     /// without it.
     fn insert_overriding(&self, overriding: bool) -> &'static str {
         if overriding { " OVERRIDING SYSTEM VALUE" } else { "" }
+    }
+}
+
+/// Which edits of a result's rows PostgreSQL's servers take.
+struct PgEdits;
+
+impl EditRules for PgEdits {
+    /// PostgreSQL's, on every version.
+    fn writer(&self, _: &ServerFacts) -> Fact<EditFormat> {
+        Fact::Known(EditFormat::Postgres)
     }
 }
 

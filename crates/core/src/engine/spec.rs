@@ -1,7 +1,7 @@
 //! What is fixed per engine, known without a connection: one [`EngineSpec`] per engine.
 
 use super::{CountInTx, EngineId, Fact, OpenVerdict, ReadOnlyProof, ServerFacts, Support, TxStatement, TxVerdict};
-use crate::driver::{ColumnMeta, Hierarchy, ReadIn, SessionRole, SessionValues, ValueKind};
+use crate::driver::{ColumnMeta, EditFormat, Hierarchy, ReadIn, SessionRole, SessionValues, ValueKind};
 use crate::edit::{Invalid, TableColumn};
 use crate::export::keyset::NotKeyset;
 use crate::export::{Kind, Refused, SqlCells, SqlColumn};
@@ -53,6 +53,8 @@ pub struct EngineSpec {
     pub values: &'static dyn ValueRules,
     /// How its tables are read for an export.
     pub export: Fact<&'static dyn ExportRules>,
+    /// Which edits of a result's rows its servers take.
+    pub edit: Fact<&'static dyn EditRules>,
 }
 
 /// How an engine's text is read on a server.
@@ -178,6 +180,13 @@ pub trait ExportRules: Sync {
 
     /// Whether the server ends a session that reads a result more slowly than it sends it.
     fn drops_slow_readers(&self) -> bool;
+}
+
+/// Which edits of a result's rows an engine's servers take.
+pub trait EditRules: Sync {
+    /// The SQL a session on the server of `f` takes for edits of a result's rows, or why it
+    /// takes none.
+    fn writer(&self, f: &ServerFacts) -> Fact<EditFormat>;
 }
 
 /// Whether a value typed into a cell is a value of its column's type, in the form the result

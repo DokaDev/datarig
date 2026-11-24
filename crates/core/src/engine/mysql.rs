@@ -4,8 +4,11 @@ use super::mysql_family::{
     FamilyCancel, FamilyExport, FamilySession, FamilyText, FamilyTx, FamilyValues, family_classifier,
     family_filter_calls, family_read_only_calls,
 };
-use super::{EngineId, EngineSpec, Fact, FilterCalls, MYSQL_FAMILY, RiskRules, Support, Transport};
-use crate::driver::Hierarchy;
+use super::{
+    EditRules, EngineFacts, EngineId, EngineSpec, Fact, FilterCalls, MYSQL_FAMILY, RiskRules, ServerFacts, Support,
+    Transport, Version, Why,
+};
+use crate::driver::{EditFormat, Hierarchy, MySqlEdit};
 use crate::profile::dsn::Scheme;
 use crate::sql::dialect::Dialect;
 use crate::sql::risk::Classifier;
@@ -28,6 +31,7 @@ pub static SPEC: EngineSpec = EngineSpec {
     cancel: &FamilyCancel,
     values: &FamilyValues,
     export: Fact::Known(&FamilyExport),
+    edit: Fact::Known(&MysqlEdits),
 };
 
 /// How MySQL's statements are judged: the family's classifier of the text's dialect
@@ -57,6 +61,27 @@ impl RiskRules for MysqlRisk {
         match j {
             Judged::Own => false,
             Judged::WithSibling => true,
+        }
+    }
+}
+
+/// Which edits of a result's rows MySQL's servers take: MySQL's from 8.0.17 on, where
+/// `utf8mb4_0900_bin` compares text exactly and `FOR UPDATE NOWAIT` locks without waiting.
+struct MysqlEdits;
+
+/// The first MySQL version whose servers take MySQL's edits.
+const EDIT_SINCE: Version = Version::new(8, 0, 17);
+
+impl EditRules for MysqlEdits {
+    /// By the number of the server's greeting, whichever engine its version line names.
+    fn writer(&self, f: &ServerFacts) -> Fact<EditFormat> {
+        match &f.detail {
+            EngineFacts::MySql(my) | EngineFacts::MariaDb(my) => match my.handshake >= EDIT_SINCE {
+                true => Fact::Known(EditFormat::MySql(MySqlEdit { nowait: true })),
+                false => Fact::No(Why::VersionTooOld { needed: EDIT_SINCE }),
+            },
+            // Never the facts of a MySQL greeting.
+            EngineFacts::Postgres(_) => Fact::Unknown(Why::EnginesDisagree),
         }
     }
 }
