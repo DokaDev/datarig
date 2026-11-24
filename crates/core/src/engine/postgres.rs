@@ -446,6 +446,12 @@ impl EditRules for PgEdits {
     fn writer(&self, _: &ServerFacts) -> Fact<EditFormat> {
         Fact::Known(EditFormat::Postgres)
     }
+
+    /// Always: the format is the same on every version, and the structure is read from the
+    /// catalogue's own columns (a column grant never hides one) or not at all.
+    fn duplicates_choice(&self, _: Option<&ServerFacts>, _: Option<&ServerFacts>, _: EditFormat) -> Support {
+        Fact::Known(())
+    }
 }
 
 /// How PostgreSQL's catalogue names what a result reads.

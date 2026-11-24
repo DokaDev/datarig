@@ -228,7 +228,12 @@ their results read-only ("this connection type can't edit data").
   the session's binary log keeps rows (`binlog_format` `ROW` or `MIXED`, which logs such a
   statement as rows) or keeps nothing of the session (`log_bin` or `sql_log_bin` off). With
   `binlog_format = STATEMENT`, or when it cannot be read, the Apply sends nothing and says why;
-  changing all of them is still possible.
+  changing all of them is still possible. One or all is offered only when the session that read
+  the table's structure and the tab's own session, which applies the change, both report one
+  engine at the same known version, and the tab's session takes the edit format in use. Else such
+  a row is refused before anything is written, its reason in the Changes tab (the two sessions
+  may reach different servers, behind a proxy for instance). When the edit format changes while
+  an Apply counts its rows, the Apply is cancelled: apply again.
 - **Grants by column.** The server lists a table's columns to a user only as far as the user's
   grants go: one granted single columns sees just those, and rows that look the same may differ
   in the others. Unless the user's own grants include `SELECT`, `INSERT`, `UPDATE` or

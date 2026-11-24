@@ -512,6 +512,55 @@ fn a_structure_asked_before_the_metadata_session_opened_again_is_dropped() {
     assert!(matches!(&rows(&h).edit.target, Target::Ready(_)));
 }
 
+/// What another database's metadata session found its server to be lasts as long as that
+/// session: a late word of one closed for being idle is not kept, one opened again starts with
+/// none (a duplicate-row change of that database is refused until it says), and a lost or failed
+/// one forgets it.
+#[test]
+fn an_aux_session_closed_while_idle_forgets_its_facts() {
+    let facts = |h: &Harness| {
+        let p = h.app.profiles[0].id;
+        h.app.conns.aux(p, "sales").expect("an aux session").facts.clone()
+    };
+    let mut h = profile(vec![mysql(v(8, 4, 6)), edits(true)]);
+    h.app.tab_mut().context = SessionContext { database: Some("sales".into()), schema: None };
+    read(&mut h, vec![mysql(v(8, 4, 6)), edits(true)], false);
+    aux_db(&mut h, "sales", mysql(v(8, 4, 6)));
+    aux_db(&mut h, "sales", DbEvent::Connected);
+    aux_db(&mut h, "sales", DbEvent::Keys(Ok(items_keys())));
+    assert!(facts(&h).is_some(), "said while open");
+    // No tab works there for a while: it closes, and what its server was goes with it.
+    h.app.tab_mut().context = SessionContext::default();
+    h.advance(Duration::from_secs(61));
+    let p = h.app.profiles[0].id;
+    assert!(h.app.conns.aux(p, "sales").expect("kept").session.is_none(), "closed for being idle");
+    assert!(facts(&h).is_none(), "forgotten when it closed");
+    aux_db(&mut h, "sales", mysql(v(8, 4, 6)));
+    assert!(facts(&h).is_none(), "a late word of the closed session is not kept");
+    // The tab works there again: its edit key opens the session again, which answers the
+    // structure before it says what its server is.
+    h.app.tab_mut().context = SessionContext { database: Some("sales".into()), schema: None };
+    h.sent();
+    change_b(&mut h, |h| {
+        assert!(facts(h).is_none(), "opened again with none");
+        aux_db(h, "sales", structure_answer(false));
+    });
+    apply_counted(&mut h, 2);
+    withheld(&mut h, NOT_CHECKED);
+    // Lost, or failed: forgotten.
+    for end in
+        [DbEvent::Lost { error: DbError::Closed }, DbEvent::ConnectFailed { error: DbError::Closed, auth: false }]
+    {
+        let mut h = profile(vec![mysql(v(8, 4, 6)), edits(true)]);
+        h.app.tab_mut().context = SessionContext { database: Some("sales".into()), schema: None };
+        read(&mut h, vec![mysql(v(8, 4, 6)), edits(true)], false);
+        aux_db(&mut h, "sales", mysql(v(8, 4, 6)));
+        assert!(facts(&h).is_some());
+        aux_db(&mut h, "sales", end);
+        assert!(facts(&h).is_none());
+    }
+}
+
 /// The tab's own session greets 8.0.15, another session said the profile's edits; a text
 /// column's count compares with a collation that server lacks: the count fails with the
 /// server's words, and nothing is written.

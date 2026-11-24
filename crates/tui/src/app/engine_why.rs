@@ -17,6 +17,8 @@ pub fn why_text(why: &Why) -> Msg {
         }
         Why::FeatureOff(feature) => Msg::EngineWhyFeatureOff { feature: feature.name().to_string() },
         Why::MarkerUnconfirmed => Label::EngineWhyMarkerUnconfirmed.into(),
+        Why::SessionsDiffer => Label::EngineWhySessionsDiffer.into(),
+        Why::EditFormatDiffers => Label::EngineWhyEditFormatDiffers.into(),
     }
 }
 

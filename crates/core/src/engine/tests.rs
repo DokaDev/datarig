@@ -472,3 +472,58 @@ fn server_cancel_on_every_engine() {
     let my = MyFacts::new(Version::new(8, 4, 6), EngineId::MySql);
     assert_eq!((my.performance_schema, my.marker), (Fact::Unknown(Why::NotChecked), Fact::Unknown(Why::NotChecked)));
 }
+
+/// Whether one or all of identical rows may be offered, per engine: always on PostgreSQL; on
+/// MySQL only when both sessions said what their server is, report one engine at one known
+/// version, and the applying session takes the format used, the first failing cause given;
+/// MariaDB takes no edits at all.
+#[test]
+fn duplicates_choice_on_every_engine() {
+    use crate::driver::{EditFormat, MySqlEdit};
+    let pg = EngineId::Postgres.spec().edit.clone();
+    let Fact::Known(pg) = pg else { panic!("PostgreSQL takes edits") };
+    let my846 = agreeing(EngineId::MySql, Version::new(8, 4, 6));
+    for (a, b) in [(None, None), (Some(&my846), None), (None, Some(&my846)), (Some(&my846), Some(&my846))] {
+        assert_eq!(pg.duplicates_choice(a, b, EditFormat::Postgres), Fact::Known(()));
+    }
+    assert!(matches!(EngineId::MariaDb.spec().edit, Fact::No(Why::NotBuilt)));
+    let Fact::Known(my) = EngineId::MySql.spec().edit.clone() else { panic!("MySQL takes edits") };
+    let f = EditFormat::MySql(MySqlEdit { nowait: true });
+    let with_version = |v: Fact<Version>| ServerFacts { version: v, ..my846.clone() };
+    let disagreeing = {
+        let mut x = my846.clone();
+        if let EngineFacts::MySql(m) = &mut x.detail {
+            m.greeting = EngineId::MariaDb;
+        }
+        x
+    };
+    let maria = agreeing(EngineId::MariaDb, Version::new(8, 4, 6));
+    let my847 = agreeing(EngineId::MySql, Version::new(8, 4, 7));
+    let my8015 = agreeing(EngineId::MySql, Version::new(8, 0, 15));
+    let unknown = with_version(Fact::Unknown(Why::VersionUnknown));
+    let versions = with_version(Fact::Unknown(Why::VersionsDisagree));
+    let engines = with_version(Fact::Unknown(Why::EnginesDisagree));
+    let not_checked = Fact::Unknown(Why::NotChecked);
+    let differ = Fact::No(Why::SessionsDiffer);
+    let rows: [(Option<&ServerFacts>, Option<&ServerFacts>, EditFormat, Support); 16] = [
+        (Some(&my846), Some(&my846), f, Fact::Known(())),
+        (None, Some(&my846), f, not_checked.clone()),
+        (Some(&my846), None, f, not_checked.clone()),
+        (Some(&unknown), Some(&my846), f, not_checked.clone()),
+        (Some(&my846), Some(&unknown), f, not_checked.clone()),
+        (Some(&my846), Some(&my847), f, differ.clone()),
+        (Some(&my8015), Some(&my846), f, differ.clone()),
+        (Some(&maria), Some(&my846), f, differ.clone()),
+        (Some(&disagreeing), Some(&my846), f, differ.clone()),
+        (Some(&my846), Some(&disagreeing), f, differ.clone()),
+        (Some(&versions), Some(&my846), f, differ.clone()),
+        (Some(&my846), Some(&versions), f, differ.clone()),
+        (Some(&engines), Some(&my846), f, differ.clone()),
+        (Some(&my846), Some(&engines), f, differ.clone()),
+        (Some(&my8015), Some(&my8015), f, Fact::No(Why::VersionTooOld { needed: Version::new(8, 0, 17) })),
+        (Some(&my846), Some(&my846), EditFormat::MySql(MySqlEdit { nowait: false }), Fact::No(Why::EditFormatDiffers)),
+    ];
+    for (i, (read, applies, format, want)) in rows.into_iter().enumerate() {
+        assert_eq!(my.duplicates_choice(read, applies, format), want, "row {i}");
+    }
+}

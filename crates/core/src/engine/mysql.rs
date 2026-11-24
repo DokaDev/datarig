@@ -86,4 +86,40 @@ impl EditRules for MysqlEdits {
             EngineFacts::Postgres(_) => Fact::Unknown(Why::EnginesDisagree),
         }
     }
+
+    /// Only when both sessions said what their server is, each reports one engine at one known
+    /// version, the same on both, and the applying session takes edits in `format`. The first
+    /// cause that fails is the answer: a session that said nothing or whose version was not
+    /// read, then sessions that differ, then a server too old, then another format.
+    fn duplicates_choice(
+        &self,
+        structure_by: Option<&ServerFacts>,
+        applied_by: Option<&ServerFacts>,
+        format: EditFormat,
+    ) -> Support {
+        let (Some(read), Some(applies)) = (structure_by, applied_by) else {
+            return Fact::Unknown(Why::NotChecked);
+        };
+        // Not read, as against read twice and found to differ.
+        let not_read = |f: &ServerFacts| match &f.version {
+            Fact::Known(_) | Fact::Unknown(Why::VersionsDisagree | Why::EnginesDisagree) => false,
+            Fact::Unknown(_) | Fact::No(_) => true,
+        };
+        if not_read(read) || not_read(applies) {
+            return Fact::Unknown(Why::NotChecked);
+        }
+        let one = match (&read.version, &applies.version) {
+            (Fact::Known(a), Fact::Known(b)) => a == b,
+            _ => false,
+        };
+        if !one || read.engine() != applies.engine() || read.reports_disagree() || applies.reports_disagree() {
+            return Fact::No(Why::SessionsDiffer);
+        }
+        match self.writer(applies) {
+            Fact::Known(f) if f == format => Fact::Known(()),
+            Fact::Known(_) => Fact::No(Why::EditFormatDiffers),
+            Fact::No(why) => Fact::No(why),
+            Fact::Unknown(why) => Fact::Unknown(why),
+        }
+    }
 }

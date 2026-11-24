@@ -89,6 +89,8 @@ impl App {
                     s.close();
                 }
                 a.read_only_unconfirmed = None;
+                // What its server was found to be goes with the session.
+                a.facts = None;
                 // What it was asked for never comes: asked again on the next use.
                 a.checks.retain(|_, c| *c != TableChecks::Asked);
                 if !matches!(a.schemas, Some(Ok(_))) {
@@ -150,6 +152,13 @@ impl App {
                 self.log_read_only_unconfirmed(SessionRole::Meta, &detail);
                 if let Some(a) = self.conns.aux_by_id(id) {
                     a.read_only_unconfirmed = Some(detail);
+                }
+            }
+            // What its server is, while its session is open: one closed for being idle keeps
+            // its id, and what it still sends is not of a session that may be used.
+            DbEvent::Server(facts) => {
+                if a.session.is_some() {
+                    a.facts = Some(facts);
                 }
             }
             _ => {}

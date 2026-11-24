@@ -141,7 +141,10 @@ impl App {
             .map(|a| a.id)
             .collect();
         for id in idle {
-            if let Some(s) = self.conns.aux_by_id(id).and_then(|a| a.session.take()) {
+            let Some(a) = self.conns.aux_by_id(id) else { continue };
+            // What its server was found to be goes with the session.
+            a.facts = None;
+            if let Some(s) = a.session.take() {
                 s.close();
             }
         }

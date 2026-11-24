@@ -28,6 +28,12 @@ pub enum Why {
     /// connection cannot tell it is the session's (a proxy in between, or an account that
     /// cannot read where the server lists it).
     MarkerUnconfirmed,
+    /// Two sessions of one connection, or one session's own reports, do not show one engine at
+    /// one known version: what one of them read may not hold on the other.
+    SessionsDiffer,
+    /// The edits are written in another format than the one the session that applies them
+    /// takes.
+    EditFormatDiffers,
 }
 
 /// A part of a server that may be switched off there.

@@ -476,6 +476,8 @@ impl App {
         .map(|m| i18n.msg(&m).to_string())
         .collect::<Vec<_>>()
         .join(" · ");
+        // A choice among identical rows checked for another format is not one in this.
+        let target = &*target.for_format(format);
         let f = edit::format(format);
         let dialect = f.language().dialect();
         let names: Vec<String> = rs.columns.iter().map(|c| c.meta.name.clone()).collect();
@@ -645,6 +647,7 @@ impl App {
             PlanError::Ambiguous { matches, .. } => Msg::EditPreviewAmbiguous { count: *matches },
             PlanError::Unseen { matches, .. } => Msg::EditPreviewUnseen { count: *matches },
             PlanError::Choose { matches, .. } => Msg::EditPreviewChoose { count: *matches },
+            PlanError::Withheld { matches, why, .. } => withheld_text(*matches, why),
             PlanError::NoOneOfK { row: r } => {
                 let count = matches.get(r).copied().unwrap_or(0);
                 Msg::EditPreviewNoOneOfK { count }
@@ -703,6 +706,27 @@ impl App {
 }
 
 /// `p`, or `?` for a row not found.
+/// Why a row that matches `count` identical rows is not offered one or all of them, in words
+/// for `why`. `EditRules::duplicates_choice` gives only the first five reasons, and an engine
+/// that takes no edits its own; any other is said as the nearest of them.
+fn withheld_text(count: u64, why: &datarig_core::engine::Why) -> Msg {
+    use datarig_core::engine::Why as W;
+    match why {
+        W::SessionsDiffer | W::VersionsDisagree | W::EnginesDisagree => {
+            Msg::EditPreviewWithheldSessionsDiffer { count }
+        }
+        W::EditFormatDiffers => Msg::EditPreviewWithheldEditFormatDiffers { count },
+        W::VersionTooOld { needed } => Msg::EditPreviewWithheldVersionTooOld {
+            count,
+            needed: format!("{}.{}.{}", needed.major, needed.minor, needed.patch),
+        },
+        W::NotBuilt | W::NotOnEngine => Msg::EditPreviewWithheldNotBuilt { count },
+        W::NotChecked | W::VersionUnknown | W::FeatureOff(_) | W::MarkerUnconfirmed => {
+            Msg::EditPreviewWithheldNotChecked { count }
+        }
+    }
+}
+
 fn or_unknown(p: Option<Pointer>) -> Pointer {
     p.unwrap_or_else(|| Pointer::Key("?".into()))
 }
@@ -750,6 +774,7 @@ fn problem_at(e: &PlanError) -> Option<(RowAt, Option<usize>)> {
         | PlanError::Ambiguous { row, .. }
         | PlanError::Unseen { row, .. }
         | PlanError::Choose { row, .. }
+        | PlanError::Withheld { row, .. }
         | PlanError::NoOneOfK { row } => Some((RowAt::Read(*row), None)),
         PlanError::Internal(_) => None,
     }

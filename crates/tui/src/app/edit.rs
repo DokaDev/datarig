@@ -30,6 +30,7 @@ use datarig_core::edit::{
     self, BitsForm, BytesForm, ColumnReason, EditBatch, EditSource, EditTarget, Expect, Identity, Invalid, ReadOnly,
     TableColumn, Value, Write,
 };
+use datarig_core::engine::Fact;
 use datarig_core::export;
 use ratatui::style::{Color, Style};
 use std::ops::Range;
@@ -1685,10 +1686,23 @@ impl App {
         let aux = self.open_aux(profile, database);
         let generation = self.conns.get(profile).map(|c| c.generation);
         let active = (!self.tabs.is_empty()).then(|| self.tab().id);
-        let others: Vec<(TabId, Option<String>)> =
-            self.tabs.iter().map(|t| (t.id, self.other_database(t).map(str::to_string))).collect();
+        // What the session that read the structure found its server to be.
+        let structure_by = match database {
+            None => self.conns.get(profile).and_then(|c| c.facts.clone()),
+            Some(db) => self.conns.aux(profile, db).filter(|a| a.session.is_some()).and_then(|a| a.facts.clone()),
+        };
+        // Per tab: the database it works in, its engine's edits, and what its own session (which
+        // applies its changes) found its server to be.
+        let others: Vec<_> = self
+            .tabs
+            .iter()
+            .map(|t| {
+                let edits = self.tab_dialect(t.id).engine().spec().edit.clone();
+                (t.id, self.other_database(t).map(str::to_string), edits, t.exec.current_facts().cloned())
+            })
+            .collect();
         let mut came = None;
-        for (id, other) in others {
+        for (id, other, edits, applied_by) in others {
             let Some(t) = self.tabs.get_mut(id) else { continue };
             let (binding, bound_to, view) = (t.binding, t.profile, t.exec.view);
             let shown = match &mut t.results {
@@ -1721,7 +1735,19 @@ impl App {
                 rs.edit.target = match result {
                     Err(_) => Target::ReadOnly { why: Why::Structure(error.to_string()), retry: true },
                     Ok(s) => match w.source.target(s, &*edit::format(w.format)) {
-                        Ok(t) => Target::Ready(Box::new(t)),
+                        Ok(mut t) => {
+                            // A server whose engine takes no edits (one its profile's other
+                            // sessions' word let the grid edit) gives its reason.
+                            let choice = match &edits {
+                                Fact::Known(rules) => {
+                                    rules.duplicates_choice(structure_by.as_deref(), applied_by.as_deref(), w.format)
+                                }
+                                Fact::No(why) => Fact::No(why.clone()),
+                                Fact::Unknown(why) => Fact::Unknown(why.clone()),
+                            };
+                            t.choice_on(choice, w.format);
+                            Target::Ready(Box::new(t))
+                        }
                         Err(r) => Target::ReadOnly { why: Why::Rows(r), retry: false },
                     },
                 };
