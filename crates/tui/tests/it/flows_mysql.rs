@@ -632,17 +632,18 @@ fn a_mariadb_session_words_the_key_cache_as_mysql() {
     items_result_said(&mut h, mariadb(), "Items", "7", "x", 4);
     assert_eq!(h.app.tab().exec.prepared.language(), Language::Sql(Dialect::MariaDb(MySqlMode::default())));
     h.command("copy insert");
-    let status = h.status(200, 45);
-    assert!(status.contains("Not copied as INSERT: the tables' keys are still being read"), "{status}");
+    let status = h.status(400, 45);
+    let loading = "Not copied as INSERT: the tables' keys are still being read (try again in a moment)";
+    assert!(status.contains(loading), "{status}");
     assert!(!status.contains("not known yet, or could not be read"), "{status}");
     h.db(DbEvent::Keys(Ok(items_keys())));
     items_result_said(&mut h, mariadb(), "Later", "1", "x", 4);
     h.command("copy insert");
-    let status = h.status(240, 45);
-    assert!(
-        status.contains("Not copied as INSERT: its table or one of its columns is not in the key cache"),
-        "{status}"
-    );
+    let status = h.status(400, 45);
+    let missing = "Not copied as INSERT: its table or one of its columns is not in the key cache: created after \
+                   the keys were read, or not visible to this user (the explorer's reload on the connection reads \
+                   them again)";
+    assert!(status.contains(missing), "{status}");
 }
 
 /// `SELECT <cols> FROM shop.Items` run (columns of `items_result`'s types, by name), the session

@@ -771,6 +771,12 @@ fn a_mariadb_profile_reads_ddl_as_a_mysql_profile_does() {
     assert_eq!(h.app.tab().editor.text(), "CREATE TABLE `t` (\n  `v` varchar(9) DEFAULT 'a\\b''c''d'\n);\n");
     assert_eq!(h.app.tab().context.database, None);
     assert_eq!(h.app.tab().context.schema.as_deref(), Some("shop"), "the object's database");
+    // From the console in `shop`: the name is looked up in the tab's database.
+    h.command("ddl zz_touch");
+    assert_eq!(
+        asked(&h.sent()).into_iter().map(|a| a.1).collect::<Vec<_>>(),
+        [DdlObject::Named { name: "zz_touch".into(), schema: Some("shop".into()) }]
+    );
     let ddl = h.app.tabs.iter().position(|t| t.is_ddl()).unwrap();
     h.app.tabs.activate(ddl);
     h.command("ddl shop.zz_touch");
