@@ -344,10 +344,10 @@ fn plan_asked(h: &mut Harness) -> String {
 /// PostgreSQL's, and nothing is asked: no driver connects it; on a session open already, a text
 /// `EXPLAIN` read as PostgreSQL's is offered as a plan, which only its JSON offers); on each
 /// engine, before its profile connected, before its session said a word (the driver's format),
-/// after its server (the format as before), after its plan word (none on MariaDB) and once
-/// connected, after the other word and its own again (the last word said is the profile's), after
-/// that session is lost (the word kept) and after a new attempt (the word forgotten until a session
-/// says it again).
+/// after its server and its language (the format as before), after its plan word (none on MariaDB)
+/// and once connected, after the other word and its own again (the last word said is the
+/// profile's), after that session is lost (the word kept) and after a new attempt (the word
+/// forgotten until a session says it again).
 #[test]
 fn tab_explain_answers_as_today() {
     let mut seen = Vec::new();
@@ -398,6 +398,7 @@ fn tab_explain_answers_as_today() {
         for ev in connect_words(engine, true) {
             let word = match &ev {
                 DbEvent::Server(_) => Some("its server"),
+                DbEvent::Language(_) => Some("its language"),
                 DbEvent::Explain(_) => Some("its plan word"),
                 DbEvent::Connected => Some("connected"),
                 _ => None,
@@ -442,6 +443,7 @@ fn tab_explain_answers_as_today() {
         "MySql never connected: sent: EXPLAIN FORMAT=TREE SELECT 1",
         "MySql before any word: sent: EXPLAIN FORMAT=TREE SELECT 1",
         "MySql its session said its server: sent: EXPLAIN FORMAT=TREE SELECT 1",
+        "MySql its session said its language: sent: EXPLAIN FORMAT=TREE SELECT 1",
         "MySql its session said its plan word: sent: EXPLAIN FORMAT=TREE SELECT 1",
         "MySql its session said connected: sent: EXPLAIN FORMAT=TREE SELECT 1",
         "MySql after Explain(None): not offered",
@@ -451,6 +453,7 @@ fn tab_explain_answers_as_today() {
         "MariaDb never connected: sent: EXPLAIN FORMAT=TREE SELECT 1",
         "MariaDb before any word: sent: EXPLAIN FORMAT=TREE SELECT 1",
         "MariaDb its session said its server: sent: EXPLAIN FORMAT=TREE SELECT 1",
+        "MariaDb its session said its language: sent: EXPLAIN FORMAT=TREE SELECT 1",
         "MariaDb its session said its plan word: not offered",
         "MariaDb its session said connected: not offered",
         "MariaDb after Explain(Some(MySqlTree)): sent: EXPLAIN FORMAT=TREE SELECT 1",

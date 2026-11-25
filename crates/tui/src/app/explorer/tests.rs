@@ -173,3 +173,20 @@ fn a_folder_whose_name_matches_shows_all_it_has() {
     a.explorer.filter.set("");
     assert_eq!(rows(&a), ["+", "[connections]", "other/", "  reports-db", "reports/", "gamma"]);
 }
+
+/// A tab on a profile no driver serves, and a tab without a profile, ask plans in PostgreSQL's
+/// JSON ([`App::tab_explain`]): their text is read as PostgreSQL's.
+#[test]
+fn a_tab_without_a_known_driver_asks_plans_as_postgresql() {
+    use crate::app::tabs::TabKind;
+    use crate::widgets::editor::Editor;
+    use datarig_core::driver::ExplainFormat;
+    let p = ConnectionConfig { name: "odd".into(), driver: "redis".into(), ..ConnectionConfig::default() };
+    let mut a = app(vec![p]);
+    let id = a.profiles.iter().find(|p| p.name == "odd").expect("profile").id;
+    let on_odd = a.tabs.open(TabKind::Console, Some(id), Editor::new(""));
+    let unbound = a.tabs.open(TabKind::Console, None, Editor::new(""));
+    assert!(a.profile_capabilities(Some(id)).is_none(), "no driver serves it");
+    assert_eq!(a.tab_explain(on_odd), Some(ExplainFormat::PostgresJson));
+    assert_eq!(a.tab_explain(unbound), Some(ExplainFormat::PostgresJson));
+}
