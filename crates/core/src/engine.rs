@@ -24,18 +24,19 @@ mod why;
 pub use facts::{EngineFacts, Fact, MyFacts, PgFacts, PingIdentity, Provider, ServerFacts, Support, Topology, Version};
 pub use id::{EngineId, Expected};
 pub use mysql_family::{MYSQL_FILTER_CALLS, MYSQL_REFUSED_CALLS};
-pub use postgres::TX_ROLLBACK_ANSWER_WAIT;
 pub use postgres::{PG_FILTER_CALLS, PG_REFUSED_CALLS};
-pub use rules::{Rules, UNBOUND_TAB_DIALECT};
+pub use postgres::{PG_PLAN, TX_ROLLBACK_ANSWER_WAIT};
+pub use rules::{Rules, UNBOUND_TAB_DIALECT, UNBOUND_TAB_PLAN};
 pub use session::{OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof};
 pub use spec::{
     CancelRules, CatalogueRules, DdlOfIndex, DdlRules, DdlToConsole, EditRules, EngineSpec, ExportRules, FilterCalls,
-    FilterShape, FilterSql, FilterSyntax, GroupParts, InputRules, Like, NameMatch, NullSafe, ResultTables, RiskRules,
-    SessionRules, SortRules, TextRules, Transport, TxRules, ValueRules,
+    FilterShape, FilterSql, FilterSyntax, GroupParts, InputRules, Like, NameMatch, NullSafe, PlanRules, ResultTables,
+    RiskRules, SessionRules, SortRules, TextRules, Transport, TxRules, ValueRules,
 };
 pub use tx::{CountInTx, DdlLock, TxAsk, TxNote, TxRefusal, TxStatement, TxVerdict};
 pub use why::{Feature, Why};
 
+use crate::driver::ExplainFormat;
 use crate::profile::dsn::Scheme;
 use crate::profile::session::Dbms;
 
@@ -72,6 +73,22 @@ pub fn expected(driver: &str) -> Expected {
             family => Expected::Family(family),
         },
         None => Expected::Unknown(driver.to_string()),
+    }
+}
+
+/// The plan format the server of `f` gives, as the plan rules of the engine its greeting names
+/// answer ([`PlanRules`]): a MySQL-family server's greeting decides, whichever engine its
+/// version line names, as it decides its edits; an engine that gives no plan the app reads
+/// answers why.
+pub fn plan_of(f: &ServerFacts) -> Fact<ExplainFormat> {
+    let engine = match &f.detail {
+        EngineFacts::MySql(my) | EngineFacts::MariaDb(my) => my.greeting,
+        EngineFacts::Postgres(_) => EngineId::Postgres,
+    };
+    match &engine.spec().plan {
+        Fact::Known(rules) => rules.format(f),
+        Fact::No(why) => Fact::No(why.clone()),
+        Fact::Unknown(why) => Fact::Unknown(why.clone()),
     }
 }
 

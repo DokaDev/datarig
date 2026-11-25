@@ -1,7 +1,9 @@
 //! What is fixed per engine, known without a connection: one [`EngineSpec`] per engine.
 
 use super::{CountInTx, EngineId, Fact, OpenVerdict, ReadOnlyProof, ServerFacts, Support, TxStatement, TxVerdict};
-use crate::driver::{ColumnMeta, EditFormat, Hierarchy, ReadIn, ServerMessage, SessionRole, SessionValues, ValueKind};
+use crate::driver::{
+    ColumnMeta, EditFormat, ExplainFormat, Hierarchy, ReadIn, ServerMessage, SessionRole, SessionValues, ValueKind,
+};
 use crate::edit::{Invalid, TableColumn};
 use crate::export::keyset::NotKeyset;
 use crate::export::{Kind, Refused, SqlCells, SqlColumn};
@@ -64,6 +66,8 @@ pub struct EngineSpec {
     pub sort: &'static dyn SortRules,
     /// How a table's filter is written.
     pub filter: Fact<&'static dyn FilterSql>,
+    /// Which plan format its servers give.
+    pub plan: Fact<&'static dyn PlanRules>,
 }
 
 /// How an engine's text is read on a server.
@@ -221,6 +225,12 @@ pub trait EditRules: Sync {
         applied_by: Option<&ServerFacts>,
         format: EditFormat,
     ) -> Support;
+}
+
+/// Which plan format an engine's servers give.
+pub trait PlanRules: Sync {
+    /// The plan format the server of `f` gives, or why it gives none the app reads.
+    fn format(&self, f: &ServerFacts) -> Fact<ExplainFormat>;
 }
 
 /// How an engine's catalogue names what a result reads.

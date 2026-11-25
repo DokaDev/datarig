@@ -3,12 +3,13 @@
 use super::{
     CancelRules, CatalogueRules, CountInTx, DdlLock, DdlOfIndex, DdlRules, DdlToConsole, EditRules, EngineId,
     EngineSpec, ExportRules, Fact, FilterCalls, FilterShape, FilterSql, FilterSyntax, GroupParts, InputRules, Like,
-    NameMatch, NullSafe, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, ResultTables, RiskRules, ServerFacts,
-    SessionRules, SortRules, Support, TextRules, Transport, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict,
-    ValueRules,
+    NameMatch, NullSafe, OpenVerdict, PlanRules, READ_ONLY_NOT_PROVEN, ReadOnlyProof, ResultTables, RiskRules,
+    ServerFacts, SessionRules, SortRules, Support, TextRules, Transport, TxAsk, TxNote, TxRefusal, TxRules,
+    TxStatement, TxVerdict, ValueRules,
 };
 use crate::driver::{
-    ArrayElement, ColumnMeta, EditFormat, Hierarchy, ReadIn, ServerMessage, SessionRole, SessionValues, ValueKind,
+    ArrayElement, ColumnMeta, EditFormat, ExplainFormat, Hierarchy, ReadIn, ServerMessage, SessionRole, SessionValues,
+    ValueKind,
 };
 use crate::edit::input::{self, TypeName};
 use crate::edit::{BitsForm, BytesForm, Invalid, TableColumn};
@@ -46,7 +47,21 @@ pub static SPEC: EngineSpec = EngineSpec {
     ddl: Fact::Known(&PgDdl),
     sort: &PgSort,
     filter: Fact::Known(&PgFilter),
+    plan: Fact::Known(&PgPlan),
 };
+
+/// The plan format PostgreSQL's servers give: `EXPLAIN (FORMAT JSON)`, on every version.
+pub const PG_PLAN: ExplainFormat = ExplainFormat::PostgresJson;
+
+/// Which plan format PostgreSQL's servers give.
+struct PgPlan;
+
+impl PlanRules for PgPlan {
+    /// [`PG_PLAN`], whatever the server's version and however it is reached.
+    fn format(&self, _: &ServerFacts) -> Fact<ExplainFormat> {
+        Fact::Known(PG_PLAN)
+    }
+}
 
 /// How PostgreSQL's text is read.
 struct PgText;

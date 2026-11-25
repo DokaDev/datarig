@@ -16,7 +16,7 @@ use crate::session::{Tracked, my_error};
 use datarig_core::driver::{Capabilities, DbError, EditFormat, ExplainFormat, Hierarchy, MySqlEdit};
 use datarig_core::engine::mysql_family::line_names_mariadb;
 use datarig_core::engine::{
-    EngineFacts, EngineId, Fact, MyFacts, PingIdentity, ServerFacts, Support, Topology, Version, Why,
+    EngineFacts, EngineId, Fact, MyFacts, PingIdentity, ServerFacts, Support, Topology, Version, Why, plan_of,
 };
 use datarig_core::sql::dialect::{Dialect, DollarQuotes, Language, MySqlMode};
 use datarig_core::sql::risk::mysql::{Judge, Judged};
@@ -278,7 +278,8 @@ pub(crate) fn identity(g: &Greeting, report: &VersionReport) -> PingIdentity {
 pub(crate) struct Derived {
     /// The language the session's text is read in: the server's, in the session's sql mode.
     pub(crate) language: Language,
-    /// The plan format the server gives: MySQL's tree from 8.0.16 on (`EXPLAIN FORMAT=TREE`;
+    /// The plan format the server gives, as the plan rules of the greeting's engine answer
+    /// ([`datarig_core::engine::plan_of`]): MySQL's tree from 8.0.16 on (`EXPLAIN FORMAT=TREE`;
     /// `EXPLAIN ANALYZE` from 8.0.18, an older one's error is the server's), none on MariaDB
     /// (its plans are shaped otherwise).
     pub(crate) explain: Option<ExplainFormat>,
@@ -299,9 +300,14 @@ pub(crate) fn derive(facts: &ServerFacts, tracked: &Tracked) -> Derived {
     // The greeting's engine and number, whichever engine the version line names.
     let greeting = Greeting::of(facts);
     let language = Language::Sql(dialect(&greeting, tracked.mode(dollar_quotes(facts))));
-    let explain = match greeting.mariadb {
-        false => (greeting.handshake >= Version::new(8, 0, 16)).then_some(ExplainFormat::MySqlTree),
-        true => None,
+    // The plan rules of the greeting's engine (`engine::plan_of`). PostgreSQL's facts, which no
+    // session of this driver finds, get none, as before.
+    let explain = match &facts.detail {
+        EngineFacts::MySql(_) | EngineFacts::MariaDb(_) => match plan_of(facts) {
+            Fact::Known(format) => Some(format),
+            Fact::No(_) | Fact::Unknown(_) => None,
+        },
+        EngineFacts::Postgres(_) => None,
     };
     // The edit rules of the greeting's engine, which read the greeting's number.
     let edit = match engine_of(greeting.mariadb).spec().edit {
