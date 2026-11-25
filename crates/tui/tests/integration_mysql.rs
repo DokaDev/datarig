@@ -1079,6 +1079,7 @@ async fn filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line() 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_filter_on_a_column_named_current_role_reads_the_column() {
     use datarig_tui::app::action::Action;
+    use datarig_tui::app::table_query::OrderKeysState;
     let Some((url, admin)) = urls("a_filter_on_a_column_named_current_role_reads_the_column") else { return };
     let table = format!("zz_it_currentrole_{}", std::process::id());
     let t = format!("shop.{table}");
@@ -1095,6 +1096,19 @@ async fn a_filter_on_a_column_named_current_role_reads_the_column() {
     let (mut app, mut rx) = by_value_app(&url, &table, &dir);
     app.dispatch(Action::RunStatement);
     pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 == 4).await;
+    // The table's keys come from the profile's metadata session, which may open after the first
+    // run: until they are read no key is appended to an order. Run again until they are, so the
+    // sort below ends with the primary key whatever the timing.
+    let keys = |a: &App| a.tab().doc.table_query.as_ref().map(|q| q.order_keys.clone());
+    for _ in 0..5 {
+        if matches!(keys(&app), Some(OrderKeysState::Known { .. })) {
+            break;
+        }
+        app.dispatch(Action::RunStatement);
+        let settled = |a: &App| !matches!(keys(a), Some(OrderKeysState::Asked { .. }));
+        pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 == 4 && settled(a)).await;
+    }
+    assert!(matches!(keys(&app), Some(OrderKeysState::Known { .. })), "the table's keys: {:?}", keys(&app));
     // A NULL of `current_role`: the column's NULLs, not the function's (NULL without a role).
     let (got, text) = by_value(&mut app, &mut rx, &["1"], "current_role", '=').await;
     assert_eq!((got, text.as_str()), (vec!["1".into(), "3".into(), "4".into()], "`current_role` IS NULL"));
