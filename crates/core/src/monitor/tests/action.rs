@@ -864,7 +864,10 @@ fn every_refusal_reading_answers_as_today() {
         NativeError::MySql { errno: MYSQL_EXECUTE_DENIED },
         NativeError::MySql { errno: 1317 },
     ];
-    let users = ["rdsadmin", "azure_superuser", "a_user_name_of_17c", "alice"];
+    // The providers' service accounts, a long and a short name, and multibyte names of 16 and 17
+    // characters (32 and 34 bytes): the RDS rule counts characters.
+    let named = ["rdsadmin", "azure_superuser", "cloudsqladmin", "azuresu", "a_user_name_of_17c", "alice"];
+    let users: Vec<String> = named.iter().map(|u| u.to_string()).chain([16, 17].map(|n| "\u{e9}".repeat(n))).collect();
     let vias = [Via::Standard, Via::Procedure("mysql.rds_kill")];
     let mut formats = Vec::new();
     for flavour in FLAVOURS {
@@ -882,7 +885,7 @@ fn every_refusal_reading_answers_as_today() {
     let mut got = String::new();
     for (name, format) in &formats {
         for via in vias {
-            for user in users {
+            for user in &users {
                 let answers: Vec<String> =
                     errors.iter().map(|e| format!("{e:?} {:?}", denied(format, &who(user), via, *e))).collect();
                 let _ = writeln!(got, "{name} | {via:?} | {user}: {}", answers.join(", "));

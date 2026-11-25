@@ -477,4 +477,19 @@ async fn an_action_without_the_engines_rules_sends_nothing() {
     let (outcome, sent) = act_lookup(Ok(*mysql), &m, false, ActionKind::Cancel, vec![running(), ok()]).await;
     assert_eq!(outcome, ActionOutcome::Acknowledged { via: Via::Standard });
     assert_eq!(sent, [sql::guard(&m, 63114, TOKEN), "KILL QUERY 63114".to_owned()]);
+    // The rules come first: before the marker confirmed at open and the target's id are looked at.
+    let crossed = || Ok(*postgres);
+    let negative = ActionTarget { key: SessionKey { id: -1, started: None }, ..target() };
+    for kind in [ActionKind::Cancel, ActionKind::Terminate] {
+        let (outcome, sent) = acting_with(crossed(), &m, false, None, kind, &target(), vec![running(), ok()]).await;
+        assert_eq!((outcome, sent), (ActionOutcome::NotSent(NotSent::Engine(Why::EnginesDisagree)), Vec::new()));
+        let (outcome, sent) =
+            acting_with(crossed(), &m, false, Some(&marker()), kind, &negative, vec![running(), ok()]).await;
+        assert_eq!((outcome, sent), (ActionOutcome::NotSent(NotSent::Engine(Why::EnginesDisagree)), Vec::new()));
+    }
+    // With the engine's rules, the same two answer as before.
+    let (outcome, _) = acting_with(Ok(*mysql), &m, false, None, ActionKind::Cancel, &target(), vec![]).await;
+    assert_eq!(outcome, ActionOutcome::NotSent(NotSent::Unconfirmed));
+    let (outcome, _) = acting_with(Ok(*mysql), &m, false, Some(&marker()), ActionKind::Cancel, &negative, vec![]).await;
+    assert_eq!(outcome, ActionOutcome::NotSent(NotSent::Stale(Stale::SessionGone)));
 }

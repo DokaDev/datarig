@@ -301,5 +301,7 @@ async fn an_action_without_the_engines_rules_sends_nothing() {
     let fake = Fake::new(vec![answered(Ok(row("f", "t", "t", Some("t"))))]);
     let acted = acting_with(Ok(*postgres), &fake, &pg(Route::Direct), false, ActionKind::Cancel).await;
     assert_eq!(acted.outcome, ActionOutcome::Acknowledged { via: Via::Standard });
-    assert_eq!(fake.sent().len(), 3);
+    let direct = pg(Route::Direct);
+    let want = [sql::begin(ACTION_LIMIT), sql::action(&direct, ActionKind::Cancel, &target()), "COMMIT".to_owned()];
+    assert_eq!(fake.sent(), want);
 }
