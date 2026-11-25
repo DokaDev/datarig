@@ -18,6 +18,45 @@ brew upgrade datarig   # later, for a new release
 
 The tap installs stable releases only. datarig is not in homebrew-core.
 
+## NixOS
+
+Import `nix/nixos.nix` into the NixOS configuration to install datarig with the
+next system rebuild. If you copy the module into your configuration repository,
+copy `nix/package.nix` next to it as well.
+
+```nix
+{
+  imports = [ ./datarig/nixos.nix ];
+
+  programs.datarig = {
+    enable = true;
+    settings = {
+      theme = "catppuccin";
+      icons = "off";
+      editor.auto_pairs = "on";
+    };
+  };
+}
+```
+
+Apply the configuration with `sudo nixos-rebuild switch`. With `settings` set,
+datarig defaults to the read-only `/etc/datarig/config.toml`. Edit these settings
+in Nix. Omit `settings` to use the writable config in your home directory.
+For connection profiles, keep passwords outside the generated file and choose a
+[password source](guide/connections.md#passwords).
+
+From the repository checkout, build and run the packaged release with Nixpkgs
+that provides Rust 1.93 or newer:
+
+```sh
+nix-build
+./result/bin/datarig --version
+```
+
+To install it into your user profile, run `nix profile add --file default.nix`.
+The package disables datarig's GitHub update check. To upgrade, build or install
+from a checkout with a newer package version.
+
 ## Release archives
 
 Download the archive for your platform from
