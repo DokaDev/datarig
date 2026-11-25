@@ -234,16 +234,13 @@ pub fn rules_for_with(
 /// `read_only` or not. Whether the row is one of this app's own tabs is the caller's to tell
 /// (it knows the tabs).
 pub fn decide(format: &MonitorFormat, row: &SessionRow, read_only: bool, kind: ActionKind) -> Decision {
-    // Read-only first: the rules are looked up only for a profile that may act.
-    if read_only {
-        return Decision::Refuse(Refusal::ReadOnly);
-    }
-    decide_with(format.rules(), format, row, read_only, kind)
+    decide_with(MonitorFormat::rules, format, row, read_only, kind)
 }
 
-/// [`decide`] with the engine's rules looked up as `lookup` (checked by [`rules_for_with`]).
+/// [`decide`] with the engine's rules looked up by `lookup` (checked by [`rules_for_with`]),
+/// which is called only for a profile that may act: read-only is refused first.
 pub fn decide_with(
-    lookup: Result<&'static dyn MonitorRules, Why>,
+    lookup: impl FnOnce(&MonitorFormat) -> Result<&'static dyn MonitorRules, Why>,
     format: &MonitorFormat,
     row: &SessionRow,
     read_only: bool,
@@ -252,7 +249,7 @@ pub fn decide_with(
     if read_only {
         return Decision::Refuse(Refusal::ReadOnly);
     }
-    let rules = match rules_for_with(lookup, format) {
+    let rules = match rules_for_with(lookup(format), format) {
         Ok(rules) => rules,
         Err(why) => return Decision::Refuse(Refusal::Engine(why)),
     };

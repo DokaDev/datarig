@@ -9,7 +9,7 @@
 //! and the server's status and variables: no user's table is touched. A refusal for lack of a
 //! privilege is an answer of the probe (what the account may read), never a failure of it.
 //!
-//! An action on another session ([`act`]) reads the target right before it (its session and
+//! An action on another session ([`act_with`]) reads the target right before it (its session and
 //! statement as the tick tells them, compared in the core) and sends `KILL QUERY` or `KILL`
 //! only when it is still what the row showed, and only when the monitor's connection is
 //! confirmed to reach the server directly: at open, and again in that very read, the server
@@ -104,7 +104,7 @@ pub(crate) async fn monitor_loop(
     };
     let format = match probed {
         Ok(my) => {
-            // Not confirmed at open: no action is offered (nor sent, [`act`]).
+            // Not confirmed at open: no action is offered (nor sent, [`act_with`]).
             let my = MySqlMonitor { unconfirmed: marker.is_none(), ..my };
             let format = monitor_format(my.clone());
             let _ = events.send(DbEvent::Monitor(Ok(format.clone())));
@@ -390,7 +390,7 @@ const NO_SUCH_THREAD: u16 = 1094;
 /// `ER_QUERY_INTERRUPTED`: the statement was stopped by a `KILL QUERY` (or `KILL`).
 const QUERY_INTERRUPTED: &str = "1317";
 
-/// [`act`] given at most `deadline`; past it, the connection is given up on (the error), and
+/// [`act_with`] given at most `deadline`; past it, the connection is given up on (the error), and
 /// the outcome is unknown once the statement that acts may have gone out.
 #[allow(clippy::too_many_arguments)]
 async fn within(

@@ -943,7 +943,7 @@ fn a_crossed_format_is_refused_by_decide() {
     for (rules, format, row) in crossed {
         for kind in BOTH {
             assert_eq!(
-                decide_with(Ok(rules), format, row, false, kind),
+                decide_with(|_| Ok(rules), format, row, false, kind),
                 Decision::Refuse(Refusal::Engine(Why::EnginesDisagree)),
                 "{format:?} {kind:?}"
             );
@@ -957,7 +957,7 @@ fn a_crossed_format_is_refused_by_decide() {
     }
     // A read-only profile is refused first, as before any rule.
     let rules = engine_rules(EngineId::MySql);
-    assert_eq!(decide_with(Ok(rules), &pg, &pg_row, true, ActionKind::Cancel), Decision::Refuse(Refusal::ReadOnly));
+    assert_eq!(decide_with(|_| Ok(rules), &pg, &pg_row, true, ActionKind::Cancel), Decision::Refuse(Refusal::ReadOnly));
 }
 
 #[test]
@@ -970,12 +970,12 @@ fn a_format_without_its_engines_rules_offers_and_sends_nothing() {
         for (format, row) in [(&pg, &pg_row), (&my, &my_row)] {
             for kind in BOTH {
                 assert_eq!(
-                    decide_with(Err(why.clone()), format, row, false, kind),
+                    decide_with(|_| Err(why.clone()), format, row, false, kind),
                     Decision::Refuse(Refusal::Engine(why.clone())),
                     "{why:?} {kind:?}"
                 );
                 assert_eq!(
-                    decide_with(Err(why.clone()), format, row, true, kind),
+                    decide_with(|_| Err(why.clone()), format, row, true, kind),
                     Decision::Refuse(Refusal::ReadOnly),
                     "read-only first"
                 );
@@ -988,6 +988,24 @@ fn a_format_without_its_engines_rules_offers_and_sends_nothing() {
             ] {
                 assert_eq!(denied_with(Err(why.clone()), format, &who("alice"), Via::Standard, error), None);
             }
+        }
+    }
+}
+
+/// A read-only profile is refused before the engine's rules are looked up: the lookup is never
+/// called.
+#[test]
+fn a_read_only_profile_is_refused_before_the_rules_are_looked_up() {
+    let pg = pg_format(Route::Direct);
+    let pg_row = by_application(&pg_sessions(), "zz_mon_b").clone();
+    let (my, my_list) = my_root();
+    let my_row = by_id(&my_list, 18986).clone();
+    let never = |_: &MonitorFormat| -> Result<&'static dyn MonitorRules, Why> {
+        panic!("the rules were looked up on a read-only profile")
+    };
+    for (format, row) in [(&pg, &pg_row), (&my, &my_row)] {
+        for kind in BOTH {
+            assert_eq!(decide_with(never, format, row, true, kind), Decision::Refuse(Refusal::ReadOnly));
         }
     }
 }
