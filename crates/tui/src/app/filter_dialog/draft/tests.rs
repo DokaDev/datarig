@@ -194,7 +194,8 @@ fn a_changed_row_is_written_again_in_its_place_alone() {
         assert_eq!(list.row, Some(row("id", Op::InList, vec![num("1"), num("2")])));
         // A value ticked off the list.
         assert!(w.set(1, row("id", Op::InList, vec![num("1")]), &t));
-        assert_eq!(w.text(), "price  >  2 AND id IN (1) AND born IS NULL");
+        let id = if d == MY { "`id`" } else { "id" };
+        assert_eq!(w.text(), format!("price  >  2 AND {id} IN (1) AND born IS NULL"));
         assert_eq!(w.terms()[1].origin, Origin::Edited);
         assert_eq!(w.terms()[0].origin, Origin::Original(0..11));
         assert!(!w.set(3, row("id", Op::IsNull, vec![]), &t));
@@ -253,47 +254,51 @@ fn rendered() -> Vec<(Row, &'static str, &'static str)> {
         r
     };
     vec![
-        (row("id", Op::Eq, vec![num("7")]), "id = 7", "id = 7"),
-        (row("name", Op::Eq, vec![text("O'Brien")]), "name = 'O''Brien'", "name = 'O''Brien'"),
+        (row("id", Op::Eq, vec![num("7")]), "id = 7", "`id` = 7"),
+        (row("name", Op::Eq, vec![text("O'Brien")]), "name = 'O''Brien'", "`name` = 'O''Brien'"),
         (row("Mixed Case", Op::Eq, vec![text("x")]), "\"Mixed Case\" = 'x'", "`Mixed Case` = 'x'"),
-        (row("born", Op::Eq, vec![text("2024-01-02")]), "born = '2024-01-02'", "born = '2024-01-02'"),
+        (row("born", Op::Eq, vec![text("2024-01-02")]), "born = '2024-01-02'", "`born` = '2024-01-02'"),
         (
             row("data", Op::Eq, vec![Value::Bytes(vec![0x0a, 0xff])]),
             "data = E'\\\\x0aff'::pg_catalog.bytea",
-            "data = X'0AFF'",
+            "`data` = X'0AFF'",
         ),
         (
             row("price", Op::Between, vec![num("1.5"), num("-2e3")]),
             "price BETWEEN 1.5 AND -2e3",
-            "price BETWEEN 1.5 AND -2000",
+            "`price` BETWEEN 1.5 AND -2000",
         ),
-        (row("id", Op::Ne, vec![num("7")]), "id <> 7", "id <> 7"),
-        (row("name", Op::NeOrNull, vec![text("a")]), "name IS DISTINCT FROM 'a'", "NOT (name <=> 'a')"),
-        (row("id", Op::Lt, vec![num("2")]), "id < 2", "id < 2"),
-        (row("id", Op::Le, vec![num("2")]), "id <= 2", "id <= 2"),
-        (row("id", Op::Gt, vec![num("2")]), "id > 2", "id > 2"),
-        (row("id", Op::Ge, vec![num("2")]), "id >= 2", "id >= 2"),
+        (row("id", Op::Ne, vec![num("7")]), "id <> 7", "`id` <> 7"),
+        (row("name", Op::NeOrNull, vec![text("a")]), "name IS DISTINCT FROM 'a'", "NOT (`name` <=> 'a')"),
+        (row("id", Op::Lt, vec![num("2")]), "id < 2", "`id` < 2"),
+        (row("id", Op::Le, vec![num("2")]), "id <= 2", "`id` <= 2"),
+        (row("id", Op::Gt, vec![num("2")]), "id > 2", "`id` > 2"),
+        (row("id", Op::Ge, vec![num("2")]), "id >= 2", "`id` >= 2"),
         (
             row("name", Op::Contains, vec![text("5%_!")]),
             "name ILIKE '%5!%!_!!%' ESCAPE '!'",
-            "LOWER(name) LIKE LOWER('%5!%!_!!%') ESCAPE '!'",
+            "LOWER(`name`) LIKE LOWER('%5!%!_!!%') ESCAPE '!'",
         ),
-        (row("name", Op::StartsWith, vec![text("ab")]), "name LIKE 'ab%' ESCAPE '!'", "name LIKE 'ab%' ESCAPE '!'"),
-        (row("id", Op::InList, vec![num("1"), num("2")]), "id IN (1, 2)", "id IN (1, 2)"),
-        (row("id", Op::InList, vec![num("1"), Value::Null]), "(id IN (1) OR id IS NULL)", "(id IN (1) OR id IS NULL)"),
-        (row("name", Op::NotInList, vec![text("a"), text("b")]), "name NOT IN ('a', 'b')", "name NOT IN ('a', 'b')"),
+        (row("name", Op::StartsWith, vec![text("ab")]), "name LIKE 'ab%' ESCAPE '!'", "`name` LIKE 'ab%' ESCAPE '!'"),
+        (row("id", Op::InList, vec![num("1"), num("2")]), "id IN (1, 2)", "`id` IN (1, 2)"),
+        (
+            row("id", Op::InList, vec![num("1"), Value::Null]),
+            "(id IN (1) OR id IS NULL)",
+            "(`id` IN (1) OR `id` IS NULL)",
+        ),
+        (row("name", Op::NotInList, vec![text("a"), text("b")]), "name NOT IN ('a', 'b')", "`name` NOT IN ('a', 'b')"),
         (
             kept(row("name", Op::NotInList, vec![text("a"), text("b")])),
             "(name NOT IN ('a', 'b') OR name IS NULL)",
-            "(name NOT IN ('a', 'b') OR name IS NULL)",
+            "(`name` NOT IN ('a', 'b') OR `name` IS NULL)",
         ),
         (
             row("name", Op::NotInList, vec![text("a"), Value::Null]),
             "(name NOT IN ('a') AND name IS NOT NULL)",
-            "(name NOT IN ('a') AND name IS NOT NULL)",
+            "(`name` NOT IN ('a') AND `name` IS NOT NULL)",
         ),
-        (row("born", Op::IsNull, vec![]), "born IS NULL", "born IS NULL"),
-        (row("born", Op::IsNotNull, vec![]), "born IS NOT NULL", "born IS NOT NULL"),
+        (row("born", Op::IsNull, vec![]), "born IS NULL", "`born` IS NULL"),
+        (row("born", Op::IsNotNull, vec![]), "born IS NOT NULL", "`born` IS NOT NULL"),
     ]
 }
 
@@ -309,7 +314,7 @@ fn each_operator_writes_its_condition_per_dialect() {
     // MySQL: a `_ci` collation ignores case already.
     let mut w = Where::from_text("", &target(MY));
     w.add(row("email", Op::Contains, vec![text("x")]), &target(MY));
-    assert_eq!(w.text(), "email LIKE '%x%' ESCAPE '!'");
+    assert_eq!(w.text(), "`email` LIKE '%x%' ESCAPE '!'");
 }
 
 #[test]
@@ -399,7 +404,7 @@ fn typed_values_are_numbers_only_when_plain_numbers() {
     let i = w.add(Row { values: one("1 OR 1=1", &id), ..Row::new("id", Op::Eq) }, &t);
     assert_eq!(w.terms()[i].problem, Some(RenderError::NotNumber("id".into())));
     w.add(Row { values: one("x' OR '1'='1", &info("name", ColumnKind::Text)), ..Row::new("name", Op::Eq) }, &t);
-    assert_eq!(w.text(), "name = 'x'' OR ''1''=''1'");
+    assert_eq!(w.text(), "`name` = 'x'' OR ''1''=''1'");
     // Text as typed, NULL as text, an empty field as no value.
     let name = info("name", ColumnKind::Text);
     assert_eq!(one(" a b ", &name), vec![text(" a b ")]);
@@ -952,7 +957,7 @@ fn a_timestamp_instant_is_a_row_only_on_a_timestamp() {
     let v = text("2026-11-10 09:30:00+00:00");
     assert_eq!(w.terms()[0].row, Some(row("at", Op::Eq, vec![v.clone()])));
     assert!(w.set(0, row("at", Op::InList, vec![v]), &t));
-    assert_eq!(w.text(), format!("at IN ({instant})"));
+    assert_eq!(w.text(), format!("`at` IN ({instant})"));
     // The table's types not read yet: the names alone, every column of unknown type.
     let names =
         Target::new(MY, vec![ColumnFacts::new("id", ColumnKind::Other), ColumnFacts::new("at", ColumnKind::Other)]);

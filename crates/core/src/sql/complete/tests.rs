@@ -393,7 +393,7 @@ fn values_in(d: Dialect, src_with_bar: &str, checks: Option<&[CheckValues]>) -> 
     let cursor = src_with_bar.find('|').unwrap();
     let src = src_with_bar.replacen('|', "", 1);
     let lookup = |s: &str, t: &str| if (s, t) == ("shop", "orders") { checks } else { Some(&[][..]) };
-    complete_with(&src, cursor, &enums(), false, &default_path(), d, LexState::default(), &lookup)
+    complete_with(&src, cursor, &enums(), false, &default_path(), d, LexState::default(), &lookup, false)
 }
 
 fn value_labels(d: Dialect, src_with_bar: &str) -> Vec<String> {
@@ -649,12 +649,11 @@ fn the_innermost_query_names_an_unqualified_column() {
     let at = |src: &str| {
         let cursor = src.find('|').unwrap();
         let text = src.replacen('|', "", 1);
-        complete_with(&text, cursor, &c, false, &default_path(), Dialect::Postgres, LexState::default(), &|_, _| {
-            Some(&[][..])
-        })
-        .completion
-        .map(|c| c.items.into_iter().map(|i| i.label).collect::<Vec<_>>())
-        .unwrap_or_default()
+        let none = |_: &str, _: &str| Some(&[][..]);
+        complete_with(&text, cursor, &c, false, &default_path(), Dialect::Postgres, LexState::default(), &none, false)
+            .completion
+            .map(|c| c.items.into_iter().map(|i| i.label).collect::<Vec<_>>())
+            .unwrap_or_default()
     };
     let inner = "SELECT * FROM shop.orders WHERE id IN (SELECT order_id FROM shop.tickets WHERE status = '|')";
     assert_eq!(at(inner), ["open", "closed"]);
@@ -675,6 +674,39 @@ fn a_values_detail_is_its_types_name() {
         "enum('pending','paid','shipped','cancelled')".into();
     let src = "SELECT * FROM shop.orders WHERE status = '";
     let d = Dialect::MySql(MySqlMode::default());
-    let c = complete_with(src, src.len(), &c, false, &[], d, LexState::default(), &|_, _| Some(&[][..]));
+    let c = complete_with(src, src.len(), &c, false, &[], d, LexState::default(), &|_, _| Some(&[][..]), false);
     assert_eq!(c.completion.unwrap().items[0].detail.as_deref(), Some("enum"));
+}
+
+/// With `quote_always` (a table's filter), columns are written as the filter writes them: on
+/// MySQL and MariaDB always quoted, after `WHERE` and after `ORDER BY`; on PostgreSQL bare where
+/// that reads back the same, as without it.
+#[test]
+fn a_filters_completion_writes_names_as_the_filter_does() {
+    use crate::sql::dialect::MySqlMode;
+    let mut c = cat();
+    c.relations.push(Relation {
+        schema: "shop".into(),
+        name: "roles".into(),
+        is_view: false,
+        columns: vec![ColumnInfo::new("name", "text"), ColumnInfo::new("current_role", "text")],
+    });
+    let label = |src: &str, d: Dialect, always: bool| {
+        let none = |_: &str, _: &str| Some(&[][..]);
+        let out = complete_with(src, src.len(), &c, true, &[], d, LexState::default(), &none, always);
+        out.completion.map(|c| c.items[0].label.clone())
+    };
+    let family = [Dialect::MySql(MySqlMode::default()), Dialect::MariaDb(MySqlMode::default())];
+    for src in ["SELECT * FROM shop.roles WHERE na", "SELECT * FROM shop.roles ORDER BY na"] {
+        for d in family {
+            assert_eq!(label(src, d, true).as_deref(), Some("`name`"), "{d:?} {src}");
+            assert_eq!(label(src, d, false).as_deref(), Some("name"), "{d:?} {src}: the editor's");
+        }
+        assert_eq!(label(src, Dialect::Postgres, true).as_deref(), Some("name"), "{src}");
+    }
+    for src in ["SELECT * FROM shop.roles WHERE current_r", "SELECT * FROM shop.roles ORDER BY current_r"] {
+        for d in family {
+            assert_eq!(label(src, d, true).as_deref(), Some("`current_role`"), "{d:?} {src}");
+        }
+    }
 }

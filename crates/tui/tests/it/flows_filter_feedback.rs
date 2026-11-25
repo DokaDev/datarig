@@ -770,3 +770,92 @@ fn a_failed_ordered_run_reads_the_keys_again() {
     h.sent();
     run_again_asks_the_keys(&mut h);
 }
+
+/// A column the filter dialog's `WHERE` and `ORDER BY` fields complete is written as the table's
+/// filter writes it: on MySQL and MariaDB always quoted (a column named like a call the server
+/// makes without parentheses, `current_role`, is then that column), on PostgreSQL only when it
+/// must be.
+#[test]
+fn a_completed_column_is_quoted_on_mysql_and_mariadb() {
+    use datarig_core::sql::complete::ColumnInfo;
+    use ratatui::crossterm::event::KeyModifiers;
+    let mut cat = catalog();
+    let users = cat.relations.iter_mut().find(|r| r.name == "users").expect("shop.users");
+    users.columns.push(ColumnInfo::new("current_role", "varchar(20)"));
+    let family = [
+        ("mysql", Language::Sql(Dialect::MySql(MySqlMode::default())), "`name`", "`current_role`"),
+        ("mariadb", Language::Sql(Dialect::MariaDb(MySqlMode::default())), "`name`", "`current_role`"),
+    ];
+    for (driver_name, lang, name, role) in family {
+        let driver = FakeDriver::default();
+        driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
+        let mut p = ConnectionConfig::test_db();
+        (p.name, p.driver) = ("local-my".into(), driver_name.into());
+        let cfg = Config { connections: vec![p], ..Default::default() };
+        let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+        h.db(DbEvent::Language(lang));
+        h.db(DbEvent::Connected);
+        h.db(DbEvent::Schemas(Ok(vec!["shop".into()])));
+        h.db(DbEvent::Catalog(Ok(cat.clone())));
+        open(&mut h, "users");
+        let index = h.app.tabs.active_index();
+        h.tab_db(index, DbEvent::Language(lang));
+        h.tab_db(index, DbEvent::Connected);
+        answer_role(&mut h);
+        h.sent();
+        h.key(KeyCode::Tab);
+        completed(&mut h, name, role, driver_name);
+    }
+    // PostgreSQL as before: bare where it reads back bare.
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Catalog(Ok(cat)));
+    open(&mut h, "users");
+    answer_role(&mut h);
+    h.sent();
+    h.key(KeyCode::Tab);
+    completed(&mut h, "name", "\"current_role\"", "postgres");
+
+    /// The table's first page: `id`, `name` and `current_role` (the order completes the
+    /// columns of the rows loaded).
+    fn answer_role(h: &mut Harness) {
+        let id = h.app.tab().exec.query_id;
+        let index = h.app.tabs.active_index();
+        let columns = vec![
+            meta("id", "int8", true, false),
+            meta("name", "text", false, false),
+            meta("current_role", "text", false, false),
+        ];
+        let rows = vec![vec![Some("1".into()), Some("n".into()), None]];
+        h.tab_db(
+            index,
+            DbEvent::Page { id, columns: Some(columns), rows, more: false, elapsed: Duration::from_millis(2) },
+        );
+    }
+
+    /// In the dialog of the open table: `na` and then `current_r` completed in the `WHERE`
+    /// field and in the `ORDER BY` field, each through `Ctrl+Space` and `Tab`.
+    fn completed(h: &mut Harness, name: &str, role: &str, what: &str) {
+        let pick = |h: &mut Harness, typed: &str| {
+            h.type_text(typed);
+            h.key_mod(KeyCode::Char(' '), KeyModifiers::CONTROL);
+            assert!(h.popup().is_some(), "{what}: {typed} offers a list");
+            h.key(KeyCode::Tab);
+        };
+        let fields = |h: &Harness| h.app.filter_dialog_sql_fields().expect("the SQL view's fields");
+        h.keys("f");
+        h.keys("Q");
+        h.keys("Q");
+        assert_eq!(h.app.key_context(), Ctx::FilterDialogText);
+        pick(h, "na");
+        assert_eq!(fields(h).0, name, "{what}");
+        h.type_text(" = 'x' AND ");
+        pick(h, "current_r");
+        assert_eq!(fields(h).0, format!("{name} = 'x' AND {role}"), "{what}");
+        h.key(KeyCode::Down);
+        pick(h, "na");
+        assert_eq!(fields(h).1, name, "{what}");
+        h.type_text(" DESC, ");
+        pick(h, "current_r");
+        assert_eq!(fields(h).1, format!("{name} DESC, {role}"), "{what}");
+    }
+}

@@ -160,17 +160,23 @@ impl Made {
 impl Drop for Made {
     fn drop(&mut self) {
         let (admin, undo) = (self.admin.clone(), self.undo.clone());
-        let _ = std::thread::spawn(move || {
+        let what = undo.join("; ");
+        let ended = std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             rt.block_on(async {
                 let mut c = side(&admin).await;
                 for s in undo {
-                    let _ = c.query_drop(s).await;
+                    if let Err(e) = c.query_drop(s.as_str()).await {
+                        let _ = writeln!(std::io::stderr(), "warning: {s}: {e}");
+                    }
                 }
                 let _ = c.disconnect().await;
             });
         })
         .join();
+        if ended.is_err() {
+            let _ = writeln!(std::io::stderr(), "warning: {what}: the cleanup connection failed");
+        }
     }
 }
 
@@ -963,22 +969,22 @@ async fn filter_by_value_reads_back_the_rows_it_names() {
     // The cells (by `id`), the column, the entry, the ids it reads back and the filter it runs.
     type Case<'a> = (&'a [&'a str], &'a str, char, &'a [&'a str], &'a str);
     let cases: &[Case] = &[
-        (&["1"], "name", '=', &["1"], "name = 'Apple'"),
-        (&["1"], "name", '!', &["2", "3", "4", "5"], "NOT (name <=> 'Apple')"),
+        (&["1"], "name", '=', &["1"], "`name` = 'Apple'"),
+        (&["1"], "name", '!', &["2", "3", "4", "5"], "NOT (`name` <=> 'Apple')"),
         // `_ci`: case does not count; `_bin`: it does.
-        (&["2"], "name", '=', &["2"], "name = 'apple pie'"),
-        (&["2"], "bname", '=', &["2"], "bname = 'apple pie'"),
-        (&["4"], "name", '=', &["4"], "name = '50%_off'"),
-        (&["1"], "n", '=', &["1"], "n = 1.50"),
-        (&["2"], "at", '!', &["1", "3", "4", "5"], "NOT (at <=> '2026-11-10 10:00:00')"),
-        (&["1"], "at", '=', &["1"], "at = '2026-11-10 09:30:00'"),
-        (&["1"], "b", '=', &["1"], "b = X'01AB'"),
-        (&["4"], "b", '!', &["1", "2", "3", "5"], "NOT (b <=> X'0102')"),
-        (&["3"], "name", '=', &["3"], "name IS NULL"),
-        (&["3"], "name", '!', &["1", "2", "4", "5"], "name IS NOT NULL"),
-        (&["1", "2", "3"], "name", '=', &["1", "2", "3"], "(name IN ('Apple', 'apple pie') OR name IS NULL)"),
-        (&["1", "2", "3"], "name", '!', &["4", "5"], "(name NOT IN ('Apple', 'apple pie') AND name IS NOT NULL)"),
-        (&["1", "2"], "n", '!', &["3", "4", "5"], "(n NOT IN (1.50, 2.00) OR n IS NULL)"),
+        (&["2"], "name", '=', &["2"], "`name` = 'apple pie'"),
+        (&["2"], "bname", '=', &["2"], "`bname` = 'apple pie'"),
+        (&["4"], "name", '=', &["4"], "`name` = '50%_off'"),
+        (&["1"], "n", '=', &["1"], "`n` = 1.50"),
+        (&["2"], "at", '!', &["1", "3", "4", "5"], "NOT (`at` <=> '2026-11-10 10:00:00')"),
+        (&["1"], "at", '=', &["1"], "`at` = '2026-11-10 09:30:00'"),
+        (&["1"], "b", '=', &["1"], "`b` = X'01AB'"),
+        (&["4"], "b", '!', &["1", "2", "3", "5"], "NOT (`b` <=> X'0102')"),
+        (&["3"], "name", '=', &["3"], "`name` IS NULL"),
+        (&["3"], "name", '!', &["1", "2", "4", "5"], "`name` IS NOT NULL"),
+        (&["1", "2", "3"], "name", '=', &["1", "2", "3"], "(`name` IN ('Apple', 'apple pie') OR `name` IS NULL)"),
+        (&["1", "2", "3"], "name", '!', &["4", "5"], "(`name` NOT IN ('Apple', 'apple pie') AND `name` IS NOT NULL)"),
+        (&["1", "2"], "n", '!', &["3", "4", "5"], "(`n` NOT IN (1.50, 2.00) OR `n` IS NULL)"),
     ];
     for (cells, name, key, want, text) in cases {
         let (got, ran) = by_value(&mut app, &mut rx, cells, name, *key).await;
@@ -1019,15 +1025,15 @@ async fn filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line() 
     pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 == 5).await;
     type Case<'a> = (&'a [&'a str], char, &'a [&'a str], &'a str);
     let cases: &[Case] = &[
-        (&["1"], '=', &["1"], "name = _utf8mb4 X'610A62'"),
-        (&["2"], '=', &["2"], "name = _utf8mb4 X'610D62'"),
-        (&["3"], '=', &["3"], "name = _utf8mb4 X'610D0A62'"),
-        (&["1"], '!', &["2", "3", "4", "5"], "NOT (name <=> _utf8mb4 X'610A62')"),
+        (&["1"], '=', &["1"], "`name` = _utf8mb4 X'610A62'"),
+        (&["2"], '=', &["2"], "`name` = _utf8mb4 X'610D62'"),
+        (&["3"], '=', &["3"], "`name` = _utf8mb4 X'610D0A62'"),
+        (&["1"], '!', &["2", "3", "4", "5"], "NOT (`name` <=> _utf8mb4 X'610A62')"),
         (
             &["1", "2", "3"],
             '=',
             &["1", "2", "3"],
-            "name IN (_utf8mb4 X'610A62', _utf8mb4 X'610D62', _utf8mb4 X'610D0A62')",
+            "`name` IN (_utf8mb4 X'610A62', _utf8mb4 X'610D62', _utf8mb4 X'610D0A62')",
         ),
     ];
     for (cells, key, want, text) in cases {
@@ -1062,6 +1068,112 @@ async fn filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line() 
         app.dispatch(Action::Table(TableAction::Clear));
         pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 == 5).await;
     }
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Columns named like a call MariaDB makes without parentheses (`current_role`) and like a
+/// reserved word (`offset`): a filter by value on each, a sort by both, a count of a column's
+/// values under the filter and an export of the filtered rows all read the columns. Makes
+/// `shop.zz_it_currentrole_<pid>` and drops it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_filter_on_a_column_named_current_role_reads_the_column() {
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::table_query::OrderKeysState;
+    let Some((url, admin)) = urls("a_filter_on_a_column_named_current_role_reads_the_column") else { return };
+    let table = format!("zz_it_currentrole_{}", std::process::id());
+    let t = format!("shop.{table}");
+    let _t = Made::make(
+        &admin,
+        &[
+            format!("CREATE TABLE {t} (id INT PRIMARY KEY, `current_role` VARCHAR(20) NULL, `offset` INT NOT NULL)"),
+            format!("INSERT INTO {t} VALUES (1, NULL, 10), (2, 'admin', 20), (3, NULL, 30), (4, NULL, 30)"),
+        ],
+        &[format!("DROP TABLE IF EXISTS {t}")],
+    )
+    .await;
+    let dir = std::env::temp_dir().join(format!("datarig-it-mycurrentrole-{}", std::process::id()));
+    let (mut app, mut rx) = by_value_app(&url, &table, &dir);
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 == 4).await;
+    // The table's keys come from the profile's metadata session, which may open after the first
+    // run: until they are read no key is appended to an order. Run again until they are, so the
+    // sort below ends with the primary key whatever the timing.
+    let keys = |a: &App| a.tab().doc.table_query.as_ref().map(|q| q.order_keys.clone());
+    for _ in 0..5 {
+        if matches!(keys(&app), Some(OrderKeysState::Known { .. })) {
+            break;
+        }
+        app.dispatch(Action::RunStatement);
+        let settled = |a: &App| !matches!(keys(a), Some(OrderKeysState::Asked { .. }));
+        pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 == 4 && settled(a)).await;
+    }
+    assert!(matches!(keys(&app), Some(OrderKeysState::Known { .. })), "the table's keys: {:?}", keys(&app));
+    // A NULL of `current_role`: the column's NULLs, not the function's (NULL without a role).
+    let (got, text) = by_value(&mut app, &mut rx, &["1"], "current_role", '=').await;
+    assert_eq!((got, text.as_str()), (vec!["1".into(), "3".into(), "4".into()], "`current_role` IS NULL"));
+    // A sort by both: `offset` going down, then `current_role`.
+    let sent = |app: &App| app.tab().exec.run.statements.iter().map(|s| s.sql.clone()).collect::<Vec<_>>();
+    for (col, key) in [(2, 's'), (2, 's'), (1, 'S')] {
+        let qid = app.tab().exec.query_id;
+        app.focus = Focus::Results;
+        app.tab_mut().grid.col = col;
+        press(&mut app, key);
+        pump(&mut app, &mut rx, 30, |a| idle(a) && a.tab().exec.query_id != qid && held_rows(a).0 > 0).await;
+    }
+    let mode = datarig_core::sql::dialect::MySqlMode::default();
+    let d = if mariadb(&url).await { Dialect::MariaDb(mode) } else { Dialect::MySql(mode) };
+    let order = app.tab().doc.table_query.as_ref().map(|q| datarig_core::query::order_text(&q.draft.order, d));
+    assert_eq!(order.as_deref(), Some("`offset` DESC, `current_role` ASC"), "{:?}", sent(&app));
+    let run = format!(
+        "SELECT * FROM `shop`.`{table}` WHERE (`current_role` IS NULL) ORDER BY `offset` DESC, `current_role` ASC, `id` ASC"
+    );
+    assert_eq!(sent(&app), [run]);
+    assert_eq!(held_column(&app, 0), [Some("3".into()), Some("4".into()), Some("1".into())], "{:?}", sent(&app));
+    // A filter by value on `offset` too.
+    let (got, text) = by_value(&mut app, &mut rx, &["3", "4"], "offset", '=').await;
+    assert_eq!((got, text.as_str()), (vec!["3".into(), "4".into()], "`current_role` IS NULL AND `offset` = 30"));
+    let (got, _) = by_value(&mut app, &mut rx, &["3"], "id", '!').await;
+    assert_eq!(got, ["4"]);
+    // The count of `id`'s values under the other conditions: the rows the filter reads.
+    app.focus = Focus::Results;
+    app.tab_mut().grid.col = 0;
+    press(&mut app, 'f');
+    press(&mut app, '#');
+    let mut screen = String::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !screen.contains("exact \u{b7} other conditions applied") {
+        assert!(Instant::now() < deadline, "no count: {screen}");
+        if let Ok(Some(ev)) = tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+            app.on_app_event(ev);
+        }
+        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| datarig_tui::screens::draw(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        screen = (0..40)
+            .map(|y| (0..120).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    let mut values: Vec<String> = screen
+        .lines()
+        .filter_map(|l| l.split_once("[ ] ").or_else(|| l.split_once("[x] ")))
+        .filter_map(|(_, rest)| rest.split_whitespace().next().map(str::to_string))
+        .collect();
+    values.sort();
+    assert_eq!(values, ["3", "4"], "{screen}");
+    app.handle_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+    // An export of the rows the filter reads.
+    let path = dir.join("current_role.csv");
+    let req = app.export_request(&format!("all {}", path.display())).unwrap();
+    app.start_export(req);
+    let id = app.tab().id;
+    pump(&mut app, &mut rx, 60, |a| !a.exporting(id)).await;
+    let csv = std::fs::read_to_string(&path).unwrap();
+    let mut lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines.remove(0), "id,current_role,offset", "{csv}");
+    lines.sort();
+    assert_eq!(lines, ["4,,30"], "{csv}");
     drop(app);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1107,7 +1219,7 @@ async fn a_table_tab_pages_counts_and_filters(url: &str, table: &str, dir: &std:
     assert!(matches!(&app.tab().results, Results::Rows(rs) if rs.counted == Some(1200)), "the exact count");
     // Filter by a value of `v`, then cleared.
     let (got, text) = by_value(&mut app, &mut rx, &["7"], "v", '=').await;
-    assert_eq!((got, text.as_str()), (vec!["7".to_string()], "v = 'row 7'"));
+    assert_eq!((got, text.as_str()), (vec!["7".to_string()], "`v` = 'row 7'"));
     app.dispatch(Action::Table(TableAction::Clear));
     pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 == 500).await;
     drop(app);

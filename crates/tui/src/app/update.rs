@@ -590,7 +590,7 @@ impl App {
         // The text around the cursor holds its whole `;`-delimited segment, which is all the
         // completer reads.
         let (base, text, state, off) = self.tab_mut().editor.completion_context();
-        let out = self.complete_text(&text, off, state, force);
+        let out = self.complete_text(&text, off, state, force, false);
         let popup = out.completion.map(|c| Popup {
             items: c.items,
             selected: 0,
@@ -607,13 +607,15 @@ impl App {
 
     /// The completion engine over `text` (the cursor at byte `off`, the lexer in `state` at its
     /// start) with what the active tab knows: its database's catalog, the checks' values known
-    /// there, and its search path.
+    /// there, and its search path. `quote_always`: names as a table's filter writes them
+    /// ([`complete_with`]).
     pub(super) fn complete_text(
         &mut self,
         text: &str,
         off: usize,
         state: datarig_core::sql::lexer::LexState,
         force: bool,
+        quote_always: bool,
     ) -> datarig_core::sql::complete::Outcome {
         let (path, other) = (self.tab_path(self.tab()), self.other_database(self.tab()).map(str::to_string));
         let profile = self.tab().profile;
@@ -627,7 +629,7 @@ impl App {
             TableChecks::Asked | TableChecks::Failed(_) => None,
         };
         let dialect = self.tab_dialect(self.tab().id);
-        complete_with(text, off, catalog, force, &path, dialect, state, &lookup)
+        complete_with(text, off, catalog, force, &path, dialect, state, &lookup, quote_always)
     }
 
     /// The active tab's popup is `popup` now. `literal`: the checks' values came late, and the

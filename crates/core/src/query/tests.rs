@@ -202,12 +202,12 @@ fn render_literals_follow_the_column() {
     assert_eq!(render_pg(&cmp("Mixed Case", CmpOp::Lt, text("b"))), r#""Mixed Case" < 'b'"#);
     assert_eq!(render_pg(&cmp("born", CmpOp::Gt, text("2026-01-01"))), "born > '2026-01-01'");
     assert_eq!(render_pg(&cmp("data", CmpOp::Eq, Value::Bytes(vec![1, 0xab]))), r"data = E'\\x01ab'::pg_catalog.bytea");
-    assert_eq!(render_my(&cmp("data", CmpOp::Eq, Value::Bytes(vec![1, 0xab])), true), "data = X'01AB'");
+    assert_eq!(render_my(&cmp("data", CmpOp::Eq, Value::Bytes(vec![1, 0xab])), true), "`data` = X'01AB'");
     assert_eq!(render_pg(&cmp("id", CmpOp::Eq, Value::Bool(true))), "id = TRUE");
     // MySQL text: plain only with a known utf8mb4 session and no backslash.
-    assert_eq!(render_my(&cmp("name", CmpOp::Eq, text("it's")), true), "name = 'it''s'");
-    assert_eq!(render_my(&cmp("name", CmpOp::Eq, text("ab")), false), "name = _utf8mb4 X'6162'");
-    assert_eq!(render_my(&cmp("name", CmpOp::Eq, text(r"a\b")), true), "name = _utf8mb4 X'615C62'");
+    assert_eq!(render_my(&cmp("name", CmpOp::Eq, text("it's")), true), "`name` = 'it''s'");
+    assert_eq!(render_my(&cmp("name", CmpOp::Eq, text("ab")), false), "`name` = _utf8mb4 X'6162'");
+    assert_eq!(render_my(&cmp("name", CmpOp::Eq, text(r"a\b")), true), "`name` = _utf8mb4 X'615C62'");
     assert_eq!(render_my(&cmp("Mixed Case", CmpOp::Eq, num("1")), true), "`Mixed Case` = '1'");
 }
 
@@ -216,8 +216,8 @@ fn render_null_safe_forms() {
     let nd = |negated| Cond::NotDistinct { col: "name".into(), value: Value::Null, negated };
     assert_eq!(render_pg(&nd(false)), "name IS NOT DISTINCT FROM NULL");
     assert_eq!(render_pg(&nd(true)), "name IS DISTINCT FROM NULL");
-    assert_eq!(render_my(&nd(false), true), "name <=> NULL");
-    assert_eq!(render_my(&nd(true), true), "NOT (name <=> NULL)");
+    assert_eq!(render_my(&nd(false), true), "`name` <=> NULL");
+    assert_eq!(render_my(&nd(true), true), "NOT (`name` <=> NULL)");
     assert_eq!(render_pg(&Cond::IsNull { col: "name".into(), negated: true }), "name IS NOT NULL");
     let t = target(Dialect::Postgres);
     assert_eq!(render(&cmp("name", CmpOp::Eq, Value::Null), &t), Err(RenderError::NullCompare("name".into())));
@@ -247,10 +247,10 @@ fn render_writes_a_real_number_that_compares_exactly() {
         assert_eq!(render(&c, &my), inexact, "{c:?}");
     }
     assert_eq!(render(&r#in(vec![Value::Null, num("1")]), &my), inexact);
-    assert_eq!(ok(&r#in(vec![Value::Null]), &my), "r IS NULL");
-    assert_eq!(ok(&nd(Value::Null), &my), "NOT (r <=> NULL)");
-    assert_eq!(ok(&cmp("r", CmpOp::Ge, num("0.1")), &my), "r >= 0.1");
-    assert_eq!(ok(&between, &my), "r BETWEEN 0.1 AND 1.5");
+    assert_eq!(ok(&r#in(vec![Value::Null]), &my), "`r` IS NULL");
+    assert_eq!(ok(&nd(Value::Null), &my), "NOT (`r` <=> NULL)");
+    assert_eq!(ok(&cmp("r", CmpOp::Ge, num("0.1")), &my), "`r` >= 0.1");
+    assert_eq!(ok(&between, &my), "`r` BETWEEN 0.1 AND 1.5");
 }
 
 /// MySQL reads text compared with a number as a number without a word (`'abc'` as 0, `'12abc'`
@@ -272,10 +272,10 @@ fn render_refuses_mysql_text_that_is_no_number_on_a_number_column() {
     ] {
         assert_eq!(render(&c, &t), not_number, "{c:?}");
     }
-    assert_eq!(render(&cmp("id", CmpOp::Eq, text("12")), &t).as_deref(), Ok("id = 12"));
-    assert_eq!(render(&cmp("id", CmpOp::Eq, Value::Bool(true)), &t).as_deref(), Ok("id = TRUE"));
-    assert_eq!(render(&cmp("name", CmpOp::Eq, text("abc")), &t).as_deref(), Ok("name = 'abc'"));
-    assert_eq!(render(&cmp("born", CmpOp::Eq, text("abc")), &t).as_deref(), Ok("born = 'abc'"));
+    assert_eq!(render(&cmp("id", CmpOp::Eq, text("12")), &t).as_deref(), Ok("`id` = 12"));
+    assert_eq!(render(&cmp("id", CmpOp::Eq, Value::Bool(true)), &t).as_deref(), Ok("`id` = TRUE"));
+    assert_eq!(render(&cmp("name", CmpOp::Eq, text("abc")), &t).as_deref(), Ok("`name` = 'abc'"));
+    assert_eq!(render(&cmp("born", CmpOp::Eq, text("abc")), &t).as_deref(), Ok("`born` = 'abc'"));
     assert_eq!(render_pg(&cmp("id", CmpOp::Eq, text("abc"))), "id = 'abc'");
 }
 
@@ -288,14 +288,14 @@ fn render_writes_mysql_number_text_as_a_number() {
     for (c, want) in [
         (
             r#in(vec![text("9007199254740992"), text("9007199254740994")], false),
-            "id IN (9007199254740992, 9007199254740994)",
+            "`id` IN (9007199254740992, 9007199254740994)",
         ),
-        (r#in(vec![text(wide), num("1")], true), "id NOT IN (9007199254740993, 1)"),
-        (between(text("1.5"), text("-2e3")), "id BETWEEN 1.5 AND -2000"),
-        (cmp("price", CmpOp::Ge, text(wide)), "price >= 9007199254740993"),
-        (cmp("id", CmpOp::Eq, text("-0")), "id = '-0'"),
-        (cmp("name", CmpOp::Eq, text(wide)), "name = '9007199254740993'"),
-        (cmp("born", CmpOp::Eq, text(wide)), "born = '9007199254740993'"),
+        (r#in(vec![text(wide), num("1")], true), "`id` NOT IN (9007199254740993, 1)"),
+        (between(text("1.5"), text("-2e3")), "`id` BETWEEN 1.5 AND -2000"),
+        (cmp("price", CmpOp::Ge, text(wide)), "`price` >= 9007199254740993"),
+        (cmp("id", CmpOp::Eq, text("-0")), "`id` = '-0'"),
+        (cmp("name", CmpOp::Eq, text(wide)), "`name` = '9007199254740993'"),
+        (cmp("born", CmpOp::Eq, text(wide)), "`born` = '9007199254740993'"),
     ] {
         assert_eq!(render(&c, &t).as_deref(), Ok(want), "{c:?}");
     }
@@ -313,21 +313,21 @@ fn render_writes_mysql_exponents_as_exact_decimals() {
     for (c, want) in [
         (
             r#in(vec![text("9007199254740992e0"), num("9007199254740994E+0")], false),
-            "id IN (9007199254740992, 9007199254740994)",
+            "`id` IN (9007199254740992, 9007199254740994)",
         ),
         (
             r#in(vec![num("90071992547409.93e2"), text("9007199254740995")], true),
-            "id NOT IN (9007199254740993, 9007199254740995)",
+            "`id` NOT IN (9007199254740993, 9007199254740995)",
         ),
         (
             between(text("900719925474099e1"), num("90071992547409920e-1"), false),
-            "id BETWEEN 9007199254740990 AND 9007199254740992",
+            "`id` BETWEEN 9007199254740990 AND 9007199254740992",
         ),
-        (between(num("-15e-1"), text("1.25E1"), true), "id NOT BETWEEN -1.5 AND 12.5"),
-        (cmp("id", CmpOp::Eq, num("0e9999")), "id = 0"),
-        (cmp("id", CmpOp::Lt, text("1e-30")), "id < 0.000000000000000000000000000001"),
-        (cmp("id", CmpOp::Lt, num(".5e1")), "id < 5"),
-        (cmp("id", CmpOp::Eq, num("12")), "id = 12"),
+        (between(num("-15e-1"), text("1.25E1"), true), "`id` NOT BETWEEN -1.5 AND 12.5"),
+        (cmp("id", CmpOp::Eq, num("0e9999")), "`id` = 0"),
+        (cmp("id", CmpOp::Lt, text("1e-30")), "`id` < 0.000000000000000000000000000001"),
+        (cmp("id", CmpOp::Lt, num(".5e1")), "`id` < 5"),
+        (cmp("id", CmpOp::Eq, num("12")), "`id` = 12"),
     ] {
         assert_eq!(render(&c, &t).as_deref(), Ok(want), "{c:?}");
     }
@@ -336,7 +336,7 @@ fn render_writes_mysql_exponents_as_exact_decimals() {
         assert_eq!(render(&cmp("id", CmpOp::Eq, v.clone()), &t), not_exact, "{v:?}");
         assert_eq!(render(&r#in(vec![num("1"), v.clone()], false), &t), not_exact, "{v:?}");
     }
-    assert_eq!(render(&cmp("id", CmpOp::Eq, num(&"9".repeat(65))), &t), Ok(format!("id = {}", "9".repeat(65))));
+    assert_eq!(render(&cmp("id", CmpOp::Eq, num(&"9".repeat(65))), &t), Ok(format!("`id` = {}", "9".repeat(65))));
     // PostgreSQL reads a number with an exponent as numeric, exactly: kept as written.
     assert_eq!(render_pg(&cmp("id", CmpOp::Eq, num("9007199254740993e0"))), "id = 9007199254740993e0");
 }
@@ -359,20 +359,20 @@ fn a_mysql_timestamp_with_its_offset_is_written_as_its_instant_in_the_session_zo
     let instant = |at: &str, off: &str| format!("CONVERT_TZ('{at}', '{off}', @@session.time_zone)");
     let v = "2026-11-10 09:30:00+00:00";
     for (c, want) in [
-        (cmp("at", CmpOp::Eq, text(v)), format!("at = {}", instant("2026-11-10 09:30:00", "+00:00"))),
+        (cmp("at", CmpOp::Eq, text(v)), format!("`at` = {}", instant("2026-11-10 09:30:00", "+00:00"))),
         (
             Cond::In { col: "at".into(), values: vec![text(v), text("2026-11-11 10:00:00.250-08:00")], negated: false },
             format!(
-                "at IN ({}, {})",
+                "`at` IN ({}, {})",
                 instant("2026-11-10 09:30:00", "+00:00"),
                 instant("2026-11-11 18:00:00.250", "+00:00")
             ),
         ),
         // Typed without an offset: the session's local time, as written.
-        (cmp("at", CmpOp::Lt, text("2026-11-10 09:30:00")), "at < '2026-11-10 09:30:00'".to_string()),
-        (cmp("at", CmpOp::Eq, text("+05:30")), "at = '+05:30'".to_string()),
+        (cmp("at", CmpOp::Lt, text("2026-11-10 09:30:00")), "`at` < '2026-11-10 09:30:00'".to_string()),
+        (cmp("at", CmpOp::Eq, text("+05:30")), "`at` = '+05:30'".to_string()),
         // Not a TIMESTAMP: a string.
-        (cmp("born", CmpOp::Eq, text(v)), format!("born = '{v}'")),
+        (cmp("born", CmpOp::Eq, text(v)), format!("`born` = '{v}'")),
     ] {
         let sql = render(&c, &t).unwrap();
         assert_eq!(sql, want, "{c:?}");
@@ -424,14 +424,14 @@ fn a_mysql_timestamp_instant_is_written_from_utc_and_refused_when_it_is_none() {
     ] {
         let c = cmp("at", CmpOp::Eq, text(v));
         let sql = render(&c, &t).unwrap();
-        assert_eq!(sql, format!("at = {}", instant(utc)), "{v}");
+        assert_eq!(sql, format!("`at` = {}", instant(utc)), "{v}");
         // The history's text read back is that instant, and is written the same again.
         let back = recognise(&sql, &t).unwrap();
         assert_eq!(back, cmp("at", CmpOp::Eq, text(&format!("{utc}+00:00"))), "{sql}");
         assert_eq!(render(&back, &t).unwrap(), sql);
         // Excluded NULL-safely as the same instant.
         let not = Cond::NotDistinct { col: "at".into(), value: text(v), negated: true };
-        assert_eq!(render(&not, &t).unwrap(), format!("NOT (at <=> {})", instant(utc)), "{v}");
+        assert_eq!(render(&not, &t).unwrap(), format!("NOT (`at` <=> {})", instant(utc)), "{v}");
     }
     let refused = Err(RenderError::NotInstant("at".into()));
     for v in [
@@ -548,8 +548,8 @@ fn render_like_escapes_the_value() {
     let like = |col: &str, case| Cond::Like { col: col.into(), pattern: like_contains("x_"), negated: false, case };
     assert_eq!(render_pg(&like("name", CaseMode::Server)), "name LIKE '%x!_%' ESCAPE '!'");
     assert_eq!(render_pg(&like("name", CaseMode::Insensitive)), "name ILIKE '%x!_%' ESCAPE '!'");
-    assert_eq!(render_my(&like("email", CaseMode::Insensitive), true), "email LIKE '%x!_%' ESCAPE '!'");
-    assert_eq!(render_my(&like("name", CaseMode::Insensitive), true), "LOWER(name) LIKE LOWER('%x!_%') ESCAPE '!'");
+    assert_eq!(render_my(&like("email", CaseMode::Insensitive), true), "`email` LIKE '%x!_%' ESCAPE '!'");
+    assert_eq!(render_my(&like("name", CaseMode::Insensitive), true), "LOWER(`name`) LIKE LOWER('%x!_%') ESCAPE '!'");
     let mut t = target(Dialect::Postgres);
     t.columns[1].deterministic = Some(false);
     assert_eq!(
@@ -588,7 +588,7 @@ fn render_like_on_a_nondeterministic_collation_needs_postgres_18() {
     // MySQL: its collations take `LIKE` (known by name, never refused for this).
     let mut t = Target { utf8mb4: true, ..target(MY) };
     t.columns[1].deterministic = None;
-    assert_eq!(render(&like, &t).unwrap(), written);
+    assert_eq!(render(&like, &t).unwrap(), "`name` LIKE 'a%' ESCAPE '!'");
 }
 
 #[test]
@@ -613,27 +613,30 @@ fn render_groups_what_needs_it() {
 fn render_values_of_a_cell_per_type_and_dialect() {
     // Numbers bare on a number column, quoted on any other; NaN quoted for the server to read.
     assert_eq!(render_pg(&cmp("price", CmpOp::Lt, num("19.990"))), "price < 19.990");
-    assert_eq!(render_my(&cmp("price", CmpOp::Gt, num("-0.5")), true), "price > -0.5");
+    assert_eq!(render_my(&cmp("price", CmpOp::Gt, num("-0.5")), true), "`price` > -0.5");
     assert_eq!(render_pg(&cmp("price", CmpOp::Eq, num("-0"))), "price = '-0'");
-    assert_eq!(render_my(&cmp("name", CmpOp::Eq, num("7")), true), "name = '7'");
+    assert_eq!(render_my(&cmp("name", CmpOp::Eq, num("7")), true), "`name` = '7'");
     // Times as the server showed them, quoted: the session reads back what it wrote.
     let ts = text("2026-11-10 09:30:00.123456+09");
     assert_eq!(render_pg(&cmp("born", CmpOp::Ge, ts)), "born >= '2026-11-10 09:30:00.123456+09'");
-    assert_eq!(render_my(&cmp("born", CmpOp::Le, text("2026-11-10 09:30:00")), true), "born <= '2026-11-10 09:30:00'");
+    assert_eq!(
+        render_my(&cmp("born", CmpOp::Le, text("2026-11-10 09:30:00")), true),
+        "`born` <= '2026-11-10 09:30:00'"
+    );
     assert_eq!(
         render_my(&cmp("born", CmpOp::Le, text("2026-11-10")), false),
-        "born <= _utf8mb4 X'323032362D31312D3130'"
+        "`born` <= _utf8mb4 X'323032362D31312D3130'"
     );
     // Bytes: never text.
     let b = || Value::Bytes(vec![0, 0x27, 0x5c, 0xff]);
     assert_eq!(render_pg(&cmp("data", CmpOp::Eq, b())), r"data = E'\\x00275cff'::pg_catalog.bytea");
-    assert_eq!(render_my(&cmp("data", CmpOp::Ne, b()), true), "data <> X'00275CFF'");
-    assert_eq!(render_my(&cmp("data", CmpOp::Ne, b()), false), "data <> X'00275CFF'");
+    assert_eq!(render_my(&cmp("data", CmpOp::Ne, b()), true), "`data` <> X'00275CFF'");
+    assert_eq!(render_my(&cmp("data", CmpOp::Ne, b()), false), "`data` <> X'00275CFF'");
     // NULL-safe not equal keeps the NULL rows; a NULL cell is `IS NULL`.
     let ne = Cond::NotDistinct { col: "Mixed Case".into(), value: text("a'b"), negated: true };
     assert_eq!(render_pg(&ne), r#""Mixed Case" IS DISTINCT FROM 'a''b'"#);
     assert_eq!(render_my(&ne, true), "NOT (`Mixed Case` <=> 'a''b')");
-    assert_eq!(render_my(&Cond::IsNull { col: "data".into(), negated: false }, true), "data IS NULL");
+    assert_eq!(render_my(&Cond::IsNull { col: "data".into(), negated: false }, true), "`data` IS NULL");
 }
 
 /// A value with a line break is written on one line, read back as the value: the filter's text
@@ -655,11 +658,11 @@ fn render_writes_line_breaks_on_one_line() {
     for &(v, pg, my) in cases {
         let r = |c: &Cond, t: &Target| render(c, t).unwrap();
         assert_eq!(r(&cmp("name", CmpOp::Eq, text(v)), &pg_t), format!("name = {pg}"), "{v:?}");
-        assert_eq!(r(&cmp("name", CmpOp::Eq, text(v)), &my_t), format!("name = _utf8mb4 {my}"), "{v:?}");
+        assert_eq!(r(&cmp("name", CmpOp::Eq, text(v)), &my_t), format!("`name` = _utf8mb4 {my}"), "{v:?}");
         let pg_like = format!("name LIKE E'%{}%' ESCAPE '!'", &pg[2..pg.len() - 1]);
         assert_eq!(r(&like(v), &pg_t), pg_like, "{v:?}");
         assert_eq!(r(&list(v), &pg_t), format!("name IN ({pg}, 'x')"), "{v:?}");
-        assert_eq!(r(&list(v), &my_t), format!("name IN (_utf8mb4 {my}, 'x')"), "{v:?}");
+        assert_eq!(r(&list(v), &my_t), format!("`name` IN (_utf8mb4 {my}, 'x')"), "{v:?}");
         for (t, d) in [(&pg_t, Dialect::Postgres), (&my_t, MY)] {
             for c in [cmp("name", CmpOp::Eq, text(v)), like(v), list(v)] {
                 let out = r(&c, t);
@@ -685,17 +688,17 @@ fn render_in_lists_keep_the_null_forms() {
     let r#in = |null, negated| Cond::In { col: "name".into(), values: values(null), negated };
     // NOT IN that keeps the rows whose value is NULL.
     let not_in_nulls = Cond::Any(vec![r#in(false, true), Cond::IsNull { col: "name".into(), negated: false }]);
-    for (d, utf8mb4) in [(Dialect::Postgres, false), (MY, true)] {
+    for (d, utf8mb4, c) in [(Dialect::Postgres, false, "name"), (MY, true, "`name`")] {
         let t = Target { utf8mb4, ..target(d) };
         let r = |c: &Cond| render(c, &t).unwrap();
-        assert_eq!(r(&r#in(false, false)), "name IN ('a', 'b''c')");
-        assert_eq!(r(&r#in(true, false)), "(name IN ('a', 'b''c') OR name IS NULL)");
-        assert_eq!(r(&r#in(false, true)), "name NOT IN ('a', 'b''c')");
-        assert_eq!(r(&r#in(true, true)), "(name NOT IN ('a', 'b''c') AND name IS NOT NULL)");
-        assert_eq!(r(&not_in_nulls), "(name NOT IN ('a', 'b''c') OR name IS NULL)");
+        assert_eq!(r(&r#in(false, false)), format!("{c} IN ('a', 'b''c')"));
+        assert_eq!(r(&r#in(true, false)), format!("({c} IN ('a', 'b''c') OR {c} IS NULL)"));
+        assert_eq!(r(&r#in(false, true)), format!("{c} NOT IN ('a', 'b''c')"));
+        assert_eq!(r(&r#in(true, true)), format!("({c} NOT IN ('a', 'b''c') AND {c} IS NOT NULL)"));
+        assert_eq!(r(&not_in_nulls), format!("({c} NOT IN ('a', 'b''c') OR {c} IS NULL)"));
     }
     let t = Target { utf8mb4: false, ..target(MY) };
-    assert_eq!(render(&r#in(false, false), &t).unwrap(), "name IN (_utf8mb4 X'61', _utf8mb4 X'622763')");
+    assert_eq!(render(&r#in(false, false), &t).unwrap(), "`name` IN (_utf8mb4 X'61', _utf8mb4 X'622763')");
 }
 
 #[test]
@@ -718,9 +721,9 @@ fn render_like_patterns_read_the_same_in_every_mysql_mode() {
     for d in modes {
         let t = Target { utf8mb4: true, ..target(d) };
         // `%`, `_` and `!` escaped with `!`, never with a backslash.
-        assert_eq!(render(&starts("5%_!"), &t).unwrap(), "name LIKE '5!%!_!!%' ESCAPE '!'", "{d:?}");
+        assert_eq!(render(&starts("5%_!"), &t).unwrap(), "`name` LIKE '5!%!_!!%' ESCAPE '!'", "{d:?}");
         // A backslash is a character of the value: written as bytes, read the same in both modes.
-        assert_eq!(render(&starts(r"a\"), &t).unwrap(), "name LIKE _utf8mb4 X'615C25' ESCAPE '!'", "{d:?}");
+        assert_eq!(render(&starts(r"a\"), &t).unwrap(), "`name` LIKE _utf8mb4 X'615C25' ESCAPE '!'", "{d:?}");
     }
     let contains = |col: &str| Cond::Like {
         col: col.into(),
@@ -729,7 +732,7 @@ fn render_like_patterns_read_the_same_in_every_mysql_mode() {
         case: CaseMode::Insensitive,
     };
     // A `_ci` column compares without case already; a column of no known collation is lowered.
-    assert_eq!(render_my(&contains("email"), true), "email LIKE '%A!_%' ESCAPE '!'");
+    assert_eq!(render_my(&contains("email"), true), "`email` LIKE '%A!_%' ESCAPE '!'");
     let unknown = contains("Mixed Case");
     assert_eq!(render_my(&unknown, true), "LOWER(`Mixed Case`) LIKE LOWER('%A!_%') ESCAPE '!'");
     // PostgreSQL: `ILIKE` only on a collation known deterministic (a nondeterministic one is
@@ -1527,7 +1530,7 @@ fn order_text_reads_back_as_the_same_keys() {
     assert_eq!(order_text(&keys, pg), "\"Mixed Case\" DESC, price ASC NULLS LAST");
     assert_eq!(order(pg, &order_text(&keys, pg)), Ok(keys[..2].to_vec()));
     let my_keys = vec![OrderKey::user("Mixed Case", Dir::Asc), OrderKey::user("name", Dir::Desc)];
-    assert_eq!(order_text(&my_keys, MY), "`Mixed Case` ASC, name DESC");
+    assert_eq!(order_text(&my_keys, MY), "`Mixed Case` ASC, `name` DESC");
     assert_eq!(order(MY, &order_text(&my_keys, MY)), Ok(my_keys));
     assert_eq!(order_text(&[], pg), "");
     // A keyword column is quoted.
@@ -1535,6 +1538,52 @@ fn order_text_reads_back_as_the_same_keys() {
     let k = vec![OrderKey::user("order", Dir::Asc)];
     assert_eq!(order_text(&k, pg), "\"order\" ASC");
     assert_eq!(parse_order(&order_text(&k, pg), &t), Ok(k));
+}
+
+#[test]
+fn order_text_quotes_every_name_on_the_family() {
+    let keys = vec![
+        OrderKey::user("name", Dir::Asc),
+        OrderKey::user("current_role", Dir::Desc),
+        OrderKey::user("offset", Dir::Asc),
+        OrderKey::user("a`b", Dir::Desc),
+    ];
+    let ansi = Dialect::MySql(MySqlMode { ansi_quotes: true, ..MySqlMode::default() });
+    for d in [MY, Dialect::MariaDb(MySqlMode::default()), ansi] {
+        assert_eq!(order_text(&keys, d), "`name` ASC, `current_role` DESC, `offset` ASC, `a``b` DESC", "{d:?}");
+        let columns = ["name", "current_role", "offset", "a`b"].map(|c| ColumnFacts::new(c, ColumnKind::Number));
+        let t = Target::new(d, columns.to_vec());
+        assert_eq!(parse_order(&order_text(&keys, d), &t), Ok(keys.clone()), "{d:?}");
+    }
+    // PostgreSQL quotes only what must be.
+    assert_eq!(order_text(&keys[..1], Dialect::Postgres), "name ASC");
+}
+
+#[test]
+fn a_bare_name_the_family_may_call_is_no_column() {
+    let names = ["current_role", "current_date", "utc_timestamp", "localtime", "date", "char", "user", "id", "unknown"];
+    let table = |d: Dialect| Target::new(d, names.map(|c| ColumnFacts::new(c, ColumnKind::Number)).to_vec());
+    let is_null = |col: &str| Some(Cond::IsNull { col: col.into(), negated: false });
+    for d in [MY, Dialect::MariaDb(MySqlMode::default())] {
+        let t = table(d);
+        // Both engines' words, on every session of either: the server may call them bare.
+        for call in ["current_role", "CURRENT_ROLE", "current_date", "utc_timestamp", "localtime"] {
+            let text = format!("{call} IS NULL");
+            assert_eq!(recognise(&text, &t), Some(Cond::Raw(text.clone())), "{d:?} {text}");
+        }
+        // Quoted, it is the column.
+        assert_eq!(recognise("`current_role` IS NULL", &t), is_null("current_role"), "{d:?}");
+        // Other words stay column names, as they always were.
+        for col in ["date", "char", "user", "id"] {
+            assert_eq!(recognise(&format!("{col} IS NULL"), &t), is_null(col), "{d:?} {col}");
+        }
+        // UNKNOWN is a constant, whatever the columns (a column `unknown` too); quoted, the column.
+        assert_eq!(recognise("unknown IS NULL", &t), Some(Cond::Raw("unknown IS NULL".into())), "{d:?}");
+        assert_eq!(recognise("`unknown` IS NULL", &t), is_null("unknown"), "{d:?}");
+    }
+    let pg = table(Dialect::Postgres);
+    assert_eq!(recognise("current_role IS NULL", &pg), is_null("current_role"));
+    assert_eq!(recognise("date IS NULL", &pg), is_null("date"));
 }
 
 // sort actions

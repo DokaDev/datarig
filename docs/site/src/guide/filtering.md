@@ -200,8 +200,11 @@ included), keeps the order and the limit of the rows shown, and can be undone in
 [conditions](#conditions): numbers bare (on PostgreSQL's `real` in quotes, on MySQL with any
 exponent written out), bytes in hexadecimal, text with a backslash or a line break as an escape
 string (`E'…'`) on PostgreSQL. On MySQL, text with a backslash, a NUL or a line break, or any text
-when the session is not known to use `utf8mb4`, is written as its bytes, `_utf8mb4 X'…'`. Nothing
-is taken while the tab is running or shows rows of an earlier query; and a value is refused, with
+when the session is not known to use `utf8mb4`, is written as its bytes, `_utf8mb4 X'…'`. On MySQL
+and MariaDB the column's name is always quoted (`` `col` ``), here, in Advanced, in the order and in
+completion, so a column named like a function the server calls without parentheses
+(`current_role`) or like a reserved word (`offset`) is read as the column; a condition you type
+that names such a function bare is kept as you typed it. Nothing is taken while the tab is running or shows rows of an earlier query; and a value is refused, with
 the reason, when it is not shown whole (as a copy as SQL judges it), is binary data over 64 KiB, is
 of a type whose comparison datarig does not know (`json`, MySQL's JSON, geometry, most types of your
 own), is in a new row or a cell with an edit on it, or when the cells are of several columns or more

@@ -113,10 +113,14 @@ impl Via {
     /// conditions after it).
     fn sent(self, all: &str, rest: &str) -> (String, Option<u64>) {
         match self {
+            // MySQL and MariaDB write the name of the changed condition quoted.
+            Via::Advanced | Via::ConditionPopup if all == MY => {
+                (format!("{all} WHERE (id > 0 AND `id` < 90{rest})"), None)
+            }
             Via::Advanced | Via::ConditionPopup => (format!("{all} WHERE (id > 0 AND id < 90{rest})"), None),
             Via::ChipX => (format!("{all} WHERE (id < 9{rest})"), None),
             Via::LimitInline => (format!("{all} WHERE ({BASE}{rest})"), Some(5)),
-            Via::ValueLine if all == MY => (format!("{all} WHERE ({BASE}{rest} AND NOT (id <=> 0))"), None),
+            Via::ValueLine if all == MY => (format!("{all} WHERE ({BASE}{rest} AND NOT (`id` <=> 0))"), None),
             Via::ValueLine => (format!("{all} WHERE ({BASE}{rest} AND id IS DISTINCT FROM 0)"), None),
         }
     }
@@ -129,7 +133,7 @@ impl Via {
             Via::ChipX | Via::LimitInline | Via::ValueLine => assert!(!open(h), "{self:?}: no dialog"),
         }
         if self.dialog() {
-            assert!(draft_where(h).contains("id < 90"), "{self:?}: the draft kept: {}", draft_where(h));
+            assert!(draft_where(h).contains(" < 90"), "{self:?}: the draft kept: {}", draft_where(h));
         }
     }
 }

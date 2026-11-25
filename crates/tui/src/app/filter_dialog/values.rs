@@ -245,10 +245,18 @@ pub(crate) fn sort(values: &mut [Counted]) {
 }
 
 /// Term `text` of dialect `d` names column `col` (an identifier, quoted or not, of that name,
-/// whatever its case): a condition that may restrict the column's values.
+/// whatever its case): a condition that may restrict the column's values. A bare name the
+/// engine may read as a call (`SortRules::bare_call`) names no column; after a `.`
+/// (`users.current_date`) it is a column reference all the same.
 pub(crate) fn mentions(text: &str, col: &str, d: Dialect) -> bool {
-    lex_in(text, d).iter().any(|t| match t.kind {
-        Tok::Ident | Tok::Keyword => t.text(text).eq_ignore_ascii_case(col),
+    let sort = d.engine().spec().sort;
+    let toks: Vec<_> = lex_in(text, d).into_iter().filter(|t| !t.is_trivia()).collect();
+    toks.iter().enumerate().any(|(i, t)| match t.kind {
+        Tok::Ident | Tok::Keyword => {
+            let word = t.text(text);
+            let qualified = i > 0 && toks[i - 1].kind == Tok::Dot;
+            word.eq_ignore_ascii_case(col) && (qualified || !sort.bare_call(word))
+        }
         Tok::QuotedIdent => {
             let q = t.text(text);
             let (open, inner) = q.split_at(q.chars().next().map_or(0, char::len_utf8));

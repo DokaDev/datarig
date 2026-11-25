@@ -4,7 +4,8 @@
 //! The text is lexed, and names are read and written, in the dialect of the text
 //! ([`complete_in_dialect`]). Names are offered as SQL: quoted when the server would not read
 //! them back bare ([`Dialect::quote_ident`]), and always quoted after an opening quote. A name matches when the
-//! typed prefix starts it; names the typed letters only appear in, in order, follow those.
+//! typed prefix starts it; names the typed letters only appear in, in order, follow those. Text that
+//! goes into a table's filter writes them as the filter does ([`complete_with`]'s `quote_always`).
 //!
 //! Inside a string literal compared with a column (`col = '…'`, `col <> '…'`, `col IN ('a',
 //! '…')`, `SET col = '…'`), the values the column may hold are offered ([`complete_with`]):
@@ -269,13 +270,23 @@ struct Typed {
     text: String,
     /// After an opening quote: every name is written quoted.
     quoted: bool,
+    /// Names are written as a table's filter writes them ([`SortRules::name`]).
+    ///
+    /// [`SortRules::name`]: crate::engine::SortRules::name
+    always: bool,
     /// The dialect names are written in.
     dialect: Dialect,
 }
 
 impl Typed {
     fn ident(&self, name: &str) -> String {
-        if self.quoted { self.dialect.force_quote_ident(name) } else { self.dialect.quote_ident(name) }
+        if self.quoted {
+            self.dialect.force_quote_ident(name)
+        } else if self.always {
+            self.dialect.engine().spec().sort.name(self.dialect, name)
+        } else {
+            self.dialect.quote_ident(name)
+        }
     }
 }
 
@@ -334,7 +345,7 @@ pub fn complete_from(
     d: Dialect,
     state: LexState,
 ) -> Option<Completion> {
-    complete_with(src, cursor, cat, force, path, d, state, &|_, _| None).completion
+    complete_with(src, cursor, cat, force, path, d, state, &|_, _| None, false).completion
 }
 
 /// [`complete_from`] where `checks(schema, table)` are the values the checks of a table allow
@@ -343,7 +354,11 @@ pub fn complete_from(
 /// what the literal holds before the cursor (an empty one: all). Accepting one replaces the
 /// literal's value (not its quotes; one being typed, open at the cursor, gets its closing
 /// quote). When the column's table's checks are not known, the outcome says so
-/// ([`Outcome::wants_checks`]).
+/// ([`Outcome::wants_checks`]). With `quote_always`, for text that goes into a table's filter,
+/// names are written as the filter writes them: always quoted where the engine says so
+/// ([`SortRules::name`]), else as everywhere.
+///
+/// [`SortRules::name`]: crate::engine::SortRules::name
 #[allow(clippy::too_many_arguments)]
 pub fn complete_with<'c>(
     src: &str,
@@ -354,6 +369,7 @@ pub fn complete_with<'c>(
     d: Dialect,
     state: LexState,
     checks: &dyn Fn(&str, &str) -> Option<&'c [CheckValues]>,
+    quote_always: bool,
 ) -> Outcome {
     let none = Outcome::default();
     // The segment around the cursor (between the statement ends around it), and the lexer's
@@ -431,11 +447,15 @@ pub fn complete_with<'c>(
             let ends_here = seg[cur..].starts_with(quote) && closed(d, t, seg) && cur + quote.len_utf8() == t.end;
             let trail = if ends_here { quote.len_utf8() } else { 0 };
             let text = d.unescape_ident(quote, &seg[t.start + quote.len_utf8()..cur]);
-            (t.start, Typed { text, quoted: true, dialect: d }, trail)
+            (t.start, Typed { text, quoted: true, always: quote_always, dialect: d }, trail)
         }
         None => match toks.iter().find(|t| t.is_word() && t.start < cur && cur <= t.end) {
-            Some(t) => (t.start, Typed { text: seg[t.start..cur].to_string(), quoted: false, dialect: d }, 0),
-            None => (cur, Typed { text: String::new(), quoted: false, dialect: d }, 0),
+            Some(t) => (
+                t.start,
+                Typed { text: seg[t.start..cur].to_string(), quoted: false, always: quote_always, dialect: d },
+                0,
+            ),
+            None => (cur, Typed { text: String::new(), quoted: false, always: quote_always, dialect: d }, 0),
         },
     };
     let prefix = typed.text.as_str();

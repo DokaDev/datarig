@@ -280,7 +280,7 @@ fn a_tick_of_the_bytes_typed_in_another_case_keeps_one_value() {
     h.key(KeyCode::Char(' '));
     h.type_text("0xab");
     let typed = draft(&h);
-    assert!(typed.starts_with("b = ") && typed.to_lowercase().contains("ab"), "{typed}");
+    assert!(typed.starts_with("`b` = ") && typed.to_lowercase().contains("ab"), "{typed}");
     h.key(KeyCode::Down);
     let screen = h.screen(120, 34);
     assert!(screen.contains("0xAB") && !screen.contains("0xCD"), "{screen}");
@@ -620,11 +620,11 @@ fn mysql_text_typed_on_a_number_column_is_not_written_and_says_why() {
         (0, "12abc", None),
         (0, "'abc'", None),
         (0, "true", None),
-        (0, "12", Some("id = 12")),
-        (0, "'12'", Some("id = 12")),
-        (1, "true", Some("flag = TRUE")),
-        (1, "False", Some("flag = FALSE")),
-        (1, "1", Some("flag = 1")),
+        (0, "12", Some("`id` = 12")),
+        (0, "'12'", Some("`id` = 12")),
+        (1, "true", Some("`flag` = TRUE")),
+        (1, "False", Some("`flag` = FALSE")),
+        (1, "1", Some("`flag` = 1")),
         (1, "yes", None),
     ] {
         let mut h = table_of(true, cols(), vec![vec![s("1"), s("0")]]);
@@ -683,7 +683,7 @@ fn values_typed_with_only_the_catalogue_known_are_judged_by_its_types() {
     for (column, value, want, why) in [
         (0, "abc", "", Some("not a number")),
         (0, "12abc", "", Some("not a number")),
-        (0, "'12'", "id = 12", None),
+        (0, "'12'", "`id` = 12", None),
         // `=` on a FLOAT is dimmed: the first operator offered is `between`.
         (1, "1.5", "", Some("between")),
     ] {
@@ -728,12 +728,12 @@ fn mysql_numbers_typed_in_quotes_in_a_list_or_a_range_are_written_as_numbers() {
     let cols = || vec![col("n", "decimal(30,0)", ValueKind::Decimal)];
     // The operator's place in the picker of a number column (see `each_operator_sends_its_term`).
     for (down, value, second, want) in [
-        (10, "'9007199254740992', 9007199254740994", None, "n IN (9007199254740992, 9007199254740994)"),
-        (11, "'9007199254740992', '9007199254740994'", None, "n NOT IN (9007199254740992, 9007199254740994)"),
-        (1, "'9007199254740990'", Some("'9007199254740992'"), "n BETWEEN 9007199254740990 AND 9007199254740992"),
+        (10, "'9007199254740992', 9007199254740994", None, "`n` IN (9007199254740992, 9007199254740994)"),
+        (11, "'9007199254740992', '9007199254740994'", None, "`n` NOT IN (9007199254740992, 9007199254740994)"),
+        (1, "'9007199254740990'", Some("'9007199254740992'"), "`n` BETWEEN 9007199254740990 AND 9007199254740992"),
         // With an exponent (MySQL reads it as a double): the exact decimal.
-        (10, "'9007199254740992e0', 900719925474099.4e1", None, "n IN (9007199254740992, 9007199254740994)"),
-        (1, "9007199254740990E0", Some("'90071992547409920e-1'"), "n BETWEEN 9007199254740990 AND 9007199254740992"),
+        (10, "'9007199254740992e0', 900719925474099.4e1", None, "`n` IN (9007199254740992, 9007199254740994)"),
+        (1, "9007199254740990E0", Some("'90071992547409920e-1'"), "`n` BETWEEN 9007199254740990 AND 9007199254740992"),
     ] {
         let mut h = table_of(true, cols(), vec![vec![s("9007199254740993")]]);
         dialog_on(&mut h, 0);
@@ -833,7 +833,7 @@ fn a_ticked_mysql_timestamp_is_the_same_instant_after_the_zone_changes() {
     dialog_on(&mut h, 1);
     to_values(&mut h, 0);
     h.key(KeyCode::Char(' '));
-    let instant = "at = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)";
+    let instant = "`at` = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)";
     assert_eq!(draft(&h), instant);
     zone(&mut h, "+05:30");
     h.key(KeyCode::Enter);
@@ -888,7 +888,7 @@ fn a_timestamp_typed_with_an_offset_on_the_catalogue_is_its_instant() {
     typed(&mut h, "2026-11-10 09:30:00+05:30");
     assert_eq!(
         draft(&h),
-        "at = CONVERT_TZ('2026-11-10 04:00:00', '+00:00', @@session.time_zone)",
+        "`at` = CONVERT_TZ('2026-11-10 04:00:00', '+00:00', @@session.time_zone)",
         "{}",
         h.screen(120, 34)
     );
@@ -909,7 +909,7 @@ fn a_mysql_timestamp_is_written_from_utc_or_not_at_all() {
     dialog_on(&mut h, 1);
     to_values(&mut h, 0);
     h.key(KeyCode::Char(' '));
-    let instant = "at = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)";
+    let instant = "`at` = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)";
     assert_eq!(draft(&h), instant, "{}", h.screen(120, 34));
     h.key(KeyCode::Enter);
     let sent = vec![vec![format!("SELECT * FROM `shop`.`users` WHERE ({instant})")]];
@@ -922,8 +922,8 @@ fn a_mysql_timestamp_is_written_from_utc_or_not_at_all() {
     let s = |v: &str| Some(v.to_string());
     let cols = || vec![col("id", "int", ValueKind::Integer), col("at", "timestamp", ValueKind::TimestampTz)];
     for (value, want) in [
-        ("2026-11-10 14:00:00+14:00", Some("at = CONVERT_TZ('2026-11-10 00:00:00', '+00:00', @@session.time_zone)")),
-        ("2026-12-31 20:00:00-13:59", Some("at = CONVERT_TZ('2027-01-01 09:59:00', '+00:00', @@session.time_zone)")),
+        ("2026-11-10 14:00:00+14:00", Some("`at` = CONVERT_TZ('2026-11-10 00:00:00', '+00:00', @@session.time_zone)")),
+        ("2026-12-31 20:00:00-13:59", Some("`at` = CONVERT_TZ('2027-01-01 09:59:00', '+00:00', @@session.time_zone)")),
         ("2026-11-10 09:30:00+14:01", None),
         ("2026-11-10 09:30:00-14:00", None),
         ("2026-02-29 09:30:00+00:00", None),
@@ -960,7 +960,7 @@ fn a_timestamp_filter_value_is_taken_on_every_mysql_family_server() {
         dialog_on(&mut h, 1);
         to_values(&mut h, 0);
         h.key(KeyCode::Char(' '));
-        let instant = "at = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)";
+        let instant = "`at` = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)";
         assert_eq!(draft(&h), instant, "{server}: {}", h.screen(120, 34));
         h.key(KeyCode::Enter);
         assert_eq!(runs(&mut h), vec![vec![format!("SELECT * FROM `shop`.`users` WHERE ({instant})")]], "{server}");
@@ -980,7 +980,7 @@ fn a_mysql_timestamp_is_ticked_only_in_the_zone_it_was_read_in() {
     h.key(KeyCode::Down);
     h.key(KeyCode::Char(' '));
     let earlier = "CONVERT_TZ('2026-11-11 10:00:00', '+00:00', @@session.time_zone)";
-    assert_eq!(draft(&h), format!("at IN ('2026-11-10 09:30:00', {earlier})"));
+    assert_eq!(draft(&h), format!("`at` IN ('2026-11-10 09:30:00', {earlier})"));
     h.keys("u");
     h.key(KeyCode::Esc);
     // The session's zone changed since: neither the loaded nor the earlier value is taken.
@@ -1158,7 +1158,7 @@ fn count_exactly_counts_a_mysql_invisible_column_by_its_catalogue_type() {
     let mut h = mysql_invisible();
     // The second counted under the condition the first ticked.
     let cases =
-        [(2, "rank", "", "7", "`rank` = 7"), (3, "note", " WHERE (`rank` = 7)", "x", "`rank` = 7 AND note = 'x'")];
+        [(2, "rank", "", "7", "`rank` = 7"), (3, "note", " WHERE (`rank` = 7)", "x", "`rank` = 7 AND `note` = 'x'")];
     for (down, name, other, counted_value, sent_where) in cases {
         for _ in 0..down {
             h.key(KeyCode::Char('j'));
@@ -1241,7 +1241,7 @@ fn a_mysql_value_with_a_line_break_read_back_stays_when_another_is_edited() {
     h.key(KeyCode::Enter);
     assert_eq!(
         runs(&mut h),
-        vec![vec!["SELECT * FROM `shop`.`users` WHERE (at IN (_utf8mb4 X'610A62', 'xy'))".to_string()]]
+        vec![vec!["SELECT * FROM `shop`.`users` WHERE (`at` IN (_utf8mb4 X'610A62', 'xy'))".to_string()]]
     );
 }
 
@@ -1354,7 +1354,7 @@ fn an_invisible_mysql_timestamp_is_written_from_its_instant() {
         h.key(KeyCode::Char('j'));
     }
     typed(&mut h, "2026-11-10 09:30:00+05:30");
-    let typed_instant = "seen = CONVERT_TZ('2026-11-10 04:00:00', '+00:00', @@session.time_zone)";
+    let typed_instant = "`seen` = CONVERT_TZ('2026-11-10 04:00:00', '+00:00', @@session.time_zone)";
     assert_eq!(draft(&h), typed_instant, "{}", h.screen(120, 34));
     // Counted on a dialog of its own.
     let mut h = mysql_invisible();
@@ -1367,7 +1367,7 @@ fn an_invisible_mysql_timestamp_is_written_from_its_instant() {
     counted(&mut h, sent[0].0, Ok(GroupCounts { values: vec![value(Some("2026-11-10 09:30:00"), 3)], more: false }));
     to_values(&mut h, 0);
     h.key(KeyCode::Char(' '));
-    let instant = "seen = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)";
+    let instant = "`seen` = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)";
     assert_eq!(draft(&h), instant, "{}", h.screen(120, 34));
     h.key(KeyCode::Enter);
     assert_eq!(runs(&mut h), vec![vec![format!("SELECT * FROM `shop`.`users` WHERE ({instant})")]]);
@@ -1379,7 +1379,7 @@ fn an_invisible_mysql_timestamp_is_written_from_its_instant() {
 #[test]
 fn a_condition_typed_on_an_invisible_column_is_its_columns() {
     let mut h = mysql_invisible();
-    for (down, value, term) in [(2, "7", "`rank` = 7"), (3, "abc", "note = 'abc'")] {
+    for (down, value, term) in [(2, "7", "`rank` = 7"), (3, "abc", "`note` = 'abc'")] {
         for _ in 0..down {
             h.key(KeyCode::Char('j'));
         }
@@ -1466,7 +1466,10 @@ fn a_mysql_value_with_a_carriage_return_read_back_stays_when_its_field_is_edited
     h.key(KeyCode::Left);
     h.type_text("e");
     h.key(KeyCode::Enter);
-    assert_eq!(runs(&mut h), vec![vec!["SELECT * FROM `shop`.`users` WHERE (at < _utf8mb4 X'630D6465')".to_string()]]);
+    assert_eq!(
+        runs(&mut h),
+        vec![vec!["SELECT * FROM `shop`.`users` WHERE (`at` < _utf8mb4 X'630D6465')".to_string()]]
+    );
 }
 
 /// The first bound of `between` with a line feed (read back from MySQL's SQL) stays as it is
@@ -1485,7 +1488,7 @@ fn a_between_bound_with_a_line_feed_stays_when_the_other_is_edited() {
     h.key(KeyCode::Enter);
     assert_eq!(
         runs(&mut h),
-        vec![vec!["SELECT * FROM `shop`.`users` WHERE (at BETWEEN _utf8mb4 X'610A62' AND 'xy')".to_string()]]
+        vec![vec!["SELECT * FROM `shop`.`users` WHERE (`at` BETWEEN _utf8mb4 X'610A62' AND 'xy')".to_string()]]
     );
 }
 
@@ -1527,7 +1530,7 @@ fn a_ticked_value_holding_mariadb_comment_characters_runs_and_counts_on_mariadb(
     dialog_on(&mut h, 1);
     to_values(&mut h, 0);
     h.key(KeyCode::Char(' '));
-    assert!(draft(&h).starts_with("status = "), "{}", draft(&h));
+    assert!(draft(&h).starts_with("`status` = "), "{}", draft(&h));
     h.key(KeyCode::Enter);
     let sent = runs(&mut h);
     assert_eq!(sent.len(), 1, "the condition runs: {:?}", h.app.tab().status);
@@ -1557,4 +1560,20 @@ fn a_typed_condition_holding_mariadb_comment_characters_is_not_counted_under_on_
     assert!(draft(&h).contains("/*M!"), "{}", draft(&h));
     h.keys("#");
     assert!(counts(&mut h).is_empty(), "nothing sent: {:?}", h.app.status);
+}
+
+/// On MariaDB, which reads a bare `current_role` as its function, a value filter on a column of
+/// that name is written with the name quoted: it runs on the column, and the bar shows it so.
+#[test]
+fn a_value_filter_on_a_column_named_like_a_function_uses_the_column() {
+    let columns = vec![col("id", "int", ValueKind::Integer), col("current_role", "varchar", ValueKind::Text)];
+    let rows = vec![vec![Some("1".into()), Some("admin".into())], vec![Some("2".into()), None]];
+    let mut h = maria_table(columns, rows);
+    dialog_on(&mut h, 1);
+    typed(&mut h, "admin");
+    assert_eq!(draft(&h), "`current_role` = 'admin'");
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec!["SELECT * FROM `shop`.`users` WHERE (`current_role` = 'admin')".to_string()]]);
+    let bar = h.app.tab().doc.table_query.as_ref().and_then(|q| q.draft.filter.as_ref()).map(|f| f.text.clone());
+    assert_eq!(bar.as_deref(), Some("`current_role` = 'admin'"));
 }

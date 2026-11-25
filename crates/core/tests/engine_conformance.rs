@@ -300,6 +300,17 @@ fn sort_rules_on_every_engine() {
 }
 
 #[test]
+fn bare_calls_on_every_engine() {
+    run("bare calls", &sort::bare_call_cases(), sort::bare_call);
+}
+
+#[test]
+fn every_quoted_filter_reads_back_as_the_same_condition() {
+    let differences = filter::read_back_differences();
+    assert!(differences.is_empty(), "{}", differences.join("\n"));
+}
+
+#[test]
 fn edit_input_cases_on_every_engine() {
     run("edit input", &values::input_cases(), values::input);
 }
@@ -389,6 +400,7 @@ fn every_case_names_every_engine() {
         named("filter read", &filter::read_cases()),
         named("filter check", &filter::check_cases()),
         named("sort rules", &sort::sort_cases()),
+        named("bare calls", &sort::bare_call_cases()),
         named("edit input", &values::input_cases()),
         named("sql cells", &values::cells_cases()),
         named_versioned("sql literal", &values::literal_cases()),

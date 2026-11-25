@@ -1,11 +1,13 @@
 //! How each engine orders and pages a table's rows: where NULLs sort when a key does not say,
 //! how a key that says is written, whether an order may say it, how an unquoted name finds its
-//! column, and how rows are skipped without a cap.
+//! column, and how rows are skipped without a cap. Which bare names the server may read as a
+//! call rather than as the column of that name ([`bare_call`], [`bare_call_cases`]).
 
 use crate::Case;
 use crate::Engine::{self, MariaDb, MySql, Pg};
 use datarig_core::query::{
-    ColumnFacts, ColumnKind, Dir, Nulls, OrderKey, Query, TableName, Target, compile, compile_capped, parse_order,
+    ColumnFacts, ColumnKind, Cond, Dir, Nulls, OrderKey, Query, TableName, Target, compile, compile_capped,
+    parse_order, recognise,
 };
 
 /// What a sort case asks.
@@ -166,4 +168,43 @@ pub fn sort_cases() -> Vec<Case<Input>> {
             ],
         },
     ]
+}
+
+/// How filter text `<name> IS NULL` reads on `e`, on a table with a column of that name (in
+/// lower case): `column` when it is that column's condition, `as written` when the bare name
+/// may be a call and the text is kept as typed.
+pub fn bare_call(e: Engine, name: &&'static str) -> String {
+    let t = Target::new(e.dialect(), vec![ColumnFacts::new(name.to_lowercase(), ColumnKind::Number)]);
+    match recognise(&format!("{name} IS NULL"), &t) {
+        Some(Cond::IsNull { .. }) => "column".to_string(),
+        Some(Cond::Raw(_)) => "as written".to_string(),
+        other => format!("{other:?}"),
+    }
+}
+
+const CALL: &[(Engine, &str)] = &[(Pg, "column"), (MySql, "as written"), (MariaDb, "as written")];
+const COLUMN: &[(Engine, &str)] = &[(Pg, "column"), (MySql, "column"), (MariaDb, "column")];
+
+/// The words MySQL or MariaDB may read bare as a call (each on every session of either: one
+/// set for both), and words that stay column names.
+pub fn bare_call_cases() -> Vec<Case<&'static str>> {
+    let calls = [
+        "current_date",
+        "current_time",
+        "current_timestamp",
+        "current_user",
+        "localtime",
+        "localtimestamp",
+        "utc_date",
+        "utc_time",
+        "utc_timestamp",
+        "current_role",
+        "CURRENT_ROLE",
+    ];
+    let columns = ["date", "char", "user", "now", "sysdate", "database", "session_user", "id"];
+    calls
+        .into_iter()
+        .map(|name| Case { name, input: name, expect: CALL })
+        .chain(columns.into_iter().map(|name| Case { name, input: name, expect: COLUMN }))
+        .collect()
 }
