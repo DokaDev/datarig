@@ -29,6 +29,8 @@ mod filter;
 mod golden;
 #[path = "engine_conformance/golden/values.rs"]
 mod golden_values;
+#[path = "engine_conformance/plan.rs"]
+mod plan;
 #[path = "engine_conformance/read_only.rs"]
 mod read_only;
 #[path = "engine_conformance/risk.rs"]
@@ -351,6 +353,11 @@ fn duplicates_choice_on_every_engine() {
 }
 
 #[test]
+fn plan_cases_on_every_engine() {
+    run("plan", &plan::plan_cases(), plan::plan);
+}
+
+#[test]
 fn read_only_open_on_every_engine() {
     run("read-only open", &read_only::cases(), read_only::verdict);
 }
@@ -409,6 +416,7 @@ fn every_case_names_every_engine() {
         named("tx statement", &tx::statement_cases()),
         named_versioned("session rules", &session::cases()),
         named("read-only open", &read_only::cases()),
+        named("plan", &plan::plan_cases()),
         named("catalogue rules", &catalogue::catalogue_cases()),
         named("ddl rules", &catalogue::ddl_cases()),
         named("hierarchy", &catalogue::hierarchy_cases()),

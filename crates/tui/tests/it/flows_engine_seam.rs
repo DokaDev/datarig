@@ -302,6 +302,153 @@ async fn a_plan_asked_before_connect_on_a_mariadb_server_is_refused_after_explai
     assert!(executes(&mut h).is_empty(), "nothing is sent");
 }
 
+/// What the plan action of the active tab asks for `SELECT 1` now, where it goes: `bind` (a tab
+/// without a connection asks for one, the plan to run on it), `waits` (for the profile to
+/// connect), `sent`; `not offered` when the action is not offered. What it asked is undone
+/// after (the picker closed, the waiting plan cancelled, the sent one ended), so the tab can
+/// ask again.
+fn plan_asked(h: &mut Harness) -> String {
+    use datarig_tui::app::overlay::Overlay;
+    use datarig_tui::app::quick::QuickPurpose;
+    if !(datarig_tui::app::action::spec(Action::Explain(false)).when)(&h.app) {
+        return "not offered".into();
+    }
+    h.sent();
+    h.app.focus = Focus::Editor;
+    edit(h, "SELECT 1");
+    h.app.dispatch(Action::Explain(false));
+    if let Some(Overlay::QuickConnect(q)) = h.app.overlays.top() {
+        let QuickPurpose::Bind { run: Some((statements, _)), .. } = &q.purpose else {
+            panic!("a picker for another purpose");
+        };
+        let asked = format!("bind: {}", statements.join("; "));
+        h.key(KeyCode::Esc);
+        return asked;
+    }
+    let waits = waiting(h);
+    if !waits.is_empty() {
+        h.app.cancel();
+        assert!(!h.app.is_queued(h.app.tab().id));
+        return format!("waits: {}", waits.concat().join("; "));
+    }
+    let sent = executes(h);
+    if !sent.is_empty() {
+        done(h);
+        return format!("sent: {}", sent.concat().join("; "));
+    }
+    "offered, nothing asked".into()
+}
+
+/// The plan format a tab's plan action asks in, today, in every state: a tab without a
+/// profile (PostgreSQL's JSON, run once a connection is picked); a profile no driver serves
+/// (offered, as PostgreSQL's, and nothing is asked: no driver connects it); on each engine,
+/// before its profile connected, before its session said a word (the driver's format), after it
+/// said its server and its word (none on MariaDB), after the other word and its own again (the
+/// last word said is the profile's), after that session is lost (the word kept) and after a new
+/// attempt (the word forgotten until a session says it again).
+#[test]
+fn tab_explain_answers_as_today() {
+    let mut seen = Vec::new();
+    // No profile.
+    let mut h = seam_profile("mysql", true);
+    let tab = h.app.tab().id;
+    h.app.tabs.bind(tab, None);
+    let mut h = h.with_fake_driver();
+    seen.push(format!("no profile: {}", plan_asked(&mut h)));
+    // A driver name no driver serves.
+    let mut h = seam_profile("redis", true);
+    seen.push(format!("no driver: {}", plan_asked(&mut h)));
+    for engine in ENGINES {
+        let mut h = seam_profile(engine.driver(), engine.mysql_driver());
+        seen.push(format!("{engine:?} never connected: {}", plan_asked(&mut h)));
+        open_meta(&mut h);
+        seen.push(format!("{engine:?} before any word: {}", plan_asked(&mut h)));
+        for ev in connect_words(engine, true) {
+            h.meta_db("seam", ev);
+        }
+        seen.push(format!("{engine:?} its session said its server: {}", plan_asked(&mut h)));
+        if engine.mysql_driver() {
+            // The other word, then its own again, said by the profile's session.
+            let (other, own) = match engine {
+                Engine::MariaDb => (Some(ExplainFormat::MySqlTree), None),
+                Engine::MySql | Engine::Postgres => (None, Some(ExplainFormat::MySqlTree)),
+            };
+            h.meta_db("seam", DbEvent::Explain(other));
+            seen.push(format!("{engine:?} after Explain({other:?}): {}", plan_asked(&mut h)));
+            h.meta_db("seam", DbEvent::Explain(own));
+            seen.push(format!("{engine:?} after Explain({own:?}): {}", plan_asked(&mut h)));
+        }
+        // The metadata session is lost.
+        h.meta_db("seam", DbEvent::Lost { error: DbError::Closed });
+        seen.push(format!("{engine:?} its session lost: {}", plan_asked(&mut h)));
+        // A new attempt.
+        h.app.dispatch(Action::ReconnectCurrent);
+        if h.overlay_kind().is_some() {
+            h.keys("y");
+        }
+        seen.push(format!("{engine:?} a new attempt: {}", plan_asked(&mut h)));
+    }
+    let expected = [
+        "no profile: bind: EXPLAIN (FORMAT JSON) SELECT 1",
+        "no driver: offered, nothing asked",
+        "Postgres never connected: sent: EXPLAIN (FORMAT JSON) SELECT 1",
+        "Postgres before any word: sent: EXPLAIN (FORMAT JSON) SELECT 1",
+        "Postgres its session said its server: sent: EXPLAIN (FORMAT JSON) SELECT 1",
+        "Postgres its session lost: sent: EXPLAIN (FORMAT JSON) SELECT 1",
+        "Postgres a new attempt: sent: EXPLAIN (FORMAT JSON) SELECT 1",
+        "MySql never connected: sent: EXPLAIN FORMAT=TREE SELECT 1",
+        "MySql before any word: sent: EXPLAIN FORMAT=TREE SELECT 1",
+        "MySql its session said its server: sent: EXPLAIN FORMAT=TREE SELECT 1",
+        "MySql after Explain(None): not offered",
+        "MySql after Explain(Some(MySqlTree)): sent: EXPLAIN FORMAT=TREE SELECT 1",
+        "MySql its session lost: sent: EXPLAIN FORMAT=TREE SELECT 1",
+        "MySql a new attempt: sent: EXPLAIN FORMAT=TREE SELECT 1",
+        "MariaDb never connected: sent: EXPLAIN FORMAT=TREE SELECT 1",
+        "MariaDb before any word: sent: EXPLAIN FORMAT=TREE SELECT 1",
+        "MariaDb its session said its server: not offered",
+        "MariaDb after Explain(Some(MySqlTree)): sent: EXPLAIN FORMAT=TREE SELECT 1",
+        "MariaDb after Explain(None): not offered",
+        "MariaDb its session lost: not offered",
+        "MariaDb a new attempt: sent: EXPLAIN FORMAT=TREE SELECT 1",
+    ];
+    assert_eq!(seen, expected);
+}
+
+/// A MariaDB tab is offered the plan, and asks for it as MySQL's tree, when another session
+/// of its profile, greeting as MySQL 8.4, said the tree after the tab's own session said its
+/// server gives none: the profile's word is the last one said, the tab's dialect its own
+/// session's. The server refuses the statement (MariaDB has no `FORMAT=TREE`).
+#[test]
+fn a_mariadb_tab_offers_the_plan_another_session_of_its_profile_reported() {
+    let mut h = seam_profile("mysql", true);
+    open_meta(&mut h);
+    for ev in connect_words(Engine::MariaDb, true) {
+        h.meta_db("seam", ev);
+    }
+    // The MariaDB tab's own session opens first.
+    h.app.focus = Focus::Editor;
+    run_all(&mut h, "SELECT 1");
+    h.tab_db(0, facts_of(Engine::MariaDb));
+    h.tab_db(0, DbEvent::Language(mariadb()));
+    h.tab_db(0, DbEvent::Explain(None));
+    h.tab_db(0, DbEvent::Connected);
+    done(&mut h);
+    assert_eq!(plan_asked(&mut h), "not offered", "the profile's word is none");
+    // Another session of the profile, greeting as MySQL 8.4, says the tree last.
+    h.ctrl('t');
+    assert_eq!(h.app.tabs.active_index(), 1);
+    run_all(&mut h, "SELECT 2");
+    h.tab_db(1, DbEvent::Server(facts_at(Engine::MySql, v(8, 4, 6))));
+    h.tab_db(1, DbEvent::Language(mysql(MySqlMode::default())));
+    h.tab_db(1, DbEvent::Explain(Some(ExplainFormat::MySqlTree)));
+    h.tab_db(1, DbEvent::Connected);
+    done(&mut h);
+    // Back on the MariaDB tab.
+    h.app.tabs.activate(0);
+    assert_eq!(h.app.tab_language(h.app.tab().id), mariadb(), "its own session's dialect");
+    assert_eq!(plan_asked(&mut h), "sent: EXPLAIN FORMAT=TREE SELECT 1", "offered, as MySQL's tree");
+}
+
 /// `Edit(None)` said before `Connected` is the profile's at once: the first result read after
 /// the connect is not editable, with the server's reason.
 #[test]

@@ -281,6 +281,44 @@ fn the_mysql_edit_writer_reads_the_greeting_whatever_the_line_names() {
     }
 }
 
+/// The plan format a session says follows the server's greeting on every shape of its facts:
+/// MySQL's tree from a MySQL greeting of 8.0.16 on, none from an older one or from a MariaDB
+/// greeting, whether the version line agrees with the greeting, gives another number, gives
+/// none, or names the other engine.
+#[test]
+fn the_plan_format_follows_the_greeting_on_every_facts_shape() {
+    let tree = Some(ExplainFormat::MySqlTree);
+    let rows = [
+        (my(8, 0, 15), None),
+        (my(8, 0, 16), tree),
+        (my(8, 0, 18), tree),
+        (my(8, 4, 6), tree),
+        (maria(10, 6, 0), None),
+        (maria(11, 4, 5), None),
+    ];
+    for (g, explain) in rows {
+        let (other_number, no_number, other_engine) = match g.mariadb {
+            true => ("10.11.9-MariaDB", "x-MariaDB", "8.4.6"),
+            false => ("8.0.99", "x", "11.4.5-MariaDB"),
+        };
+        let line = |l: &str| judge(&g, Some(Value::Bytes(l.as_bytes().to_vec()))).expect("a line");
+        let shapes = [
+            (VersionReport::agreeing(&g), Fact::Known(g.handshake)),
+            (line(other_number), Fact::Unknown(Why::VersionsDisagree)),
+            (line(no_number), Fact::Unknown(Why::VersionUnknown)),
+            (line(other_engine), Fact::Unknown(Why::EnginesDisagree)),
+        ];
+        for (report, version) in shapes {
+            for own in [Some(true), Some(false), None] {
+                let f = facts(&g, &report, own);
+                assert_eq!(f.version, version, "{g:?} {}", report.line);
+                let d = derive(&f, &Tracked::default());
+                assert_eq!((d.explain, d.capabilities.explain), (explain, explain), "{g:?} {} {own:?}", report.line);
+            }
+        }
+    }
+}
+
 /// The servers the session's set-up is recorded for: MySQL and MariaDB around each version its
 /// statements depend on.
 const SET_UP_SERVERS: [(bool, (u16, u16, u16)); 7] = [
