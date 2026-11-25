@@ -344,3 +344,43 @@ async fn a_target_without_its_thread_is_never_killed() {
         assert!(!fake.sent.iter().any(|s| s.starts_with("KILL")), "{:?}", fake.sent);
     }
 }
+
+/// What a cancel and an end send, in order, on every provider: the read of the target with the
+/// monitor's marker, then `KILL QUERY` or `KILL` (and on a refusal that calls for it, the target
+/// read again and the provider's procedure).
+#[tokio::test]
+async fn a_cancel_and_an_end_send_todays_statements() {
+    let flavours = [
+        Flavour::Standard,
+        Flavour::AmazonRds,
+        Flavour::AmazonAurora,
+        Flavour::GoogleCloudSql,
+        Flavour::GoogleAlloyDb,
+        Flavour::AzureDatabase,
+    ];
+    for flavour in flavours {
+        let m = my(flavour);
+        for (kind, kill) in [(ActionKind::Cancel, "KILL QUERY 63114"), (ActionKind::Terminate, "KILL 63114")] {
+            let (outcome, sent) = acting(&m, kind, vec![running(), ok()]).await;
+            assert_eq!(outcome, ActionOutcome::Acknowledged { via: Via::Standard }, "{flavour:?} {kind:?}");
+            assert_eq!(sent, [sql::guard(&m, 63114, TOKEN), kill.to_owned()], "{flavour:?} {kind:?}");
+            let (_, sent) = acting(&m, kind, vec![running(), server(1095), running(), ok()]).await;
+            let procedure = match (flavour, kind) {
+                (Flavour::AmazonRds | Flavour::AmazonAurora, ActionKind::Cancel) => {
+                    Some("CALL mysql.rds_kill_query(63114)")
+                }
+                (Flavour::AmazonRds | Flavour::AmazonAurora, ActionKind::Terminate) => {
+                    Some("CALL mysql.rds_kill(63114)")
+                }
+                (Flavour::AzureDatabase, ActionKind::Cancel) => Some("CALL mysql.az_kill_query(63114)"),
+                (Flavour::AzureDatabase, ActionKind::Terminate) => Some("CALL mysql.az_kill(63114)"),
+                (Flavour::Standard | Flavour::GoogleCloudSql | Flavour::GoogleAlloyDb, _) => None,
+            };
+            let mut want = vec![sql::guard(&m, 63114, TOKEN), kill.to_owned()];
+            if let Some(call) = procedure {
+                want.extend([sql::guard(&m, 63114, TOKEN), call.to_owned()]);
+            }
+            assert_eq!(sent, want, "{flavour:?} {kind:?} refused");
+        }
+    }
+}

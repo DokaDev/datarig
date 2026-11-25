@@ -221,3 +221,34 @@ fn the_route_is_direct_only_when_the_server_names_the_start_ups_process() {
     assert_eq!(route(&Vec::new(), 4242), Route::Unknown);
     assert_eq!(route(&vec![vec![None]], 4242), Route::Unknown);
 }
+
+/// What a cancel and an end send, in order, on every route and provider: the action's
+/// transaction (its `BEGIN` with the limits, the one statement that reads and signals the target,
+/// the `COMMIT`), and nothing more, refused or not.
+#[tokio::test]
+async fn a_cancel_and_an_end_send_todays_statements() {
+    let flavours = [
+        Flavour::Standard,
+        Flavour::AmazonRds,
+        Flavour::AmazonAurora,
+        Flavour::GoogleCloudSql,
+        Flavour::GoogleAlloyDb,
+        Flavour::AzureDatabase,
+    ];
+    for flavour in flavours {
+        for route in [Route::Direct, Route::Pooled, Route::Unknown] {
+            let m = PgMonitor { flavour, ..pg(route) };
+            for kind in [ActionKind::Cancel, ActionKind::Terminate] {
+                let want = [sql::begin(ACTION_LIMIT), sql::action(&m, kind, &target()), "COMMIT".to_owned()];
+                let fake = Fake::new(vec![answered(Ok(row("f", "t", "t", Some("t"))))]);
+                let acted = act(&fake, &m, false, kind, &target()).await;
+                assert_eq!(acted.outcome, ActionOutcome::Acknowledged { via: Via::Standard }, "{flavour:?} {route:?}");
+                assert_eq!(fake.sent(), want, "{flavour:?} {route:?} {kind:?}");
+                let fake = Fake::new(vec![answered(Err(server("42501")))]);
+                let acted = act(&fake, &m, false, kind, &target()).await;
+                assert!(matches!(acted.outcome, ActionOutcome::NotSent(NotSent::Refused(_))), "{:?}", acted.outcome);
+                assert_eq!(fake.sent(), want, "{flavour:?} {route:?} {kind:?} refused");
+            }
+        }
+    }
+}

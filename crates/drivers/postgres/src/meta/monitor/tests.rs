@@ -319,3 +319,29 @@ async fn every_replication_statement_gives_its_decoders_columns() {
         }
     }
 }
+
+/// Every statement a monitor of `p` sends (the probe's aside): the tick's, a session's, the
+/// lock table's and the replication reads.
+fn statements_of(p: &PgMonitor) -> Vec<String> {
+    let mut out = vec![sessions(p, IDLE), sessions(p, NO_IDLE), session(p, 1), locks(p)];
+    out.extend(replication::read(p));
+    out
+}
+
+/// A beta or development build's `server_version` does not parse as a version, so the facts of
+/// its sessions say the version is not known; the monitor reads what its own probe's
+/// `server_version_num` says, and those facts are no input: a 18 beta and a 17 development
+/// build are read with every statement of 17.11, the parallel leader and the lock wait start
+/// included.
+#[test]
+fn the_statements_follow_the_probes_number_on_beta_and_devel_builds() {
+    use datarig_core::monitor::decode;
+    for number in ["180000", "170000"] {
+        let cells = [number, "t", "t", "t", ""].map(|c| Some(c.to_owned()));
+        let p = decode::pg::probe(&vec![cells.to_vec()]).unwrap();
+        assert_eq!(p.version.to_string(), number);
+        assert!(p.leader_pid() && p.waitstart(), "{number}");
+        assert_eq!(statements_of(&p), statements_of(&pg(170011)), "{number}");
+        assert_eq!(probe(), every(170011)[0].1);
+    }
+}
