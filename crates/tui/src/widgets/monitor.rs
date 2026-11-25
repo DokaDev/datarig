@@ -1894,4 +1894,124 @@ mod tests {
         assert_eq!(short_version("8.4.11 MySQL Community Server - GPL", true), "8.4.11 (MySQL Community Server)");
         assert_eq!(short_version("8.0.45", true), "MySQL 8.0.45");
     }
+
+    /// The formats a frame draws with: a PostgreSQL and a MySQL server's, and none yet (the
+    /// probe not answered).
+    pub(super) fn formats() -> [(&'static str, Option<MonitorFormat>); 3] {
+        use datarig_core::monitor::{Flavour, MySqlMonitor, PgMonitor, Readable, Route};
+        let pg = PgMonitor {
+            version: 170011,
+            superuser: true,
+            read_all_stats: true,
+            signal_backend: true,
+            flavour: Flavour::Standard,
+            route: Route::Direct,
+        };
+        let my = MySqlMonitor {
+            version: 80411,
+            performance_schema: true,
+            user: "root".into(),
+            process: Readable::Yes,
+            innodb_trx: Readable::Yes,
+            metadata_locks: Readable::Yes,
+            statements: Readable::Yes,
+            threads: Readable::Yes,
+            unconfirmed: false,
+            flavour: Flavour::Standard,
+        };
+        [("pg", Some(MonitorFormat::Postgres(pg))), ("mysql", Some(MonitorFormat::MySql(my))), ("none", None)]
+    }
+
+    /// A Monitor tab reading with `format`, or still opening.
+    pub(super) fn tab(format: Option<MonitorFormat>) -> MonitorTab {
+        let mut m = MonitorTab::new(datarig_core::config::MonitorInterval::default());
+        m.state = match format {
+            Some(f) => MonState::Ready(f),
+            None => MonState::Opening,
+        };
+        m
+    }
+
+    /// What a frame of `m` draws from, as [`draw`] builds it.
+    pub(super) fn cx<'a>(i18n: &'a I18n, m: &'a MonitorTab) -> Cx<'a> {
+        let mysql = matches!(m.format(), Some(MonitorFormat::MySql(_)));
+        Cx {
+            i18n,
+            m,
+            focused: false,
+            mysql,
+            read_key: "r".into(),
+            format_key: "f".into(),
+            own: None,
+            actions: Vec::new(),
+        }
+    }
+
+    /// The server's strip of `m` with a server whose version line is `version`.
+    fn strip(i18n: &I18n, m: &mut MonitorTab, version: &str) -> String {
+        m.server = Some(datarig_core::monitor::ServerInfo {
+            version: version.into(),
+            started: None,
+            read_at: Timestamp(0),
+            read_only: false,
+            max_connections: None,
+            cache_bytes: None,
+            extra: Vec::new(),
+        });
+        let mut buf = Buffer::empty(Rect::new(0, 0, 120, 1));
+        cx(i18n, m).server_strip(Rect::new(0, 0, 120, 1), &mut buf);
+        (0..120).map(|x| buf[(x, 0)].symbol()).collect::<String>().trim().to_string()
+    }
+
+    /// What the views call things, for each format and for none: the id column, the server's
+    /// role both ways, the version line of a MySQL and a PostgreSQL server (a beta's included)
+    /// and the charts drawn, as today.
+    #[test]
+    fn labels_answer_as_today() {
+        let i18n = I18n::new(datarig_i18n::Lang::En);
+        let versions = [
+            "8.4.11 MySQL Community Server - GPL",
+            "8.0.36",
+            "17.2 (Debian 17.2-1.pgdg120+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14) 12.2.0, 64-bit",
+            "18beta1",
+        ];
+        let mut got = Vec::new();
+        for (name, format) in formats() {
+            let mut m = tab(format);
+            {
+                let c = cx(&i18n, &m);
+                got.push(format!("{name}: column {}", c.col_label(Col::Id)));
+                got.push(format!("{name}: role {} / {}", c.role(true), c.role(false)));
+                let charts: Vec<String> = c.charts().into_iter().map(|d| d.title).collect();
+                got.push(format!("{name}: charts {charts:?}"));
+            }
+            for v in versions {
+                got.push(format!("{name}: strip {}", strip(&i18n, &mut m, v)));
+            }
+        }
+        let want = [
+            "pg: column pid",
+            "pg: role standby / primary",
+            "pg: charts [\"rows/s by operation\", \"sessions by state\"]",
+            "pg: strip 8.4.11 MySQL Community Server - GPL · primary",
+            "pg: strip 8.0.36 · primary",
+            "pg: strip 17.2 · primary",
+            "pg: strip 18beta1 · primary",
+            "mysql: column id",
+            "mysql: role server read-only / server takes writes",
+            "mysql: charts [\"statements/s by type\", \"sessions by state\"]",
+            "mysql: strip 8.4.11 (MySQL Community Server) · server takes writes",
+            "mysql: strip MySQL 8.0.36 · server takes writes",
+            "mysql: strip 17.2 ((Debian 17.2-1.pgdg120+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14) 12.2.0, 64-bit) · server t…",
+            "mysql: strip MySQL 18beta1 · server takes writes",
+            "none: column pid",
+            "none: role standby / primary",
+            "none: charts []",
+            "none: strip 8.4.11 MySQL Community Server - GPL · primary",
+            "none: strip 8.0.36 · primary",
+            "none: strip 17.2 · primary",
+            "none: strip 18beta1 · primary",
+        ];
+        assert_eq!(got, want, "{got:#?}");
+    }
 }

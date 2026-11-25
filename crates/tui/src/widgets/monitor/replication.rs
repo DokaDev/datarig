@@ -574,4 +574,214 @@ mod tests {
         assert!(shown.ends_with('…') && !shown.contains('\n'));
         assert_eq!(set_start("a:1-5,\nb:1-3"), "a:1-5, b:1-3");
     }
+
+    /// A server it takes changes from, both sides running, nothing else known.
+    fn upstream() -> Upstream {
+        Upstream {
+            channel: None,
+            source: Some("10.0.0.5:3306".into()),
+            slot: None,
+            receiver: Running::Yes,
+            receiver_state: None,
+            applier: Running::Yes,
+            applier_state: None,
+            received: None,
+            applied: None,
+            received_set: None,
+            executed_set: None,
+            gtids_only: false,
+            gtids_left: None,
+            source_read: None,
+            source_applied: None,
+            applier_behind: None,
+            delay: None,
+            last_message: Some(Timestamp(-2_000_000)),
+            last_received: None,
+            last_applied: Some(Timestamp(-5_000_000)),
+            errors: Vec::new(),
+            visible: Visibility::Full,
+        }
+    }
+
+    /// A server that takes changes from this one.
+    fn replica() -> Replica {
+        use datarig_core::monitor::Lsn;
+        Replica {
+            id: Some(87),
+            name: Some("walreceiver".into()),
+            client: Some("10.0.0.21".into()),
+            state: Some("streaming".into()),
+            sync: Some("async".into()),
+            sent: Some(Lsn(4096)),
+            written: Some(Lsn(4096)),
+            flushed: Some(Lsn(4096)),
+            replayed: Some(Lsn(1024)),
+            write_lag: None,
+            flush_lag: None,
+            replay_lag: Some(1_834),
+            reply: None,
+            user: Some("repl".into()),
+            visible: Visibility::Full,
+        }
+    }
+
+    /// The lines of each case, for each format and for none: what the replication view calls
+    /// the receiving and applying sides, the channel, the last message, the lag in bytes and a
+    /// replica, as today.
+    #[test]
+    fn replication_lines_answer_as_today() {
+        use datarig_core::monitor::Lsn;
+        let i18n = datarig_i18n::I18n::new(datarig_i18n::Lang::En);
+        let named = Upstream { channel: Some("east".into()), ..upstream() };
+        let standby = Upstream {
+            received: Some(Lsn(4096)),
+            applied: Some(Lsn(4096)),
+            last_received: Some(Timestamp(-1_000_000)),
+            ..upstream()
+        };
+        let no_receiver = Upstream { receiver: Running::No, ..standby.clone() };
+        let zero = Upstream { receiver: Running::No, applier_behind: Some(0), ..upstream() };
+        let behind = Upstream { applied: Some(Lsn(1024)), ..standby.clone() };
+        let upstreams = [
+            ("default channel", upstream()),
+            ("named channel", named),
+            ("standby", standby),
+            ("no receiver", no_receiver),
+            ("zero, receiver off", zero),
+            ("behind", behind),
+        ];
+        let hidden = Replica { visible: Visibility::Hidden, ..replica() };
+        let replicas = [("replica", replica()), ("hidden replica", hidden)];
+        let read = Replication {
+            time: Timestamp(0),
+            in_recovery: None,
+            position: Some(Lsn(4096)),
+            upstream: None,
+            replicas: None,
+            slots: None,
+            subscriptions: None,
+            members: Vec::new(),
+            hidden: Vec::new(),
+        };
+        let mut got = Vec::new();
+        for (format, f) in super::super::tests::formats() {
+            let m = super::super::tests::tab(f);
+            let c = super::super::tests::cx(&i18n, &m);
+            for (case, u) in &upstreams {
+                let mut out = Lines::new();
+                c.upstream(u, Timestamp(0), 200, &mut out);
+                got.extend(out.into_iter().map(|(l, _)| format!("{format}, {case}: {l}")));
+            }
+            for (case, r) in &replicas {
+                let mut out = Lines::new();
+                c.replica(r, &read, 200, &mut out);
+                got.extend(out.into_iter().map(|(l, _)| format!("{format}, {case}: {l}")));
+            }
+        }
+        let want = [
+            "pg, default channel: Takes changes from 10.0.0.5:3306",
+            "pg, default channel:   WAL receiver: running · last heard from the source 2s ago",
+            "pg, default channel:   replay: running",
+            "pg, default channel:   how far behind is not known",
+            "pg, default channel:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "pg, named channel: Channel east from 10.0.0.5:3306",
+            "pg, named channel:   WAL receiver: running · last heard from the source 2s ago",
+            "pg, named channel:   replay: running",
+            "pg, named channel:   how far behind is not known",
+            "pg, named channel:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "pg, standby: Takes changes from 10.0.0.5:3306",
+            "pg, standby:   WAL receiver: running · last heard from the source 2s ago · last transaction fetched 1s ago",
+            "pg, standby:   replay: running",
+            "pg, standby:   applied all it received",
+            "pg, standby:   received 0/1000 · replayed 0/1000",
+            "pg, standby:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "pg, no receiver: No WAL receiver: the standby replays only what it has, or reads from an archive",
+            "pg, no receiver:   replay: running",
+            "pg, no receiver:   applied all it received",
+            "pg, no receiver:   received 0/1000 · replayed 0/1000",
+            "pg, no receiver:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "pg, zero, receiver off: No WAL receiver: the standby replays only what it has, or reads from an archive",
+            "pg, zero, receiver off:   replay: running",
+            "pg, zero, receiver off:   how far behind is not known",
+            "pg, zero, receiver off:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "pg, behind: Takes changes from 10.0.0.5:3306",
+            "pg, behind:   WAL receiver: running · last heard from the source 2s ago · last transaction fetched 1s ago",
+            "pg, behind:   replay: running",
+            "pg, behind:   3 KB not replayed yet",
+            "pg, behind:   received 0/1000 · replayed 0/400",
+            "pg, behind:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "pg, replica:   walreceiver · 10.0.0.21 · streaming · async",
+            "pg, replica:     3 KB not replayed yet · lag replay 1ms",
+            "pg, hidden replica:   walreceiver · 10.0.0.21 · streaming · async · pid 87",
+            "pg, hidden replica:     state and positions hidden",
+            "mysql, default channel: Default channel from 10.0.0.5:3306",
+            "mysql, default channel:   receiver: running · last heartbeat 2s ago (sent only while the source has nothing else to send)",
+            "mysql, default channel:   applier: running · last transaction applied 5s ago",
+            "mysql, default channel:   how far behind is not known",
+            "mysql, named channel: Channel east from 10.0.0.5:3306",
+            "mysql, named channel:   receiver: running · last heartbeat 2s ago (sent only while the source has nothing else to send)",
+            "mysql, named channel:   applier: running · last transaction applied 5s ago",
+            "mysql, named channel:   how far behind is not known",
+            "mysql, standby: Default channel from 10.0.0.5:3306",
+            "mysql, standby:   receiver: running · last heartbeat 2s ago (sent only while the source has nothing else to send) · last transaction fetched 1s ago",
+            "mysql, standby:   applier: running · last transaction applied 5s ago",
+            "mysql, standby:   applied all it received",
+            "mysql, standby:   received 0/1000 · replayed 0/1000",
+            "mysql, no receiver: Default channel from 10.0.0.5:3306",
+            "mysql, no receiver:   receiver: stopped · last heartbeat 2s ago (sent only while the source has nothing else to send) · last transaction fetched 1s ago",
+            "mysql, no receiver:   applier: running · last transaction applied 5s ago",
+            "mysql, no receiver:   applied all it received",
+            "mysql, no receiver:   received 0/1000 · replayed 0/1000",
+            "mysql, zero, receiver off: Default channel from 10.0.0.5:3306",
+            "mysql, zero, receiver off:   receiver: stopped · last heartbeat 2s ago (sent only while the source has nothing else to send)",
+            "mysql, zero, receiver off:   applier: running · last transaction applied 5s ago",
+            "mysql, zero, receiver off:   how far behind is not known",
+            "mysql, zero, receiver off:   Seconds_Behind_Source counts only what the receiver fetched: with the receiver not running, 0 does not mean caught up with the source",
+            "mysql, behind: Default channel from 10.0.0.5:3306",
+            "mysql, behind:   receiver: running · last heartbeat 2s ago (sent only while the source has nothing else to send) · last transaction fetched 1s ago",
+            "mysql, behind:   applier: running · last transaction applied 5s ago",
+            "mysql, behind:   3 KB fetched, not applied yet",
+            "mysql, behind:   received 0/1000 · replayed 0/400",
+            "mysql, replica:   10.0.0.21 · repl · streaming",
+            "mysql, replica:     its lag is read on the replica itself",
+            "mysql, hidden replica:   10.0.0.21 · repl · streaming",
+            "mysql, hidden replica:     its lag is read on the replica itself",
+            "none, default channel: Takes changes from 10.0.0.5:3306",
+            "none, default channel:   WAL receiver: running · last heard from the source 2s ago",
+            "none, default channel:   replay: running",
+            "none, default channel:   how far behind is not known",
+            "none, default channel:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "none, named channel: Channel east from 10.0.0.5:3306",
+            "none, named channel:   WAL receiver: running · last heard from the source 2s ago",
+            "none, named channel:   replay: running",
+            "none, named channel:   how far behind is not known",
+            "none, named channel:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "none, standby: Takes changes from 10.0.0.5:3306",
+            "none, standby:   WAL receiver: running · last heard from the source 2s ago · last transaction fetched 1s ago",
+            "none, standby:   replay: running",
+            "none, standby:   applied all it received",
+            "none, standby:   received 0/1000 · replayed 0/1000",
+            "none, standby:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "none, no receiver: No WAL receiver: the standby replays only what it has, or reads from an archive",
+            "none, no receiver:   replay: running",
+            "none, no receiver:   applied all it received",
+            "none, no receiver:   received 0/1000 · replayed 0/1000",
+            "none, no receiver:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "none, zero, receiver off: No WAL receiver: the standby replays only what it has, or reads from an archive",
+            "none, zero, receiver off:   replay: running",
+            "none, zero, receiver off:   how far behind is not known",
+            "none, zero, receiver off:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "none, behind: Takes changes from 10.0.0.5:3306",
+            "none, behind:   WAL receiver: running · last heard from the source 2s ago · last transaction fetched 1s ago",
+            "none, behind:   replay: running",
+            "none, behind:   3 KB not replayed yet",
+            "none, behind:   received 0/1000 · replayed 0/400",
+            "none, behind:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "none, replica:   walreceiver · 10.0.0.21 · streaming · async",
+            "none, replica:     3 KB not replayed yet · lag replay 1ms",
+            "none, hidden replica:   walreceiver · 10.0.0.21 · streaming · async · pid 87",
+            "none, hidden replica:     state and positions hidden",
+        ];
+        assert_eq!(got, want, "{got:#?}");
+    }
 }
