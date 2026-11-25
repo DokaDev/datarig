@@ -46,8 +46,8 @@ impl Fake {
 }
 
 impl Pipeline for Fake {
-    async fn send(&self, begin: &str, statement: &str, _deadline: Duration) -> Option<Pipelined> {
-        self.sent.lock().unwrap().extend([begin.to_owned(), statement.to_owned(), "COMMIT".to_owned()]);
+    async fn send(&self, begin: &str, statement: &str, commit: &str, _deadline: Duration) -> Option<Pipelined> {
+        self.sent.lock().unwrap().extend([begin.to_owned(), statement.to_owned(), commit.to_owned()]);
         self.answers.lock().unwrap().pop().expect("an answer for every transaction")
     }
 }
@@ -259,17 +259,16 @@ async fn a_cancel_and_an_end_send_todays_statements() {
     }
 }
 
-/// [`act`] with the engine's monitor rules looked up as `lookup`, checked as an action checks
-/// them ([`action::rules_for_with`]), on `fake`.
-async fn act_with(
+/// The driver's action with the engine's monitor rules looked up as `lookup`, unchecked: the
+/// driver checks them itself ([`act_with`]), on `fake`.
+async fn acting_with(
     lookup: Result<&'static dyn MonitorRules, Why>,
     fake: &Fake,
     m: &PgMonitor,
     read_only: bool,
     kind: ActionKind,
 ) -> Acted {
-    let rules = |f: &MonitorFormat| action::rules_for_with(lookup, f);
-    act_by(fake, m, &format_of(m), rules, read_only, kind, &target()).await
+    act_with(|_| lookup, fake, m, &format_of(m), read_only, kind, &target()).await
 }
 
 /// Without the engine's monitor rules for the format, or with rules that do not read it,
@@ -287,20 +286,20 @@ async fn an_action_without_the_engines_rules_sends_nothing() {
         for (lookup, why) in lookups.clone() {
             for kind in [ActionKind::Cancel, ActionKind::Terminate] {
                 let fake = Fake::new(Vec::new());
-                let acted = act_with(lookup.clone(), &fake, &pg(route), false, kind).await;
+                let acted = acting_with(lookup.clone(), &fake, &pg(route), false, kind).await;
                 assert_eq!(acted, Acted { outcome: ActionOutcome::NotSent(why.clone()), committed: false, lost: None });
                 assert!(fake.sent().is_empty(), "{:?}", fake.sent());
             }
         }
     }
     let fake = Fake::new(Vec::new());
-    let acted = act_with(Err(Why::NotBuilt), &fake, &pg(Route::Direct), true, ActionKind::Cancel).await;
+    let acted = acting_with(Err(Why::NotBuilt), &fake, &pg(Route::Direct), true, ActionKind::Cancel).await;
     assert_eq!(acted.outcome, ActionOutcome::NotSent(NotSent::ReadOnly));
     assert!(fake.sent().is_empty());
     // The engine's own rules: the action's transaction, as before.
     let Fact::Known(postgres) = &EngineId::Postgres.spec().monitor else { panic!("PostgreSQL has monitor rules") };
     let fake = Fake::new(vec![answered(Ok(row("f", "t", "t", Some("t"))))]);
-    let acted = act_with(Ok(*postgres), &fake, &pg(Route::Direct), false, ActionKind::Cancel).await;
+    let acted = acting_with(Ok(*postgres), &fake, &pg(Route::Direct), false, ActionKind::Cancel).await;
     assert_eq!(acted.outcome, ActionOutcome::Acknowledged { via: Via::Standard });
     assert_eq!(fake.sent().len(), 3);
 }

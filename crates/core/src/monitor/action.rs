@@ -234,6 +234,10 @@ pub fn rules_for_with(
 /// `read_only` or not. Whether the row is one of this app's own tabs is the caller's to tell
 /// (it knows the tabs).
 pub fn decide(format: &MonitorFormat, row: &SessionRow, read_only: bool, kind: ActionKind) -> Decision {
+    // Read-only first: the rules are looked up only for a profile that may act.
+    if read_only {
+        return Decision::Refuse(Refusal::ReadOnly);
+    }
     decide_with(format.rules(), format, row, read_only, kind)
 }
 

@@ -278,15 +278,18 @@ struct Pipelined {
 
 /// What sends an action's transaction: the connection, or a test's stand-in.
 trait Pipeline {
-    /// `begin`, `statement` and `COMMIT` in one round trip; `None` when no answer came within
-    /// `deadline`.
-    async fn send(&self, begin: &str, statement: &str, deadline: Duration) -> Option<Pipelined>;
+    /// `begin`, `statement` and `commit` in one round trip, in that order; `None` when no
+    /// answer came within `deadline`.
+    async fn send(&self, begin: &str, statement: &str, commit: &str, deadline: Duration) -> Option<Pipelined>;
 }
 
+/// The statement that ends an action's transaction.
+const COMMIT: &str = "COMMIT";
+
 impl Pipeline for Client {
-    async fn send(&self, begin: &str, statement: &str, deadline: Duration) -> Option<Pipelined> {
+    async fn send(&self, begin: &str, statement: &str, commit: &str, deadline: Duration) -> Option<Pipelined> {
         let all =
-            async { tokio::join!(self.batch_execute(begin), self.simple_query(statement), self.command_tag("COMMIT")) };
+            async { tokio::join!(self.batch_execute(begin), self.simple_query(statement), self.command_tag(commit)) };
         let (begun, acted, committed) = tokio::time::timeout(deadline, all).await.ok()?;
         Some(Pipelined {
             begun: begun.map_err(|e| Fail::of(&e)),
@@ -310,15 +313,16 @@ async fn act(
     kind: ActionKind,
     target: &ActionTarget,
 ) -> Acted {
-    act_by(p, pg, format, action::rules_for, read_only, kind, target).await
+    act_with(MonitorFormat::rules, p, pg, format, read_only, kind, target).await
 }
 
-/// [`act`] with the engine's monitor rules for `format` as `rules` finds them.
-async fn act_by(
+/// [`act`] with the engine's monitor rules for `format` as `lookup` finds them, checked by
+/// [`action::rules_for_with`] right after the read-only check, before anything is sent.
+async fn act_with(
+    lookup: impl FnOnce(&MonitorFormat) -> Result<&'static dyn MonitorRules, Why>,
     p: &impl Pipeline,
     pg: &PgMonitor,
     format: &MonitorFormat,
-    rules: impl FnOnce(&MonitorFormat) -> Result<&'static dyn MonitorRules, Why>,
     read_only: bool,
     kind: ActionKind,
     target: &ActionTarget,
@@ -327,11 +331,12 @@ async fn act_by(
     if read_only {
         return done(ActionOutcome::NotSent(NotSent::ReadOnly));
     }
-    if let Err(why) = rules(format) {
+    if let Err(why) = action::rules_for_with(lookup(format), format) {
         return done(ActionOutcome::NotSent(NotSent::Engine(why)));
     }
     let deadline = ACTION_LIMIT + GRACE;
-    let Some(answers) = p.send(&sql::begin(ACTION_LIMIT), &sql::action(pg, kind, target), deadline).await else {
+    let Some(answers) = p.send(&sql::begin(ACTION_LIMIT), &sql::action(pg, kind, target), COMMIT, deadline).await
+    else {
         return Acted {
             outcome: ActionOutcome::OutcomeUnknown,
             committed: false,

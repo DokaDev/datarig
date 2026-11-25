@@ -423,20 +423,32 @@ async fn a_cancel_and_an_end_send_todays_statements() {
     }
 }
 
-/// [`act`] with the engine's monitor rules looked up as `lookup`, checked as an action checks
-/// them ([`action::rules_for_with`]), on the fake: what it answered and what it sent.
-async fn act_with(
+/// The driver's action with the engine's monitor rules looked up as `lookup`, unchecked: the
+/// driver checks them itself ([`act_with`]); on the fake, with the monitor's `marker` and on
+/// `target`: what it answered and what it sent.
+async fn acting_with(
+    lookup: Result<&'static dyn MonitorRules, Why>,
+    m: &MySqlMonitor,
+    read_only: bool,
+    marker: Option<&Marker>,
+    kind: ActionKind,
+    target: &ActionTarget,
+    answers: Vec<Result<Rows, Fail>>,
+) -> (ActionOutcome, Vec<String>) {
+    let mut fake = Fake::new(answers);
+    let outcome = act_with(|_| lookup, &mut fake, m, &format_of(m), read_only, marker, kind, target, &mut false).await;
+    (outcome, fake.sent)
+}
+
+/// [`acting_with`] with the confirmed marker, on [`target`].
+async fn act_lookup(
     lookup: Result<&'static dyn MonitorRules, Why>,
     m: &MySqlMonitor,
     read_only: bool,
     kind: ActionKind,
     answers: Vec<Result<Rows, Fail>>,
 ) -> (ActionOutcome, Vec<String>) {
-    let mut fake = Fake::new(answers);
-    let rules = |f: &MonitorFormat| action::rules_for_with(lookup, f);
-    let outcome =
-        act(&mut fake, m, &format_of(m), rules, read_only, Some(&marker()), kind, &target(), &mut false).await;
-    (outcome, fake.sent)
+    acting_with(lookup, m, read_only, Some(&marker()), kind, &target(), answers).await
 }
 
 /// Without the engine's monitor rules for the format, or with rules that do not read it,
@@ -453,16 +465,16 @@ async fn an_action_without_the_engines_rules_sends_nothing() {
     ];
     for (lookup, why) in lookups {
         for kind in [ActionKind::Cancel, ActionKind::Terminate] {
-            let (outcome, sent) = act_with(lookup.clone(), &m, false, kind, vec![running(), ok()]).await;
+            let (outcome, sent) = act_lookup(lookup.clone(), &m, false, kind, vec![running(), ok()]).await;
             assert_eq!(outcome, ActionOutcome::NotSent(why.clone()), "{kind:?}");
             assert!(sent.is_empty(), "{sent:?}");
         }
     }
-    let (outcome, sent) = act_with(Err(Why::NotBuilt), &m, true, ActionKind::Cancel, vec![running(), ok()]).await;
+    let (outcome, sent) = act_lookup(Err(Why::NotBuilt), &m, true, ActionKind::Cancel, vec![running(), ok()]).await;
     assert_eq!((outcome, sent), (ActionOutcome::NotSent(NotSent::ReadOnly), Vec::new()));
     // The engine's own rules: the read, then `KILL`, as before.
     let Fact::Known(mysql) = &EngineId::MySql.spec().monitor else { panic!("MySQL has monitor rules") };
-    let (outcome, sent) = act_with(Ok(*mysql), &m, false, ActionKind::Cancel, vec![running(), ok()]).await;
+    let (outcome, sent) = act_lookup(Ok(*mysql), &m, false, ActionKind::Cancel, vec![running(), ok()]).await;
     assert_eq!(outcome, ActionOutcome::Acknowledged { via: Via::Standard });
     assert_eq!(sent, [sql::guard(&m, 63114, TOKEN), "KILL QUERY 63114".to_owned()]);
 }

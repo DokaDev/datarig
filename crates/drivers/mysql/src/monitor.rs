@@ -404,7 +404,7 @@ async fn within(
     target: &ActionTarget,
 ) -> (ActionOutcome, Option<DbError>) {
     let mut sending = false;
-    let acting = act(x, my, format, action::rules_for, read_only, marker, kind, target, &mut sending);
+    let acting = act_with(MonitorFormat::rules, x, my, format, read_only, marker, kind, target, &mut sending);
     match tokio::time::timeout(deadline, acting).await {
         Ok(outcome) => (outcome, None),
         Err(_) => {
@@ -417,15 +417,15 @@ async fn within(
 
 /// Send `kind` on `target` of the server read as `format` (`my`) if a read right before finds
 /// it unchanged and the connection confirmed (`marker`); on a `read_only` profile nothing is
-/// sent at all, nor without the engine's monitor rules for `format` (as `rules` finds them,
-/// [`action::rules_for`]), nor without a marker confirmed at open. `sending` is set before the
-/// statement that acts goes out.
+/// sent at all, nor without the engine's monitor rules for `format` (`lookup` finds them, and
+/// [`action::rules_for_with`] checks they read it, before anything else), nor without a marker
+/// confirmed at open. `sending` is set before the statement that acts goes out.
 #[allow(clippy::too_many_arguments)]
-async fn act(
+async fn act_with(
+    lookup: impl FnOnce(&MonitorFormat) -> Result<&'static dyn MonitorRules, Why>,
     x: &mut impl Exec,
     my: &MySqlMonitor,
     format: &MonitorFormat,
-    rules: impl FnOnce(&MonitorFormat) -> Result<&'static dyn MonitorRules, Why>,
     read_only: bool,
     marker: Option<&Marker>,
     kind: ActionKind,
@@ -435,7 +435,7 @@ async fn act(
     if read_only {
         return ActionOutcome::NotSent(NotSent::ReadOnly);
     }
-    let rules = match rules(format) {
+    let rules = match action::rules_for_with(lookup(format), format) {
         Ok(rules) => rules,
         Err(why) => return ActionOutcome::NotSent(NotSent::Engine(why)),
     };
