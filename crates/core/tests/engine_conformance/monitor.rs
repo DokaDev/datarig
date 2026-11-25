@@ -1,13 +1,12 @@
 //! How each engine's monitor sends an action on every provider (`monitor::action::route`): the
 //! provider's procedures that stop a session when the standard statement is refused, the codes
 //! that call for them, and the grants and service accounts a refusal names. MariaDB has no
-//! monitor: its probe is refused at any version, so it has no route.
+//! monitor rules (its probe is refused at any version), so it has no route.
 
 use crate::Case;
 use crate::Engine::{self, MariaDb, MySql, Pg};
+use datarig_core::engine::{EngineId, Fact};
 use datarig_core::monitor::action::route;
-use datarig_core::monitor::decode::{self, Answer};
-use datarig_core::monitor::format::MYSQL_OLDEST;
 use datarig_core::monitor::{Flavour, MonitorFormat, MySqlMonitor, PgMonitor, Readable, Route};
 
 /// A PostgreSQL server of `flavour`, as its probe reads it.
@@ -38,14 +37,12 @@ fn mysql(flavour: Flavour) -> MonitorFormat {
     })
 }
 
-/// A MariaDB server's probe, which the monitor refuses at any version.
+/// MariaDB's monitor rules: none, and why.
 fn mariadb() -> String {
-    let none = Answer::Rows(Vec::new());
-    let first = Answer::Rows(vec![vec![Some("11.4.13-MariaDB-ubu2404".into()), Some("1".into()), Some("u@%".into())]]);
-    let answers = [first, none.clone(), none.clone(), none.clone(), none.clone(), none.clone(), none];
-    match decode::mysql::probe(&answers) {
-        Ok(m) => format!("probed {m:?}"),
-        Err(e) => format!("no route: {:?}", e.into_db(MYSQL_OLDEST)),
+    match &EngineId::MariaDb.spec().monitor {
+        Fact::Known(rules) => format!("Known({:?})", rules.routes().standard),
+        Fact::No(why) => format!("No({why:?})"),
+        Fact::Unknown(why) => format!("Unknown({why:?})"),
     }
 }
 
@@ -57,7 +54,10 @@ pub fn route_of(e: Engine, flavour: &Flavour) -> String {
         MariaDb => return mariadb(),
         other => panic!("{other:?} is not a column of the monitor routes table"),
     };
-    let r = route(&format);
+    let r = match route(&format) {
+        Ok(r) => r,
+        Err(why) => return format!("Err({why:?})"),
+    };
     let fallback = match r.fallback {
         Some(f) => format!("{} / {} on {:?}", f.cancel, f.terminate, f.on),
         None => "none".to_string(),
@@ -68,7 +68,7 @@ pub fn route_of(e: Engine, flavour: &Flavour) -> String {
     )
 }
 
-const MARIADB: &str = "no route: MonitorUnsupported(\"MariaDB 11.4.13\")";
+const MARIADB: &str = "No(NotBuilt)";
 
 pub fn route_cases() -> Vec<Case<Flavour>> {
     vec![

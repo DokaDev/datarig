@@ -7,6 +7,8 @@ use crate::driver::{
 use crate::edit::{Invalid, TableColumn};
 use crate::export::keyset::NotKeyset;
 use crate::export::{Kind, Refused, SqlCells, SqlColumn};
+use crate::monitor::action::{ActionKind, ActionRoute, ActionTarget, Ask, Denied, NativeError, Via};
+use crate::monitor::{Flavour, MonitorFormat, SessionRow};
 use crate::profile::dsn::Scheme;
 use crate::query::{CaseMode, ColumnFacts, ColumnKind, Compares, NoEquality, Nulls, RenderError, Target};
 use crate::sql::dialect::{Dialect, DollarQuotes};
@@ -68,6 +70,8 @@ pub struct EngineSpec {
     pub filter: Fact<&'static dyn FilterSql>,
     /// Which plan format its servers give.
     pub plan: Fact<&'static dyn PlanRules>,
+    /// What a monitor may do to the other sessions of its servers.
+    pub monitor: Fact<&'static dyn MonitorRules>,
 }
 
 /// How an engine's text is read on a server.
@@ -231,6 +235,52 @@ pub trait EditRules: Sync {
 pub trait PlanRules: Sync {
     /// The plan format the server of `f` gives, or why it gives none the app reads.
     fn format(&self, f: &ServerFacts) -> Fact<ExplainFormat>;
+}
+
+/// What a monitor may do to the other sessions of an engine's servers, for a server its probe
+/// read as `f` ([`crate::monitor::action`] asks them). [`MonitorRules::reads`] says whether `f`
+/// is the engine's own; the other methods are asked only after it, and answer another engine's
+/// `f` on the side that offers and sends nothing.
+pub trait MonitorRules: Sync {
+    /// Whether `f` is a format of the engine's servers.
+    fn reads(&self, f: &MonitorFormat) -> bool;
+
+    /// The monitor's connection could not be confirmed to reach the server directly: its
+    /// actions could reach another session.
+    fn unconfirmed(&self, f: &MonitorFormat) -> bool;
+
+    /// Whether the account can tell the session of `row` apart from a later one given its id.
+    fn identifies(&self, f: &MonitorFormat, row: &SessionRow) -> bool;
+
+    /// Whether an end needs the session's statement start, without which a later client of
+    /// the same server session could not be told apart from the one the row showed.
+    fn end_needs_start(&self) -> bool;
+
+    /// The monitor is not known to reach the server directly.
+    fn pooled(&self, f: &MonitorFormat) -> bool;
+
+    /// How an action of `kind` on `row` is asked, with what it warns of.
+    fn ask(&self, f: &MonitorFormat, row: &SessionRow, kind: ActionKind) -> Ask;
+
+    /// How actions are sent on each provider.
+    fn routes(&self) -> &'static Routes;
+
+    /// What the server's refusal `e` of an action on `target`, sent `via`, means; `None` when
+    /// it is not a refusal (another failure).
+    fn denied(&self, f: &MonitorFormat, target: &ActionTarget, via: Via, e: NativeError) -> Option<Denied>;
+}
+
+/// An engine's action routes: its standard one, then one per provider whose route differs.
+pub struct Routes {
+    pub standard: ActionRoute,
+    pub providers: &'static [ActionRoute],
+}
+
+impl Routes {
+    /// The route of `flavour`: its provider's, else the standard one.
+    pub fn of(&self, flavour: Flavour) -> &ActionRoute {
+        self.providers.iter().find(|r| r.flavour == flavour).unwrap_or(&self.standard)
+    }
 }
 
 /// How an engine's catalogue names what a result reads.

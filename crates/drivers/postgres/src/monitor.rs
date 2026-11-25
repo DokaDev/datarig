@@ -24,9 +24,11 @@
 //! transactions counted in [`Own`] are all it ever committed.
 
 use crate::connect::db_error;
+use crate::engine::monitor_format;
 use crate::link::{Link, Next};
 use crate::meta::monitor as sql;
 use datarig_core::driver::{Cell, DbCommand, DbError, DbEvent};
+use datarig_core::engine::{MonitorRules, Why};
 use datarig_core::monitor::action::{
     self, ActionKind, ActionOutcome, ActionTarget, FollowUp, NativeError, NotSent, Stale, Via,
 };
@@ -66,7 +68,11 @@ pub(crate) async fn monitor_loop(client: Client, mut link: Link, events: Unbound
         return;
     };
     let format = match probed {
-        Ok(format) => Some(format),
+        Ok(pg) => {
+            let format = monitor_format(pg.clone());
+            let _ = events.send(DbEvent::Monitor(Ok(format.clone())));
+            Some((pg, format))
+        }
         Err(Failure::Lost(error)) => {
             link.close();
             let _ = events.send(DbEvent::Lost { error });
@@ -77,9 +83,6 @@ pub(crate) async fn monitor_loop(client: Client, mut link: Link, events: Unbound
             None
         }
     };
-    if let Some(pg) = &format {
-        let _ = events.send(DbEvent::Monitor(Ok(MonitorFormat::Postgres(pg.clone()))));
-    }
     loop {
         let cmd = match link.next().await {
             Next::Command(c) => c,
@@ -89,7 +92,7 @@ pub(crate) async fn monitor_loop(client: Client, mut link: Link, events: Unbound
                 return;
             }
         };
-        let Some(pg) = &format else {
+        let Some((pg, format)) = &format else {
             // Without a format there is nothing to read with.
             if events.send(cmd.not_supported()).is_err() {
                 return;
@@ -137,7 +140,7 @@ pub(crate) async fn monitor_loop(client: Client, mut link: Link, events: Unbound
                 }
             }
             DbCommand::MonitorAction { request, kind, target } => {
-                let acted = act(&client, pg, read_only, kind, &target);
+                let acted = act(&client, pg, format, read_only, kind, &target);
                 let Ok(acted) = link.guard(None, acted).await else {
                     link.close();
                     return;
@@ -296,12 +299,36 @@ impl Pipeline for Client {
 /// The SQLSTATE of a statement cancelled (here: past its `statement_timeout`).
 const QUERY_CANCELED: &str = "57014";
 
-/// Send `kind` on `target` in a transaction of its own; on a `read_only` profile nothing is
-/// sent at all.
-async fn act(p: &impl Pipeline, pg: &PgMonitor, read_only: bool, kind: ActionKind, target: &ActionTarget) -> Acted {
+/// Send `kind` on `target` of the server read as `format` (`pg`) in a transaction of its own; on
+/// a `read_only` profile nothing is sent at all, nor without the engine's monitor rules for
+/// `format` ([`action::rules_for`]).
+async fn act(
+    p: &impl Pipeline,
+    pg: &PgMonitor,
+    format: &MonitorFormat,
+    read_only: bool,
+    kind: ActionKind,
+    target: &ActionTarget,
+) -> Acted {
+    act_by(p, pg, format, action::rules_for, read_only, kind, target).await
+}
+
+/// [`act`] with the engine's monitor rules for `format` as `rules` finds them.
+async fn act_by(
+    p: &impl Pipeline,
+    pg: &PgMonitor,
+    format: &MonitorFormat,
+    rules: impl FnOnce(&MonitorFormat) -> Result<&'static dyn MonitorRules, Why>,
+    read_only: bool,
+    kind: ActionKind,
+    target: &ActionTarget,
+) -> Acted {
     let done = |outcome| Acted { outcome, committed: false, lost: None };
     if read_only {
         return done(ActionOutcome::NotSent(NotSent::ReadOnly));
+    }
+    if let Err(why) = rules(format) {
+        return done(ActionOutcome::NotSent(NotSent::Engine(why)));
     }
     let deadline = ACTION_LIMIT + GRACE;
     let Some(answers) = p.send(&sql::begin(ACTION_LIMIT), &sql::action(pg, kind, target), deadline).await else {
@@ -317,8 +344,7 @@ async fn act(p: &impl Pipeline, pg: &PgMonitor, read_only: bool, kind: ActionKin
     let outcome = match answers.acted {
         Ok(rows) => outcome(&rows),
         Err(Fail::Server { sqlstate, error }) => {
-            let format = MonitorFormat::Postgres(pg.clone());
-            match action::denied(&format, target, Via::Standard, NativeError::Pg { sqlstate: &sqlstate }) {
+            match action::denied(format, target, Via::Standard, NativeError::Pg { sqlstate: &sqlstate }) {
                 Some(why) => ActionOutcome::NotSent(NotSent::Refused(why)),
                 // The limit may have stopped it after the signal went.
                 None if sqlstate == QUERY_CANCELED => ActionOutcome::OutcomeUnknown,

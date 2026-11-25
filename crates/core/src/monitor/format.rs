@@ -15,16 +15,6 @@ pub enum MonitorFormat {
     MySql(MySqlMonitor),
 }
 
-impl MonitorFormat {
-    /// The provider the server belongs to.
-    pub fn flavour(&self) -> Flavour {
-        match self {
-            MonitorFormat::Postgres(pg) => pg.flavour,
-            MonitorFormat::MySql(my) => my.flavour,
-        }
-    }
-}
-
 /// The oldest PostgreSQL the monitor reads (`server_version_num`).
 pub const PG_MIN_VERSION: u32 = 120000;
 

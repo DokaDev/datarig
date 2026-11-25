@@ -12,6 +12,7 @@
 mod facts;
 mod id;
 mod mariadb;
+mod monitor;
 mod mysql;
 pub mod mysql_family;
 mod postgres;
@@ -30,8 +31,8 @@ pub use rules::{Rules, UNBOUND_TAB_DIALECT, UNBOUND_TAB_PLAN};
 pub use session::{OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof};
 pub use spec::{
     CancelRules, CatalogueRules, DdlOfIndex, DdlRules, DdlToConsole, EditRules, EngineSpec, ExportRules, FilterCalls,
-    FilterShape, FilterSql, FilterSyntax, GroupParts, InputRules, Like, NameMatch, NullSafe, PlanRules, ResultTables,
-    RiskRules, SessionRules, SortRules, TextRules, Transport, TxRules, ValueRules,
+    FilterShape, FilterSql, FilterSyntax, GroupParts, InputRules, Like, MonitorRules, NameMatch, NullSafe, PlanRules,
+    ResultTables, RiskRules, Routes, SessionRules, SortRules, TextRules, Transport, TxRules, ValueRules,
 };
 pub use tx::{CountInTx, DdlLock, TxAsk, TxNote, TxRefusal, TxStatement, TxVerdict};
 pub use why::{Feature, Why};

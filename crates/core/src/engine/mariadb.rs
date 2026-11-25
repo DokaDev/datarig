@@ -37,6 +37,8 @@ pub static SPEC: EngineSpec = EngineSpec {
     filter: Fact::Known(&FamilyFilter),
     // Its plans are shaped otherwise than MySQL's tree.
     plan: Fact::No(Why::NotBuilt),
+    // Its system tables differ from MySQL's: its probe is refused at any version.
+    monitor: Fact::No(Why::NotBuilt),
 };
 
 /// How MariaDB's statements are judged: the family's classifier of the text's dialect

@@ -3,9 +3,9 @@
 use super::{
     CancelRules, CatalogueRules, CountInTx, DdlLock, DdlOfIndex, DdlRules, DdlToConsole, EditRules, EngineId,
     EngineSpec, ExportRules, Fact, FilterCalls, FilterShape, FilterSql, FilterSyntax, GroupParts, InputRules, Like,
-    NameMatch, NullSafe, OpenVerdict, PlanRules, READ_ONLY_NOT_PROVEN, ReadOnlyProof, ResultTables, RiskRules,
-    ServerFacts, SessionRules, SortRules, Support, TextRules, Transport, TxAsk, TxNote, TxRefusal, TxRules,
-    TxStatement, TxVerdict, ValueRules,
+    MonitorRules, NameMatch, NullSafe, OpenVerdict, PlanRules, Provider, READ_ONLY_NOT_PROVEN, ReadOnlyProof,
+    ResultTables, RiskRules, Routes, ServerFacts, SessionRules, SortRules, Support, TextRules, Transport, TxAsk,
+    TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, ValueRules,
 };
 use crate::driver::{
     ArrayElement, ColumnMeta, EditFormat, ExplainFormat, Hierarchy, ReadIn, ServerMessage, SessionRole, SessionValues,
@@ -15,6 +15,10 @@ use crate::edit::input::{self, TypeName};
 use crate::edit::{BitsForm, BytesForm, Invalid, TableColumn};
 use crate::export::keyset::NotKeyset;
 use crate::export::{self, Kind, Refused, Rule, SqlCells, SqlColumn};
+use crate::monitor::action::{
+    ActionKind, ActionRoute, ActionTarget, Ask, Denied, Guidance, NativeError, PG_INSUFFICIENT_PRIVILEGE, Via, Warning,
+};
+use crate::monitor::{MonitorFormat, Route, SessionRow, Visibility};
 use crate::profile::dsn::Scheme;
 use crate::query::{
     CaseMode, ColumnKind, Compares, GROUP_PREVIEW, LINE_BREAKS, NoEquality, Nulls, RenderError, Target, base_type, hex,
@@ -48,6 +52,7 @@ pub static SPEC: EngineSpec = EngineSpec {
     sort: &PgSort,
     filter: Fact::Known(&PgFilter),
     plan: Fact::Known(&PgPlan),
+    monitor: Fact::Known(&PgMonitorRules),
 };
 
 /// The plan format PostgreSQL's servers give: `EXPLAIN (FORMAT JSON)`, on every version.
@@ -60,6 +65,128 @@ impl PlanRules for PgPlan {
     /// [`PG_PLAN`], whatever the server's version and however it is reached.
     fn format(&self, _: &ServerFacts) -> Fact<ExplainFormat> {
         Fact::Known(PG_PLAN)
+    }
+}
+
+/// What a monitor may do to the other sessions of PostgreSQL's servers.
+struct PgMonitorRules;
+
+const PG_STANDARD: Guidance = Guidance { grants: &["pg_signal_backend"], service_users: &[] };
+
+/// PostgreSQL's action routes: the signal functions on every provider, each naming its own grants
+/// and service accounts.
+static PG_ROUTES: Routes = Routes {
+    standard: ActionRoute { flavour: Provider::Standard, fallback: None, guidance: PG_STANDARD },
+    providers: &[
+        ActionRoute {
+            flavour: Provider::AmazonRds,
+            fallback: None,
+            guidance: Guidance { grants: &["rds_superuser", "pg_signal_backend"], service_users: &["rdsadmin"] },
+        },
+        ActionRoute {
+            flavour: Provider::AmazonAurora,
+            fallback: None,
+            guidance: Guidance { grants: &["rds_superuser", "pg_signal_backend"], service_users: &["rdsadmin"] },
+        },
+        ActionRoute {
+            flavour: Provider::GoogleCloudSql,
+            fallback: None,
+            guidance: Guidance {
+                grants: &["cloudsqlsuperuser", "pg_signal_backend"],
+                service_users: &["cloudsqladmin"],
+            },
+        },
+        ActionRoute {
+            flavour: Provider::GoogleAlloyDb,
+            fallback: None,
+            guidance: Guidance { grants: &["alloydbsuperuser", "pg_signal_backend"], service_users: &[] },
+        },
+        ActionRoute {
+            flavour: Provider::AzureDatabase,
+            fallback: None,
+            guidance: Guidance { grants: &["azure_pg_admin", "pg_signal_backend"], service_users: &["azuresu"] },
+        },
+    ],
+};
+
+impl MonitorRules for PgMonitorRules {
+    fn reads(&self, f: &MonitorFormat) -> bool {
+        match f {
+            MonitorFormat::Postgres(_) => true,
+            MonitorFormat::MySql(_) => false,
+        }
+    }
+
+    /// Never: a pooled connection is told by its route ([`MonitorRules::pooled`]).
+    fn unconfirmed(&self, f: &MonitorFormat) -> bool {
+        match f {
+            MonitorFormat::Postgres(_) => false,
+            MonitorFormat::MySql(_) => true,
+        }
+    }
+
+    /// When its state and its start are shown (without `pg_read_all_stats`, other roles'
+    /// sessions show neither).
+    fn identifies(&self, f: &MonitorFormat, row: &SessionRow) -> bool {
+        match f {
+            MonitorFormat::Postgres(_) => row.visible != Visibility::Hidden && row.key.started.is_some(),
+            MonitorFormat::MySql(_) => false,
+        }
+    }
+
+    /// Yes: behind a pooler, a session's statement start is what tells its client apart.
+    fn end_needs_start(&self) -> bool {
+        true
+    }
+
+    /// When the connection's route was not verified direct.
+    fn pooled(&self, f: &MonitorFormat) -> bool {
+        match f {
+            MonitorFormat::Postgres(pg) => pg.route != Route::Direct,
+            MonitorFormat::MySql(_) => true,
+        }
+    }
+
+    /// A line for a cancel; a dialog for an end, which warns behind a pooler.
+    fn ask(&self, f: &MonitorFormat, _: &SessionRow, kind: ActionKind) -> Ask {
+        let pooled = vec![Warning::PoolerSharedBackend];
+        match (f, kind) {
+            (MonitorFormat::Postgres(_), ActionKind::Cancel) => Ask::Line,
+            (MonitorFormat::Postgres(_), ActionKind::Terminate) => {
+                Ask::Modal { warnings: if self.pooled(f) { pooled } else { Vec::new() } }
+            }
+            (MonitorFormat::MySql(_), ActionKind::Cancel | ActionKind::Terminate) => Ask::Modal { warnings: pooled },
+        }
+    }
+
+    fn routes(&self) -> &'static Routes {
+        &PG_ROUTES
+    }
+
+    /// The missing privilege (`insufficient_privilege`): the provider's own session, a
+    /// superuser's (when the account may signal other roles'), or the grants that allow it.
+    fn denied(&self, f: &MonitorFormat, target: &ActionTarget, _: Via, e: NativeError) -> Option<Denied> {
+        let pg = match f {
+            MonitorFormat::Postgres(pg) => pg,
+            MonitorFormat::MySql(_) => return None,
+        };
+        let sqlstate = match e {
+            NativeError::Pg { sqlstate } => sqlstate,
+            NativeError::MySql { .. } => return None,
+        };
+        if sqlstate != PG_INSUFFICIENT_PRIVILEGE {
+            return None;
+        }
+        let guidance = self.routes().of(pg.flavour).guidance;
+        let service = target.user.as_deref().is_some_and(|u| guidance.service_users.contains(&u));
+        Some(if service {
+            Denied::ServiceSession
+        } else if pg.signal_backend || pg.superuser {
+            // The account may signal other roles' sessions: what is left is a superuser's.
+            Denied::SuperuserTarget
+        } else {
+            Denied::Grant(guidance.grants)
+        })
     }
 }
 

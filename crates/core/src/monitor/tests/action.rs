@@ -1,5 +1,6 @@
 use super::{IDLE, by_application, by_id, load, pg, rows, single};
 use crate::driver::{DbCommand, DbError, DbEvent};
+use crate::engine::{EngineId, Fact, MonitorRules, Routes, Why};
 use crate::monitor::action::*;
 use crate::monitor::decode;
 use crate::monitor::format::Route;
@@ -257,15 +258,25 @@ const FLAVOURS: [Flavour; 6] = [
     Flavour::AzureDatabase,
 ];
 
+/// The action routes of engine `id`'s monitor rules.
+fn engine_routes(id: EngineId) -> &'static Routes {
+    match &id.spec().monitor {
+        Fact::Known(rules) => rules.routes(),
+        Fact::No(_) | Fact::Unknown(_) => panic!("{id:?} has no monitor rules"),
+    }
+}
+
 #[test]
 fn every_flavour_has_a_route() {
     for flavour in FLAVOURS {
         let pg = MonitorFormat::Postgres(crate::monitor::PgMonitor { flavour, ..pg(170011) });
-        let r = route(&pg);
-        assert_eq!((r.engine, r.flavour, r.fallback), (Engine::Postgres, flavour, None), "{flavour:?}");
+        let r = route(&pg).unwrap();
+        assert!(std::ptr::eq(r, engine_routes(EngineId::Postgres).of(flavour)), "{flavour:?}");
+        assert_eq!((r.flavour, r.fallback), (flavour, None), "{flavour:?}");
         assert!(r.guidance.grants.contains(&"pg_signal_backend"), "{flavour:?}");
-        let r = route(&my_format(flavour, 80411));
-        assert_eq!(r.engine, Engine::MySql);
+        let my = my_format(flavour, 80411);
+        let r = route(&my).unwrap();
+        assert!(std::ptr::eq(r, engine_routes(EngineId::MySql).of(flavour)), "{flavour:?}");
         assert!(!r.guidance.grants.contains(&"SUPER"), "{flavour:?}: never recommends SUPER");
         assert_eq!(r.guidance.grants, ["CONNECTION_ADMIN"]);
         let (listed, fallback) = match flavour {
@@ -282,7 +293,8 @@ fn every_flavour_has_a_route() {
         );
         assert!(r.fallback.is_none_or(|f| f.on == [MYSQL_KILL_DENIED]));
     }
-    let service = |f| route(&MonitorFormat::Postgres(crate::monitor::PgMonitor { flavour: f, ..pg(170011) })).guidance;
+    let service =
+        |f| route(&MonitorFormat::Postgres(crate::monitor::PgMonitor { flavour: f, ..pg(170011) })).unwrap().guidance;
     assert_eq!(service(Flavour::AmazonRds).service_users, ["rdsadmin"]);
     assert_eq!(service(Flavour::GoogleCloudSql).grants, ["cloudsqlsuperuser", "pg_signal_backend"]);
     assert_eq!(service(Flavour::AzureDatabase).service_users, ["azuresu"]);
@@ -887,4 +899,92 @@ fn every_refusal_reading_answers_as_today() {
         assert_eq!(g, w, "line {} (DATARIG_BLESS=1 cargo test -p datarig-core --lib refusal_reading)", n + 1);
     }
     assert_eq!(got.len(), want.len());
+}
+
+/// The monitor rules of engine `id`.
+fn engine_rules(id: EngineId) -> &'static dyn MonitorRules {
+    match &id.spec().monitor {
+        Fact::Known(rules) => *rules,
+        Fact::No(_) | Fact::Unknown(_) => panic!("{id:?} has no monitor rules"),
+    }
+}
+
+#[test]
+fn rules_for_checks_the_lookup_and_the_format() {
+    let pg = pg_format(Route::Direct);
+    let (my, _) = my_root();
+    let (pg_rules, my_rules) = (engine_rules(EngineId::Postgres), engine_rules(EngineId::MySql));
+    assert!(rules_for(&pg).is_ok_and(|r| std::ptr::eq(r.routes(), pg_rules.routes())));
+    assert!(rules_for(&my).is_ok_and(|r| std::ptr::eq(r.routes(), my_rules.routes())));
+    // Rules that do not read the format: the engines disagree.
+    assert!(rules_for_with(Ok(my_rules), &pg).is_err_and(|w| w == Why::EnginesDisagree));
+    assert!(rules_for_with(Ok(pg_rules), &my).is_err_and(|w| w == Why::EnginesDisagree));
+    // No rules: why, as the lookup says.
+    for why in [Why::NotBuilt, Why::NotChecked] {
+        assert!(rules_for_with(Err(why.clone()), &pg).is_err_and(|w| w == why));
+    }
+}
+
+#[test]
+fn a_crossed_format_is_refused_by_decide() {
+    let pg = pg_format(Route::Direct);
+    let pg_row = by_application(&pg_sessions(), "zz_mon_b").clone();
+    let (my, my_list) = my_root();
+    let my_row = by_id(&my_list, 18986).clone();
+    let crossed = [
+        (engine_rules(EngineId::MySql), &pg, &pg_row),
+        (engine_rules(EngineId::Postgres), &my, &my_row),
+        (engine_rules(EngineId::MySql), &pg, &my_row),
+        (engine_rules(EngineId::Postgres), &my, &pg_row),
+    ];
+    for (rules, format, row) in crossed {
+        for kind in BOTH {
+            assert_eq!(
+                decide_with(Ok(rules), format, row, false, kind),
+                Decision::Refuse(Refusal::Engine(Why::EnginesDisagree)),
+                "{format:?} {kind:?}"
+            );
+            assert_eq!(target_with(Ok(rules), format, row), None);
+            assert_eq!(route_with(Ok(rules), format), Err(Why::EnginesDisagree));
+            let refused = NativeError::Pg { sqlstate: PG_INSUFFICIENT_PRIVILEGE };
+            for error in [refused, NativeError::MySql { errno: MYSQL_KILL_DENIED }] {
+                assert_eq!(denied_with(Ok(rules), format, &who("alice"), Via::Standard, error), None);
+            }
+        }
+    }
+    // A read-only profile is refused first, as before any rule.
+    let rules = engine_rules(EngineId::MySql);
+    assert_eq!(decide_with(Ok(rules), &pg, &pg_row, true, ActionKind::Cancel), Decision::Refuse(Refusal::ReadOnly));
+}
+
+#[test]
+fn a_format_without_its_engines_rules_offers_and_sends_nothing() {
+    let pg = pg_format(Route::Direct);
+    let pg_row = by_application(&pg_sessions(), "zz_mon_b").clone();
+    let (my, my_list) = my_root();
+    let my_row = by_id(&my_list, 18986).clone();
+    for why in [Why::NotBuilt, Why::NotChecked] {
+        for (format, row) in [(&pg, &pg_row), (&my, &my_row)] {
+            for kind in BOTH {
+                assert_eq!(
+                    decide_with(Err(why.clone()), format, row, false, kind),
+                    Decision::Refuse(Refusal::Engine(why.clone())),
+                    "{why:?} {kind:?}"
+                );
+                assert_eq!(
+                    decide_with(Err(why.clone()), format, row, true, kind),
+                    Decision::Refuse(Refusal::ReadOnly),
+                    "read-only first"
+                );
+            }
+            assert_eq!(target_with(Err(why.clone()), format, row), None);
+            assert_eq!(route_with(Err(why.clone()), format), Err(why.clone()));
+            for error in [
+                NativeError::Pg { sqlstate: PG_INSUFFICIENT_PRIVILEGE },
+                NativeError::MySql { errno: MYSQL_KILL_DENIED },
+            ] {
+                assert_eq!(denied_with(Err(why.clone()), format, &who("alice"), Via::Standard, error), None);
+            }
+        }
+    }
 }

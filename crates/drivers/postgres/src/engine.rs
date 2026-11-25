@@ -5,6 +5,7 @@ use datarig_core::driver::{Capabilities, EditFormat, Hierarchy};
 use datarig_core::engine::{
     EngineFacts, EngineId, Fact, PG_PLAN, PgFacts, PingIdentity, ServerFacts, SessionRules, Topology, Version, Why,
 };
+use datarig_core::monitor::{MonitorFormat, PgMonitor};
 use datarig_core::sql::dialect::{Dialect, Language};
 use std::sync::Arc;
 use tokio_postgres::SharedParameters;
@@ -68,6 +69,11 @@ fn version(text: Option<&str>) -> Fact<Version> {
         Some(v) => Fact::Known(v),
         None => Fact::Unknown(Why::VersionUnknown),
     }
+}
+
+/// The format the monitor's probe found, `pg`, as the monitor's actions and the app read it.
+pub(crate) fn monitor_format(pg: PgMonitor) -> MonitorFormat {
+    MonitorFormat::Postgres(pg)
 }
 
 #[cfg(test)]
