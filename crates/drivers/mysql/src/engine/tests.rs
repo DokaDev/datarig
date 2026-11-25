@@ -100,6 +100,8 @@ fn the_greeting_of_facts_is_the_sessions() {
     assert!(Greeting::UNREAD.check().is_err());
     let d = derive(&pg, &Tracked::default());
     assert_eq!((d.explain, d.edit), (None, None));
+    // The engine's plan rules give PostgreSQL's facts its JSON; this driver's sessions say none.
+    assert_eq!(datarig_core::engine::plan_of(&pg), Fact::Known(ExplainFormat::PostgresJson));
 }
 
 #[test]

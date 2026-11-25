@@ -7,7 +7,7 @@
 //! (`engine::plan_of`) on every shape of its facts.
 
 use crate::Case;
-use crate::Engine::{self, MariaDb, MySql, MySqlAnsiQuotes, Pg};
+use crate::Engine::{self, MariaDb, MySql, MySqlAnsiQuotes, MySqlNoBackslashEscapes, Pg};
 use datarig_core::driver::ExplainFormat;
 use datarig_core::engine::{
     EngineFacts, EngineId, Fact, MyFacts, PgFacts, ServerFacts, Topology, Version, Why, plan_of,
@@ -31,7 +31,7 @@ pub enum Ask {
 fn format(e: Engine) -> Option<ExplainFormat> {
     match e {
         Pg => Some(ExplainFormat::PostgresJson),
-        MySql | MySqlAnsiQuotes => Some(ExplainFormat::MySqlTree),
+        MySql | MySqlAnsiQuotes | MySqlNoBackslashEscapes => Some(ExplainFormat::MySqlTree),
         MariaDb => None,
         other => panic!("{other:?} is not a column of the plan table"),
     }
@@ -59,7 +59,7 @@ pub fn plan(e: Engine, a: &Ask) -> String {
     }
 }
 
-/// An answer of `again`: the statement asked and what it wraps, whether it analyzes and
+/// An answer of `again`: the statement asked and what it wraps, whether it analyses and
 /// evaluates, or why it is not asked again.
 fn again(r: &Result<JsonExplain, NotJson>) -> String {
     match r {
@@ -268,6 +268,45 @@ pub fn plan_cases() -> Vec<Case<Ask>> {
                     MySqlAnsiQuotes,
                     "EXPLAIN FORMAT=TREE SELECT \"a\" FROM t / SELECT \"a\" FROM t / analyze false / evaluates false | text EXPLAIN FORMAT=TREE SELECT \"a\" FROM t / SELECT \"a\" FROM t / analyze false / evaluates false",
                 ),
+            ],
+        },
+        Case {
+            name: "a mysql-only function asked again as the tree",
+            input: Ask::Again { format: TREE, sql: "EXPLAIN SELECT BIN_TO_UUID(x) FROM t" },
+            expect: &[
+                (Pg, "Unreadable | text Unreadable"),
+                (
+                    MySql,
+                    "EXPLAIN FORMAT=TREE SELECT BIN_TO_UUID(x) FROM t / SELECT BIN_TO_UUID(x) FROM t / analyze false / evaluates false | text EXPLAIN FORMAT=TREE SELECT BIN_TO_UUID(x) FROM t / SELECT BIN_TO_UUID(x) FROM t / analyze false / evaluates false",
+                ),
+                (
+                    MariaDb,
+                    "EXPLAIN FORMAT=TREE SELECT BIN_TO_UUID(x) FROM t / SELECT BIN_TO_UUID(x) FROM t / analyze false / evaluates true | text EXPLAIN FORMAT=TREE SELECT BIN_TO_UUID(x) FROM t / SELECT BIN_TO_UUID(x) FROM t / analyze false / evaluates false",
+                ),
+                (
+                    MySqlAnsiQuotes,
+                    "EXPLAIN FORMAT=TREE SELECT BIN_TO_UUID(x) FROM t / SELECT BIN_TO_UUID(x) FROM t / analyze false / evaluates false | text EXPLAIN FORMAT=TREE SELECT BIN_TO_UUID(x) FROM t / SELECT BIN_TO_UUID(x) FROM t / analyze false / evaluates false",
+                ),
+            ],
+        },
+        Case {
+            name: "an escaped quote asked again as the tree",
+            input: Ask::Again { format: TREE, sql: "EXPLAIN SELECT 'a\\'; SELECT 1'" },
+            expect: &[
+                (Pg, "Unreadable | text Unreadable"),
+                (
+                    MySql,
+                    "EXPLAIN FORMAT=TREE SELECT 'a\\'; SELECT 1' / SELECT 'a\\'; SELECT 1' / analyze false / evaluates false | text EXPLAIN FORMAT=TREE SELECT 'a\\'; SELECT 1' / SELECT 'a\\'; SELECT 1' / analyze false / evaluates false",
+                ),
+                (
+                    MariaDb,
+                    "EXPLAIN FORMAT=TREE SELECT 'a\\'; SELECT 1' / SELECT 'a\\'; SELECT 1' / analyze false / evaluates false | text EXPLAIN FORMAT=TREE SELECT 'a\\'; SELECT 1' / SELECT 'a\\'; SELECT 1' / analyze false / evaluates false",
+                ),
+                (
+                    MySqlAnsiQuotes,
+                    "EXPLAIN FORMAT=TREE SELECT 'a\\'; SELECT 1' / SELECT 'a\\'; SELECT 1' / analyze false / evaluates false | text EXPLAIN FORMAT=TREE SELECT 'a\\'; SELECT 1' / SELECT 'a\\'; SELECT 1' / analyze false / evaluates false",
+                ),
+                (MySqlNoBackslashEscapes, "Several | text Several"),
             ],
         },
     ]

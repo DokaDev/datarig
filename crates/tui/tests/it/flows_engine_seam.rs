@@ -339,13 +339,15 @@ fn plan_asked(h: &mut Harness) -> String {
     "offered, nothing asked".into()
 }
 
-/// The plan format a tab's plan action asks in, today, in every state: a tab without a
-/// profile (PostgreSQL's JSON, run once a connection is picked); a profile no driver serves
-/// (offered, as PostgreSQL's, and nothing is asked: no driver connects it); on each engine,
-/// before its profile connected, before its session said a word (the driver's format), after it
-/// said its server and its word (none on MariaDB), after the other word and its own again (the
-/// last word said is the profile's), after that session is lost (the word kept) and after a new
-/// attempt (the word forgotten until a session says it again).
+/// The plan format a tab's plan action asks in, today, in every state: a tab without a profile
+/// (PostgreSQL's JSON, run once a connection is picked); a profile no driver serves (offered, as
+/// PostgreSQL's, and nothing is asked: no driver connects it; on a session open already, a text
+/// `EXPLAIN` read as PostgreSQL's is offered as a plan, which only its JSON offers); on each
+/// engine, before its profile connected, before its session said a word (the driver's format),
+/// after its server (the format as before), after its plan word (none on MariaDB) and once
+/// connected, after the other word and its own again (the last word said is the profile's), after
+/// that session is lost (the word kept) and after a new attempt (the word forgotten until a session
+/// says it again).
 #[test]
 fn tab_explain_answers_as_today() {
     let mut seen = Vec::new();
@@ -358,15 +360,53 @@ fn tab_explain_answers_as_today() {
     // A driver name no driver serves.
     let mut h = seam_profile("redis", true);
     seen.push(format!("no driver: {}", plan_asked(&mut h)));
+    // The same on a session open already, the profile's driver renamed to one no driver serves
+    // after its MySQL session showed the rows of a text `EXPLAIN`: its text is read as
+    // PostgreSQL's now, and only PostgreSQL's JSON asks such a text again as a plan.
+    let mut h = seam_profile("mysql", true);
+    open_meta(&mut h);
+    for ev in connect_words(Engine::MySql, true) {
+        h.meta_db("seam", ev);
+    }
+    h.app.focus = Focus::Editor;
+    run_all(&mut h, "EXPLAIN SELECT 1");
+    h.tab_db(0, DbEvent::Connected);
+    let id = h.app.tab().exec.query_id;
+    let columns = Some(vec![meta("id", "BIGINT", true, false), meta("table", "TEXT", false, false)]);
+    h.tab_db(0, DbEvent::Page { id, columns, rows: vec![vec![Some("1".into()), None]], more: false, elapsed: MS });
+    done(&mut h);
+    let as_plan = |h: &Harness| h.app.text_plan_hint().is_some();
+    seen.push(format!(
+        "MySQL driver: read as {:?}, view as plan {}",
+        h.app.tab_language(h.app.tab().id).dialect().engine(),
+        as_plan(&h)
+    ));
+    h.app.profiles[0].driver = "redis".into();
+    // Its language pushed again, as a new registry does.
+    let h = h.with_fake_driver();
+    seen.push(format!(
+        "no driver, a session open: read as {:?}, view as plan {}",
+        h.app.tab_language(h.app.tab().id).dialect().engine(),
+        as_plan(&h)
+    ));
     for engine in ENGINES {
         let mut h = seam_profile(engine.driver(), engine.mysql_driver());
         seen.push(format!("{engine:?} never connected: {}", plan_asked(&mut h)));
         open_meta(&mut h);
         seen.push(format!("{engine:?} before any word: {}", plan_asked(&mut h)));
+        // Its words one by one: the format follows the `Explain` word, not the facts before it.
         for ev in connect_words(engine, true) {
+            let word = match &ev {
+                DbEvent::Server(_) => Some("its server"),
+                DbEvent::Explain(_) => Some("its plan word"),
+                DbEvent::Connected => Some("connected"),
+                _ => None,
+            };
             h.meta_db("seam", ev);
+            if let Some(word) = word {
+                seen.push(format!("{engine:?} its session said {word}: {}", plan_asked(&mut h)));
+            }
         }
-        seen.push(format!("{engine:?} its session said its server: {}", plan_asked(&mut h)));
         if engine.mysql_driver() {
             // The other word, then its own again, said by the profile's session.
             let (other, own) = match engine {
@@ -391,21 +431,28 @@ fn tab_explain_answers_as_today() {
     let expected = [
         "no profile: bind: EXPLAIN (FORMAT JSON) SELECT 1",
         "no driver: offered, nothing asked",
+        "MySQL driver: read as MySql, view as plan true",
+        "no driver, a session open: read as Postgres, view as plan true",
         "Postgres never connected: sent: EXPLAIN (FORMAT JSON) SELECT 1",
         "Postgres before any word: sent: EXPLAIN (FORMAT JSON) SELECT 1",
         "Postgres its session said its server: sent: EXPLAIN (FORMAT JSON) SELECT 1",
+        "Postgres its session said connected: sent: EXPLAIN (FORMAT JSON) SELECT 1",
         "Postgres its session lost: sent: EXPLAIN (FORMAT JSON) SELECT 1",
         "Postgres a new attempt: sent: EXPLAIN (FORMAT JSON) SELECT 1",
         "MySql never connected: sent: EXPLAIN FORMAT=TREE SELECT 1",
         "MySql before any word: sent: EXPLAIN FORMAT=TREE SELECT 1",
         "MySql its session said its server: sent: EXPLAIN FORMAT=TREE SELECT 1",
+        "MySql its session said its plan word: sent: EXPLAIN FORMAT=TREE SELECT 1",
+        "MySql its session said connected: sent: EXPLAIN FORMAT=TREE SELECT 1",
         "MySql after Explain(None): not offered",
         "MySql after Explain(Some(MySqlTree)): sent: EXPLAIN FORMAT=TREE SELECT 1",
         "MySql its session lost: sent: EXPLAIN FORMAT=TREE SELECT 1",
         "MySql a new attempt: sent: EXPLAIN FORMAT=TREE SELECT 1",
         "MariaDb never connected: sent: EXPLAIN FORMAT=TREE SELECT 1",
         "MariaDb before any word: sent: EXPLAIN FORMAT=TREE SELECT 1",
-        "MariaDb its session said its server: not offered",
+        "MariaDb its session said its server: sent: EXPLAIN FORMAT=TREE SELECT 1",
+        "MariaDb its session said its plan word: not offered",
+        "MariaDb its session said connected: not offered",
         "MariaDb after Explain(Some(MySqlTree)): sent: EXPLAIN FORMAT=TREE SELECT 1",
         "MariaDb after Explain(None): not offered",
         "MariaDb its session lost: not offered",
