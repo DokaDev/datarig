@@ -35,6 +35,8 @@ pub static SPEC: EngineSpec = EngineSpec {
     ddl: Fact::Known(&FamilyDdl),
     sort: &FamilySort,
     filter: Fact::Known(&FamilyFilter),
+    // Its plans are shaped otherwise than MySQL's tree.
+    plan: Fact::No(Why::NotBuilt),
 };
 
 /// How MariaDB's statements are judged: the family's classifier of the text's dialect

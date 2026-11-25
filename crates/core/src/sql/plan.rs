@@ -411,19 +411,28 @@ impl ExplainFormat {
     /// The plan's text came from the server as it is shown (a text format): the raw view and
     /// a copy show it as it came. Otherwise (JSON) the raw view writes the model as text.
     pub fn is_text(self) -> bool {
-        matches!(self, ExplainFormat::MySqlTree)
+        match self {
+            ExplainFormat::PostgresJson => false,
+            ExplainFormat::MySqlTree => true,
+        }
     }
 
     /// The format reports the statement's own times (planning, execution) beside its nodes':
     /// without them (MySQL's tree) the measured total is the roots' times.
     pub fn reports_statement_times(self) -> bool {
-        matches!(self, ExplainFormat::PostgresJson)
+        match self {
+            ExplainFormat::PostgresJson => true,
+            ExplainFormat::MySqlTree => false,
+        }
     }
 
     /// The format can count the blocks a node read (PostgreSQL's `BUFFERS`): a plan without
     /// them was asked without, rather than from a server that has none.
     pub fn has_buffers(self) -> bool {
-        matches!(self, ExplainFormat::PostgresJson)
+        match self {
+            ExplainFormat::PostgresJson => true,
+            ExplainFormat::MySqlTree => false,
+        }
     }
 
     /// A text `EXPLAIN` the user ran (`sql`, in dialect `d`), asked again for a plan in this
@@ -433,7 +442,8 @@ impl ExplainFormat {
             (ExplainFormat::PostgresJson, Dialect::Postgres) => explain::json(sql),
             (ExplainFormat::MySqlTree, Dialect::MySql(mode)) => explain::tree(sql, Judge::mysql(mode)),
             (ExplainFormat::MySqlTree, Dialect::MariaDb(mode)) => explain::tree(sql, Judge::mariadb(mode)),
-            _ => Err(explain::NotJson::Unreadable),
+            (ExplainFormat::PostgresJson, Dialect::MySql(_) | Dialect::MariaDb(_))
+            | (ExplainFormat::MySqlTree, Dialect::Postgres) => Err(explain::NotJson::Unreadable),
         }
     }
 
@@ -442,7 +452,8 @@ impl ExplainFormat {
         match (self, d) {
             (ExplainFormat::PostgresJson, Dialect::Postgres) => explain::json_text(sql),
             (ExplainFormat::MySqlTree, Dialect::MySql(mode) | Dialect::MariaDb(mode)) => explain::tree_text(sql, mode),
-            _ => Err(explain::NotJson::Unreadable),
+            (ExplainFormat::PostgresJson, Dialect::MySql(_) | Dialect::MariaDb(_))
+            | (ExplainFormat::MySqlTree, Dialect::Postgres) => Err(explain::NotJson::Unreadable),
         }
     }
 }

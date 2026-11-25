@@ -552,3 +552,64 @@ fn mysql_quotes_the_text_from_where_it_stopped() {
     assert_eq!(mysql_near("ERROR 1064 (42000): ... near '' at line 1"), None, "nothing quoted");
     assert_eq!(mysql_near("ERROR 1054 (42S22): Unknown column 'x' in 'where clause'"), None);
 }
+
+/// The plan group of each engine on every shape of a session's facts (§13.7: an unknown
+/// version): PostgreSQL gives its JSON whatever its version and however it is reached; MySQL's
+/// rules read the version when it is known, else the greeting's number, so a session whose
+/// version is not known keeps the plan its greeting gives; MariaDB gives none the app reads.
+/// [`plan_of`] asks the group of the greeting's engine, whichever engine the line names.
+#[test]
+fn the_plan_group_answers_every_facts_shape() {
+    let tree = Fact::Known(ExplainFormat::MySqlTree);
+    let too_old = Fact::No(Why::VersionTooOld { needed: Version::new(8, 0, 16) });
+    let Fact::Known(mysql) = EngineId::MySql.spec().plan else { panic!("MySQL gives a plan") };
+    let unknown = [Why::VersionUnknown, Why::VersionsDisagree, Why::EnginesDisagree];
+    for (handshake, want) in [(Version::new(8, 0, 15), too_old), (Version::new(8, 0, 16), tree)] {
+        let known = agreeing(EngineId::MySql, handshake);
+        assert_eq!(mysql.format(&known), want, "{handshake:?}");
+        assert_eq!(plan_of(&known), want, "{handshake:?}");
+        for why in &unknown {
+            for detail in [
+                EngineFacts::MySql(MyFacts::new(handshake, EngineId::MySql)),
+                EngineFacts::MariaDb(MyFacts::new(handshake, EngineId::MySql)),
+            ] {
+                let f =
+                    ServerFacts { version: Fact::Unknown(why.clone()), detail, ..agreeing(EngineId::MySql, handshake) };
+                assert_eq!(mysql.format(&f), want, "{handshake:?} {why:?} {}", f.engine().spec().key);
+                assert_eq!(plan_of(&f), want, "{handshake:?} {why:?} {}", f.engine().spec().key);
+            }
+        }
+    }
+    // PostgreSQL: a version that does not parse, reached through a pooler.
+    let Fact::Known(pg) = EngineId::Postgres.spec().plan else { panic!("PostgreSQL gives a plan") };
+    for line in ["18beta1", "17devel", "17.2"] {
+        for topology in [Fact::Known(Topology::Direct), Fact::Known(Topology::Pooled), Fact::Unknown(Why::NotChecked)] {
+            let f = ServerFacts {
+                version: Version::parse(line).map_or(Fact::Unknown(Why::VersionUnknown), Fact::Known),
+                version_text: Some(line.to_string()),
+                topology: topology.clone(),
+                ..agreeing(EngineId::Postgres, Version::new(17, 2, 0))
+            };
+            assert_eq!(pg.format(&f), Fact::Known(PG_PLAN), "{line} {topology:?}");
+            assert_eq!(plan_of(&f), Fact::Known(PG_PLAN), "{line} {topology:?}");
+        }
+    }
+    assert_eq!(PG_PLAN, ExplainFormat::PostgresJson);
+    // MariaDB: the group itself is not there, whatever the facts; a MariaDB greeting answers it
+    // even when the line names MySQL.
+    assert!(matches!(EngineId::MariaDb.spec().plan, Fact::No(Why::NotBuilt)));
+    let maria = Version::new(11, 4, 5);
+    let lines_mysql = ServerFacts {
+        version: Fact::Unknown(Why::EnginesDisagree),
+        detail: EngineFacts::MySql(MyFacts::new(maria, EngineId::MariaDb)),
+        ..agreeing(EngineId::MariaDb, maria)
+    };
+    for f in [agreeing(EngineId::MariaDb, maria), lines_mysql] {
+        assert_eq!(plan_of(&f), Fact::No(Why::NotBuilt), "{}", f.engine().spec().key);
+    }
+    // MySQL's rules never answer for PostgreSQL's facts.
+    assert_eq!(
+        mysql.format(&agreeing(EngineId::Postgres, Version::new(17, 2, 0))),
+        Fact::Unknown(Why::EnginesDisagree)
+    );
+}

@@ -2,11 +2,16 @@
 //! that asks for a plan, what the plan view shows of it, the server's "no plan" answer, and a
 //! text `EXPLAIN` the user ran asked again for a plan, in the format of each engine and in a
 //! format of the other engine (a profile's plan format is the last one any of its sessions
-//! said, a tab's dialect its own session's). No case reads a session's facts.
+//! said, a tab's dialect its own session's). No case of [`plan_cases`] reads a session's
+//! facts; [`plan_format_cases`] asks the plan rules of the engine of a session's greeting
+//! (`engine::plan_of`) on every shape of its facts.
 
 use crate::Case;
 use crate::Engine::{self, MariaDb, MySql, MySqlAnsiQuotes, Pg};
 use datarig_core::driver::ExplainFormat;
+use datarig_core::engine::{
+    EngineFacts, EngineId, Fact, MyFacts, PgFacts, ServerFacts, Topology, Version, Why, plan_of,
+};
 use datarig_core::sql::plan::explain::{JsonExplain, NotJson};
 
 /// A question of a plan format.
@@ -263,6 +268,100 @@ pub fn plan_cases() -> Vec<Case<Ask>> {
                     MySqlAnsiQuotes,
                     "EXPLAIN FORMAT=TREE SELECT \"a\" FROM t / SELECT \"a\" FROM t / analyze false / evaluates false | text EXPLAIN FORMAT=TREE SELECT \"a\" FROM t / SELECT \"a\" FROM t / analyze false / evaluates false",
                 ),
+            ],
+        },
+    ]
+}
+
+/// A server of the plan format table: an older one, or one of today.
+pub enum Server {
+    /// PostgreSQL 12.0, MySQL 8.0.15 (before the tree), MariaDB 10.6.0.
+    Older,
+    /// PostgreSQL 17.2, MySQL 8.4.6, MariaDB 11.4.13.
+    Today,
+}
+
+/// What a session of column `e` on server `s` found it to be, reached directly: its reports
+/// agreeing, or a version not known (it did not parse, the reports name different numbers, or
+/// the greeting names MariaDB and the line MySQL).
+fn facts(e: Engine, s: &Server) -> ServerFacts {
+    let (pg, my, maria) = match s {
+        Server::Older => (Version::new(12, 0, 0), Version::new(8, 0, 15), Version::new(10, 6, 0)),
+        Server::Today => (Version::new(17, 2, 0), Version::new(8, 4, 6), Version::new(11, 4, 13)),
+    };
+    let unknown = |why| Fact::Unknown(why);
+    let (version, detail) = match e {
+        Pg => (Fact::Known(pg), EngineFacts::Postgres(PgFacts::default())),
+        Engine::PgVersionUnknown => (unknown(Why::VersionUnknown), EngineFacts::Postgres(PgFacts::default())),
+        MySql => (Fact::Known(my), EngineFacts::MySql(MyFacts::new(my, EngineId::MySql))),
+        Engine::MySqlVersionUnknown => {
+            (unknown(Why::VersionUnknown), EngineFacts::MySql(MyFacts::new(my, EngineId::MySql)))
+        }
+        Engine::MySqlVersionsDisagree => {
+            (unknown(Why::VersionsDisagree), EngineFacts::MySql(MyFacts::new(my, EngineId::MySql)))
+        }
+        Engine::MySqlEnginesDisagree => {
+            (unknown(Why::EnginesDisagree), EngineFacts::MySql(MyFacts::new(my, EngineId::MariaDb)))
+        }
+        MariaDb => (Fact::Known(maria), EngineFacts::MariaDb(MyFacts::new(maria, EngineId::MariaDb))),
+        Engine::MariaDbVersionUnknown => {
+            (unknown(Why::VersionUnknown), EngineFacts::MariaDb(MyFacts::new(maria, EngineId::MariaDb)))
+        }
+        Engine::MariaDbVersionsDisagree => {
+            (unknown(Why::VersionsDisagree), EngineFacts::MariaDb(MyFacts::new(maria, EngineId::MariaDb)))
+        }
+        other => panic!("{other:?} is not a column of the plan format table"),
+    };
+    ServerFacts {
+        version,
+        version_text: None,
+        provider: Fact::Unknown(Why::NotChecked),
+        topology: Fact::Known(Topology::Direct),
+        detail,
+    }
+}
+
+/// The plan format a session of column `e` on server `s` gives (`engine::plan_of`).
+pub fn plan_format(e: Engine, s: &Server) -> String {
+    format!("{:?}", plan_of(&facts(e, s)))
+}
+
+pub fn plan_format_cases() -> Vec<Case<Server>> {
+    vec![
+        Case {
+            name: "an older server",
+            input: Server::Older,
+            expect: &[
+                (Pg, "Known(PostgresJson)"),
+                (Engine::PgVersionUnknown, "Known(PostgresJson)"),
+                (MySql, "No(VersionTooOld { needed: Version { major: 8, minor: 0, patch: 16 } })"),
+                (
+                    Engine::MySqlVersionUnknown,
+                    "No(VersionTooOld { needed: Version { major: 8, minor: 0, patch: 16 } })",
+                ),
+                (
+                    Engine::MySqlVersionsDisagree,
+                    "No(VersionTooOld { needed: Version { major: 8, minor: 0, patch: 16 } })",
+                ),
+                (Engine::MySqlEnginesDisagree, "No(NotBuilt)"),
+                (MariaDb, "No(NotBuilt)"),
+                (Engine::MariaDbVersionUnknown, "No(NotBuilt)"),
+                (Engine::MariaDbVersionsDisagree, "No(NotBuilt)"),
+            ],
+        },
+        Case {
+            name: "a server of today",
+            input: Server::Today,
+            expect: &[
+                (Pg, "Known(PostgresJson)"),
+                (Engine::PgVersionUnknown, "Known(PostgresJson)"),
+                (MySql, "Known(MySqlTree)"),
+                (Engine::MySqlVersionUnknown, "Known(MySqlTree)"),
+                (Engine::MySqlVersionsDisagree, "Known(MySqlTree)"),
+                (Engine::MySqlEnginesDisagree, "No(NotBuilt)"),
+                (MariaDb, "No(NotBuilt)"),
+                (Engine::MariaDbVersionUnknown, "No(NotBuilt)"),
+                (Engine::MariaDbVersionsDisagree, "No(NotBuilt)"),
             ],
         },
     ]

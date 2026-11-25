@@ -2857,7 +2857,7 @@ async fn estimate(
     if tx.block || tx.unsure {
         return Ok(Err(DbError::NotSupported));
     }
-    let format = datarig_core::driver::ExplainFormat::PostgresJson;
+    let format = datarig_core::engine::PG_PLAN;
     let explain = format.explain_sql(sql, false);
     let read = limited_read(client, link, env, (ESTIMATE_LIMIT, COUNT_LOCK_WAIT), &ask, &explain).await?;
     let read = read.map_err(|why| if why == DbError::NotFound { not_lockable(sql) } else { why });

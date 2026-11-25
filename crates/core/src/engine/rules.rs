@@ -2,6 +2,7 @@
 //! [`Rules`], one answer per question whatever the engine.
 
 use super::{Expected, ServerFacts};
+use crate::driver::ExplainFormat;
 use crate::sql::dialect::{Dialect, Language};
 use crate::sql::risk::Classifier;
 use crate::sql::risk::mysql::Judged;
@@ -10,6 +11,10 @@ use std::sync::Arc;
 /// The language of a tab bound to no profile: PostgreSQL's, for highlighting only (nothing runs
 /// without a profile).
 pub const UNBOUND_TAB_DIALECT: Dialect = Dialect::Postgres;
+
+/// The plan format of a tab bound to no profile: PostgreSQL's, as its language
+/// ([`UNBOUND_TAB_DIALECT`]); a plan asked for asks for a connection first.
+pub const UNBOUND_TAB_PLAN: ExplainFormat = ExplainFormat::PostgresJson;
 
 /// What the app knows of the server a tab's text is for.
 #[derive(Clone, Debug, PartialEq, Eq)]

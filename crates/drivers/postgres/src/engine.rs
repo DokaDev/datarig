@@ -1,9 +1,9 @@
 //! What the driver knows of the engine it serves, PostgreSQL: what it offers ([`CAPABILITIES`])
 //! and the facts a session's connection found ([`facts`]).
 
-use datarig_core::driver::{Capabilities, EditFormat, ExplainFormat, Hierarchy};
+use datarig_core::driver::{Capabilities, EditFormat, Hierarchy};
 use datarig_core::engine::{
-    EngineFacts, EngineId, Fact, PgFacts, PingIdentity, ServerFacts, SessionRules, Topology, Version, Why,
+    EngineFacts, EngineId, Fact, PG_PLAN, PgFacts, PingIdentity, ServerFacts, SessionRules, Topology, Version, Why,
 };
 use datarig_core::sql::dialect::{Dialect, Language};
 use std::sync::Arc;
@@ -28,7 +28,7 @@ pub(crate) const CAPABILITIES: Capabilities = Capabilities {
     ddl: true,
     language: Language::Sql(Dialect::Postgres),
     hierarchy: Hierarchy::DatabaseSchema,
-    explain: Some(ExplainFormat::PostgresJson),
+    explain: Some(PG_PLAN),
     reads_held_to_end: false,
     export: true,
     manual_commit: true,

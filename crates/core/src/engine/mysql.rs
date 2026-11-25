@@ -5,10 +5,10 @@ use super::mysql_family::{
     FamilyTx, FamilyValues, family_classifier, family_filter_calls, family_read_only_calls,
 };
 use super::{
-    EditRules, EngineFacts, EngineId, EngineSpec, Fact, FilterCalls, MYSQL_FAMILY, RiskRules, ServerFacts, Support,
-    Transport, Version, Why,
+    EditRules, EngineFacts, EngineId, EngineSpec, Fact, FilterCalls, MYSQL_FAMILY, PlanRules, RiskRules, ServerFacts,
+    Support, Transport, Version, Why,
 };
-use crate::driver::{EditFormat, Hierarchy, MySqlEdit};
+use crate::driver::{EditFormat, ExplainFormat, Hierarchy, MySqlEdit};
 use crate::profile::dsn::Scheme;
 use crate::sql::dialect::Dialect;
 use crate::sql::risk::Classifier;
@@ -36,6 +36,7 @@ pub static SPEC: EngineSpec = EngineSpec {
     ddl: Fact::Known(&FamilyDdl),
     sort: &FamilySort,
     filter: Fact::Known(&FamilyFilter),
+    plan: Fact::Known(&MysqlPlan),
 };
 
 /// How MySQL's statements are judged: the family's classifier of the text's dialect
@@ -75,6 +76,35 @@ struct MysqlEdits;
 
 /// The first MySQL version whose servers take MySQL's edits.
 const EDIT_SINCE: Version = Version::new(8, 0, 17);
+
+/// Which plan format MySQL's servers give: the tree from 8.0.16 on (`EXPLAIN FORMAT=TREE`;
+/// `EXPLAIN ANALYZE` from 8.0.18, an older server's error is its own).
+struct MysqlPlan;
+
+/// The first MySQL version whose servers give the tree.
+const PLAN_SINCE: Version = Version::new(8, 0, 16);
+
+impl PlanRules for MysqlPlan {
+    /// By the server's version when it is known, else by the number of its greeting, whichever
+    /// engine its version line names: a compatibility decision (a known version is the
+    /// greeting's number), so a session whose reports disagree keeps the plan it had.
+    fn format(&self, f: &ServerFacts) -> Fact<ExplainFormat> {
+        match &f.detail {
+            EngineFacts::MySql(my) | EngineFacts::MariaDb(my) => {
+                let version = match &f.version {
+                    Fact::Known(v) => *v,
+                    Fact::No(_) | Fact::Unknown(_) => my.handshake,
+                };
+                match version >= PLAN_SINCE {
+                    true => Fact::Known(ExplainFormat::MySqlTree),
+                    false => Fact::No(Why::VersionTooOld { needed: PLAN_SINCE }),
+                }
+            }
+            // Never the facts of a MySQL greeting.
+            EngineFacts::Postgres(_) => Fact::Unknown(Why::EnginesDisagree),
+        }
+    }
+}
 
 impl EditRules for MysqlEdits {
     /// By the number of the server's greeting, whichever engine its version line names.

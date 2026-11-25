@@ -1037,13 +1037,14 @@ impl App {
 
     /// The plan format tab `tab`'s server gives: as a session of its profile said
     /// (`DbEvent::Explain`: none on MariaDB), else its driver's (`Capabilities::explain`). A
-    /// tab without a profile, or whose profile or driver is unknown, counts as PostgreSQL's:
-    /// its text is in the default language, PostgreSQL ([`App::tab_language`]), so the plan
-    /// actions stay offered as they always were (running one asks for a connection first).
+    /// tab without a profile, or whose profile or driver is unknown, counts as PostgreSQL's
+    /// ([`datarig_core::engine::UNBOUND_TAB_PLAN`]): its text is in the default language,
+    /// PostgreSQL ([`App::tab_language`]), so the plan actions stay offered as they always were
+    /// (running one asks for a connection first).
     pub(crate) fn tab_explain(&self, tab: TabId) -> Option<datarig_core::driver::ExplainFormat> {
         let profile = self.tabs.get(tab).and_then(|t| t.profile);
         let Some(caps) = self.profile_capabilities(profile) else {
-            return Some(datarig_core::driver::ExplainFormat::PostgresJson);
+            return Some(datarig_core::engine::UNBOUND_TAB_PLAN);
         };
         // Only a driver with a format has servers that say theirs.
         let said = profile.and_then(|p| self.conns.get(p)).and_then(|c| c.explain);

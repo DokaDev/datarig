@@ -358,6 +358,11 @@ fn plan_cases_on_every_engine() {
 }
 
 #[test]
+fn plan_format_on_every_engine() {
+    run_versioned("plan format", &plan::plan_format_cases(), plan::plan_format);
+}
+
+#[test]
 fn read_only_open_on_every_engine() {
     run("read-only open", &read_only::cases(), read_only::verdict);
 }
@@ -417,6 +422,7 @@ fn every_case_names_every_engine() {
         named_versioned("session rules", &session::cases()),
         named("read-only open", &read_only::cases()),
         named("plan", &plan::plan_cases()),
+        named_versioned("plan format", &plan::plan_format_cases()),
         named("catalogue rules", &catalogue::catalogue_cases()),
         named("ddl rules", &catalogue::ddl_cases()),
         named("hierarchy", &catalogue::hierarchy_cases()),
