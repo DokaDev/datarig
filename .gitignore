@@ -1,5 +1,6 @@
 # Build output
 /target/
+/result
 
 # SSH test keys made by dev/ssh/make-fixture.sh (never committed)
 /dev/ssh/.fixture/
