@@ -7,6 +7,9 @@ use super::{Cx, age, put};
 use crate::app::monitor::{MonitorHits, MonitorView};
 use crate::text::{human_bytes, width};
 use crate::theme;
+use datarig_core::engine::{
+    ApplierName, ChannelWords, LagBytes, LastMessage, ReceiverName, ReplicaWho, ReplicationTerms,
+};
 use datarig_core::monitor::replication::{ChannelError, Member, Replica, Running, Side, Slot, Upstream};
 use datarig_core::monitor::{ExtraKey, Flavour, GaugeKind, Lag, Replication, Role, Timestamp, Visibility};
 use datarig_i18n::{Label, Msg};
@@ -25,6 +28,11 @@ const INDENT: &str = "  ";
 const KEY_MAX: usize = 18;
 
 impl Cx<'_> {
+    /// What the view calls things on the server's engine (`None`: no format yet).
+    fn repl_terms(&self) -> Option<ReplicationTerms> {
+        self.terms.map(|t| t.replication)
+    }
+
     /// The Replication view in `area`, from its line `top` (kept within the lines): the top drawn.
     pub(super) fn replication(&self, area: Rect, buf: &mut Buffer, hits: &mut MonitorHits) -> usize {
         let lines = self.replication_lines(area.width.saturating_sub(2) as usize);
@@ -129,13 +137,15 @@ impl Cx<'_> {
         let text = Style::new().fg(th.fg);
         let dim = Style::new().fg(th.fg_dim);
         let ago = |t: Option<Timestamp>| t.and_then(|t| now.since(t)).map(age);
+        let terms = self.repl_terms();
         // Where from.
         let source = u.source.clone().unwrap_or_else(|| "?".into());
-        let mut head = match (&u.channel, self.mysql) {
+        // No format yet: as a stream.
+        let mut head = match (&u.channel, terms.map_or(ChannelWords::Streams, |t| t.channels)) {
             (Some(name), _) => self.msg(Msg::MonitorReplChannel { name: name.clone(), source }),
-            (None, true) => self.msg(Msg::MonitorReplChannelDefault { source }),
-            (None, false) if u.receiver == Running::No => self.label(Label::MonitorReplNoReceiver),
-            (None, false) => self.msg(Msg::MonitorReplSource { source }),
+            (None, ChannelWords::Named) => self.msg(Msg::MonitorReplChannelDefault { source }),
+            (None, ChannelWords::Streams) if u.receiver == Running::No => self.label(Label::MonitorReplNoReceiver),
+            (None, ChannelWords::Streams) => self.msg(Msg::MonitorReplSource { source }),
         };
         if let Some(slot) = &u.slot {
             head.push_str(" · ");
@@ -145,46 +155,54 @@ impl Cx<'_> {
         if u.visible == Visibility::Hidden {
             out.push((format!("{INDENT}{}", self.label(Label::MonitorReplStreamHidden)), dim));
         }
-        // The receiving side.
-        let receiver_label =
-            self.label(if self.mysql { Label::MonitorReplReceiver } else { Label::MonitorReplWalReceiver });
+        // The receiving side (no format yet: the WAL receiver).
+        let receiver_label = self.label(match terms.map_or(ReceiverName::WalReceiver, |t| t.receiver) {
+            ReceiverName::Receiver => Label::MonitorReplReceiver,
+            ReceiverName::WalReceiver => Label::MonitorReplWalReceiver,
+        });
         let mut parts = vec![format!("{receiver_label}: {}", self.running(&u.receiver))];
         let mut style = run_style(&u.receiver);
         if let Some(state) = &u.receiver_state {
             parts.push(state.clone());
         }
         // A MySQL source sends a heartbeat only while it has nothing else to send: its age is
-        // no measure of how long the source has been silent.
+        // no measure of how long the source has been silent. No format yet: a message.
         if let Some(a) = ago(u.last_message) {
-            parts.push(match self.mysql {
-                true => self.msg(Msg::MonitorReplLastHeartbeat { time: a }),
-                false => self.msg(Msg::MonitorReplLastMessage { time: a }),
+            parts.push(match terms.map_or(LastMessage::Message, |t| t.last_message) {
+                LastMessage::Heartbeat => self.msg(Msg::MonitorReplLastHeartbeat { time: a }),
+                LastMessage::Message => self.msg(Msg::MonitorReplLastMessage { time: a }),
             });
         }
         if let Some(a) = ago(u.last_received) {
             parts.push(self.msg(Msg::MonitorReplLastFetched { time: a }));
         }
-        // A PostgreSQL standby without a receiver says so in its heading.
-        if u.receiver != Running::No || self.mysql {
+        // A PostgreSQL standby without a receiver says so in its heading, as does a server with
+        // no format yet.
+        if u.receiver != Running::No || terms.is_some_and(|t| t.receiver_line_always) {
             pack(out, INDENT, parts, w, style);
         }
-        // The applying side.
-        let applier_label = self.label(if self.mysql { Label::MonitorReplApplier } else { Label::MonitorReplReplay });
+        // The applying side (no format yet: replay).
+        let applier_label = self.label(match terms.map_or(ApplierName::Replay, |t| t.applier) {
+            ApplierName::Applier => Label::MonitorReplApplier,
+            ApplierName::Replay => Label::MonitorReplReplay,
+        });
+        // When the last transaction was applied: on the applier's line, else below the
+        // positions as when it was last replayed (no format yet).
+        let applied_here = terms.is_some_and(|t| t.applied_on_applier_line);
         let mut parts = vec![format!("{applier_label}: {}", self.running(&u.applier))];
         style = run_style(&u.applier);
         if let Some(state) = &u.applier_state {
             parts.push(state.clone());
         }
-        if self.mysql
-            && let Some(a) = ago(u.last_applied)
-        {
+        if applied_here && let Some(a) = ago(u.last_applied) {
             parts.push(self.msg(Msg::MonitorReplLastApplied { time: a }));
         }
         pack(out, INDENT, parts, w, style);
         // How far behind.
         let (lag, lag_style) = self.lag(&u.lag(), true);
         wrapped(out, INDENT, &lag, w, lag_style);
-        if self.mysql && u.applier_behind == Some(0) && u.receiver != Running::Yes {
+        // No format yet: no note.
+        if terms.is_some_and(|t| t.zero_lag_note) && u.applier_behind == Some(0) && u.receiver != Running::Yes {
             wrapped(out, INDENT, &self.label(Label::MonitorReplZeroNote), w, dim);
         }
         if let (Some(read), Some(applied)) = (&u.source_read, &u.source_applied) {
@@ -202,9 +220,7 @@ impl Cx<'_> {
             let replayed = self.msg(Msg::MonitorReplReplayed { replayed: applied.to_string() });
             out.push((format!("{INDENT}{replayed}"), text));
         }
-        if !self.mysql
-            && let Some(a) = ago(u.last_applied)
-        {
+        if !applied_here && let Some(a) = ago(u.last_applied) {
             wrapped(out, INDENT, &self.msg(Msg::MonitorReplLastReplayed { time: a }), w, dim);
         }
         if let Some(d) = u.delay.filter(|d| *d > 0) {
@@ -235,9 +251,10 @@ impl Cx<'_> {
                 let mut parts = Vec::new();
                 if let Some(b) = bytes {
                     let bytes = human_bytes(*b);
-                    parts.push(match self.mysql {
-                        true => self.msg(Msg::MonitorLagBytesFetched { bytes }),
-                        false => self.msg(Msg::MonitorLagBytes { bytes }),
+                    // No format yet: behind.
+                    parts.push(match self.repl_terms().map_or(LagBytes::Behind, |t| t.lag_bytes) {
+                        LagBytes::Fetched => self.msg(Msg::MonitorLagBytesFetched { bytes }),
+                        LagBytes::Behind => self.msg(Msg::MonitorLagBytes { bytes }),
                     });
                 }
                 if let Some(n) = transactions {
@@ -285,7 +302,9 @@ impl Cx<'_> {
         let th = theme::cur();
         let dim = Style::new().fg(th.fg_dim);
         let mut who = Vec::new();
-        if self.mysql {
+        // No format yet: by its name, and how far behind from the stream.
+        let shape = self.repl_terms().map_or(ReplicaWho::NameClientStateSync, |t| t.replica);
+        if shape == ReplicaWho::ClientUserState {
             who.extend(rep.client.clone());
             who.extend(rep.user.clone());
             who.extend(rep.state.clone());
@@ -300,7 +319,7 @@ impl Cx<'_> {
         }
         pack(out, INDENT, who, w, Style::new().fg(th.fg));
         let indent = format!("{INDENT}{INDENT}");
-        if self.mysql {
+        if shape == ReplicaWho::ClientUserState {
             out.push((format!("{indent}{}", self.label(Label::MonitorReplicaMysqlLag)), dim));
             return;
         }

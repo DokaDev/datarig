@@ -15,10 +15,11 @@ use crate::keymap::Ctx;
 use crate::text::{clip, width, wrap, wrap_words};
 use crate::theme;
 use crate::widgets::{panel, put, sparkline};
+use datarig_core::engine::{Charts, MonitorTerms, RoleWords, SessionIdName, VersionLine, WaitsAsked};
 use datarig_core::monitor::locks::{Blame, Holder, LockObject};
 use datarig_core::monitor::{
-    CounterKind, ExtraKey, FullText, GaugeKind, Hidden, MAX_WAITERS, MonitorFormat, Need, Part, Proof, SessionKind,
-    SessionRow, SessionState, Timestamp, Tx, Visibility, WaitClass,
+    CounterKind, ExtraKey, FullText, GaugeKind, Hidden, MAX_WAITERS, Need, Part, Proof, SessionKind, SessionRow,
+    SessionState, Timestamp, Tx, Visibility, WaitClass,
 };
 use datarig_i18n::{I18n, Label, Msg};
 use ratatui::buffer::Buffer;
@@ -298,7 +299,7 @@ pub(crate) fn draw_monitor(app: &mut App, area: Rect, buf: &mut Buffer) {
         m.prepare_statement(dialect, indent);
     }
     let Some(m) = app.monitor_of(id) else { return };
-    let mysql = matches!(m.format(), Some(MonitorFormat::MySql(_)));
+    let terms = m.terms();
     // The query tab whose own session the selected row is.
     let own = app.tab().profile.zip(m.selected_row()).and_then(|(p, r)| app.own_tab(p, r));
     let own = own.and_then(|t| app.tabs.get(t)).map(|t| crate::widgets::tabbar::document_name(app, t));
@@ -307,7 +308,7 @@ pub(crate) fn draw_monitor(app: &mut App, area: Rect, buf: &mut Buffer) {
         true => m.actions.iter().rev().take(ACTIONS_SHOWN).map(|e| app.action_line(e, now)).collect(),
         false => Vec::new(),
     };
-    let cx = Cx { i18n: &app.i18n, m, focused, mysql, read_key, format_key, own, actions };
+    let cx = Cx { i18n: &app.i18n, m, focused, terms, read_key, format_key, own, actions };
     if inner.height == 0 || inner.width < 10 {
         return;
     }
@@ -384,7 +385,9 @@ struct Cx<'a> {
     i18n: &'a I18n,
     m: &'a MonitorTab,
     focused: bool,
-    mysql: bool,
+    /// What the views call things on the server's engine (`None`: no format yet; each place
+    /// then says what it says without one).
+    terms: Option<&'static MonitorTerms>,
     /// The key that reads again (what a state that waits for it names).
     read_key: String,
     /// The key that shows statements laid out or as sent (what the details' note names).
@@ -404,14 +407,15 @@ impl Cx<'_> {
         self.i18n.msg(&m).to_string()
     }
 
-    /// The server's role, said of the server (never to be read as the profile's own mode):
-    /// PostgreSQL in recovery or not, MySQL `read_only` (or `super_read_only`) on or not.
+    /// The server's role, said of the server (never to be read as the profile's own mode): in
+    /// recovery or not (PostgreSQL), its `read_only` (or `super_read_only`) on or not (MySQL).
+    /// No format yet: by recovery.
     fn role(&self, read_only: bool) -> String {
-        self.label(match (self.mysql, read_only) {
-            (true, true) => Label::MonitorRoleServerReadOnly,
-            (true, false) => Label::MonitorRoleTakesWrites,
-            (false, true) => Label::MonitorRoleStandby,
-            (false, false) => Label::MonitorRolePrimary,
+        self.label(match (self.terms.map_or(RoleWords::Recovery, |t| t.role), read_only) {
+            (RoleWords::ReadOnlyFlag, true) => Label::MonitorRoleServerReadOnly,
+            (RoleWords::ReadOnlyFlag, false) => Label::MonitorRoleTakesWrites,
+            (RoleWords::Recovery, true) => Label::MonitorRoleStandby,
+            (RoleWords::Recovery, false) => Label::MonitorRolePrimary,
         })
     }
 
@@ -433,7 +437,8 @@ impl Cx<'_> {
         let th = theme::cur();
         let mut parts = Vec::new();
         if let Some(s) = &self.m.server {
-            parts.push(short_version(&s.version, self.mysql));
+            // No format yet: up to its build details.
+            parts.push(short_version(&s.version, self.terms.map_or(VersionLine::UpToBuild, |t| t.version_line)));
             if let Some(p) = self.m.format().and_then(|f| f.flavour().product()) {
                 parts.push(p.to_string());
             }
@@ -876,11 +881,11 @@ impl Cx<'_> {
         }
     }
 
-    /// The charts of several series this format draws, in order.
+    /// The charts of several series this format draws, in order (no format yet: none).
     fn charts(&self) -> Vec<ChartData> {
-        let defs: &[&ChartDef] = match self.m.format() {
-            Some(MonitorFormat::MySql(_)) => &[&STATEMENTS_BY_TYPE, &THREAD_COMMANDS],
-            Some(MonitorFormat::Postgres(_)) => &[&ROWS_BY_OPERATION, &SESSION_STATES],
+        let defs: &[&ChartDef] = match self.terms.map(|t| t.charts) {
+            Some(Charts::StatementsAndCommands) => &[&STATEMENTS_BY_TYPE, &THREAD_COMMANDS],
+            Some(Charts::RowsAndStates) => &[&ROWS_BY_OPERATION, &SESSION_STATES],
             None => &[],
         };
         defs.iter().map(|d| self.chart(d)).collect()
@@ -1282,8 +1287,10 @@ impl Cx<'_> {
                         let who: Vec<String> = l.also.iter().map(|(h, _)| self.holder_name(h)).collect();
                         parts.push(self.msg(Msg::MonitorLockAlso { who: who.join(", ") }));
                     }
-                    if l.alone && r.is_some_and(|r| r.blocked_by.is_none()) && !self.mysql {
-                        // PostgreSQL: past the longest waits asked who blocks them.
+                    // No format yet: as for the longest waits only.
+                    let longest = self.terms.map_or(WaitsAsked::Longest, |t| t.waits_asked) == WaitsAsked::Longest;
+                    if l.alone && r.is_some_and(|r| r.blocked_by.is_none()) && longest {
+                        // Past the longest waits asked who blocks them (PostgreSQL).
                         let max = MAX_WAITERS.to_string();
                         parts.push(self.msg(Msg::MonitorLockNotAsked { max }));
                     } else if l.alone {
@@ -1427,8 +1434,11 @@ impl Cx<'_> {
 
     fn col_label(&self, c: Col) -> String {
         match c {
-            Col::Id if self.mysql => "id".into(),
-            Col::Id => "pid".into(),
+            // No format yet: `pid`.
+            Col::Id => match self.terms.map_or(SessionIdName::Pid, |t| t.session_id) {
+                SessionIdName::Id => "id".into(),
+                SessionIdName::Pid => "pid".into(),
+            },
             Col::User => self.label(Label::MonitorColUser),
             Col::Database => self.label(Label::MonitorColDatabase),
             Col::State => self.label(Label::MonitorColState),
@@ -1847,20 +1857,24 @@ pub(crate) fn rate(v: f64) -> String {
     }
 }
 
-/// The server's version line, short: PostgreSQL's up to its build details, MySQL's with its
-/// product name.
-fn short_version(line: &str, mysql: bool) -> String {
-    if mysql {
-        // `8.4.11 MySQL Community Server - GPL`: the product's name first.
-        let (number, comment) = line.split_once(' ').unwrap_or((line, ""));
-        let product = comment.split(" - ").next().unwrap_or("").trim();
-        return match product.is_empty() {
-            true => format!("MySQL {number}"),
-            false => format!("{number} ({product})"),
-        };
+/// The server's version line, short, as the engine's servers write it: up to its build details
+/// (PostgreSQL), or the number with its product's name (MySQL).
+fn short_version(line: &str, shape: VersionLine) -> String {
+    match shape {
+        VersionLine::NumberThenProduct => {
+            // `8.4.11 MySQL Community Server - GPL`: the product's name first.
+            let (number, comment) = line.split_once(' ').unwrap_or((line, ""));
+            let product = comment.split(" - ").next().unwrap_or("").trim();
+            match product.is_empty() {
+                true => format!("MySQL {number}"),
+                false => format!("{number} ({product})"),
+            }
+        }
+        VersionLine::UpToBuild => {
+            let end = [" (", " on "].iter().filter_map(|p| line.find(p)).min().unwrap_or(line.len());
+            clip(&line[..end], 40)
+        }
     }
-    let end = [" (", " on "].iter().filter_map(|p| line.find(p)).min().unwrap_or(line.len());
-    clip(&line[..end], 40)
 }
 
 /// The engine-only facts of a session, by the server's names (for tests).
@@ -1872,6 +1886,7 @@ fn extra_names(r: &SessionRow) -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datarig_core::monitor::MonitorFormat;
 
     #[test]
     fn ages_and_rates_read_short() {
@@ -1890,9 +1905,10 @@ mod tests {
     #[test]
     fn versions_read_short() {
         let pg = "PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc";
-        assert_eq!(short_version(pg, false), "PostgreSQL 17.11");
-        assert_eq!(short_version("8.4.11 MySQL Community Server - GPL", true), "8.4.11 (MySQL Community Server)");
-        assert_eq!(short_version("8.0.45", true), "MySQL 8.0.45");
+        assert_eq!(short_version(pg, VersionLine::UpToBuild), "PostgreSQL 17.11");
+        let mysql = VersionLine::NumberThenProduct;
+        assert_eq!(short_version("8.4.11 MySQL Community Server - GPL", mysql), "8.4.11 (MySQL Community Server)");
+        assert_eq!(short_version("8.0.45", mysql), "MySQL 8.0.45");
     }
 
     /// The formats a frame draws with: a PostgreSQL and a MySQL server's, and none yet (the
@@ -1934,12 +1950,11 @@ mod tests {
 
     /// What a frame of `m` draws from, as [`draw`] builds it.
     pub(super) fn cx<'a>(i18n: &'a I18n, m: &'a MonitorTab) -> Cx<'a> {
-        let mysql = matches!(m.format(), Some(MonitorFormat::MySql(_)));
         Cx {
             i18n,
             m,
             focused: false,
-            mysql,
+            terms: m.terms(),
             read_key: "r".into(),
             format_key: "f".into(),
             own: None,
