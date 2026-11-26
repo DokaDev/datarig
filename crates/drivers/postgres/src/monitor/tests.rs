@@ -14,6 +14,11 @@ fn pg(route: Route) -> PgMonitor {
     }
 }
 
+/// The format the monitor keeps beside `m`.
+fn format_of(m: &PgMonitor) -> MonitorFormat {
+    crate::engine::monitor_format(m.clone())
+}
+
 fn target() -> ActionTarget {
     ActionTarget {
         key: SessionKey { id: 4242, started: Some(Timestamp(1_794_068_700_000_001)) },
@@ -41,8 +46,8 @@ impl Fake {
 }
 
 impl Pipeline for Fake {
-    async fn send(&self, begin: &str, statement: &str, _deadline: Duration) -> Option<Pipelined> {
-        self.sent.lock().unwrap().extend([begin.to_owned(), statement.to_owned(), "COMMIT".to_owned()]);
+    async fn send(&self, begin: &str, statement: &str, commit: &str, _deadline: Duration) -> Option<Pipelined> {
+        self.sent.lock().unwrap().extend([begin.to_owned(), statement.to_owned(), commit.to_owned()]);
         self.answers.lock().unwrap().pop().expect("an answer for every transaction")
     }
 }
@@ -65,7 +70,7 @@ fn server(sqlstate: &str) -> Fail {
 }
 
 async fn acting(pg: &PgMonitor, kind: ActionKind, answer: Option<Pipelined>) -> Acted {
-    act(&Fake::new(vec![answer]), pg, false, kind, &target()).await
+    act(&Fake::new(vec![answer]), pg, &format_of(pg), false, kind, &target()).await
 }
 
 #[tokio::test]
@@ -73,7 +78,7 @@ async fn a_read_only_profile_sends_nothing() {
     for kind in [ActionKind::Cancel, ActionKind::Terminate] {
         for route in [Route::Direct, Route::Pooled, Route::Unknown] {
             let fake = Fake::new(Vec::new());
-            let acted = act(&fake, &pg(route), true, kind, &target()).await;
+            let acted = act(&fake, &pg(route), &format_of(&pg(route)), true, kind, &target()).await;
             assert_eq!(acted.outcome, ActionOutcome::NotSent(NotSent::ReadOnly), "{kind:?} {route:?}");
             assert!(fake.sent().is_empty(), "{:?}", fake.sent());
             assert!(!acted.committed && acted.lost.is_none());
@@ -84,7 +89,8 @@ async fn a_read_only_profile_sends_nothing() {
 #[tokio::test]
 async fn an_action_is_one_read_only_transaction_of_its_own() {
     let fake = Fake::new(vec![answered(Ok(row("f", "t", "t", Some("t"))))]);
-    let acted = act(&fake, &pg(Route::Direct), false, ActionKind::Cancel, &target()).await;
+    let acted =
+        act(&fake, &pg(Route::Direct), &format_of(&pg(Route::Direct)), false, ActionKind::Cancel, &target()).await;
     assert_eq!(
         acted,
         Acted { outcome: ActionOutcome::Acknowledged { via: Via::Standard }, committed: true, lost: None }
@@ -220,4 +226,82 @@ fn the_route_is_direct_only_when_the_server_names_the_start_ups_process() {
     assert_eq!(route(&pid("x"), 4242), Route::Unknown);
     assert_eq!(route(&Vec::new(), 4242), Route::Unknown);
     assert_eq!(route(&vec![vec![None]], 4242), Route::Unknown);
+}
+
+/// What a cancel and an end send, in order, on every route and provider: the action's
+/// transaction (its `BEGIN` with the limits, the one statement that reads and signals the target,
+/// the `COMMIT`), and nothing more, refused or not.
+#[tokio::test]
+async fn a_cancel_and_an_end_send_todays_statements() {
+    let flavours = [
+        Flavour::Standard,
+        Flavour::AmazonRds,
+        Flavour::AmazonAurora,
+        Flavour::GoogleCloudSql,
+        Flavour::GoogleAlloyDb,
+        Flavour::AzureDatabase,
+    ];
+    for flavour in flavours {
+        for route in [Route::Direct, Route::Pooled, Route::Unknown] {
+            let m = PgMonitor { flavour, ..pg(route) };
+            for kind in [ActionKind::Cancel, ActionKind::Terminate] {
+                let want = [sql::begin(ACTION_LIMIT), sql::action(&m, kind, &target()), "COMMIT".to_owned()];
+                let fake = Fake::new(vec![answered(Ok(row("f", "t", "t", Some("t"))))]);
+                let acted = act(&fake, &m, &format_of(&m), false, kind, &target()).await;
+                assert_eq!(acted.outcome, ActionOutcome::Acknowledged { via: Via::Standard }, "{flavour:?} {route:?}");
+                assert_eq!(fake.sent(), want, "{flavour:?} {route:?} {kind:?}");
+                let fake = Fake::new(vec![answered(Err(server("42501")))]);
+                let acted = act(&fake, &m, &format_of(&m), false, kind, &target()).await;
+                assert!(matches!(acted.outcome, ActionOutcome::NotSent(NotSent::Refused(_))), "{:?}", acted.outcome);
+                assert_eq!(fake.sent(), want, "{flavour:?} {route:?} {kind:?} refused");
+            }
+        }
+    }
+}
+
+/// The driver's action with the engine's monitor rules looked up as `lookup`, unchecked: the
+/// driver checks them itself ([`act_with`]), on `fake`.
+async fn acting_with(
+    lookup: Result<&'static dyn MonitorRules, Why>,
+    fake: &Fake,
+    m: &PgMonitor,
+    read_only: bool,
+    kind: ActionKind,
+) -> Acted {
+    act_with(|_| lookup, fake, m, &format_of(m), read_only, kind, &target()).await
+}
+
+/// Without the engine's monitor rules for the format, or with rules that do not read it,
+/// nothing is sent: no transaction at all. A read-only profile is told first.
+#[tokio::test]
+async fn an_action_without_the_engines_rules_sends_nothing() {
+    use datarig_core::engine::{EngineId, Fact};
+    let Fact::Known(mysql) = &EngineId::MySql.spec().monitor else { panic!("MySQL has monitor rules") };
+    let lookups = [
+        (Err(Why::NotBuilt), NotSent::Engine(Why::NotBuilt)),
+        (Err(Why::NotChecked), NotSent::Engine(Why::NotChecked)),
+        (Ok(*mysql), NotSent::Engine(Why::EnginesDisagree)),
+    ];
+    for route in [Route::Direct, Route::Pooled] {
+        for (lookup, why) in lookups.clone() {
+            for kind in [ActionKind::Cancel, ActionKind::Terminate] {
+                let fake = Fake::new(Vec::new());
+                let acted = acting_with(lookup.clone(), &fake, &pg(route), false, kind).await;
+                assert_eq!(acted, Acted { outcome: ActionOutcome::NotSent(why.clone()), committed: false, lost: None });
+                assert!(fake.sent().is_empty(), "{:?}", fake.sent());
+            }
+        }
+    }
+    let fake = Fake::new(Vec::new());
+    let acted = acting_with(Err(Why::NotBuilt), &fake, &pg(Route::Direct), true, ActionKind::Cancel).await;
+    assert_eq!(acted.outcome, ActionOutcome::NotSent(NotSent::ReadOnly));
+    assert!(fake.sent().is_empty());
+    // The engine's own rules: the action's transaction, as before.
+    let Fact::Known(postgres) = &EngineId::Postgres.spec().monitor else { panic!("PostgreSQL has monitor rules") };
+    let fake = Fake::new(vec![answered(Ok(row("f", "t", "t", Some("t"))))]);
+    let acted = acting_with(Ok(*postgres), &fake, &pg(Route::Direct), false, ActionKind::Cancel).await;
+    assert_eq!(acted.outcome, ActionOutcome::Acknowledged { via: Via::Standard });
+    let direct = pg(Route::Direct);
+    let want = [sql::begin(ACTION_LIMIT), sql::action(&direct, ActionKind::Cancel, &target()), "COMMIT".to_owned()];
+    assert_eq!(fake.sent(), want);
 }

@@ -11,12 +11,10 @@
 //! ended is confirmed only when a later read no longer finds it, and a cancel is called
 //! successful only when the server tells it interrupted that very statement.
 
-use super::format::{Flavour, MonitorFormat, Route};
+use super::format::{Flavour, MonitorFormat};
 use super::model::{Need, SessionKey, SessionKind, SessionRow, SessionState, Timestamp, Visibility};
 use crate::driver::DbError;
-use crate::sql::dialect::MySqlMode;
-use crate::sql::risk::mysql::Judge;
-use crate::sql::risk::{Class, Explain};
+use crate::engine::{MonitorRules, Why};
 
 /// What to do to a session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -169,6 +167,9 @@ pub enum Refusal {
     /// MySQL: the monitor's connection could not be confirmed to reach the server directly
     /// ([`crate::monitor::MySqlMonitor::unconfirmed`]): its actions could reach another session.
     Unconfirmed,
+    /// The server's engine has no monitor rules for the format ([`rules_for`]), or they do not
+    /// read it.
+    Engine(Why),
 }
 
 /// What the user is told before an action is sent, besides what the session is.
@@ -210,27 +211,62 @@ pub enum Decision {
 /// The grant that shows a PostgreSQL session's start and statement times to an account.
 const PG_READ_ALL_STATS: Need = Need::Grant("pg_read_all_stats");
 
+/// The monitor rules of the engine whose probe gave `format`, checked to read it: why there are
+/// none ([`Why::EnginesDisagree`] when they do not read it). Every question of an action asks
+/// them so, first.
+pub fn rules_for(format: &MonitorFormat) -> Result<&'static dyn MonitorRules, Why> {
+    rules_for_with(format.rules(), format)
+}
+
+/// [`rules_for`] of the registry's answer `lookup` for `format`: the rules, when they read it.
+pub fn rules_for_with(
+    lookup: Result<&'static dyn MonitorRules, Why>,
+    format: &MonitorFormat,
+) -> Result<&'static dyn MonitorRules, Why> {
+    let rules = lookup?;
+    match rules.reads(format) {
+        true => Ok(rules),
+        false => Err(Why::EnginesDisagree),
+    }
+}
+
 /// What may be offered for `row` of a server read with `format`, on a profile that is
 /// `read_only` or not. Whether the row is one of this app's own tabs is the caller's to tell
 /// (it knows the tabs).
 pub fn decide(format: &MonitorFormat, row: &SessionRow, read_only: bool, kind: ActionKind) -> Decision {
+    decide_with(MonitorFormat::rules, format, row, read_only, kind)
+}
+
+/// [`decide`] with the engine's rules looked up by `lookup` (checked by [`rules_for_with`]),
+/// which is called only for a profile that may act: read-only is refused first.
+pub fn decide_with(
+    lookup: impl FnOnce(&MonitorFormat) -> Result<&'static dyn MonitorRules, Why>,
+    format: &MonitorFormat,
+    row: &SessionRow,
+    read_only: bool,
+    kind: ActionKind,
+) -> Decision {
     if read_only {
         return Decision::Refuse(Refusal::ReadOnly);
     }
-    match refusal(format, row, kind) {
+    let rules = match rules_for_with(lookup(format), format) {
+        Ok(rules) => rules,
+        Err(why) => return Decision::Refuse(Refusal::Engine(why)),
+    };
+    match refusal(rules, format, row, kind) {
         Some(why) => Decision::Refuse(why),
-        None => Decision::Offer(ask(format, row, kind)),
+        None => Decision::Offer(rules.ask(format, row, kind)),
     }
 }
 
-fn refusal(format: &MonitorFormat, row: &SessionRow, kind: ActionKind) -> Option<Refusal> {
+fn refusal(rules: &dyn MonitorRules, format: &MonitorFormat, row: &SessionRow, kind: ActionKind) -> Option<Refusal> {
     if row.monitor {
         return Some(Refusal::MonitorConnection);
     }
-    if matches!(format, MonitorFormat::MySql(my) if my.unconfirmed) {
+    if rules.unconfirmed(format) {
         return Some(Refusal::Unconfirmed);
     }
-    let Some(target) = target(format, row) else {
+    let Some(target) = identified(rules, format, row) else {
         return Some(Refusal::Hidden(PG_READ_ALL_STATS));
     };
     if matches!(row.kind, SessionKind::Background(_) | SessionKind::Replication | SessionKind::ParallelWorker { .. }) {
@@ -240,8 +276,8 @@ fn refusal(format: &MonitorFormat, row: &SessionRow, kind: ActionKind) -> Option
     let untracked = matches!(target.stamp, None | Some(StatementStamp::Pg { query_start: None }));
     match kind {
         ActionKind::Cancel if !running => Some(Refusal::NoStatement),
-        ActionKind::Terminate if matches!(format, MonitorFormat::Postgres(_)) && untracked => Some(Refusal::Untracked),
-        ActionKind::Terminate if pooled(format) && !running => Some(Refusal::PooledIdle),
+        ActionKind::Terminate if rules.end_needs_start() && untracked => Some(Refusal::Untracked),
+        ActionKind::Terminate if rules.pooled(format) && !running => Some(Refusal::PooledIdle),
         _ => None,
     }
 }
@@ -256,85 +292,28 @@ fn runs_statement(row: &SessionRow, stamp: Option<&StatementStamp>) -> bool {
     stamped && !idle
 }
 
-/// The monitor is not known to reach the server directly.
-fn pooled(format: &MonitorFormat) -> bool {
-    matches!(format, MonitorFormat::Postgres(pg) if pg.route != Route::Direct)
-}
-
-fn ask(format: &MonitorFormat, row: &SessionRow, kind: ActionKind) -> Ask {
-    match (format, kind) {
-        (MonitorFormat::Postgres(_), ActionKind::Cancel) => Ask::Line,
-        (MonitorFormat::Postgres(_), ActionKind::Terminate) => {
-            Ask::Modal { warnings: if pooled(format) { vec![Warning::PoolerSharedBackend] } else { Vec::new() } }
-        }
-        (MonitorFormat::MySql(_), ActionKind::Cancel) => {
-            let mut warnings = Vec::new();
-            if row.statement.as_ref().is_some_and(StatementStamp::weak) {
-                warnings.push(Warning::WeakIdentity);
-            }
-            let text = row.query.as_ref();
-            if text.is_some_and(|q| maintenance(&q.text)) {
-                warnings.push(Warning::MySqlMaintenance);
-            } else if !text.is_some_and(|q| !q.shortened && plain_read(&q.text)) {
-                warnings.push(Warning::MySqlMayLeaveHalfDone);
-            }
-            if warnings.is_empty() { Ask::Line } else { Ask::Modal { warnings } }
-        }
-        (MonitorFormat::MySql(_), ActionKind::Terminate) => {
-            Ask::Modal { warnings: vec![Warning::MySqlTerminateKeepsNonTx] }
-        }
-    }
-}
-
-/// The first keywords of MySQL statements that maintain a table.
-const MAINTENANCE: &[&str] = &["ALTER", "OPTIMIZE", "REPAIR", "CHECK", "ANALYZE", "LOAD"];
-
-/// The statement's first word is one of [`MAINTENANCE`] (read from a text that may be cut).
-fn maintenance(text: &str) -> bool {
-    let word: String = text
-        .trim_start_matches(|c: char| c.is_whitespace() || c == '(')
-        .chars()
-        .take_while(|c| c.is_ascii_alphabetic())
-        .collect();
-    MAINTENANCE.iter().any(|k| word.eq_ignore_ascii_case(k))
-}
-
-/// The MySQL classifier calls the whole text a read with no effect beyond it: no function that
-/// is not a built-in, nothing that runs code, no danger, no `EXPLAIN ANALYZE`. The text is a
-/// family server's (its `performance_schema`), judged on MySQL's lists; which engine it is is
-/// not known here, so a text either engine's lists call a write (on MariaDB a sequence's next
-/// value) is no plain read either. The session's sql mode is not known; the classifier also reads the text as the
-/// other modes would and keeps the worse reading.
-fn plain_read(text: &str) -> bool {
-    let mode = MySqlMode::default();
-    if crate::sql::risk::mysql::classify(text, Judge::mysql(mode).with_sibling()).writes {
-        return false;
-    }
-    let risk = crate::sql::risk::mysql::classify(text, Judge::mysql(mode));
-    risk.class == Class::Read
-        && risk.danger.is_none()
-        && !risk.writes
-        && risk.unchecked_call.is_none()
-        && !risk.runs_code
-        && risk.explain != Explain::Analyze
-}
-
 /// What an action on `row` carries, `None` when the account cannot tell the session apart
-/// (PostgreSQL: its start is hidden without `pg_read_all_stats`).
+/// (PostgreSQL: its start is hidden without `pg_read_all_stats`), or the format's engine has no
+/// monitor rules that read it.
 pub fn target(format: &MonitorFormat, row: &SessionRow) -> Option<ActionTarget> {
-    if let MonitorFormat::Postgres(_) = format
-        && (row.visible == Visibility::Hidden || row.key.started.is_none())
-    {
+    target_with(format.rules(), format, row)
+}
+
+/// [`target`] with the engine's rules looked up as `lookup` (checked by [`rules_for_with`]).
+pub fn target_with(
+    lookup: Result<&'static dyn MonitorRules, Why>,
+    format: &MonitorFormat,
+    row: &SessionRow,
+) -> Option<ActionTarget> {
+    identified(rules_for_with(lookup, format).ok()?, format, row)
+}
+
+/// [`target`] by `rules`.
+fn identified(rules: &dyn MonitorRules, format: &MonitorFormat, row: &SessionRow) -> Option<ActionTarget> {
+    if !rules.identifies(format, row) {
         return None;
     }
     Some(ActionTarget { key: row.key, user: row.user.clone(), thread: row.thread, stamp: row.statement.clone() })
-}
-
-/// The engine an [`ActionRoute`] is for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Engine {
-    Postgres,
-    MySql,
 }
 
 /// The provider's own procedures that stop a session when the standard statement is refused
@@ -369,10 +348,10 @@ pub struct Guidance {
     pub service_users: &'static [&'static str],
 }
 
-/// How actions are sent on one engine and provider.
+/// How actions are sent on one engine and provider (an engine's are its
+/// [`MonitorRules::routes`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ActionRoute {
-    pub engine: Engine,
     pub flavour: Flavour,
     pub fallback: Option<Fallback>,
     pub guidance: Guidance,
@@ -392,80 +371,18 @@ pub const MYSQL_EXECUTE_DENIED: u16 = 1370;
 /// PostgreSQL's SQLSTATE for a missing privilege (`insufficient_privilege`).
 pub const PG_INSUFFICIENT_PRIVILEGE: &str = "42501";
 
-const PG_STANDARD: Guidance = Guidance { grants: &["pg_signal_backend"], service_users: &[] };
-const MYSQL_STANDARD: Guidance = Guidance { grants: &["CONNECTION_ADMIN"], service_users: &[] };
-const RDS_MYSQL: Fallback =
-    Fallback { cancel: "mysql.rds_kill_query", terminate: "mysql.rds_kill", on: &[MYSQL_KILL_DENIED] };
-const AZURE_MYSQL: Fallback =
-    Fallback { cancel: "mysql.az_kill_query", terminate: "mysql.az_kill", on: &[MYSQL_KILL_DENIED] };
+/// How actions are sent to the server of `format`: its engine's route for its provider, else the
+/// engine's standard one; why there is none when the engine has no monitor rules that read it.
+pub fn route(format: &MonitorFormat) -> Result<&'static ActionRoute, Why> {
+    route_with(format.rules(), format)
+}
 
-/// Every engine and provider, the standard one of each engine first (a provider not listed
-/// for an engine takes it).
-pub const ROUTES: &[ActionRoute] = &[
-    ActionRoute { engine: Engine::Postgres, flavour: Flavour::Standard, fallback: None, guidance: PG_STANDARD },
-    ActionRoute {
-        engine: Engine::Postgres,
-        flavour: Flavour::AmazonRds,
-        fallback: None,
-        guidance: Guidance { grants: &["rds_superuser", "pg_signal_backend"], service_users: &["rdsadmin"] },
-    },
-    ActionRoute {
-        engine: Engine::Postgres,
-        flavour: Flavour::AmazonAurora,
-        fallback: None,
-        guidance: Guidance { grants: &["rds_superuser", "pg_signal_backend"], service_users: &["rdsadmin"] },
-    },
-    ActionRoute {
-        engine: Engine::Postgres,
-        flavour: Flavour::GoogleCloudSql,
-        fallback: None,
-        guidance: Guidance { grants: &["cloudsqlsuperuser", "pg_signal_backend"], service_users: &["cloudsqladmin"] },
-    },
-    ActionRoute {
-        engine: Engine::Postgres,
-        flavour: Flavour::GoogleAlloyDb,
-        fallback: None,
-        guidance: Guidance { grants: &["alloydbsuperuser", "pg_signal_backend"], service_users: &[] },
-    },
-    ActionRoute {
-        engine: Engine::Postgres,
-        flavour: Flavour::AzureDatabase,
-        fallback: None,
-        guidance: Guidance { grants: &["azure_pg_admin", "pg_signal_backend"], service_users: &["azuresu"] },
-    },
-    ActionRoute { engine: Engine::MySql, flavour: Flavour::Standard, fallback: None, guidance: MYSQL_STANDARD },
-    ActionRoute {
-        engine: Engine::MySql,
-        flavour: Flavour::AmazonRds,
-        fallback: Some(RDS_MYSQL),
-        guidance: Guidance { grants: MYSQL_STANDARD.grants, service_users: &["rdsadmin"] },
-    },
-    ActionRoute {
-        engine: Engine::MySql,
-        flavour: Flavour::AmazonAurora,
-        fallback: Some(RDS_MYSQL),
-        guidance: Guidance { grants: MYSQL_STANDARD.grants, service_users: &["rdsadmin"] },
-    },
-    ActionRoute {
-        engine: Engine::MySql,
-        flavour: Flavour::AzureDatabase,
-        fallback: Some(AZURE_MYSQL),
-        guidance: Guidance { grants: MYSQL_STANDARD.grants, service_users: &["azure_superuser"] },
-    },
-];
-
-/// How actions are sent to the server of `format`.
-pub fn route(format: &MonitorFormat) -> &'static ActionRoute {
-    let engine = match format {
-        MonitorFormat::Postgres(_) => Engine::Postgres,
-        MonitorFormat::MySql(_) => Engine::MySql,
-    };
-    let flavour = format.flavour();
-    ROUTES
-        .iter()
-        .find(|r| r.engine == engine && r.flavour == flavour)
-        .or_else(|| ROUTES.iter().find(|r| r.engine == engine && r.flavour == Flavour::Standard))
-        .expect("every engine has a standard route")
+/// [`route`] with the engine's rules looked up as `lookup` (checked by [`rules_for_with`]).
+pub fn route_with(
+    lookup: Result<&'static dyn MonitorRules, Why>,
+    format: &MonitorFormat,
+) -> Result<&'static ActionRoute, Why> {
+    Ok(rules_for_with(lookup, format)?.routes().of(format.flavour()))
 }
 
 /// How the action was sent.
@@ -523,51 +440,22 @@ pub enum NativeError<'a> {
     MySql { errno: u16 },
 }
 
-/// The last MySQL version of Amazon RDS whose kill procedures fail for long target user names.
-const RDS_LONG_USER_FIXED_AFTER: u32 = 80032;
-
-/// The longest target user name those procedures take.
-const RDS_LONG_USER_CHARS: usize = 16;
-
 /// What the server's refusal `error` of an action on `target`, sent `via`, means; `None` when
-/// it is not a refusal (another failure).
+/// it is not a refusal (another failure), or the format's engine has no monitor rules that read
+/// it.
 pub fn denied(format: &MonitorFormat, target: &ActionTarget, via: Via, error: NativeError) -> Option<Denied> {
-    let route = route(format);
-    let service = target.user.as_deref().is_some_and(|u| route.guidance.service_users.contains(&u));
-    match (format, error) {
-        (MonitorFormat::Postgres(pg), NativeError::Pg { sqlstate }) if sqlstate == PG_INSUFFICIENT_PRIVILEGE => {
-            Some(if service {
-                Denied::ServiceSession
-            } else if pg.signal_backend || pg.superuser {
-                // The account may signal other roles' sessions: what is left is a superuser's.
-                Denied::SuperuserTarget
-            } else {
-                Denied::Grant(route.guidance.grants)
-            })
-        }
-        (MonitorFormat::MySql(my), NativeError::MySql { errno }) => {
-            let long_user = target.user.as_deref().is_some_and(|u| u.chars().count() > RDS_LONG_USER_CHARS);
-            match errno {
-                _ if matches!(via, Via::Procedure(_))
-                    && my.flavour == Flavour::AmazonRds
-                    && my.version <= RDS_LONG_USER_FIXED_AFTER
-                    && long_user
-                    && [MYSQL_KILL_DENIED, MYSQL_NEEDS_PRIVILEGE].contains(&errno) =>
-                {
-                    Some(Denied::RdsLongUserName)
-                }
-                MYSQL_KILL_DENIED | MYSQL_NEEDS_PRIVILEGE if service => Some(Denied::ServiceSession),
-                MYSQL_KILL_DENIED => Some(Denied::GrantOrSystemUser(route.guidance.grants)),
-                MYSQL_NEEDS_PRIVILEGE => Some(Denied::SystemUserTarget),
-                MYSQL_EXECUTE_DENIED => match via {
-                    Via::Procedure(name) => Some(Denied::ProcedureDenied(name)),
-                    Via::Standard => None,
-                },
-                _ => None,
-            }
-        }
-        _ => None,
-    }
+    denied_with(format.rules(), format, target, via, error)
+}
+
+/// [`denied`] with the engine's rules looked up as `lookup` (checked by [`rules_for_with`]).
+pub fn denied_with(
+    lookup: Result<&'static dyn MonitorRules, Why>,
+    format: &MonitorFormat,
+    target: &ActionTarget,
+    via: Via,
+    error: NativeError,
+) -> Option<Denied> {
+    rules_for_with(lookup, format).ok()?.denied(format, target, via, error)
 }
 
 /// Why nothing was sent.
@@ -590,6 +478,9 @@ pub enum NotSent {
     /// own marker on its own id, the handshake's), so the read before the action and the action
     /// could reach different sessions.
     Unconfirmed,
+    /// The server's engine has no monitor rules for the format, or they do not read it
+    /// ([`rules_for`]).
+    Engine(Why),
 }
 
 /// What a read of the target's id just before an action of `kind` on `target` shows of it

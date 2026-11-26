@@ -613,3 +613,40 @@ fn the_plan_group_answers_every_facts_shape() {
         Fact::Unknown(Why::EnginesDisagree)
     );
 }
+
+/// Each format a monitor's probe gives names its engine, whose monitor group is known and reads
+/// it; MariaDB, whose probe is refused, has none.
+#[test]
+fn the_monitor_group_is_known_where_a_format_exists() {
+    use crate::monitor::{MonitorFormat, MySqlMonitor, PgMonitor, Readable, Route};
+    let pg = MonitorFormat::Postgres(PgMonitor {
+        version: 170011,
+        superuser: false,
+        read_all_stats: true,
+        signal_backend: false,
+        flavour: Provider::AmazonRds,
+        route: Route::Direct,
+    });
+    let my = MonitorFormat::MySql(MySqlMonitor {
+        version: 80411,
+        performance_schema: true,
+        user: "zz_admin".into(),
+        process: Readable::Yes,
+        innodb_trx: Readable::Yes,
+        metadata_locks: Readable::Yes,
+        statements: Readable::Yes,
+        threads: Readable::Yes,
+        unconfirmed: false,
+        flavour: Provider::AzureDatabase,
+    });
+    for (format, engine, flavour) in
+        [(&pg, EngineId::Postgres, Provider::AmazonRds), (&my, EngineId::MySql, Provider::AzureDatabase)]
+    {
+        assert_eq!((format.engine(), format.flavour()), (engine, flavour));
+        let Fact::Known(group) = &engine.spec().monitor else { panic!("{engine:?} has no monitor rules") };
+        let rules = format.rules().unwrap_or_else(|w| panic!("{engine:?}: {w:?}"));
+        assert!(std::ptr::eq(rules.routes(), group.routes()), "{engine:?}");
+        assert!(rules.reads(format), "{engine:?}");
+    }
+    assert!(matches!(&EngineId::MariaDb.spec().monitor, Fact::No(Why::NotBuilt)));
+}

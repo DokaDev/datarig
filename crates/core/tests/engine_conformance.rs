@@ -29,6 +29,8 @@ mod filter;
 mod golden;
 #[path = "engine_conformance/golden/values.rs"]
 mod golden_values;
+#[path = "engine_conformance/monitor.rs"]
+mod monitor;
 #[path = "engine_conformance/plan.rs"]
 mod plan;
 #[path = "engine_conformance/read_only.rs"]
@@ -363,6 +365,11 @@ fn plan_format_on_every_engine() {
 }
 
 #[test]
+fn monitor_routes_on_every_engine() {
+    run("monitor routes", &monitor::route_cases(), monitor::route_of);
+}
+
+#[test]
 fn read_only_open_on_every_engine() {
     run("read-only open", &read_only::cases(), read_only::verdict);
 }
@@ -423,6 +430,7 @@ fn every_case_names_every_engine() {
         named("read-only open", &read_only::cases()),
         named("plan", &plan::plan_cases()),
         named_versioned("plan format", &plan::plan_format_cases()),
+        named("monitor routes", &monitor::route_cases()),
         named("catalogue rules", &catalogue::catalogue_cases()),
         named("ddl rules", &catalogue::ddl_cases()),
         named("hierarchy", &catalogue::hierarchy_cases()),

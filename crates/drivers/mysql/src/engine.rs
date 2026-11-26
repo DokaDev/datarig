@@ -18,6 +18,7 @@ use datarig_core::engine::mysql_family::line_names_mariadb;
 use datarig_core::engine::{
     EngineFacts, EngineId, Fact, MyFacts, PingIdentity, ServerFacts, Support, Topology, Version, Why, plan_of,
 };
+use datarig_core::monitor::{MonitorFormat, MySqlMonitor};
 use datarig_core::sql::dialect::{Dialect, DollarQuotes, Language, MySqlMode};
 use datarig_core::sql::risk::mysql::{Judge, Judged};
 use mysql_async::prelude::Queryable;
@@ -385,6 +386,11 @@ pub(crate) fn skips_mysql_version_comments(d: Dialect) -> bool {
         Dialect::MariaDb(_) => true,
         Dialect::MySql(_) | Dialect::Postgres => false,
     }
+}
+
+/// The format the monitor's probe found, `my`, as the monitor's actions and the app read it.
+pub(crate) fn monitor_format(my: MySqlMonitor) -> MonitorFormat {
+    MonitorFormat::MySql(my)
 }
 
 #[cfg(test)]

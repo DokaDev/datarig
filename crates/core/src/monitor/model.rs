@@ -105,7 +105,7 @@ impl ExtraKey {
 }
 
 /// A cumulative counter of the server. Each kind counts one thing only; the UI names a kind by
-/// what it counts, with the engine's own names in the detail line ([`CounterKind::source`]).
+/// what it counts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum CounterKind {
     /// Transactions committed, the monitor's own taken out ([`Own::transactions`]). PostgreSQL
@@ -162,42 +162,6 @@ pub enum CounterKind {
     RowsUpdated,
     /// Rows deleted. PostgreSQL `tup_deleted`.
     RowsDeleted,
-}
-
-impl CounterKind {
-    /// The engine's own name of what the kind counts, for the detail line.
-    pub fn source(self, mysql: bool) -> &'static str {
-        match (self, mysql) {
-            (CounterKind::Commits, _) => "xact_commit",
-            (CounterKind::Rollbacks, _) => "xact_rollback",
-            (CounterKind::ExplicitCommits, _) => "Com_commit",
-            (CounterKind::ExplicitRollbacks, _) => "Com_rollback",
-            (CounterKind::Statements, _) => "Questions",
-            (CounterKind::RowsRead, false) => "tup_returned",
-            (CounterKind::RowsRead, true) => "Innodb_rows_read",
-            (CounterKind::RowsWritten, false) => "tup_inserted + tup_updated + tup_deleted",
-            (CounterKind::RowsWritten, true) => "Innodb_rows_inserted + Innodb_rows_updated + Innodb_rows_deleted",
-            (CounterKind::PageRequests, false) => "blks_hit + blks_read",
-            (CounterKind::PageRequests, true) => "Innodb_buffer_pool_read_requests",
-            (CounterKind::PageReads, false) => "blks_read",
-            (CounterKind::PageReads, true) => "Innodb_buffer_pool_reads",
-            (CounterKind::BytesIn, _) => "Bytes_received",
-            (CounterKind::BytesOut, _) => "Bytes_sent",
-            (CounterKind::Deadlocks, _) => "deadlocks",
-            (CounterKind::RowLockWaits, _) => "Innodb_row_lock_waits",
-            (CounterKind::TempBytes, _) => "temp_bytes",
-            (CounterKind::TempDiskTables, _) => "Created_tmp_disk_tables",
-            (CounterKind::SlowQueries, _) => "Slow_queries",
-            (CounterKind::AbortedConnects, _) => "Aborted_connects",
-            (CounterKind::Selects, _) => "Com_select",
-            (CounterKind::Inserts, _) => "Com_insert + Com_insert_select + Com_replace + Com_replace_select",
-            (CounterKind::Updates, _) => "Com_update + Com_update_multi",
-            (CounterKind::Deletes, _) => "Com_delete + Com_delete_multi",
-            (CounterKind::RowsInserted, _) => "tup_inserted",
-            (CounterKind::RowsUpdated, _) => "tup_updated",
-            (CounterKind::RowsDeleted, _) => "tup_deleted",
-        }
-    }
 }
 
 /// One counter's cumulative value.

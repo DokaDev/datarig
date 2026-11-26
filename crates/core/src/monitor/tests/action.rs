@@ -1,5 +1,6 @@
 use super::{IDLE, by_application, by_id, load, pg, rows, single};
 use crate::driver::{DbCommand, DbError, DbEvent};
+use crate::engine::{EngineId, Fact, MonitorRules, Routes, Why};
 use crate::monitor::action::*;
 use crate::monitor::decode;
 use crate::monitor::format::Route;
@@ -257,15 +258,25 @@ const FLAVOURS: [Flavour; 6] = [
     Flavour::AzureDatabase,
 ];
 
+/// The action routes of engine `id`'s monitor rules.
+fn engine_routes(id: EngineId) -> &'static Routes {
+    match &id.spec().monitor {
+        Fact::Known(rules) => rules.routes(),
+        Fact::No(_) | Fact::Unknown(_) => panic!("{id:?} has no monitor rules"),
+    }
+}
+
 #[test]
 fn every_flavour_has_a_route() {
     for flavour in FLAVOURS {
         let pg = MonitorFormat::Postgres(crate::monitor::PgMonitor { flavour, ..pg(170011) });
-        let r = route(&pg);
-        assert_eq!((r.engine, r.flavour, r.fallback), (Engine::Postgres, flavour, None), "{flavour:?}");
+        let r = route(&pg).unwrap();
+        assert!(std::ptr::eq(r, engine_routes(EngineId::Postgres).of(flavour)), "{flavour:?}");
+        assert_eq!((r.flavour, r.fallback), (flavour, None), "{flavour:?}");
         assert!(r.guidance.grants.contains(&"pg_signal_backend"), "{flavour:?}");
-        let r = route(&my_format(flavour, 80411));
-        assert_eq!(r.engine, Engine::MySql);
+        let my = my_format(flavour, 80411);
+        let r = route(&my).unwrap();
+        assert!(std::ptr::eq(r, engine_routes(EngineId::MySql).of(flavour)), "{flavour:?}");
         assert!(!r.guidance.grants.contains(&"SUPER"), "{flavour:?}: never recommends SUPER");
         assert_eq!(r.guidance.grants, ["CONNECTION_ADMIN"]);
         let (listed, fallback) = match flavour {
@@ -282,7 +293,8 @@ fn every_flavour_has_a_route() {
         );
         assert!(r.fallback.is_none_or(|f| f.on == [MYSQL_KILL_DENIED]));
     }
-    let service = |f| route(&MonitorFormat::Postgres(crate::monitor::PgMonitor { flavour: f, ..pg(170011) })).guidance;
+    let service =
+        |f| route(&MonitorFormat::Postgres(crate::monitor::PgMonitor { flavour: f, ..pg(170011) })).unwrap().guidance;
     assert_eq!(service(Flavour::AmazonRds).service_users, ["rdsadmin"]);
     assert_eq!(service(Flavour::GoogleCloudSql).grants, ["cloudsqlsuperuser", "pg_signal_backend"]);
     assert_eq!(service(Flavour::AzureDatabase).service_users, ["azuresu"]);
@@ -594,4 +606,406 @@ fn identity_hidden_or_read_another_way_proves_nothing() {
         SessionRow { statement: Some(StatementStamp::MySqlEvent { thread_id: 1, event_id: 2 }), ..weak.clone() };
     assert_eq!(recheck(ActionKind::Cancel, &t, Some(&event_now)), stale(Stale::CannotTell));
     assert_eq!(confirm(ActionKind::Cancel, &t, &follow(event_now)), Confirmation::Unknown);
+}
+
+/// One row of [`every_decision_answers_as_today`]: what `decide` answers for a cancel and for
+/// an end of `row` on a server read with `format`.
+struct DecisionCase {
+    name: &'static str,
+    format: MonitorFormat,
+    row: SessionRow,
+    read_only: bool,
+    cancel: Decision,
+    terminate: Decision,
+}
+
+/// Every branch of `decide` on both formats, for both actions, as the base answers them: each
+/// condition alone, then the conditions that overlap, whose order decides which refusal wins.
+#[test]
+fn every_decision_answers_as_today() {
+    let refuse = Decision::Refuse;
+    let hidden = refuse(Refusal::Hidden(Need::Grant("pg_read_all_stats")));
+    let pg_list = pg_sessions();
+    let pg_running = by_application(&pg_list, "zz_mon_b").clone();
+    assert_eq!((&pg_running.state, &pg_running.visible), (&SessionState::Active, &Visibility::Full));
+    assert!(matches!(&pg_running.statement, Some(StatementStamp::Pg { query_start: Some(_) })));
+    let pg_idle = SessionRow { state: SessionState::Idle, ..pg_running.clone() };
+    let pg_untracked = SessionRow {
+        query_started: None,
+        statement: Some(StatementStamp::Pg { query_start: None }),
+        ..pg_idle.clone()
+    };
+    let pg_no_stamp = SessionRow { statement: None, ..pg_running.clone() };
+    let pg_hidden = SessionRow { visible: Visibility::Hidden, ..pg_running.clone() };
+    let pg_no_start = SessionRow { key: SessionKey { started: None, ..pg_running.key }, ..pg_running.clone() };
+    let pg_own = SessionRow { monitor: true, ..pg_running.clone() };
+    let pg_background = by_id(&pg_list, 26).clone();
+    assert!(matches!(pg_background.kind, SessionKind::Background(_)));
+    let pg_replication = SessionRow { kind: SessionKind::Replication, ..pg_running.clone() };
+    let pg_worker = SessionRow { kind: SessionKind::ParallelWorker { leader: Some(1) }, ..pg_running.clone() };
+    let pg_background_idle = SessionRow { kind: SessionKind::Replication, ..pg_idle.clone() };
+
+    let (my, my_list) = my_root();
+    let MonitorFormat::MySql(m) = &my else { unreachable!() };
+    let my_unconfirmed = MonitorFormat::MySql(MySqlMonitor { unconfirmed: true, ..m.clone() });
+    // A plain read on a strong stamp, then the same on a weak one.
+    let my_running = my_row(&my_list, 18986, "SELECT id, v FROM zz_mon_t WHERE id = 1", false);
+    assert!(matches!(&my_running.statement, Some(StatementStamp::MySqlEvent { .. })));
+    let my_weak = my_row(&my_list, 18990, "SELECT id, v FROM zz_mon_t WHERE id = 1", false);
+    assert!(my_weak.statement.as_ref().is_some_and(StatementStamp::weak));
+    let my_idle = by_id(&my_list, 18985).clone();
+    assert_eq!(my_idle.statement, None);
+    let my_no_stamp = SessionRow { statement: None, ..my_running.clone() };
+    let my_hidden = SessionRow { visible: Visibility::Hidden, ..my_running.clone() };
+    let my_own = SessionRow { monitor: true, ..my_running.clone() };
+    let my_background = by_id(&my_list, 5).clone();
+    assert!(matches!(my_background.kind, SessionKind::Background(_)));
+
+    let direct = pg_format(Route::Direct);
+    let pooled = pg_format(Route::Pooled);
+    let unknown = pg_format(Route::Unknown);
+    let end = offer(&[]);
+    let shared = offer(&[Warning::PoolerSharedBackend]);
+    let keeps = offer(&[Warning::MySqlTerminateKeepsNonTx]);
+    let case = |name, format: &MonitorFormat, row: &SessionRow, read_only, cancel, terminate| DecisionCase {
+        name,
+        format: format.clone(),
+        row: row.clone(),
+        read_only,
+        cancel,
+        terminate,
+    };
+    let cases = [
+        // PostgreSQL, each condition alone.
+        case("pg read-only", &direct, &pg_running, true, refuse(Refusal::ReadOnly), refuse(Refusal::ReadOnly)),
+        case(
+            "pg own connection",
+            &direct,
+            &pg_own,
+            false,
+            refuse(Refusal::MonitorConnection),
+            refuse(Refusal::MonitorConnection),
+        ),
+        case("pg hidden", &direct, &pg_hidden, false, hidden.clone(), hidden.clone()),
+        case("pg start hidden", &direct, &pg_no_start, false, hidden.clone(), hidden.clone()),
+        case("pg background", &direct, &pg_background, false, refuse(Refusal::Background), refuse(Refusal::Background)),
+        case(
+            "pg replication",
+            &direct,
+            &pg_replication,
+            false,
+            refuse(Refusal::Background),
+            refuse(Refusal::Background),
+        ),
+        case("pg worker", &direct, &pg_worker, false, refuse(Refusal::Background), refuse(Refusal::Background)),
+        case("pg idle", &direct, &pg_idle, false, refuse(Refusal::NoStatement), end.clone()),
+        case("pg running", &direct, &pg_running, false, LINE, end.clone()),
+        case("pg untracked", &direct, &pg_untracked, false, refuse(Refusal::NoStatement), refuse(Refusal::Untracked)),
+        case("pg no stamp", &direct, &pg_no_stamp, false, refuse(Refusal::NoStatement), refuse(Refusal::Untracked)),
+        case("pg pooled idle", &pooled, &pg_idle, false, refuse(Refusal::NoStatement), refuse(Refusal::PooledIdle)),
+        case("pg pooled running", &pooled, &pg_running, false, LINE, shared.clone()),
+        case(
+            "pg unknown route idle",
+            &unknown,
+            &pg_idle,
+            false,
+            refuse(Refusal::NoStatement),
+            refuse(Refusal::PooledIdle),
+        ),
+        case("pg unknown route running", &unknown, &pg_running, false, LINE, shared.clone()),
+        // MySQL, each condition alone.
+        case("my read-only", &my, &my_running, true, refuse(Refusal::ReadOnly), refuse(Refusal::ReadOnly)),
+        case(
+            "my own connection",
+            &my,
+            &my_own,
+            false,
+            refuse(Refusal::MonitorConnection),
+            refuse(Refusal::MonitorConnection),
+        ),
+        case(
+            "my unconfirmed",
+            &my_unconfirmed,
+            &my_running,
+            false,
+            refuse(Refusal::Unconfirmed),
+            refuse(Refusal::Unconfirmed),
+        ),
+        case("my hidden", &my, &my_hidden, false, LINE, keeps.clone()),
+        case("my background", &my, &my_background, false, refuse(Refusal::Background), refuse(Refusal::Background)),
+        case("my idle", &my, &my_idle, false, refuse(Refusal::NoStatement), keeps.clone()),
+        case("my running strong", &my, &my_running, false, LINE, keeps.clone()),
+        case("my running weak", &my, &my_weak, false, offer(&[Warning::WeakIdentity]), keeps.clone()),
+        case("my no stamp", &my, &my_no_stamp, false, refuse(Refusal::NoStatement), keeps.clone()),
+        // Conditions that overlap: the first in `decide`'s order wins.
+        case("pg read-only own", &direct, &pg_own, true, refuse(Refusal::ReadOnly), refuse(Refusal::ReadOnly)),
+        case("my read-only own", &my, &my_own, true, refuse(Refusal::ReadOnly), refuse(Refusal::ReadOnly)),
+        case(
+            "my read-only unconfirmed",
+            &my_unconfirmed,
+            &my_running,
+            true,
+            refuse(Refusal::ReadOnly),
+            refuse(Refusal::ReadOnly),
+        ),
+        case(
+            "my own unconfirmed",
+            &my_unconfirmed,
+            &my_own,
+            false,
+            refuse(Refusal::MonitorConnection),
+            refuse(Refusal::MonitorConnection),
+        ),
+        case(
+            "my unconfirmed hidden",
+            &my_unconfirmed,
+            &my_hidden,
+            false,
+            refuse(Refusal::Unconfirmed),
+            refuse(Refusal::Unconfirmed),
+        ),
+        case(
+            "pg own hidden",
+            &direct,
+            &SessionRow { monitor: true, ..pg_hidden.clone() },
+            false,
+            refuse(Refusal::MonitorConnection),
+            refuse(Refusal::MonitorConnection),
+        ),
+        case(
+            "pg hidden background",
+            &direct,
+            &SessionRow { kind: SessionKind::Replication, ..pg_hidden.clone() },
+            false,
+            hidden.clone(),
+            hidden.clone(),
+        ),
+        case(
+            "pg background no statement",
+            &direct,
+            &pg_background_idle,
+            false,
+            refuse(Refusal::Background),
+            refuse(Refusal::Background),
+        ),
+        case(
+            "my background no statement",
+            &my,
+            &SessionRow { statement: None, ..my_background.clone() },
+            false,
+            refuse(Refusal::Background),
+            refuse(Refusal::Background),
+        ),
+        case(
+            "pg untracked pooled idle",
+            &pooled,
+            &pg_untracked,
+            false,
+            refuse(Refusal::NoStatement),
+            refuse(Refusal::Untracked),
+        ),
+        case(
+            "pg untracked unknown route idle",
+            &unknown,
+            &pg_untracked,
+            false,
+            refuse(Refusal::NoStatement),
+            refuse(Refusal::Untracked),
+        ),
+    ];
+    for c in &cases {
+        assert_eq!(decide(&c.format, &c.row, c.read_only, ActionKind::Cancel), c.cancel, "{}: cancel", c.name);
+        assert_eq!(decide(&c.format, &c.row, c.read_only, ActionKind::Terminate), c.terminate, "{}: end", c.name);
+    }
+}
+
+/// The warnings of a MySQL cancel and their order, for texts on a strong and on a weak stamp.
+#[test]
+fn mysql_cancel_warnings_answer_as_today() {
+    use Warning::{MySqlMaintenance as Maintenance, MySqlMayLeaveHalfDone as HalfDone, WeakIdentity as Weak};
+    let (my, list) = my_root();
+    // (text, shortened, warnings on a strong stamp; a weak one adds `WeakIdentity` first).
+    let cases: [(&str, bool, &[Warning]); 8] = [
+        ("SELECT id FROM zz_mon_t", false, &[]),
+        // A sibling read calls it a write (a sequence's next value on MariaDB).
+        ("SELECT NEXTVAL(zz_s)", false, &[HalfDone]),
+        ("SELECT zz_s.nextval", false, &[HalfDone]),
+        // A maintenance word after `(`, whole or shortened.
+        ("(ALTER TABLE zz_mon_t ENGINE=InnoDB)", false, &[Maintenance]),
+        ("  (OPTIMIZE TABLE zz_mon_t", true, &[Maintenance]),
+        // A plain read shortened: it cannot be judged.
+        ("SELECT id FROM zz_mon_t", true, &[HalfDone]),
+        ("UPDATE zz_mon_t SET v = 1", false, &[HalfDone]),
+        ("EXPLAIN ANALYZE SELECT 1", false, &[HalfDone]),
+    ];
+    for (text, shortened, strong) in cases {
+        let row = my_row(&list, 18986, text, shortened);
+        let want = if strong.is_empty() { LINE } else { offer(strong) };
+        assert_eq!(decide(&my, &row, false, ActionKind::Cancel), want, "strong {text:?} {shortened}");
+        let row = my_row(&list, 18990, text, shortened);
+        let weak: Vec<Warning> = std::iter::once(Weak).chain(strong.iter().copied()).collect();
+        assert_eq!(decide(&my, &row, false, ActionKind::Cancel), offer(&weak), "weak {text:?} {shortened}");
+    }
+}
+
+/// What every refusal of the server means, on both formats: every flavour, the standard
+/// statement and a procedure, PostgreSQL's privilege error, MySQL's three and an unrelated one of
+/// each, a service account, a long and a short user name, an account that may signal or not
+/// (PostgreSQL) and Amazon RDS 8.0.32 and 8.0.33 (MySQL). Recorded in
+/// `tests/golden/refusal_readings.txt` (`DATARIG_BLESS=1` writes it anew).
+#[test]
+fn every_refusal_reading_answers_as_today() {
+    use std::fmt::Write as _;
+    let errors = [
+        NativeError::Pg { sqlstate: PG_INSUFFICIENT_PRIVILEGE },
+        NativeError::Pg { sqlstate: "57P01" },
+        NativeError::MySql { errno: MYSQL_KILL_DENIED },
+        NativeError::MySql { errno: MYSQL_NEEDS_PRIVILEGE },
+        NativeError::MySql { errno: MYSQL_EXECUTE_DENIED },
+        NativeError::MySql { errno: 1317 },
+    ];
+    // The providers' service accounts, a long and a short name, and multibyte names of 16 and 17
+    // characters (32 and 34 bytes): the RDS rule counts characters.
+    let named = ["rdsadmin", "azure_superuser", "cloudsqladmin", "azuresu", "a_user_name_of_17c", "alice"];
+    let users: Vec<String> = named.iter().map(|u| u.to_string()).chain([16, 17].map(|n| "\u{e9}".repeat(n))).collect();
+    let vias = [Via::Standard, Via::Procedure("mysql.rds_kill")];
+    let mut formats = Vec::new();
+    for flavour in FLAVOURS {
+        for (signal_backend, superuser) in [(false, false), (true, false), (false, true)] {
+            let pg = crate::monitor::PgMonitor { signal_backend, superuser, flavour, ..pg(170011) };
+            formats.push((
+                format!("pg {flavour:?} signal {signal_backend} super {superuser}"),
+                MonitorFormat::Postgres(pg),
+            ));
+        }
+        for version in [80032, 80033] {
+            formats.push((format!("my {flavour:?} {version}"), my_format(flavour, version)));
+        }
+    }
+    let mut got = String::new();
+    for (name, format) in &formats {
+        for via in vias {
+            for user in &users {
+                let answers: Vec<String> =
+                    errors.iter().map(|e| format!("{e:?} {:?}", denied(format, &who(user), via, *e))).collect();
+                let _ = writeln!(got, "{name} | {via:?} | {user}: {}", answers.join(", "));
+            }
+        }
+    }
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/monitor/tests/golden/refusal_readings.txt");
+    if std::env::var("DATARIG_BLESS").is_ok_and(|v| v == "1") {
+        std::fs::write(&path, &got).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    }
+    let want = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let (got, want): (Vec<&str>, Vec<&str>) = (got.lines().collect(), want.lines().collect());
+    for (n, (g, w)) in got.iter().zip(&want).enumerate() {
+        assert_eq!(g, w, "line {} (DATARIG_BLESS=1 cargo test -p datarig-core --lib refusal_reading)", n + 1);
+    }
+    assert_eq!(got.len(), want.len());
+}
+
+/// The monitor rules of engine `id`.
+fn engine_rules(id: EngineId) -> &'static dyn MonitorRules {
+    match &id.spec().monitor {
+        Fact::Known(rules) => *rules,
+        Fact::No(_) | Fact::Unknown(_) => panic!("{id:?} has no monitor rules"),
+    }
+}
+
+#[test]
+fn rules_for_checks_the_lookup_and_the_format() {
+    let pg = pg_format(Route::Direct);
+    let (my, _) = my_root();
+    let (pg_rules, my_rules) = (engine_rules(EngineId::Postgres), engine_rules(EngineId::MySql));
+    assert!(rules_for(&pg).is_ok_and(|r| std::ptr::eq(r.routes(), pg_rules.routes())));
+    assert!(rules_for(&my).is_ok_and(|r| std::ptr::eq(r.routes(), my_rules.routes())));
+    // Rules that do not read the format: the engines disagree.
+    assert!(rules_for_with(Ok(my_rules), &pg).is_err_and(|w| w == Why::EnginesDisagree));
+    assert!(rules_for_with(Ok(pg_rules), &my).is_err_and(|w| w == Why::EnginesDisagree));
+    // No rules: why, as the lookup says.
+    for why in [Why::NotBuilt, Why::NotChecked] {
+        assert!(rules_for_with(Err(why.clone()), &pg).is_err_and(|w| w == why));
+    }
+}
+
+#[test]
+fn a_crossed_format_is_refused_by_decide() {
+    let pg = pg_format(Route::Direct);
+    let pg_row = by_application(&pg_sessions(), "zz_mon_b").clone();
+    let (my, my_list) = my_root();
+    let my_row = by_id(&my_list, 18986).clone();
+    let crossed = [
+        (engine_rules(EngineId::MySql), &pg, &pg_row),
+        (engine_rules(EngineId::Postgres), &my, &my_row),
+        (engine_rules(EngineId::MySql), &pg, &my_row),
+        (engine_rules(EngineId::Postgres), &my, &pg_row),
+    ];
+    for (rules, format, row) in crossed {
+        for kind in BOTH {
+            assert_eq!(
+                decide_with(|_| Ok(rules), format, row, false, kind),
+                Decision::Refuse(Refusal::Engine(Why::EnginesDisagree)),
+                "{format:?} {kind:?}"
+            );
+            assert_eq!(target_with(Ok(rules), format, row), None);
+            assert_eq!(route_with(Ok(rules), format), Err(Why::EnginesDisagree));
+            let refused = NativeError::Pg { sqlstate: PG_INSUFFICIENT_PRIVILEGE };
+            for error in [refused, NativeError::MySql { errno: MYSQL_KILL_DENIED }] {
+                assert_eq!(denied_with(Ok(rules), format, &who("alice"), Via::Standard, error), None);
+            }
+        }
+    }
+    // A read-only profile is refused first, as before any rule.
+    let rules = engine_rules(EngineId::MySql);
+    assert_eq!(decide_with(|_| Ok(rules), &pg, &pg_row, true, ActionKind::Cancel), Decision::Refuse(Refusal::ReadOnly));
+}
+
+#[test]
+fn a_format_without_its_engines_rules_offers_and_sends_nothing() {
+    let pg = pg_format(Route::Direct);
+    let pg_row = by_application(&pg_sessions(), "zz_mon_b").clone();
+    let (my, my_list) = my_root();
+    let my_row = by_id(&my_list, 18986).clone();
+    for why in [Why::NotBuilt, Why::NotChecked] {
+        for (format, row) in [(&pg, &pg_row), (&my, &my_row)] {
+            for kind in BOTH {
+                assert_eq!(
+                    decide_with(|_| Err(why.clone()), format, row, false, kind),
+                    Decision::Refuse(Refusal::Engine(why.clone())),
+                    "{why:?} {kind:?}"
+                );
+                assert_eq!(
+                    decide_with(|_| Err(why.clone()), format, row, true, kind),
+                    Decision::Refuse(Refusal::ReadOnly),
+                    "read-only first"
+                );
+            }
+            assert_eq!(target_with(Err(why.clone()), format, row), None);
+            assert_eq!(route_with(Err(why.clone()), format), Err(why.clone()));
+            for error in [
+                NativeError::Pg { sqlstate: PG_INSUFFICIENT_PRIVILEGE },
+                NativeError::MySql { errno: MYSQL_KILL_DENIED },
+            ] {
+                assert_eq!(denied_with(Err(why.clone()), format, &who("alice"), Via::Standard, error), None);
+            }
+        }
+    }
+}
+
+/// A read-only profile is refused before the engine's rules are looked up: the lookup is never
+/// called.
+#[test]
+fn a_read_only_profile_is_refused_before_the_rules_are_looked_up() {
+    let pg = pg_format(Route::Direct);
+    let pg_row = by_application(&pg_sessions(), "zz_mon_b").clone();
+    let (my, my_list) = my_root();
+    let my_row = by_id(&my_list, 18986).clone();
+    let never = |_: &MonitorFormat| -> Result<&'static dyn MonitorRules, Why> {
+        panic!("the rules were looked up on a read-only profile")
+    };
+    for (format, row) in [(&pg, &pg_row), (&my, &my_row)] {
+        for kind in BOTH {
+            assert_eq!(decide_with(never, format, row, true, kind), Decision::Refuse(Refusal::ReadOnly));
+        }
+    }
 }

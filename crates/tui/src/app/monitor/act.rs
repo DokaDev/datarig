@@ -153,6 +153,7 @@ fn refusal_short(refusal: &Refusal) -> Label {
         Refusal::PooledIdle => Label::MonitorActOffPooledIdle,
         Refusal::Untracked => Label::MonitorActOffUntracked,
         Refusal::Unconfirmed => Label::MonitorActOffUnconfirmed,
+        Refusal::Engine(why) => super::super::engine_why::why_label(why),
     }
 }
 
@@ -306,6 +307,7 @@ impl App {
             Refusal::PooledIdle => Label::MonitorActRefusePooledIdle.into(),
             Refusal::Untracked => Msg::MonitorActRefuseUntracked { id },
             Refusal::Unconfirmed => Label::MonitorActRefuseUnconfirmed.into(),
+            Refusal::Engine(why) => super::super::engine_why::why_text(why),
         }
     }
 
@@ -587,6 +589,7 @@ impl App {
                     NotSent::Unidentified => Msg::MonitorActUnidentified { id },
                     NotSent::Unconfirmed => Label::MonitorActUnconfirmed.into(),
                     NotSent::Refused(_) => Msg::MonitorActRefused { why: refused },
+                    NotSent::Engine(why) => super::super::engine_why::why_text(&why),
                 };
                 (msg, Level::Warning, false)
             }

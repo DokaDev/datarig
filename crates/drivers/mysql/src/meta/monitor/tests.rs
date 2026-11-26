@@ -441,3 +441,56 @@ async fn another_accounts_thread_is_told_alike_in_sql_and_in_the_core() {
         }
     }
 }
+
+/// The probe's answers of a server whose `VERSION()` is `line`, the performance schema on,
+/// every table of the probe readable and its switches on.
+fn probe_answers(line: &str) -> Vec<datarig_core::monitor::decode::Answer> {
+    use datarig_core::monitor::decode::Answer;
+    let cells = |c: &[&str]| vec![c.iter().map(|v| Some((*v).to_owned())).collect::<Vec<_>>()];
+    vec![
+        Answer::Rows(cells(&[line, "1", "datarig@%"])),
+        Answer::Rows(Vec::new()),
+        Answer::Rows(Vec::new()),
+        Answer::Rows(cells(&["1"])),
+        Answer::Rows(cells(&["YES", "0"])),
+        Answer::Rows(cells(&["YES", "0"])),
+        Answer::Rows(cells(&["0"])),
+    ]
+}
+
+/// Every statement of `every` but the lock reads.
+fn without_lock_reads(m: &MySqlMonitor) -> Vec<String> {
+    every(m).into_iter().filter(|(n, _, _)| !n.contains("lock waits")).map(|(_, sql, _)| sql).collect()
+}
+
+/// The monitor reads what its own probe's `VERSION()` says, whatever the session's facts say
+/// (a greeting that names another version leaves them `VersionsDisagree`; they are no input):
+/// a probe that answers 8.4.11 gets every statement of 8.4 (the lock reads aside, whose gate
+/// is the stall's).
+#[test]
+fn the_statements_follow_the_probes_number_when_the_reports_disagree() {
+    let m = datarig_core::monitor::decode::mysql::probe(&probe_answers("8.4.11")).unwrap();
+    assert_eq!(m, my(80411, true, Readable::Yes));
+    assert_eq!(without_lock_reads(&m), without_lock_reads(&my(80411, true, Readable::Yes)));
+    assert!(m.ps_processlist());
+    let replication: Vec<String> = replication::read(&m).into_iter().map(|s| s.sql).collect();
+    let want: Vec<String> = replication::read(&my(80411, true, Readable::Yes)).into_iter().map(|s| s.sql).collect();
+    assert_eq!(replication, want);
+}
+
+/// A probe number below 8.0.22 on a newer server (a proxy that answers `VERSION()` itself, on
+/// a session whose facts say 8.4.11) reads the session list from
+/// `information_schema.PROCESSLIST`, as the number says, though the performance schema is on.
+#[test]
+fn a_probe_number_below_8_0_22_reads_the_information_schema_list() {
+    let m = datarig_core::monitor::decode::mysql::probe(&probe_answers("8.0.21")).unwrap();
+    assert_eq!((m.version, m.performance_schema), (80021, true));
+    assert!(!m.ps_processlist());
+    for wanted in [IDLE, NO_IDLE] {
+        let list = sessions(&m, wanted).join("\n");
+        assert!(list.contains("information_schema.PROCESSLIST"), "{list}");
+        assert!(!list.contains("performance_schema.processlist"), "{list}");
+    }
+    assert!(session(&m, 63114).contains("information_schema.PROCESSLIST"));
+    assert!(guard(&m, 63114, TOKEN).contains("information_schema.PROCESSLIST"));
+}

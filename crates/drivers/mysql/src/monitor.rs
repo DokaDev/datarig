@@ -9,7 +9,7 @@
 //! and the server's status and variables: no user's table is touched. A refusal for lack of a
 //! privilege is an answer of the probe (what the account may read), never a failure of it.
 //!
-//! An action on another session ([`act`]) reads the target right before it (its session and
+//! An action on another session ([`act_with`]) reads the target right before it (its session and
 //! statement as the tick tells them, compared in the core) and sends `KILL QUERY` or `KILL`
 //! only when it is still what the row showed, and only when the monitor's connection is
 //! confirmed to reach the server directly: at open, and again in that very read, the server
@@ -25,10 +25,12 @@
 //! `Com_select` ([`Own::selects`]); a `CALL` runs statements of its own that cannot be counted
 //! here ([`Own::uncounted`]).
 
+use crate::engine::monitor_format;
 use crate::link::{Link, Next};
 use crate::meta::monitor as sql;
 use crate::session::{my_error, own_verdict, quit};
 use datarig_core::driver::{Cell, DbCommand, DbError, DbEvent};
+use datarig_core::engine::{MonitorRules, Why};
 use datarig_core::monitor::action::{
     self, ActionKind, ActionOutcome, ActionTarget, FollowUp, NativeError, NotSent, Stale, Via,
 };
@@ -102,10 +104,11 @@ pub(crate) async fn monitor_loop(
     };
     let format = match probed {
         Ok(my) => {
-            // Not confirmed at open: no action is offered (nor sent, [`act`]).
+            // Not confirmed at open: no action is offered (nor sent, [`act_with`]).
             let my = MySqlMonitor { unconfirmed: marker.is_none(), ..my };
-            let _ = events.send(DbEvent::Monitor(Ok(MonitorFormat::MySql(my.clone()))));
-            Some(my)
+            let format = monitor_format(my.clone());
+            let _ = events.send(DbEvent::Monitor(Ok(format.clone())));
+            Some((my, format))
         }
         Err(error) => {
             let _ = events.send(DbEvent::Monitor(Err(error)));
@@ -124,7 +127,7 @@ pub(crate) async fn monitor_loop(
                 return;
             }
         };
-        let Some(my) = &format else {
+        let Some((my, format)) = &format else {
             // Without a format there is nothing to read with.
             if events.send(cmd.not_supported()).is_err() {
                 return;
@@ -166,7 +169,7 @@ pub(crate) async fn monitor_loop(
                 }
             }
             DbCommand::MonitorAction { request, kind, target } => {
-                let act = within(&mut m, ACTION_DEADLINE, my, read_only, marker.as_ref(), kind, &target);
+                let act = within(&mut m, ACTION_DEADLINE, my, format, read_only, marker.as_ref(), kind, &target);
                 let Ok((outcome, lost)) = link.guard(None, act).await else {
                     return;
                 };
@@ -387,19 +390,22 @@ const NO_SUCH_THREAD: u16 = 1094;
 /// `ER_QUERY_INTERRUPTED`: the statement was stopped by a `KILL QUERY` (or `KILL`).
 const QUERY_INTERRUPTED: &str = "1317";
 
-/// [`act`] given at most `deadline`; past it, the connection is given up on (the error), and
+/// [`act_with`] given at most `deadline`; past it, the connection is given up on (the error), and
 /// the outcome is unknown once the statement that acts may have gone out.
+#[allow(clippy::too_many_arguments)]
 async fn within(
     x: &mut impl Exec,
     deadline: Duration,
     my: &MySqlMonitor,
+    format: &MonitorFormat,
     read_only: bool,
     marker: Option<&Marker>,
     kind: ActionKind,
     target: &ActionTarget,
 ) -> (ActionOutcome, Option<DbError>) {
     let mut sending = false;
-    match tokio::time::timeout(deadline, act(x, my, read_only, marker, kind, target, &mut sending)).await {
+    let acting = act_with(MonitorFormat::rules, x, my, format, read_only, marker, kind, target, &mut sending);
+    match tokio::time::timeout(deadline, acting).await {
         Ok(outcome) => (outcome, None),
         Err(_) => {
             let error = DbError::NoAnswer(deadline);
@@ -409,12 +415,17 @@ async fn within(
     }
 }
 
-/// Send `kind` on `target` if a read right before finds it unchanged and the connection
-/// confirmed (`marker`); on a `read_only` profile nothing is sent at all, nor without a marker
+/// Send `kind` on `target` of the server read as `format` (`my`) if a read right before finds
+/// it unchanged and the connection confirmed (`marker`); on a `read_only` profile nothing is
+/// sent at all, nor without the engine's monitor rules for `format` (`lookup` finds them, and
+/// [`action::rules_for_with`] checks they read it, before anything else), nor without a marker
 /// confirmed at open. `sending` is set before the statement that acts goes out.
-async fn act(
+#[allow(clippy::too_many_arguments)]
+async fn act_with(
+    lookup: impl FnOnce(&MonitorFormat) -> Result<&'static dyn MonitorRules, Why>,
     x: &mut impl Exec,
     my: &MySqlMonitor,
+    format: &MonitorFormat,
     read_only: bool,
     marker: Option<&Marker>,
     kind: ActionKind,
@@ -424,6 +435,10 @@ async fn act(
     if read_only {
         return ActionOutcome::NotSent(NotSent::ReadOnly);
     }
+    let rules = match action::rules_for_with(lookup(format), format) {
+        Ok(rules) => rules,
+        Err(why) => return ActionOutcome::NotSent(NotSent::Engine(why)),
+    };
     let Some(marker) = marker else {
         return ActionOutcome::NotSent(NotSent::Unconfirmed);
     };
@@ -434,8 +449,7 @@ async fn act(
     if let Err(outcome) = recheck(x, my, marker, kind, target, id).await {
         return outcome;
     }
-    let format = MonitorFormat::MySql(my.clone());
-    let route = action::route(&format);
+    let route = rules.routes().of(format.flavour());
     *sending = true;
     let failed = match x.run(&sql::kill(kind, id)).await {
         Ok(_) => return ActionOutcome::Acknowledged { via: Via::Standard },
@@ -443,7 +457,7 @@ async fn act(
     };
     let fallback = match (&failed, route.fallback) {
         (Fail::Server { code, .. }, Some(fallback)) if fallback.on.contains(code) => fallback,
-        _ => return refused(&format, target, Via::Standard, failed),
+        _ => return refused(format, target, Via::Standard, failed),
     };
     // The standard statement was refused: nothing reached the target. The provider's procedure
     // goes only to the same target, read again.
@@ -455,7 +469,7 @@ async fn act(
     *sending = true;
     match x.run(&sql::call(procedure, id)).await {
         Ok(_) => ActionOutcome::Acknowledged { via: Via::Procedure(procedure) },
-        Err(fail) => refused(&format, target, Via::Procedure(procedure), fail),
+        Err(fail) => refused(format, target, Via::Procedure(procedure), fail),
     }
 }
 
