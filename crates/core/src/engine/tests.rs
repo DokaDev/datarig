@@ -637,6 +637,7 @@ fn the_monitor_group_is_known_where_a_format_exists() {
         statements: Readable::Yes,
         threads: Readable::Yes,
         unconfirmed: false,
+        version_confirmed: true,
         flavour: Provider::AzureDatabase,
     });
     for (format, engine, flavour) in

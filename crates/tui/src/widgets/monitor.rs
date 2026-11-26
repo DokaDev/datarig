@@ -553,6 +553,7 @@ impl Cx<'_> {
             Need::Grant(g) => self.msg(Msg::MonitorNeedGrant { grant: (*g).to_string() }),
             Need::Setting(s) => self.msg(Msg::MonitorNeedSetting { setting: (*s).to_string() }),
             Need::Version(v) => self.msg(Msg::MonitorNeedVersion { version: (*v).to_string() }),
+            Need::Unconfirmed => self.label(Label::MonitorNeedUnconfirmed),
         }
     }
 
@@ -1933,6 +1934,7 @@ mod tests {
             statements: Readable::Yes,
             threads: Readable::Yes,
             unconfirmed: false,
+            version_confirmed: true,
             flavour: Flavour::Standard,
         };
         [("pg", Some(MonitorFormat::Postgres(pg))), ("mysql", Some(MonitorFormat::MySql(my))), ("none", None)]

@@ -110,6 +110,12 @@ pub struct MySqlMonitor {
     /// directly (its marker on its own id, the handshake's): no action is offered or sent. The
     /// driver sets it; the probe's answers never do.
     pub unconfirmed: bool,
+    /// The monitor session's own facts confirm the server its probe read: their version is
+    /// known and is the probe's number, and the session reaches the server directly
+    /// ([`confirms_server`]). Without it the row lock waits are not read ([`Self::lock_waits`]):
+    /// behind a proxy or a pooler the server that answers may be a version whose read stalls
+    /// it. The driver sets it; the probe's answers never do.
+    pub version_confirmed: bool,
     pub flavour: Flavour,
 }
 
@@ -120,13 +126,35 @@ impl MySqlMonitor {
         self.version >= 80022 && self.performance_schema
     }
 
-    /// `performance_schema.data_lock_waits` may be read: before the fix its read goes through
-    /// every transaction under the engine's global lock and transaction mutexes, which with many
-    /// transactions stalls the whole server for seconds (MySQL bug 109539, fixed in 8.4.0 and
-    /// in 8.0.38; the 8.1 to 8.3 releases do not have the fix).
+    /// `performance_schema.data_lock_waits` may be read: the probe's version has the fix
+    /// ([`Self::lock_waits_fixed`]) and the session's facts confirm it is the server's
+    /// ([`Self::version_confirmed`]).
     pub fn lock_waits(&self) -> bool {
+        self.version_confirmed && self.lock_waits_fixed()
+    }
+
+    /// The probe's version has the fix of `performance_schema.data_lock_waits`: before it its
+    /// read goes through every transaction under the engine's global lock and transaction
+    /// mutexes, which with many transactions stalls the whole server for seconds (MySQL bug
+    /// 109539, fixed in 8.4.0 and in 8.0.38; the 8.1 to 8.3 releases do not have the fix).
+    pub fn lock_waits_fixed(&self) -> bool {
         (LOCK_WAITS_VERSION..80100).contains(&self.version) || self.version >= 80400
     }
+}
+
+/// Whether a MySQL monitor session's own facts confirm the server its probe read at `version`
+/// (`major * 10000 + minor * 100 + patch`, [`MySqlMonitor::version`]): the facts' version is
+/// known and equals that number part by part (never packed: 8.3.100 is not 8.4.0), and the
+/// session reaches the server directly. A version the reports disagree on or that did not
+/// parse, a pooled connection and one whose check did not answer confirm nothing.
+pub fn confirms_server(facts: &crate::engine::ServerFacts, version: u32) -> bool {
+    use crate::engine::{Fact, Topology};
+    let probed = (version / 10000, version / 100 % 100, version % 100);
+    let same = match &facts.version {
+        Fact::Known(v) => probed == (u32::from(v.major), u32::from(v.minor), u32::from(v.patch)),
+        Fact::No(_) | Fact::Unknown(_) => false,
+    };
+    same && facts.topology == Fact::Known(Topology::Direct)
 }
 
 /// Whether the account may read something.

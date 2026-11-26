@@ -269,7 +269,7 @@ async fn run_session(
         }
         SessionRole::Monitor => {
             let marker = token.map(|token| crate::monitor::Marker { token, handshake: conn.id() });
-            crate::monitor::monitor_loop(conn, link, events, opts.read_only, marker).await
+            crate::monitor::monitor_loop(conn, link, events, opts.read_only, marker, &facts).await
         }
         SessionRole::Query => {
             let killer = canceller.killer.lock().ok().and_then(|g| g.clone());

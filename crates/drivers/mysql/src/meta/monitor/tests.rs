@@ -18,6 +18,7 @@ fn my(version: u32, performance_schema: bool, readable: Readable) -> MySqlMonito
         statements: readable,
         threads: Readable::Yes,
         unconfirmed: false,
+        version_confirmed: true,
         flavour: Flavour::Standard,
     }
 }
@@ -471,7 +472,7 @@ fn without_lock_reads(m: &MySqlMonitor) -> Vec<String> {
 #[test]
 fn the_statements_follow_the_probes_number_when_the_reports_disagree() {
     let m = datarig_core::monitor::decode::mysql::probe(&probe_answers("8.4.11")).unwrap();
-    assert_eq!(m, my(80411, true, Readable::Yes));
+    assert_eq!(m, MySqlMonitor { version_confirmed: false, ..my(80411, true, Readable::Yes) });
     assert_eq!(without_lock_reads(&m), without_lock_reads(&my(80411, true, Readable::Yes)));
     assert!(m.ps_processlist());
     let replication: Vec<String> = replication::read(&m).into_iter().map(|s| s.sql).collect();
@@ -510,11 +511,11 @@ fn monitor_facts(version: Fact<Version>, topology: Fact<Topology>) -> ServerFact
 }
 
 /// The lock reads a monitor session of `facts` sends when its probe answers `answers`, through
-/// the probe's decoder and the lock reads' builder.
+/// the probe's decoder, the driver's set-up and the lock reads' builder.
 fn statements_of(facts: &ServerFacts, answers: &[datarig_core::monitor::decode::Answer]) -> Vec<String> {
-    let _ = facts;
-    let my = datarig_core::monitor::decode::mysql::probe(answers).unwrap();
-    locks(&my)
+    let probed = datarig_core::monitor::decode::mysql::probe(answers).unwrap();
+    let marker = crate::monitor::Marker { token: TOKEN.into(), handshake: 1 };
+    locks(&crate::monitor::set_up(probed, Some(&marker), facts))
 }
 
 /// `performance_schema.data_lock_waits` is read only where the monitor session's own facts

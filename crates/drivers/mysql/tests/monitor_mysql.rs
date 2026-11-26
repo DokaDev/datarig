@@ -482,12 +482,16 @@ async fn what_an_account_cannot_see_names_the_privilege() {
     let list = s.sessions.as_ref().unwrap();
     assert!(list.rows.iter().all(|r| r.user.as_deref() == Some(user.as_str())), "{:?}", list.rows);
     assert!(list.rows.iter().all(|r| r.tx == Tx::Unknown));
-    // The lock tables are refused: said, never an empty list of waits.
+    // The lock tables are refused: said, never an empty list of waits. The row lock waits are
+    // read only where the session's facts confirm the server (its version, and a direct
+    // connection, which an account that cannot read the marker may not confirm): said as
+    // refused then, and as not confirmed otherwise.
     let s = monitor.tick(Want { locks: true, server: false, ..TICK }).await.expect("tick");
-    for part in [Part::RowLockWaits, Part::MetadataLockWaits] {
-        let need = Need::Grant("SELECT on performance_schema");
-        assert!(s.hidden.contains(&Hidden { part, need }), "{:?}", s.hidden);
-    }
+    let grant = Need::Grant("SELECT on performance_schema");
+    let row = if my.version_confirmed { grant.clone() } else { Need::Unconfirmed };
+    eprintln!("{test}: row lock waits of the unprivileged account: {row:?}");
+    assert!(s.hidden.contains(&Hidden { part: Part::RowLockWaits, need: row }), "{:?}", s.hidden);
+    assert!(s.hidden.contains(&Hidden { part: Part::MetadataLockWaits, need: grant }), "{:?}", s.hidden);
     drop(monitor);
 
     admin.query_drop(format!("GRANT PROCESS ON *.* TO '{user}'@'%'")).await.expect("grant");

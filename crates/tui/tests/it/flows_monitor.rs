@@ -1254,6 +1254,7 @@ fn mysql_format() -> MonitorFormat {
         statements: Readable::Yes,
         threads: Readable::Yes,
         unconfirmed: false,
+        version_confirmed: true,
         flavour: Flavour::Standard,
     })
 }
@@ -1579,6 +1580,35 @@ fn the_locks_view_says_when_nothing_waits_and_what_the_reads_left_out() {
     h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(snapshot(6.0, 1000, rows(), false)) });
     let screen = h.screen(160, 40);
     assert!(screen.contains("4211 alice · waits for a lock (transactionid) · "), "{screen}");
+}
+
+/// A MySQL monitor whose session's facts do not confirm its server (a proxy that writes its own
+/// version, a pooler) does not read the row lock waits, and the Locks view says why.
+#[test]
+fn lock_waits_say_the_version_or_connection_is_not_confirmed() {
+    let mut h = Harness::connected(Lang::En);
+    h.driver.monitor.store(true, Ordering::SeqCst);
+    h.command("monitor");
+    h.monitor_db(DbEvent::Connected);
+    let MonitorFormat::MySql(my) = mysql_format() else { unreachable!("a MySQL format") };
+    let my = datarig_core::monitor::MySqlMonitor { version_confirmed: false, ..my };
+    h.monitor_db(DbEvent::Monitor(Ok(MonitorFormat::MySql(my))));
+    let first = ticks(&mut h)[0].0;
+    let quiet = || {
+        let mut rows = rows();
+        rows.iter_mut().for_each(|r| r.wait = None);
+        rows
+    };
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(snapshot(0.0, 1000, quiet(), true)) });
+    h.keys("3");
+    let t = lock_asks(&mut h);
+    let mut s = snapshot(2.0, 1000, quiet(), false);
+    s.locks = Some(LockList { time: at(2.0), waits: Vec::new(), more: 0, blocks: true });
+    s.hidden.push(Hidden { part: Part::RowLockWaits, need: Need::Unconfirmed });
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(s) });
+    let note = "Who blocks a row lock wait is not shown (the server's version or connection could not be confirmed)";
+    let screen = h.screen(160, 40);
+    assert!(screen.contains(note), "{screen}");
 }
 
 /// Waits the account may not see are not said to be none: without `pg_read_all_stats` (or,
@@ -3155,6 +3185,7 @@ fn the_monitors_own_session_is_named_in_its_details_on_mysql() {
         statements: Readable::Yes,
         threads: Readable::Yes,
         unconfirmed: false,
+        version_confirmed: true,
         flavour: Flavour::Standard,
     });
     let mut rows = mysql_rows("SELECT 1");

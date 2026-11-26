@@ -221,6 +221,7 @@ pub fn probe(answers: &[Answer]) -> Result<MySqlMonitor, DecodeError> {
         statements: enabled(statements),
         threads: readable(threads),
         unconfirmed: false,
+        version_confirmed: false,
         flavour: format::flavour(MYSQL_MARKERS, &found),
     })
 }
@@ -525,8 +526,8 @@ pub fn locks(answers: &[Answer], my: &MySqlMonitor, time: Timestamp) -> Result<(
     let mut waits: Vec<LockWait> = Vec::new();
     let mut hidden = Vec::new();
     let mut more = 0u64;
-    // In the order the driver sends them: the row lock waits from 8.0.38, the metadata lock
-    // waits when readable.
+    // In the order the driver sends them: the row lock waits from 8.0.38 on a confirmed
+    // server, the metadata lock waits when readable.
     let expected = usize::from(my.lock_waits()) + usize::from(my.metadata_locks == Readable::Yes);
     if answers.len() != expected {
         return Err(malformed("locks", format!("{} answers, expected {expected}", answers.len())));
@@ -535,9 +536,11 @@ pub fn locks(answers: &[Answer], my: &MySqlMonitor, time: Timestamp) -> Result<(
     let rows = if my.lock_waits() { next.next() } else { None };
     let metadata = next.next();
     match rows {
-        // Not read on this version: its read stalls a busy server.
-        None => hidden
+        // Not read on this version: its read stalls a busy server. The version first.
+        None if !my.lock_waits_fixed() => hidden
             .push(Hidden { part: Part::RowLockWaits, need: Need::Version(crate::monitor::format::LOCK_WAITS_FROM) }),
+        // Not read where the session's facts do not confirm the server it reads.
+        None => hidden.push(Hidden { part: Part::RowLockWaits, need: Need::Unconfirmed }),
         Some(Answer::Rows(rows)) => {
             if rows.len() >= lk::LOCK_ROWS {
                 more += 1;

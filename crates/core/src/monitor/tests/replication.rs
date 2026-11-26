@@ -258,6 +258,7 @@ fn my(process: bool) -> MySqlMonitor {
         statements: Readable::Yes,
         threads: Readable::Yes,
         unconfirmed: false,
+        version_confirmed: true,
         flavour: Flavour::Standard,
     }
 }

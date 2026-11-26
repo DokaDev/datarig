@@ -1252,8 +1252,9 @@ fn a_cycle_of_waits_is_shown_once_from_its_smallest_session() {
     assert_eq!(tree.lines[0].also, [(Holder::Session(20), Blame::Proven)]);
 }
 
+/// MySQL 8.4 as its probe read it on a session whose facts confirm it (the driver's set-up).
 fn mysql_root() -> MySqlMonitor {
-    decode::mysql::probe(&fixture!("my84_root/probe")).unwrap()
+    MySqlMonitor { version_confirmed: true, ..decode::mysql::probe(&fixture!("my84_root/probe")).unwrap() }
 }
 
 fn cells(values: &[Option<&str>]) -> Vec<Option<String>> {
@@ -1332,8 +1333,10 @@ fn mysql_row_lock_waits_name_their_blockers_and_metadata_locks_their_incompatibl
 #[test]
 fn mysql_lock_reads_refused_or_off_say_what_would_show_them() {
     let my = mysql_root();
-    // The account without grants on performance_schema, as MySQL 8.4 refused it.
-    let unprivileged = decode::mysql::probe(&fixture!("my84_unprivileged/probe")).unwrap();
+    // The account without grants on performance_schema, as MySQL 8.4 refused it, on a session
+    // whose facts confirm the server.
+    let unprivileged =
+        MySqlMonitor { version_confirmed: true, ..decode::mysql::probe(&fixture!("my84_unprivileged/probe")).unwrap() };
     let (locks, hidden) =
         decode::mysql::locks(&fixture!("my84_unprivileged/locks"), &unprivileged, Timestamp(1)).unwrap();
     assert!(locks.waits.is_empty());
@@ -1588,6 +1591,69 @@ fn row_lock_waits_before_8_0_38_are_said_not_read() {
     assert_eq!(versions.map(reads), [false, true, true, false, false, false, true, true, true]);
     // The answers follow the statements sent: one fewer.
     assert!(decode::mysql::locks(&mysql_lock_answers(), &my, Timestamp(1)).is_err());
+}
+
+/// The facts of a MySQL monitor session: its version and how it reaches the server.
+fn mysql_facts(
+    version: crate::engine::Fact<crate::engine::Version>,
+    topology: crate::engine::Fact<crate::engine::Topology>,
+) -> crate::engine::ServerFacts {
+    use crate::engine::{EngineFacts, EngineId, Fact, MyFacts, ServerFacts, Version, Why};
+    ServerFacts {
+        version,
+        version_text: None,
+        provider: Fact::Unknown(Why::NotChecked),
+        topology,
+        detail: EngineFacts::MySql(MyFacts::new(Version::new(8, 4, 11), EngineId::MySql)),
+    }
+}
+
+/// Row lock waits not read on a server the session's facts do not confirm are said so, with
+/// why; a version without the fix says the version first, confirmed or not.
+#[test]
+fn a_row_lock_wait_read_names_why_it_was_not_read() {
+    use crate::engine::{Fact, Topology, Version, Why};
+    let direct = || Fact::Known(Topology::Direct);
+    let known = |major, minor, patch| Fact::Known(Version::new(major, minor, patch));
+    let shapes = [
+        ("agreeing", known(8, 4, 11), direct()),
+        ("reports disagree", Fact::Unknown(Why::VersionsDisagree), direct()),
+        ("version unknown", Fact::Unknown(Why::VersionUnknown), direct()),
+        ("engines disagree", Fact::Unknown(Why::EnginesDisagree), Fact::Unknown(Why::EnginesDisagree)),
+        ("pooled", known(8, 4, 11), Fact::Known(Topology::Pooled)),
+        ("not checked", known(8, 4, 11), Fact::Unknown(Why::NotChecked)),
+        ("another version", known(8, 4, 10), direct()),
+    ];
+    let too_old = Need::Version(format::LOCK_WAITS_FROM);
+    for (name, version, topology) in shapes {
+        let facts = mysql_facts(version, topology);
+        for (probed, fixed) in [(80411, true), (80037, false), (80300, false), (80038, true), (80400, true)] {
+            // The facts' version as the probe read it, where the shape knows one.
+            let facts = match (&facts.version, name) {
+                (Fact::Known(_), "agreeing" | "pooled" | "not checked") => crate::engine::ServerFacts {
+                    version: known((probed / 10000) as u16, (probed / 100 % 100) as u16, (probed % 100) as u16),
+                    ..facts.clone()
+                },
+                _ => facts.clone(),
+            };
+            let confirmed = format::confirms_server(&facts, probed);
+            assert_eq!(confirmed, name == "agreeing", "{name} at {probed}");
+            let my = MySqlMonitor { version: probed, version_confirmed: confirmed, ..mysql_root() };
+            let answers: Vec<Answer> =
+                (0..usize::from(my.lock_waits()) + 1).map(|_| Answer::Rows(Vec::new())).collect();
+            let (_, hidden) = decode::mysql::locks(&answers, &my, Timestamp(1)).unwrap();
+            let need = match (fixed, confirmed) {
+                (false, _) => Some(too_old.clone()),
+                (true, false) => Some(Need::Unconfirmed),
+                (true, true) => None,
+            };
+            let said: Vec<_> = hidden.iter().filter(|h| h.part == Part::RowLockWaits).map(|h| h.need.clone()).collect();
+            assert_eq!(said, Vec::from_iter(need), "{name} at {probed}");
+        }
+    }
+    // Part by part: 8.3.100 is not 8.4.0, though its packed number is.
+    assert!(!format::confirms_server(&mysql_facts(known(8, 3, 100), direct()), 80400));
+    assert!(format::confirms_server(&mysql_facts(known(8, 4, 0), direct()), 80400));
 }
 
 #[test]

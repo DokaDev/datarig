@@ -30,7 +30,7 @@ use crate::link::{Link, Next};
 use crate::meta::monitor as sql;
 use crate::session::{my_error, own_verdict, quit};
 use datarig_core::driver::{Cell, DbCommand, DbError, DbEvent};
-use datarig_core::engine::{MonitorRules, Why};
+use datarig_core::engine::{MonitorRules, ServerFacts, Why};
 use datarig_core::monitor::action::{
     self, ActionKind, ActionOutcome, ActionTarget, FollowUp, NativeError, NotSent, Stale, Via,
 };
@@ -81,15 +81,26 @@ struct Monitor {
     limit: Option<Duration>,
 }
 
+/// What the monitor reads with, from its probe's answers `my` and what the session found when
+/// it opened: no action is offered (nor sent, [`act_with`]) without the connection's `marker`,
+/// and the row lock waits are read only where the session's `facts` confirm the server the
+/// probe read ([`datarig_core::monitor::format::confirms_server`]).
+pub(crate) fn set_up(my: MySqlMonitor, marker: Option<&Marker>, facts: &ServerFacts) -> MySqlMonitor {
+    let version_confirmed = datarig_core::monitor::format::confirms_server(facts, my.version);
+    MySqlMonitor { unconfirmed: marker.is_none(), version_confirmed, ..my }
+}
+
 /// `read_only`: the profile's own (the monitor session is read-only whatever the profile says,
 /// so this is the only place that tells an action may not be sent). `marker`: the connection's,
-/// when it was confirmed at open; `None`: no action is ever sent.
+/// when it was confirmed at open; `None`: no action is ever sent. `facts`: what the session
+/// found its server to be when it opened ([`set_up`]).
 pub(crate) async fn monitor_loop(
     conn: Conn,
     mut link: Link,
     events: UnboundedSender<DbEvent>,
     read_only: bool,
     marker: Option<Marker>,
+    facts: &ServerFacts,
 ) {
     let mut m = Monitor { conn, sent: 0, selects: 0, calls: 0, limit: None };
     let probed = match link.guard(None, tokio::time::timeout(PROBE_LIMIT, m.probe())).await {
@@ -104,8 +115,7 @@ pub(crate) async fn monitor_loop(
     };
     let format = match probed {
         Ok(my) => {
-            // Not confirmed at open: no action is offered (nor sent, [`act_with`]).
-            let my = MySqlMonitor { unconfirmed: marker.is_none(), ..my };
+            let my = set_up(my, marker.as_ref(), facts);
             let format = monitor_format(my.clone());
             let _ = events.send(DbEvent::Monitor(Ok(format.clone())));
             Some((my, format))

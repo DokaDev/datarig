@@ -291,6 +291,7 @@ impl App {
             Need::Grant(g) => Msg::MonitorNeedGrant { grant: (*g).to_string() },
             Need::Setting(s) => Msg::MonitorNeedSetting { setting: (*s).to_string() },
             Need::Version(v) => Msg::MonitorNeedVersion { version: (*v).to_string() },
+            Need::Unconfirmed => return self.i18n.label(Label::MonitorNeedUnconfirmed).to_string(),
         };
         self.i18n.msg(&m).to_string()
     }

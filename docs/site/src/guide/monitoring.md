@@ -179,7 +179,10 @@ The tree comes from what the server says:
   `INNODB_TRX`, which needs `PROCESS`): a prepared XA transaction whose session went on to
   other work is shown as a transaction with no session, and without `PROCESS` only the
   transaction is named. Row lock waits are read only from MySQL 8.0.38 in 8.0, and from 8.4 (on
-  older versions reading them can stall a busy server). For metadata locks (an `ALTER TABLE`
+  older versions reading them can stall a busy server), and only when the monitor's connection
+  confirms the server: the version its greeting and `VERSION()` report is the same, and the
+  connection reaches the server directly. Behind a proxy that reports another version, or a
+  pooler whose next read may reach another server, they are said not to be read. For metadata locks (an `ALTER TABLE`
   waiting for a long transaction, `FLUSH TABLES WITH READ LOCK`) MySQL does not name the
   blockers: the tree shows the sessions holding a lock on the same object that the
   request cannot be granted beside, as the server's lock manager decides it, and says that
@@ -360,6 +363,7 @@ nothing:
 | MySQL | `SELECT` on `performance_schema.threads` (then reopen the Monitor tab) | no cancel or end is sent: a session cannot be told apart from a later one given the same id |
 | MySQL | the metadata lock instrument (`wait/lock/metadata/sql/mdl`) | the Locks view without metadata lock waits |
 | MySQL | 8.0.38 or later in 8.0, or 8.4 or later | the Locks view without who blocks a row lock wait (on older versions reading it can stall a busy server, so it is not read) |
+| MySQL | a connection that confirms the server's version and reaches it directly | the Locks view without who blocks a row lock wait (the server that answers may be a version whose read stalls it, so it is not read) |
 | PostgreSQL | `pg_read_all_stats` | WAL senders and the WAL receiver without their state and positions (a standby's received and replayed positions still show) |
 | MySQL | `REPLICATION CLIENT` | that whether the server takes changes from another is not known |
 | MySQL | `PROCESS` | that the servers taking changes from it are not known (only the account's own sessions are listed) |
