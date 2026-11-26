@@ -1,4 +1,5 @@
 use super::*;
+use datarig_core::engine::{EngineFacts, EngineId, Fact, MyFacts, ServerFacts, Topology, Version, Why};
 use datarig_core::monitor::Flavour;
 use datarig_core::monitor::decode::mysql::{
     CLOCK, METADATA_LOCKS, NAME_VALUE, PROBE, PROBE_LOCKS, PROBE_STATEMENTS, QUERY_TEXT, ROW_LOCK_WAITS, SERVER_INFO,
@@ -493,4 +494,61 @@ fn a_probe_number_below_8_0_22_reads_the_information_schema_list() {
     }
     assert!(session(&m, 63114).contains("information_schema.PROCESSLIST"));
     assert!(guard(&m, 63114, TOKEN).contains("information_schema.PROCESSLIST"));
+}
+
+/// What a monitor session of a MySQL server found it to be: its version and how it reaches the
+/// server, the greeting's engine MySQL (MariaDB when the reports name both engines).
+fn monitor_facts(version: Fact<Version>, topology: Fact<Topology>) -> ServerFacts {
+    let greeting = if version == Fact::Unknown(Why::EnginesDisagree) { EngineId::MariaDb } else { EngineId::MySql };
+    ServerFacts {
+        version,
+        version_text: None,
+        provider: Fact::Unknown(Why::NotChecked),
+        topology,
+        detail: EngineFacts::MySql(MyFacts::new(Version::new(8, 4, 11), greeting)),
+    }
+}
+
+/// The lock reads a monitor session of `facts` sends when its probe answers `answers`, through
+/// the probe's decoder and the lock reads' builder.
+fn statements_of(facts: &ServerFacts, answers: &[datarig_core::monitor::decode::Answer]) -> Vec<String> {
+    let _ = facts;
+    let my = datarig_core::monitor::decode::mysql::probe(answers).unwrap();
+    locks(&my)
+}
+
+/// `performance_schema.data_lock_waits` is read only where the monitor session's own facts
+/// confirm the server's version (known, and the number its probe read) and that it reaches the
+/// server directly: behind a proxy or a pooler the server that answers a later read may be a
+/// version whose read stalls it.
+#[test]
+fn the_row_lock_wait_read_needs_a_confirmed_version_and_connection() {
+    let direct = || Fact::Known(Topology::Direct);
+    let v8411 = || Fact::Known(Version::new(8, 4, 11));
+    let reads = |sql: &[String]| sql.iter().any(|s| s.contains("data_lock_waits"));
+    let unconfirmed = [
+        ("reports disagree", Fact::Unknown(Why::VersionsDisagree), direct(), "8.4.11"),
+        ("version unknown", Fact::Unknown(Why::VersionUnknown), direct(), "8.4.11"),
+        ("engines disagree", Fact::Unknown(Why::EnginesDisagree), Fact::Unknown(Why::EnginesDisagree), "8.4.11"),
+        ("pooled", v8411(), Fact::Known(Topology::Pooled), "8.4.11"),
+        ("not checked", v8411(), Fact::Unknown(Why::NotChecked), "8.4.11"),
+        ("facts older than the probe", Fact::Known(Version::new(8, 4, 10)), direct(), "8.4.11"),
+        ("facts newer than the probe", v8411(), direct(), "8.4.10"),
+        // Part by part: 8.3.100 packed would read as 8.4.0.
+        ("8.3.100 is not 8.4.0", Fact::Known(Version::new(8, 3, 100)), direct(), "8.4.0"),
+    ];
+    let mut read = Vec::new();
+    for (name, version, topology, line) in unconfirmed {
+        let sql = statements_of(&monitor_facts(version, topology), &probe_answers(line));
+        if reads(&sql) {
+            read.push(name);
+        } else {
+            assert_eq!(sql, [metadata_lock_waits()], "{name}: the metadata lock waits still read");
+        }
+    }
+    assert!(read.is_empty(), "the row lock waits are read on: {read:?}");
+    // Confirmed, directly: as before.
+    let sql = statements_of(&monitor_facts(v8411(), direct()), &probe_answers("8.4.11"));
+    let m = my(80411, true, Readable::Yes);
+    assert_eq!(sql, [row_lock_waits(&m), metadata_lock_waits()]);
 }
