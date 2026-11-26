@@ -403,3 +403,40 @@ fn a_profile_without_a_tls_mode_shows_and_keeps_the_one_it_connects_with() {
     let f = ProfileForm::from_profile(&legacy, String::new(), Some(0));
     assert_eq!((f.tls_mode(), f.to_profile().sslmode.as_str()), (TlsMode::Prefer, ""));
 }
+
+/// The fields each driver row shows in the Basic and Advanced sections, and those of a name no
+/// engine serves (it opens on the first row).
+#[test]
+fn the_form_shows_each_engines_fields() {
+    use std::fmt::Write as _;
+    let mut got = String::new();
+    for name in DRIVERS.iter().map(|d| d.0).chain(["sqlite"]) {
+        let c = ConnectionConfig { driver: name.into(), ..ConnectionConfig::test_db() };
+        let mut f = ProfileForm::from_profile(&c, String::new(), None);
+        for section in [Section::Basic, Section::Advanced] {
+            f.section = section;
+            let _ = writeln!(got, "{name} {section:?}: {:?}", f.fields());
+        }
+    }
+    let basic = "[Driver, Name, Host, Port, User, Source, Password, Database, Dsn, Test, Save, Cancel]";
+    let pg = "[SslMode, TlsCa, TlsCert, TlsKey, StatementCache, Environment, SessionPreset, SessionSql, Color, Icon, \
+              Folder, Test, Save, Cancel]";
+    let my = "[SslMode, TlsCa, TlsCert, TlsKey, ServerKey, KeyRetrieval, Environment, SessionPreset, SessionSql, Color, \
+              Icon, Folder, Test, Save, Cancel]";
+    let want: String = [("postgres", pg), ("mysql", my), ("redis", pg), ("elasticsearch", pg), ("sqlite", pg)]
+        .iter()
+        .map(|(name, advanced)| format!("{name} Basic: {basic}\n{name} Advanced: {advanced}\n"))
+        .collect();
+    assert_eq!(got, want);
+}
+
+/// A new profile starts on the first driver row, the only one enabled before the app says which
+/// it has, with TLS preferred.
+#[test]
+fn a_new_profile_starts_in_prefer() {
+    let f = ProfileForm::new_profile();
+    assert_eq!(f.driver, 0);
+    assert_eq!(f.drivers_enabled, [true, false, false, false]);
+    assert_eq!(f.tls_mode(), TlsMode::Prefer);
+    assert_eq!(f.to_profile().sslmode, "prefer");
+}

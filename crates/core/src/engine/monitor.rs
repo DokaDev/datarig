@@ -2,7 +2,14 @@
 //! and the engine's monitor rules for it.
 
 use super::{EngineId, Fact, MonitorRules, Why};
-use crate::monitor::{Flavour, MonitorFormat};
+use crate::monitor::{Flavour, MonitorFormat, PgMonitor};
+
+impl From<PgMonitor> for MonitorFormat {
+    /// The format a PostgreSQL probe gave.
+    fn from(pg: PgMonitor) -> Self {
+        MonitorFormat::Postgres(pg)
+    }
+}
 
 impl MonitorFormat {
     /// The engine whose probe gave the format.

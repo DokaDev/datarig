@@ -25,6 +25,8 @@ mod edit;
 mod export;
 #[path = "engine_conformance/filter.rs"]
 mod filter;
+#[path = "engine_conformance/form.rs"]
+mod form;
 #[path = "engine_conformance/golden.rs"]
 mod golden;
 #[path = "engine_conformance/golden/values.rs"]
@@ -422,6 +424,18 @@ fn hierarchy_on_every_engine() {
 }
 
 #[test]
+fn language_on_every_engine() {
+    engines_are_the_registrys();
+    run("language", &form::language_cases(), form::language);
+}
+
+#[test]
+fn form_fields_on_every_engine() {
+    engines_are_the_registrys();
+    run("form", &form::form_cases(), form::form);
+}
+
+#[test]
 fn every_case_names_every_engine() {
     let all: Vec<Named> = [
         named_text("classifier", &risk::classifier_cases()),
@@ -452,6 +466,8 @@ fn every_case_names_every_engine() {
         named("catalogue rules", &catalogue::catalogue_cases()),
         named("ddl rules", &catalogue::ddl_cases()),
         named("hierarchy", &catalogue::hierarchy_cases()),
+        named("language", &form::language_cases()),
+        named("form", &form::form_cases()),
         named("filter types", &catalogue::filter_type_cases()),
         named("duplicates choice", &edit::cases()),
     ]

@@ -6,10 +6,6 @@
 
 # Variants of the engine enums named outside the seam modules.
 [references]
-"crates/bench/src/editor" = 1
-"crates/bench/src/export" = 1
-"crates/bench/src/monitor" = 1
-"crates/core/src/profile" = 2
 "crates/drivers/mysql/src/connect" = 0
 "crates/drivers/mysql/src/meta" = 0
 "crates/drivers/mysql/src/query" = 0
@@ -28,9 +24,7 @@
 # Legacy markers of engine identity outside the seam modules: the `mariadb` flag, `is_mysql`,
 # `mysql: bool`, `pg: bool`, `Scheme::of_driver`, `Dbms::of_driver`, the text "mariadb".
 [markers]
-"crates/bench/src/proxy" = 2
 "crates/drivers/mysql/src/connect" = 0
-"crates/tui/src/app" = 3
 
 # Matches with an arm naming an engine variant and a catch-all arm (seam modules included).
 [catch_alls]

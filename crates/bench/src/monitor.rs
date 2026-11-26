@@ -168,7 +168,7 @@ fn lock_table(n: u64, sessions: usize) -> LockList {
 
 /// A PostgreSQL connection probed, so the Overview draws its charts for the format.
 fn ready() -> MonState {
-    MonState::Ready(MonitorFormat::Postgres(PgMonitor {
+    MonState::Ready(MonitorFormat::from(PgMonitor {
         version: 170011,
         superuser: true,
         read_all_stats: true,

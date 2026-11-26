@@ -6,10 +6,10 @@ use super::{
 };
 use super::{
     CancelRules, CatalogueRules, CountInTx, DdlLock, DdlOfIndex, DdlRules, DdlToConsole, EditRules, EngineId,
-    EngineSpec, ExportRules, Fact, FilterCalls, FilterShape, FilterSql, FilterSyntax, GroupParts, InputRules, Like,
-    MonitorRules, MonitorTerms, NameMatch, NullSafe, OpenVerdict, PlanRules, Provider, READ_ONLY_NOT_PROVEN,
-    ReadOnlyProof, ResultTables, RiskRules, Routes, ServerFacts, SessionRules, SortRules, Support, TextRules,
-    Transport, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, ValueRules,
+    EngineSpec, ExportRules, Fact, FilterCalls, FilterShape, FilterSql, FilterSyntax, FormFields, GroupParts,
+    InputRules, Like, MonitorRules, MonitorTerms, NameMatch, NullSafe, OpenVerdict, PlanRules, Provider,
+    READ_ONLY_NOT_PROVEN, ReadOnlyProof, ResultTables, RiskRules, Routes, ServerFacts, SessionRules, SortRules,
+    Support, TextRules, Transport, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, ValueRules,
 };
 use crate::driver::{
     ArrayElement, ColumnMeta, EditFormat, ExplainFormat, Hierarchy, ReadIn, ServerMessage, SessionRole, SessionValues,
@@ -43,6 +43,8 @@ pub static SPEC: EngineSpec = EngineSpec {
     preset_key: "postgres",
     form_key: "postgres",
     hierarchy: Hierarchy::DatabaseSchema,
+    language: Language::Sql(Dialect::Postgres),
+    form: FormFields { statement_cache: true, server_key: false },
     text: &PgText,
     risk: &PgRisk,
     tx: &PgTx,

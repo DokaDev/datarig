@@ -2,13 +2,13 @@
 //! row and icon.
 
 use super::mysql_family::{
-    FamilyCancel, FamilyCatalogue, FamilyDdl, FamilyExport, FamilyFilter, FamilySession, FamilySort, FamilyText,
-    FamilyTx, FamilyValues, family_classifier, family_filter_calls, family_read_only_calls,
+    DEFAULT_MODE, FAMILY_FORM, FamilyCancel, FamilyCatalogue, FamilyDdl, FamilyExport, FamilyFilter, FamilySession,
+    FamilySort, FamilyText, FamilyTx, FamilyValues, family_classifier, family_filter_calls, family_read_only_calls,
 };
 use super::{EngineId, EngineSpec, Fact, FilterCalls, MYSQL_FAMILY, RiskRules, Support, Transport, Why};
 use crate::driver::Hierarchy;
 use crate::profile::dsn::Scheme;
-use crate::sql::dialect::Dialect;
+use crate::sql::dialect::{Dialect, Language};
 use crate::sql::risk::Classifier;
 use crate::sql::risk::mysql::Judged;
 
@@ -22,6 +22,8 @@ pub static SPEC: EngineSpec = EngineSpec {
     preset_key: "mysql",
     form_key: "mysql",
     hierarchy: Hierarchy::SchemaOnly,
+    language: Language::Sql(Dialect::MariaDb(DEFAULT_MODE)),
+    form: FAMILY_FORM,
     text: &FamilyText,
     risk: &MariadbRisk,
     tx: &FamilyTx,

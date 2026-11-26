@@ -16,7 +16,7 @@
 
 use crate::widgets::statement_list::StatementList;
 use crate::widgets::text_input::{InputResult, TextInput};
-use datarig_core::engine;
+use datarig_core::engine::{self, FormFields};
 use datarig_core::policy::{self, CommitRule, Confirm, Environment, EnvironmentId, PagingMode, Policy};
 use datarig_core::profile::color::{self, ProfileColor};
 use datarig_core::profile::dsn::{self, Dsn, DsnError, Scheme};
@@ -642,7 +642,7 @@ pub struct ProfileForm {
     /// Index into [`DRIVERS`].
     pub driver: usize,
     /// Which [`DRIVERS`] can be picked (the app has a driver for them).
-    pub drivers_enabled: [bool; 4],
+    pub drivers_enabled: [bool; DRIVERS.len()],
     pub section: Section,
     /// The environment picked (its name); `None`: the default rules.
     pub environment: Option<String>,
@@ -792,7 +792,8 @@ struct FormValues {
 
 impl ProfileForm {
     pub fn new_profile() -> Self {
-        let c = ConnectionConfig { host: "localhost".into(), sslmode: "prefer".into(), ..ConnectionConfig::default() };
+        let sslmode = TlsMode::Prefer.name(engine::expected(DRIVERS[0].0).form_scheme()).into();
+        let c = ConnectionConfig { host: "localhost".into(), sslmode, ..ConnectionConfig::default() };
         Self::from_profile(&c, String::new(), None)
     }
 
@@ -965,7 +966,7 @@ impl ProfileForm {
             server_key: TextInput::new(c.server_public_key_file.as_deref().unwrap_or("")),
             key_retrieval: c.allow_public_key_retrieval,
             driver: driver_index(&c.driver),
-            drivers_enabled: [true, false, false, false],
+            drivers_enabled: std::array::from_fn(|i| i == 0),
             section: Section::Basic,
             environment: c.policy.clone(),
             environments: Vec::new(),
@@ -1407,10 +1408,10 @@ impl ProfileForm {
         engine::expected(DRIVERS[self.driver].0).form_scheme()
     }
 
-    /// The driver picked is a MySQL one: the PostgreSQL-only setting (the statement cache) is
-    /// not shown, MySQL's (the server key file, key retrieval) are.
-    pub fn is_mysql(&self) -> bool {
-        self.scheme() == Scheme::MySql
+    /// The engine-only fields of the driver picked: whether the statement cache is shown, and
+    /// the server key file and key retrieval.
+    pub fn form_fields(&self) -> FormFields {
+        engine::expected(DRIVERS[self.driver].0).form_fields()
     }
 
     /// The profile would connect to a server on another machine directly, with TLS off (see
@@ -1650,13 +1651,13 @@ impl ProfileForm {
             Section::Basic => &BASIC,
             Section::Advanced | Section::Ssh => &ADVANCED,
         };
-        let mysql = self.is_mysql();
+        let form = self.form_fields();
         let mut out: Vec<Field> = section
             .iter()
             .copied()
             .filter(|f| !matches!(f, Field::Password | Field::Command | Field::Env) || Some(*f) == shown)
-            .filter(|f| !(mysql && *f == Field::StatementCache))
-            .filter(|f| mysql || !matches!(f, Field::ServerKey | Field::KeyRetrieval))
+            .filter(|f| form.statement_cache || *f != Field::StatementCache)
+            .filter(|f| form.server_key || !matches!(f, Field::ServerKey | Field::KeyRetrieval))
             .collect();
         if self.section == Section::Basic {
             out.push(Field::Dsn);
@@ -2195,7 +2196,7 @@ impl ProfileForm {
         // driver refuses any other path too).
         let relative = |p: &str| !p.is_empty() && !p.starts_with("~/") && !std::path::Path::new(p).has_root();
         let key = self.server_key.text().trim();
-        if self.is_mysql() && relative(key) {
+        if self.form_fields().server_key && relative(key) {
             out.push((Field::ServerKey, FieldError::AbsolutePath));
         }
         out.extend(self.tls_errors(relative));

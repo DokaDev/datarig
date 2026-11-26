@@ -170,7 +170,7 @@ fn the_form_warns_of_an_unencrypted_connection() {
     h.app.overlays.form_mut().unwrap().focus_field(Field::Host);
     h.ctrl('u');
     h.type_text("db.example.com");
-    assert!(!h.form().is_mysql());
+    assert!(!h.form().form_fields().server_key);
     assert!(!h.screen(120, 40).contains(short));
     off(&mut h);
     assert!(h.screen(120, 40).contains(short), "{}", h.screen(120, 40));

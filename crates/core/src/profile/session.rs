@@ -45,8 +45,9 @@
 //! still connects, and says so).
 
 use super::ConnectionConfig;
+use crate::engine::EngineId;
 use crate::policy::Policy;
-use crate::sql::dialect::{Dialect, Language, MySqlMode};
+use crate::sql::dialect::Language;
 use crate::sql::risk::{Classifier, NotLocal, ReadOnlyBlock, SetProblem};
 use serde::{Deserialize, Deserializer};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -113,14 +114,15 @@ impl Dbms {
         }
     }
 
-    /// The language its statements are checked in (MySQL: MySQL's, in the default sql mode; a
-    /// preset is the family's, and the check also reads it with `ANSI_QUOTES` and on MariaDB's
-    /// lists).
+    /// The language its statements are checked in: that of the first engine, in registry
+    /// order, whose presets these are (MySQL's, in the default sql mode, for `mysql`; a preset
+    /// is the family's, and the check also reads it with `ANSI_QUOTES` and on MariaDB's lists).
     pub fn language(self) -> Language {
-        match self {
-            Dbms::Postgres => Language::Sql(Dialect::Postgres),
-            Dbms::MySql => Language::Sql(Dialect::MySql(MySqlMode::default())),
-        }
+        EngineId::ALL
+            .iter()
+            .map(|id| id.spec())
+            .find(|s| s.preset_key == self.as_str())
+            .map_or_else(Language::default, |s| s.language)
     }
 }
 
