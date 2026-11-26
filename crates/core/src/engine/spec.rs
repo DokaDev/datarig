@@ -268,6 +268,9 @@ pub trait MonitorRules: Sync {
     /// What the server's refusal `e` of an action on `target`, sent `via`, means; `None` when
     /// it is not a refusal (another failure).
     fn denied(&self, f: &MonitorFormat, target: &ActionTarget, via: Via, e: NativeError) -> Option<Denied>;
+
+    /// What the monitor's views call things on the engine's servers.
+    fn terms(&self) -> &'static MonitorTerms;
 }
 
 /// An engine's action routes: its standard one, then one per provider whose route differs.
@@ -281,6 +284,151 @@ impl Routes {
     pub fn of(&self, flavour: Flavour) -> &ActionRoute {
         self.providers.iter().find(|r| r.flavour == flavour).unwrap_or(&self.standard)
     }
+}
+
+/// What the monitor's views call things on an engine's servers: the words the views use, as
+/// data (the views word them).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MonitorTerms {
+    /// What the session list's id column is headed.
+    pub session_id: SessionIdName,
+    /// How the server's role is said.
+    pub role: RoleWords,
+    /// How the server's version line is shortened.
+    pub version_line: VersionLine,
+    /// Which lock waits the monitor asks who blocks them.
+    pub waits_asked: WaitsAsked,
+    /// The charts of several series the Overview draws.
+    pub charts: Charts,
+    /// The server tells a statement's start in whole seconds: starts worked out from it move
+    /// a little from one read to the next.
+    pub start_in_seconds: bool,
+    /// An end's question says the session's open transaction is rolled back (where the
+    /// engine's own warnings do not say what an end keeps).
+    pub end_says_rollback: bool,
+    /// What the Replication view calls things.
+    pub replication: ReplicationTerms,
+}
+
+/// What the session list's id column is headed ([`MonitorTerms::session_id`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionIdName {
+    /// `id`: the connection's id.
+    Id,
+    /// `pid`: the server process's id.
+    Pid,
+}
+
+/// How the server's role is said ([`MonitorTerms::role`]), of the server, never of the
+/// profile's own mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoleWords {
+    /// By the server's read-only setting: read-only, or takes writes.
+    ReadOnlyFlag,
+    /// By recovery: a standby, or a primary.
+    Recovery,
+}
+
+/// How the server's version line is shortened ([`MonitorTerms::version_line`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VersionLine {
+    /// The number, then the product's name from the line's comment.
+    NumberThenProduct,
+    /// The line up to its build details (` (` or ` on `), clipped.
+    UpToBuild,
+}
+
+/// Which lock waits the monitor asks who blocks them ([`MonitorTerms::waits_asked`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WaitsAsked {
+    /// The longest waits only: past them, who blocks a wait was not asked.
+    Longest,
+    /// Every wait the lock read lists.
+    All,
+}
+
+/// The charts of several series the Overview draws ([`MonitorTerms::charts`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Charts {
+    /// Statements by type, and the threads by command.
+    StatementsAndCommands,
+    /// Rows by operation, and the sessions by state.
+    RowsAndStates,
+}
+
+/// What the Replication view calls things on an engine's servers ([`MonitorTerms::replication`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReplicationTerms {
+    /// How a source without a channel name is headed.
+    pub channels: ChannelWords,
+    /// What the receiving side is called.
+    pub receiver: ReceiverName,
+    /// What the source's last message is called.
+    pub last_message: LastMessage,
+    /// The receiving side's line is shown also when there is no receiver.
+    pub receiver_line_always: bool,
+    /// What the applying side is called.
+    pub applier: ApplierName,
+    /// When the last transaction was applied is said on the applier's line (else, as when it
+    /// was last replayed, below the positions).
+    pub applied_on_applier_line: bool,
+    /// An applier 0 behind with the receiver not running is said to count only what the
+    /// receiver fetched: it does not show the server caught up with its source.
+    pub zero_lag_note: bool,
+    /// How a lag in bytes is said.
+    pub lag_bytes: LagBytes,
+    /// How a server that takes changes from this one is said.
+    pub replica: ReplicaWho,
+}
+
+/// How a source without a channel name is headed ([`ReplicationTerms::channels`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChannelWords {
+    /// As the default channel.
+    Named,
+    /// As a stream: its source, or that there is no receiver.
+    Streams,
+}
+
+/// What the receiving side is called ([`ReplicationTerms::receiver`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReceiverName {
+    Receiver,
+    WalReceiver,
+}
+
+/// What the source's last message is called ([`ReplicationTerms::last_message`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LastMessage {
+    /// A heartbeat, sent only while the source has nothing else to send: its age is no
+    /// measure of how long the source has been silent.
+    Heartbeat,
+    Message,
+}
+
+/// What the applying side is called ([`ReplicationTerms::applier`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApplierName {
+    Applier,
+    Replay,
+}
+
+/// How a lag in bytes is said ([`ReplicationTerms::lag_bytes`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LagBytes {
+    /// Fetched and not applied yet.
+    Fetched,
+    /// Behind.
+    Behind,
+}
+
+/// How a server that takes changes from this one is said ([`ReplicationTerms::replica`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReplicaWho {
+    /// Its address, account and state; how far behind it is is not known here.
+    ClientUserState,
+    /// Its name, address, state and sync state, then how far behind it is, from the stream.
+    NameClientStateSync,
 }
 
 /// How an engine's catalogue names what a result reads.

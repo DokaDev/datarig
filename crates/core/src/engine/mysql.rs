@@ -5,8 +5,12 @@ use super::mysql_family::{
     FamilyTx, FamilyValues, family_classifier, family_filter_calls, family_read_only_calls,
 };
 use super::{
-    EditRules, EngineFacts, EngineId, EngineSpec, Fact, FilterCalls, MYSQL_FAMILY, MonitorRules, PlanRules, Provider,
-    RiskRules, Routes, ServerFacts, Support, Transport, Version, Why,
+    ApplierName, ChannelWords, Charts, LagBytes, LastMessage, ReceiverName, ReplicaWho, ReplicationTerms, RoleWords,
+    SessionIdName, VersionLine, WaitsAsked,
+};
+use super::{
+    EditRules, EngineFacts, EngineId, EngineSpec, Fact, FilterCalls, MYSQL_FAMILY, MonitorRules, MonitorTerms,
+    PlanRules, Provider, RiskRules, Routes, ServerFacts, Support, Transport, Version, Why,
 };
 use crate::driver::{EditFormat, ExplainFormat, Hierarchy, MySqlEdit};
 use crate::monitor::action::{
@@ -165,6 +169,31 @@ impl EditRules for MysqlEdits {
 /// What a monitor may do to the other sessions of MySQL's servers.
 struct MysqlMonitorRules;
 
+/// What the monitor's views call things on MySQL's servers: connections by id, the role by
+/// `read_only`, the version with its product's name, starts in whole seconds, channels with
+/// their receiver and applier threads; its lock read lists every wait, and its own warning
+/// says what an end keeps.
+const MYSQL_TERMS: MonitorTerms = MonitorTerms {
+    session_id: SessionIdName::Id,
+    role: RoleWords::ReadOnlyFlag,
+    version_line: VersionLine::NumberThenProduct,
+    waits_asked: WaitsAsked::All,
+    charts: Charts::StatementsAndCommands,
+    start_in_seconds: true,
+    end_says_rollback: false,
+    replication: ReplicationTerms {
+        channels: ChannelWords::Named,
+        receiver: ReceiverName::Receiver,
+        last_message: LastMessage::Heartbeat,
+        receiver_line_always: true,
+        applier: ApplierName::Applier,
+        applied_on_applier_line: true,
+        zero_lag_note: true,
+        lag_bytes: LagBytes::Fetched,
+        replica: ReplicaWho::ClientUserState,
+    },
+};
+
 const MYSQL_STANDARD: Guidance = Guidance { grants: &["CONNECTION_ADMIN"], service_users: &[] };
 const RDS_MYSQL: Fallback =
     Fallback { cancel: "mysql.rds_kill_query", terminate: "mysql.rds_kill", on: &[MYSQL_KILL_DENIED] };
@@ -273,6 +302,10 @@ impl MonitorRules for MysqlMonitorRules {
 
     fn routes(&self) -> &'static Routes {
         &MYSQL_ROUTES
+    }
+
+    fn terms(&self) -> &'static MonitorTerms {
+        &MYSQL_TERMS
     }
 
     /// Amazon RDS up to 8.0.32 refusing a procedure for a long target user name; the

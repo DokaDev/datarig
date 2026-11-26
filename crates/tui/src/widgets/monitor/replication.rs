@@ -7,6 +7,9 @@ use super::{Cx, age, put};
 use crate::app::monitor::{MonitorHits, MonitorView};
 use crate::text::{human_bytes, width};
 use crate::theme;
+use datarig_core::engine::{
+    ApplierName, ChannelWords, LagBytes, LastMessage, ReceiverName, ReplicaWho, ReplicationTerms,
+};
 use datarig_core::monitor::replication::{ChannelError, Member, Replica, Running, Side, Slot, Upstream};
 use datarig_core::monitor::{ExtraKey, Flavour, GaugeKind, Lag, Replication, Role, Timestamp, Visibility};
 use datarig_i18n::{Label, Msg};
@@ -25,6 +28,11 @@ const INDENT: &str = "  ";
 const KEY_MAX: usize = 18;
 
 impl Cx<'_> {
+    /// What the view calls things on the server's engine (`None`: no format yet).
+    fn repl_terms(&self) -> Option<ReplicationTerms> {
+        self.terms.map(|t| t.replication)
+    }
+
     /// The Replication view in `area`, from its line `top` (kept within the lines): the top drawn.
     pub(super) fn replication(&self, area: Rect, buf: &mut Buffer, hits: &mut MonitorHits) -> usize {
         let lines = self.replication_lines(area.width.saturating_sub(2) as usize);
@@ -129,13 +137,15 @@ impl Cx<'_> {
         let text = Style::new().fg(th.fg);
         let dim = Style::new().fg(th.fg_dim);
         let ago = |t: Option<Timestamp>| t.and_then(|t| now.since(t)).map(age);
+        let terms = self.repl_terms();
         // Where from.
         let source = u.source.clone().unwrap_or_else(|| "?".into());
-        let mut head = match (&u.channel, self.mysql) {
+        // No format yet: as a stream.
+        let mut head = match (&u.channel, terms.map_or(ChannelWords::Streams, |t| t.channels)) {
             (Some(name), _) => self.msg(Msg::MonitorReplChannel { name: name.clone(), source }),
-            (None, true) => self.msg(Msg::MonitorReplChannelDefault { source }),
-            (None, false) if u.receiver == Running::No => self.label(Label::MonitorReplNoReceiver),
-            (None, false) => self.msg(Msg::MonitorReplSource { source }),
+            (None, ChannelWords::Named) => self.msg(Msg::MonitorReplChannelDefault { source }),
+            (None, ChannelWords::Streams) if u.receiver == Running::No => self.label(Label::MonitorReplNoReceiver),
+            (None, ChannelWords::Streams) => self.msg(Msg::MonitorReplSource { source }),
         };
         if let Some(slot) = &u.slot {
             head.push_str(" · ");
@@ -145,46 +155,54 @@ impl Cx<'_> {
         if u.visible == Visibility::Hidden {
             out.push((format!("{INDENT}{}", self.label(Label::MonitorReplStreamHidden)), dim));
         }
-        // The receiving side.
-        let receiver_label =
-            self.label(if self.mysql { Label::MonitorReplReceiver } else { Label::MonitorReplWalReceiver });
+        // The receiving side (no format yet: the WAL receiver).
+        let receiver_label = self.label(match terms.map_or(ReceiverName::WalReceiver, |t| t.receiver) {
+            ReceiverName::Receiver => Label::MonitorReplReceiver,
+            ReceiverName::WalReceiver => Label::MonitorReplWalReceiver,
+        });
         let mut parts = vec![format!("{receiver_label}: {}", self.running(&u.receiver))];
         let mut style = run_style(&u.receiver);
         if let Some(state) = &u.receiver_state {
             parts.push(state.clone());
         }
         // A MySQL source sends a heartbeat only while it has nothing else to send: its age is
-        // no measure of how long the source has been silent.
+        // no measure of how long the source has been silent. No format yet: a message.
         if let Some(a) = ago(u.last_message) {
-            parts.push(match self.mysql {
-                true => self.msg(Msg::MonitorReplLastHeartbeat { time: a }),
-                false => self.msg(Msg::MonitorReplLastMessage { time: a }),
+            parts.push(match terms.map_or(LastMessage::Message, |t| t.last_message) {
+                LastMessage::Heartbeat => self.msg(Msg::MonitorReplLastHeartbeat { time: a }),
+                LastMessage::Message => self.msg(Msg::MonitorReplLastMessage { time: a }),
             });
         }
         if let Some(a) = ago(u.last_received) {
             parts.push(self.msg(Msg::MonitorReplLastFetched { time: a }));
         }
-        // A PostgreSQL standby without a receiver says so in its heading.
-        if u.receiver != Running::No || self.mysql {
+        // A PostgreSQL standby without a receiver says so in its heading, as does a server with
+        // no format yet.
+        if u.receiver != Running::No || terms.is_some_and(|t| t.receiver_line_always) {
             pack(out, INDENT, parts, w, style);
         }
-        // The applying side.
-        let applier_label = self.label(if self.mysql { Label::MonitorReplApplier } else { Label::MonitorReplReplay });
+        // The applying side (no format yet: replay).
+        let applier_label = self.label(match terms.map_or(ApplierName::Replay, |t| t.applier) {
+            ApplierName::Applier => Label::MonitorReplApplier,
+            ApplierName::Replay => Label::MonitorReplReplay,
+        });
+        // When the last transaction was applied: on the applier's line, else below the
+        // positions as when it was last replayed (no format yet).
+        let applied_here = terms.is_some_and(|t| t.applied_on_applier_line);
         let mut parts = vec![format!("{applier_label}: {}", self.running(&u.applier))];
         style = run_style(&u.applier);
         if let Some(state) = &u.applier_state {
             parts.push(state.clone());
         }
-        if self.mysql
-            && let Some(a) = ago(u.last_applied)
-        {
+        if applied_here && let Some(a) = ago(u.last_applied) {
             parts.push(self.msg(Msg::MonitorReplLastApplied { time: a }));
         }
         pack(out, INDENT, parts, w, style);
         // How far behind.
         let (lag, lag_style) = self.lag(&u.lag(), true);
         wrapped(out, INDENT, &lag, w, lag_style);
-        if self.mysql && u.applier_behind == Some(0) && u.receiver != Running::Yes {
+        // No format yet: no note.
+        if terms.is_some_and(|t| t.zero_lag_note) && u.applier_behind == Some(0) && u.receiver != Running::Yes {
             wrapped(out, INDENT, &self.label(Label::MonitorReplZeroNote), w, dim);
         }
         if let (Some(read), Some(applied)) = (&u.source_read, &u.source_applied) {
@@ -202,9 +220,7 @@ impl Cx<'_> {
             let replayed = self.msg(Msg::MonitorReplReplayed { replayed: applied.to_string() });
             out.push((format!("{INDENT}{replayed}"), text));
         }
-        if !self.mysql
-            && let Some(a) = ago(u.last_applied)
-        {
+        if !applied_here && let Some(a) = ago(u.last_applied) {
             wrapped(out, INDENT, &self.msg(Msg::MonitorReplLastReplayed { time: a }), w, dim);
         }
         if let Some(d) = u.delay.filter(|d| *d > 0) {
@@ -235,9 +251,10 @@ impl Cx<'_> {
                 let mut parts = Vec::new();
                 if let Some(b) = bytes {
                     let bytes = human_bytes(*b);
-                    parts.push(match self.mysql {
-                        true => self.msg(Msg::MonitorLagBytesFetched { bytes }),
-                        false => self.msg(Msg::MonitorLagBytes { bytes }),
+                    // No format yet: behind.
+                    parts.push(match self.repl_terms().map_or(LagBytes::Behind, |t| t.lag_bytes) {
+                        LagBytes::Fetched => self.msg(Msg::MonitorLagBytesFetched { bytes }),
+                        LagBytes::Behind => self.msg(Msg::MonitorLagBytes { bytes }),
                     });
                 }
                 if let Some(n) = transactions {
@@ -285,7 +302,9 @@ impl Cx<'_> {
         let th = theme::cur();
         let dim = Style::new().fg(th.fg_dim);
         let mut who = Vec::new();
-        if self.mysql {
+        // No format yet: by its name, and how far behind from the stream.
+        let shape = self.repl_terms().map_or(ReplicaWho::NameClientStateSync, |t| t.replica);
+        if shape == ReplicaWho::ClientUserState {
             who.extend(rep.client.clone());
             who.extend(rep.user.clone());
             who.extend(rep.state.clone());
@@ -300,7 +319,7 @@ impl Cx<'_> {
         }
         pack(out, INDENT, who, w, Style::new().fg(th.fg));
         let indent = format!("{INDENT}{INDENT}");
-        if self.mysql {
+        if shape == ReplicaWho::ClientUserState {
             out.push((format!("{indent}{}", self.label(Label::MonitorReplicaMysqlLag)), dim));
             return;
         }
@@ -573,5 +592,277 @@ mod tests {
         assert_eq!(shown.chars().count(), SET_CHARS + 1);
         assert!(shown.ends_with('…') && !shown.contains('\n'));
         assert_eq!(set_start("a:1-5,\nb:1-3"), "a:1-5, b:1-3");
+    }
+
+    /// A server it takes changes from, both sides running, nothing else known.
+    fn upstream() -> Upstream {
+        Upstream {
+            channel: None,
+            source: Some("10.0.0.5:3306".into()),
+            slot: None,
+            receiver: Running::Yes,
+            receiver_state: None,
+            applier: Running::Yes,
+            applier_state: None,
+            received: None,
+            applied: None,
+            received_set: None,
+            executed_set: None,
+            gtids_only: false,
+            gtids_left: None,
+            source_read: None,
+            source_applied: None,
+            applier_behind: None,
+            delay: None,
+            last_message: Some(Timestamp(-2_000_000)),
+            last_received: None,
+            last_applied: Some(Timestamp(-5_000_000)),
+            errors: Vec::new(),
+            visible: Visibility::Full,
+        }
+    }
+
+    /// A server that takes changes from this one.
+    fn replica() -> Replica {
+        use datarig_core::monitor::Lsn;
+        Replica {
+            id: Some(87),
+            name: Some("walreceiver".into()),
+            client: Some("10.0.0.21".into()),
+            state: Some("streaming".into()),
+            sync: Some("async".into()),
+            sent: Some(Lsn(4096)),
+            written: Some(Lsn(4096)),
+            flushed: Some(Lsn(4096)),
+            replayed: Some(Lsn(1024)),
+            write_lag: None,
+            flush_lag: None,
+            replay_lag: Some(1_834),
+            reply: None,
+            user: Some("repl".into()),
+            visible: Visibility::Full,
+        }
+    }
+
+    /// The lines of each case, for each format and for none: what the replication view calls
+    /// the receiving and applying sides, the channel, the last message, the lag in bytes and a
+    /// replica, as today.
+    #[test]
+    fn replication_lines_answer_as_today() {
+        use datarig_core::monitor::Lsn;
+        let i18n = datarig_i18n::I18n::new(datarig_i18n::Lang::En);
+        let named = Upstream { channel: Some("east".into()), ..upstream() };
+        let standby = Upstream {
+            received: Some(Lsn(4096)),
+            applied: Some(Lsn(4096)),
+            last_received: Some(Timestamp(-1_000_000)),
+            ..upstream()
+        };
+        let no_receiver = Upstream { receiver: Running::No, ..standby.clone() };
+        let zero = Upstream { receiver: Running::No, applier_behind: Some(0), ..upstream() };
+        let behind = Upstream { applied: Some(Lsn(1024)), ..standby.clone() };
+        let upstreams = [
+            ("default channel", upstream()),
+            ("named channel", named),
+            ("standby", standby),
+            ("no receiver", no_receiver),
+            ("zero, receiver off", zero),
+            ("behind", behind),
+        ];
+        let hidden = Replica { visible: Visibility::Hidden, ..replica() };
+        let replicas = [("replica", replica()), ("hidden replica", hidden)];
+        let read = Replication {
+            time: Timestamp(0),
+            in_recovery: None,
+            position: Some(Lsn(4096)),
+            upstream: None,
+            replicas: None,
+            slots: None,
+            subscriptions: None,
+            members: Vec::new(),
+            hidden: Vec::new(),
+        };
+        let mut got = Vec::new();
+        for (format, f) in super::super::tests::formats() {
+            let m = super::super::tests::tab(f);
+            let c = super::super::tests::cx(&i18n, &m);
+            for (case, u) in &upstreams {
+                let mut out = Lines::new();
+                c.upstream(u, Timestamp(0), 200, &mut out);
+                got.extend(out.into_iter().map(|(l, _)| format!("{format}, {case}: {l}")));
+            }
+            for (case, r) in &replicas {
+                let mut out = Lines::new();
+                c.replica(r, &read, 200, &mut out);
+                got.extend(out.into_iter().map(|(l, _)| format!("{format}, {case}: {l}")));
+            }
+        }
+        let want = [
+            "pg, default channel: Takes changes from 10.0.0.5:3306",
+            "pg, default channel:   WAL receiver: running · last heard from the source 2s ago",
+            "pg, default channel:   replay: running",
+            "pg, default channel:   how far behind is not known",
+            "pg, default channel:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "pg, named channel: Channel east from 10.0.0.5:3306",
+            "pg, named channel:   WAL receiver: running · last heard from the source 2s ago",
+            "pg, named channel:   replay: running",
+            "pg, named channel:   how far behind is not known",
+            "pg, named channel:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "pg, standby: Takes changes from 10.0.0.5:3306",
+            "pg, standby:   WAL receiver: running · last heard from the source 2s ago · last transaction fetched 1s ago",
+            "pg, standby:   replay: running",
+            "pg, standby:   applied all it received",
+            "pg, standby:   received 0/1000 · replayed 0/1000",
+            "pg, standby:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "pg, no receiver: No WAL receiver: the standby replays only what it has, or reads from an archive",
+            "pg, no receiver:   replay: running",
+            "pg, no receiver:   applied all it received",
+            "pg, no receiver:   received 0/1000 · replayed 0/1000",
+            "pg, no receiver:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "pg, zero, receiver off: No WAL receiver: the standby replays only what it has, or reads from an archive",
+            "pg, zero, receiver off:   replay: running",
+            "pg, zero, receiver off:   how far behind is not known",
+            "pg, zero, receiver off:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "pg, behind: Takes changes from 10.0.0.5:3306",
+            "pg, behind:   WAL receiver: running · last heard from the source 2s ago · last transaction fetched 1s ago",
+            "pg, behind:   replay: running",
+            "pg, behind:   3 KB not replayed yet",
+            "pg, behind:   received 0/1000 · replayed 0/400",
+            "pg, behind:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "pg, replica:   walreceiver · 10.0.0.21 · streaming · async",
+            "pg, replica:     3 KB not replayed yet · lag replay 1ms",
+            "pg, hidden replica:   walreceiver · 10.0.0.21 · streaming · async · pid 87",
+            "pg, hidden replica:     state and positions hidden",
+            "mysql, default channel: Default channel from 10.0.0.5:3306",
+            "mysql, default channel:   receiver: running · last heartbeat 2s ago (sent only while the source has nothing else to send)",
+            "mysql, default channel:   applier: running · last transaction applied 5s ago",
+            "mysql, default channel:   how far behind is not known",
+            "mysql, named channel: Channel east from 10.0.0.5:3306",
+            "mysql, named channel:   receiver: running · last heartbeat 2s ago (sent only while the source has nothing else to send)",
+            "mysql, named channel:   applier: running · last transaction applied 5s ago",
+            "mysql, named channel:   how far behind is not known",
+            "mysql, standby: Default channel from 10.0.0.5:3306",
+            "mysql, standby:   receiver: running · last heartbeat 2s ago (sent only while the source has nothing else to send) · last transaction fetched 1s ago",
+            "mysql, standby:   applier: running · last transaction applied 5s ago",
+            "mysql, standby:   applied all it received",
+            "mysql, standby:   received 0/1000 · replayed 0/1000",
+            "mysql, no receiver: Default channel from 10.0.0.5:3306",
+            "mysql, no receiver:   receiver: stopped · last heartbeat 2s ago (sent only while the source has nothing else to send) · last transaction fetched 1s ago",
+            "mysql, no receiver:   applier: running · last transaction applied 5s ago",
+            "mysql, no receiver:   applied all it received",
+            "mysql, no receiver:   received 0/1000 · replayed 0/1000",
+            "mysql, zero, receiver off: Default channel from 10.0.0.5:3306",
+            "mysql, zero, receiver off:   receiver: stopped · last heartbeat 2s ago (sent only while the source has nothing else to send)",
+            "mysql, zero, receiver off:   applier: running · last transaction applied 5s ago",
+            "mysql, zero, receiver off:   how far behind is not known",
+            "mysql, zero, receiver off:   Seconds_Behind_Source counts only what the receiver fetched: with the receiver not running, 0 does not mean caught up with the source",
+            "mysql, behind: Default channel from 10.0.0.5:3306",
+            "mysql, behind:   receiver: running · last heartbeat 2s ago (sent only while the source has nothing else to send) · last transaction fetched 1s ago",
+            "mysql, behind:   applier: running · last transaction applied 5s ago",
+            "mysql, behind:   3 KB fetched, not applied yet",
+            "mysql, behind:   received 0/1000 · replayed 0/400",
+            "mysql, replica:   10.0.0.21 · repl · streaming",
+            "mysql, replica:     its lag is read on the replica itself",
+            "mysql, hidden replica:   10.0.0.21 · repl · streaming",
+            "mysql, hidden replica:     its lag is read on the replica itself",
+            "none, default channel: Takes changes from 10.0.0.5:3306",
+            "none, default channel:   WAL receiver: running · last heard from the source 2s ago",
+            "none, default channel:   replay: running",
+            "none, default channel:   how far behind is not known",
+            "none, default channel:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "none, named channel: Channel east from 10.0.0.5:3306",
+            "none, named channel:   WAL receiver: running · last heard from the source 2s ago",
+            "none, named channel:   replay: running",
+            "none, named channel:   how far behind is not known",
+            "none, named channel:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "none, standby: Takes changes from 10.0.0.5:3306",
+            "none, standby:   WAL receiver: running · last heard from the source 2s ago · last transaction fetched 1s ago",
+            "none, standby:   replay: running",
+            "none, standby:   applied all it received",
+            "none, standby:   received 0/1000 · replayed 0/1000",
+            "none, standby:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "none, no receiver: No WAL receiver: the standby replays only what it has, or reads from an archive",
+            "none, no receiver:   replay: running",
+            "none, no receiver:   applied all it received",
+            "none, no receiver:   received 0/1000 · replayed 0/1000",
+            "none, no receiver:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "none, zero, receiver off: No WAL receiver: the standby replays only what it has, or reads from an archive",
+            "none, zero, receiver off:   replay: running",
+            "none, zero, receiver off:   how far behind is not known",
+            "none, zero, receiver off:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "none, behind: Takes changes from 10.0.0.5:3306",
+            "none, behind:   WAL receiver: running · last heard from the source 2s ago · last transaction fetched 1s ago",
+            "none, behind:   replay: running",
+            "none, behind:   3 KB not replayed yet",
+            "none, behind:   received 0/1000 · replayed 0/400",
+            "none, behind:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "none, replica:   walreceiver · 10.0.0.21 · streaming · async",
+            "none, replica:     3 KB not replayed yet · lag replay 1ms",
+            "none, hidden replica:   walreceiver · 10.0.0.21 · streaming · async · pid 87",
+            "none, hidden replica:     state and positions hidden",
+        ];
+        assert_eq!(got, want, "{got:#?}");
+    }
+
+    /// Each of the three flags of the receiving and applying lines on by itself, from
+    /// PostgreSQL's terms: the line it moves follows that flag alone.
+    #[test]
+    fn each_replication_flag_moves_its_own_line() {
+        use datarig_core::engine::{EngineId, Fact, MonitorTerms};
+        use datarig_core::monitor::Lsn;
+        let i18n = datarig_i18n::I18n::new(datarig_i18n::Lang::En);
+        let Fact::Known(rules) = &EngineId::Postgres.spec().monitor else { panic!("PostgreSQL has monitor rules") };
+        let pg = *rules.terms();
+        let with = |f: fn(&mut ReplicationTerms)| -> &'static MonitorTerms {
+            let mut t = pg;
+            f(&mut t.replication);
+            Box::leak(Box::new(t))
+        };
+        let flags: [(&str, &'static MonitorTerms); 4] = [
+            ("none", with(|_| {})),
+            ("receiver line always", with(|r| r.receiver_line_always = true)),
+            ("applied on applier line", with(|r| r.applied_on_applier_line = true)),
+            ("zero lag note", with(|r| r.zero_lag_note = true)),
+        ];
+        // No receiver, 0 behind, received all it applied.
+        let u = Upstream {
+            receiver: Running::No,
+            applier_behind: Some(0),
+            received: Some(Lsn(4096)),
+            applied: Some(Lsn(4096)),
+            ..upstream()
+        };
+        let m = super::super::tests::tab(None);
+        let mut got = Vec::new();
+        for (flag, terms) in flags {
+            let c = Cx { terms: Some(terms), ..super::super::tests::cx(&i18n, &m) };
+            let mut out = Lines::new();
+            c.upstream(&u, Timestamp(0), 200, &mut out);
+            got.extend(out.into_iter().map(|(l, _)| format!("{flag}: {l}")));
+        }
+        let want = [
+            "none: No WAL receiver: the standby replays only what it has, or reads from an archive",
+            "none:   replay: running",
+            "none:   applied all it received",
+            "none:   received 0/1000 · replayed 0/1000",
+            "none:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "receiver line always: No WAL receiver: the standby replays only what it has, or reads from an archive",
+            "receiver line always:   WAL receiver: stopped · last heard from the source 2s ago",
+            "receiver line always:   replay: running",
+            "receiver line always:   applied all it received",
+            "receiver line always:   received 0/1000 · replayed 0/1000",
+            "receiver line always:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "applied on applier line: No WAL receiver: the standby replays only what it has, or reads from an archive",
+            "applied on applier line:   replay: running · last transaction applied 5s ago",
+            "applied on applier line:   applied all it received",
+            "applied on applier line:   received 0/1000 · replayed 0/1000",
+            "zero lag note: No WAL receiver: the standby replays only what it has, or reads from an archive",
+            "zero lag note:   replay: running",
+            "zero lag note:   applied all it received",
+            "zero lag note:   Seconds_Behind_Source counts only what the receiver fetched: with the receiver not running, 0 does not mean caught up with the source",
+            "zero lag note:   received 0/1000 · replayed 0/1000",
+            "zero lag note:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+        ];
+        assert_eq!(got, want, "{got:#?}");
     }
 }

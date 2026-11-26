@@ -444,8 +444,9 @@ impl App {
         if !pending.row.statement.is_empty() {
             details.push(Msg::MonitorActStatement { statement: pending.row.statement.clone() });
         }
-        // MySQL's warning that it keeps what is not transactional says this too.
-        if kind == ActionKind::Terminate && matches!(format, MonitorFormat::Postgres(_)) {
+        // Where the engine's own warning says what an end keeps, it says this too. Without the
+        // engine's terms: said.
+        if kind == ActionKind::Terminate && format.rules().ok().is_none_or(|r| r.terms().end_says_rollback) {
             details.push(Label::MonitorActRollsBack.into());
         }
         details.extend(warnings.iter().map(|w| Msg::from(warning_label(*w))));

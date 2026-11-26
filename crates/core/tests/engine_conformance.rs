@@ -370,6 +370,17 @@ fn monitor_routes_on_every_engine() {
 }
 
 #[test]
+fn monitor_terms_on_every_engine() {
+    // Every field of the terms has its case.
+    let pg = &datarig_core::engine::EngineId::Postgres.spec().monitor;
+    let datarig_core::engine::Fact::Known(rules) = pg else { panic!("PostgreSQL has monitor rules") };
+    let fields: Vec<&str> = monitor::term_fields(rules.terms()).into_iter().map(|(name, _)| name).collect();
+    let cases: Vec<&str> = monitor::term_cases().iter().map(|c| c.name).collect();
+    assert_eq!(cases, fields);
+    run("monitor terms", &monitor::term_cases(), monitor::term_of);
+}
+
+#[test]
 fn read_only_open_on_every_engine() {
     run("read-only open", &read_only::cases(), read_only::verdict);
 }
@@ -431,6 +442,7 @@ fn every_case_names_every_engine() {
         named("plan", &plan::plan_cases()),
         named_versioned("plan format", &plan::plan_format_cases()),
         named("monitor routes", &monitor::route_cases()),
+        named("monitor terms", &monitor::term_cases()),
         named("catalogue rules", &catalogue::catalogue_cases()),
         named("ddl rules", &catalogue::ddl_cases()),
         named("hierarchy", &catalogue::hierarchy_cases()),

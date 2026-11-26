@@ -29,6 +29,7 @@ pub use act::{ActionEntry, Asked, MonitorAsk, RowInfo};
 use super::*;
 use crate::widgets::monitor::state_text;
 use datarig_core::config::MonitorInterval;
+use datarig_core::engine::MonitorTerms;
 use datarig_core::monitor::SessionsWanted;
 use datarig_core::monitor::locks::{self, Holder, LockList, Tree};
 use datarig_core::monitor::rate::{self, History, Pending, Rate};
@@ -601,10 +602,16 @@ impl MonitorTab {
         text_ask(self.selected_row()?, self.sessions_time()?)
     }
 
-    /// The server tells a statement's start in whole seconds (MySQL): starts worked out from it
-    /// move a little from one read to the next.
+    /// What the views call things on the server's engine: its monitor rules' terms (`None`: no
+    /// format yet).
+    pub fn terms(&self) -> Option<&'static MonitorTerms> {
+        self.format().and_then(|f| f.rules().ok()).map(|r| r.terms())
+    }
+
+    /// The server tells a statement's start in whole seconds: starts worked out from it move a
+    /// little from one read to the next. No format yet: not.
     fn whole_seconds(&self) -> bool {
-        matches!(self.format(), Some(MonitorFormat::MySql(_)))
+        self.terms().is_some_and(|t| t.start_in_seconds)
     }
 
     /// The statement the details show: the selected row's whole text when it was read for

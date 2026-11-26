@@ -30,9 +30,11 @@ pub use postgres::{PG_PLAN, TX_ROLLBACK_ANSWER_WAIT};
 pub use rules::{Rules, UNBOUND_TAB_DIALECT, UNBOUND_TAB_PLAN};
 pub use session::{OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof};
 pub use spec::{
-    CancelRules, CatalogueRules, DdlOfIndex, DdlRules, DdlToConsole, EditRules, EngineSpec, ExportRules, FilterCalls,
-    FilterShape, FilterSql, FilterSyntax, GroupParts, InputRules, Like, MonitorRules, NameMatch, NullSafe, PlanRules,
-    ResultTables, RiskRules, Routes, SessionRules, SortRules, TextRules, Transport, TxRules, ValueRules,
+    ApplierName, CancelRules, CatalogueRules, ChannelWords, Charts, DdlOfIndex, DdlRules, DdlToConsole, EditRules,
+    EngineSpec, ExportRules, FilterCalls, FilterShape, FilterSql, FilterSyntax, GroupParts, InputRules, LagBytes,
+    LastMessage, Like, MonitorRules, MonitorTerms, NameMatch, NullSafe, PlanRules, ReceiverName, ReplicaWho,
+    ReplicationTerms, ResultTables, RiskRules, RoleWords, Routes, SessionIdName, SessionRules, SortRules, TextRules,
+    Transport, TxRules, ValueRules, VersionLine, WaitsAsked,
 };
 pub use tx::{CountInTx, DdlLock, TxAsk, TxNote, TxRefusal, TxStatement, TxVerdict};
 pub use why::{Feature, Why};

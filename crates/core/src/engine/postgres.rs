@@ -1,11 +1,15 @@
 //! PostgreSQL's row of the registry.
 
 use super::{
+    ApplierName, ChannelWords, Charts, LagBytes, LastMessage, ReceiverName, ReplicaWho, ReplicationTerms, RoleWords,
+    SessionIdName, VersionLine, WaitsAsked,
+};
+use super::{
     CancelRules, CatalogueRules, CountInTx, DdlLock, DdlOfIndex, DdlRules, DdlToConsole, EditRules, EngineId,
     EngineSpec, ExportRules, Fact, FilterCalls, FilterShape, FilterSql, FilterSyntax, GroupParts, InputRules, Like,
-    MonitorRules, NameMatch, NullSafe, OpenVerdict, PlanRules, Provider, READ_ONLY_NOT_PROVEN, ReadOnlyProof,
-    ResultTables, RiskRules, Routes, ServerFacts, SessionRules, SortRules, Support, TextRules, Transport, TxAsk,
-    TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, ValueRules,
+    MonitorRules, MonitorTerms, NameMatch, NullSafe, OpenVerdict, PlanRules, Provider, READ_ONLY_NOT_PROVEN,
+    ReadOnlyProof, ResultTables, RiskRules, Routes, ServerFacts, SessionRules, SortRules, Support, TextRules,
+    Transport, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, ValueRules,
 };
 use crate::driver::{
     ArrayElement, ColumnMeta, EditFormat, ExplainFormat, Hierarchy, ReadIn, ServerMessage, SessionRole, SessionValues,
@@ -70,6 +74,30 @@ impl PlanRules for PgPlan {
 
 /// What a monitor may do to the other sessions of PostgreSQL's servers.
 struct PgMonitorRules;
+
+/// What the monitor's views call things on PostgreSQL's servers: backends by process id, the
+/// role by recovery, the WAL receiver and replay; it asks only the longest waits who blocks
+/// them, and an end rolls the session's transaction back.
+const PG_TERMS: MonitorTerms = MonitorTerms {
+    session_id: SessionIdName::Pid,
+    role: RoleWords::Recovery,
+    version_line: VersionLine::UpToBuild,
+    waits_asked: WaitsAsked::Longest,
+    charts: Charts::RowsAndStates,
+    start_in_seconds: false,
+    end_says_rollback: true,
+    replication: ReplicationTerms {
+        channels: ChannelWords::Streams,
+        receiver: ReceiverName::WalReceiver,
+        last_message: LastMessage::Message,
+        receiver_line_always: false,
+        applier: ApplierName::Replay,
+        applied_on_applier_line: false,
+        zero_lag_note: false,
+        lag_bytes: LagBytes::Behind,
+        replica: ReplicaWho::NameClientStateSync,
+    },
+};
 
 const PG_STANDARD: Guidance = Guidance { grants: &["pg_signal_backend"], service_users: &[] };
 
@@ -161,6 +189,10 @@ impl MonitorRules for PgMonitorRules {
 
     fn routes(&self) -> &'static Routes {
         &PG_ROUTES
+    }
+
+    fn terms(&self) -> &'static MonitorTerms {
+        &PG_TERMS
     }
 
     /// The missing privilege (`insufficient_privilege`): the provider's own session, a

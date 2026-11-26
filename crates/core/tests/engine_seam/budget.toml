@@ -15,7 +15,6 @@
 "crates/drivers/mysql/src/query" = 0
 "crates/drivers/mysql/src/session" = 0
 "crates/drivers/postgres/src/connect" = 0
-"crates/tui/src/app" = 2
 "crates/tui/src/app/copy" = 0
 "crates/tui/src/app/ddl" = 0
 "crates/tui/src/app/filter_dialog" = 0
@@ -24,7 +23,6 @@
 "crates/tui/src/app/table_filter" = 0
 "crates/tui/src/app/table_query" = 0
 "crates/tui/src/app/tx" = 0
-"crates/tui/src/widgets" = 3
 "crates/tui/src/widgets/filter_dialog" = 0
 
 # Legacy markers of engine identity outside the seam modules: the `mariadb` flag, `is_mysql`,
@@ -33,7 +31,6 @@
 "crates/bench/src/proxy" = 2
 "crates/drivers/mysql/src/connect" = 0
 "crates/tui/src/app" = 3
-"crates/tui/src/widgets" = 2
 
 # Matches with an arm naming an engine variant and a catch-all arm (seam modules included).
 [catch_alls]
@@ -49,7 +46,6 @@
 
 # `matches!`, `==`, `!=`, `if let` and `let .. else` on an engine variant (seam modules included).
 [boolean_tests]
-"crates/tui/src/app" = 2
 "crates/tui/src/app/copy" = 0
 "crates/tui/src/app/ddl" = 0
 "crates/tui/src/app/filter_dialog" = 0
@@ -58,7 +54,6 @@
 "crates/tui/src/app/table_filter" = 0
 "crates/tui/src/app/table_query" = 0
 "crates/tui/src/app/tx" = 0
-"crates/tui/src/widgets" = 1
 "crates/tui/src/widgets/filter_dialog" = 0
 
 # Trait items with a default body in the seam's rule traits: none, ever.
