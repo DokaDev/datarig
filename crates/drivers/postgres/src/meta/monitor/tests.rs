@@ -345,3 +345,17 @@ fn the_statements_follow_the_probes_number_on_beta_and_devel_builds() {
         assert_eq!(probe(), every(170011)[0].1);
     }
 }
+
+/// PostgreSQL's lock read has no stall to guard: a session whose version is not known (a beta
+/// build, whose `server_version` does not parse) still reads `pg_locks`, with the wait start its
+/// probe's number gives, as a known version does.
+#[test]
+fn the_lock_read_does_not_need_a_known_version() {
+    use datarig_core::monitor::decode;
+    let cells = ["180000", "t", "t", "t", ""].map(|c| Some(c.to_owned()));
+    let p = decode::pg::probe(&vec![cells.to_vec()]).unwrap();
+    let sql = locks(&p);
+    assert!(sql.contains("FROM pg_locks l"), "{sql}");
+    assert!(sql.contains("l.waitstart AS waitstart"), "{sql}");
+    assert_eq!(sql, locks(&pg(170011)));
+}

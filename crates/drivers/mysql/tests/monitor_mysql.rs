@@ -483,12 +483,19 @@ async fn what_an_account_cannot_see_names_the_privilege() {
     assert!(list.rows.iter().all(|r| r.user.as_deref() == Some(user.as_str())), "{:?}", list.rows);
     assert!(list.rows.iter().all(|r| r.tx == Tx::Unknown));
     // The lock tables are refused: said, never an empty list of waits. The row lock waits are
-    // read only where the session's facts confirm the server (its version, and a direct
-    // connection, which an account that cannot read the marker may not confirm): said as
-    // refused then, and as not confirmed otherwise.
+    // read only on a version with the fix (else that version is said first) and where the
+    // session's facts confirm the server (its version, and a direct connection, which an account
+    // that cannot read the marker may not confirm): said as refused then, and as not confirmed
+    // otherwise.
     let s = monitor.tick(Want { locks: true, server: false, ..TICK }).await.expect("tick");
     let grant = Need::Grant("SELECT on performance_schema");
-    let row = if my.version_confirmed { grant.clone() } else { Need::Unconfirmed };
+    let row = if !my.lock_waits_fixed() {
+        Need::Version(datarig_core::monitor::format::LOCK_WAITS_FROM)
+    } else if my.version_confirmed {
+        grant.clone()
+    } else {
+        Need::Unconfirmed
+    };
     eprintln!("{test}: row lock waits of the unprivileged account: {row:?}");
     assert!(s.hidden.contains(&Hidden { part: Part::RowLockWaits, need: row }), "{:?}", s.hidden);
     assert!(s.hidden.contains(&Hidden { part: Part::MetadataLockWaits, need: grant }), "{:?}", s.hidden);

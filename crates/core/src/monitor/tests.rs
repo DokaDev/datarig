@@ -1651,6 +1651,21 @@ fn a_row_lock_wait_read_names_why_it_was_not_read() {
             assert_eq!(said, Vec::from_iter(need), "{name} at {probed}");
         }
     }
+    // Which version decides the reason: the probe's. Facts of a version without the fix and a
+    // probe with it: in range, not confirmed. The reverse: the probe's version first.
+    let pair = |facts: (u16, u16, u16), probed: u32| {
+        let facts = mysql_facts(known(facts.0, facts.1, facts.2), direct());
+        let my = MySqlMonitor {
+            version: probed,
+            version_confirmed: format::confirms_server(&facts, probed),
+            ..mysql_root()
+        };
+        let answers: Vec<Answer> = (0..usize::from(my.lock_waits()) + 1).map(|_| Answer::Rows(Vec::new())).collect();
+        let (_, hidden) = decode::mysql::locks(&answers, &my, Timestamp(1)).unwrap();
+        hidden.into_iter().filter(|h| h.part == Part::RowLockWaits).map(|h| h.need).collect::<Vec<_>>()
+    };
+    assert_eq!(pair((8, 0, 37), 80411), [Need::Unconfirmed]);
+    assert_eq!(pair((8, 4, 11), 80037), [too_old]);
     // Part by part: 8.3.100 is not 8.4.0, though its packed number is.
     assert!(!format::confirms_server(&mysql_facts(known(8, 3, 100), direct()), 80400));
     assert!(format::confirms_server(&mysql_facts(known(8, 4, 0), direct()), 80400));
