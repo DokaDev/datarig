@@ -154,6 +154,7 @@ pub fn other_account_sql(user: &str, current_user: &str) -> String {
 }
 
 /// `8.4.11`, `8.0.35-0ubuntu0.22.04.1`, `8.0.28-log` as `major * 10000 + minor * 100 + patch`.
+/// A minor or patch of 100 or more, or a number above `u32::MAX`, answers `None`.
 fn version_number(version: &str) -> Option<u32> {
     let mut parts = version.split('.');
     let major: u32 = parts.next()?.parse().ok()?;
@@ -161,7 +162,10 @@ fn version_number(version: &str) -> Option<u32> {
     let patch = parts.next()?;
     let digits = patch.find(|c: char| !c.is_ascii_digit()).unwrap_or(patch.len());
     let patch: u32 = patch[..digits].parse().ok()?;
-    (minor < 100 && patch < 100).then_some(major * 10000 + minor * 100 + patch)
+    if minor >= 100 || patch >= 100 {
+        return None;
+    }
+    major.checked_mul(10000)?.checked_add(minor.checked_mul(100)?)?.checked_add(patch)
 }
 
 /// The probe's answers, in their order: the version line ([`PROBE`]), the provider variables
