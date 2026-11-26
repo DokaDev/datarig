@@ -3,9 +3,9 @@
 
 use super::{
     CancelRules, CatalogueRules, CountInTx, DdlOfIndex, DdlRules, DdlToConsole, EngineFacts, EngineId, ExportRules,
-    Fact, FilterCalls, FilterShape, FilterSql, FilterSyntax, GroupParts, InputRules, Like, NameMatch, NullSafe,
-    OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, ResultTables, ServerFacts, SessionRules, SortRules, Support,
-    TextRules, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, ValueRules, Version, Why,
+    Fact, FilterCalls, FilterShape, FilterSql, FilterSyntax, FormFields, GroupParts, InputRules, Like, NameMatch,
+    NullSafe, OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof, ResultTables, ServerFacts, SessionRules, SortRules,
+    Support, TextRules, TxAsk, TxNote, TxRefusal, TxRules, TxStatement, TxVerdict, ValueRules, Version, Why,
 };
 use crate::driver::{ColumnMeta, ReadIn, ServerMessage, SessionRole, SessionValues, ValueKind};
 use crate::edit::input::{self, TypeName};
@@ -16,7 +16,7 @@ use crate::query::{
     CaseMode, ColumnFacts, ColumnKind, Compares, GROUP_PREVIEW, LINE_BREAKS, NoEquality, Nulls, RenderError, Target,
     base_type, hex,
 };
-use crate::sql::dialect::{Dialect, DollarQuotes, Language};
+use crate::sql::dialect::{Dialect, DollarQuotes, Language, MySqlMode};
 use crate::sql::risk::mysql::Judged;
 use crate::sql::risk::{Class, Classifier, Danger};
 use std::ops::RangeInclusive;
@@ -27,6 +27,18 @@ use std::time::Duration;
 pub fn line_names_mariadb(line: &str) -> bool {
     line.contains("MariaDB")
 }
+
+/// The default sql mode ([`MySqlMode::default`]), written out for the family's specs: the
+/// language a session starts in before it says its mode.
+pub(super) const DEFAULT_MODE: MySqlMode = MySqlMode {
+    ansi_quotes: false,
+    no_backslash_escapes: false,
+    dollar_quotes: DollarQuotes::NotRead,
+    ignore_space: false,
+};
+
+/// The family's engine-only fields of the profile form: the server key, no statement cache.
+pub(super) const FAMILY_FORM: FormFields = FormFields { statement_cache: false, server_key: true };
 
 /// How MySQL's and MariaDB's text is read.
 pub(super) struct FamilyText;

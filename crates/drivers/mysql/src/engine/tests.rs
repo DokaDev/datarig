@@ -736,3 +736,13 @@ fn every_engines_language_is_its_drivers() {
         assert_eq!(CAPABILITIES.language, Language::Sql(Dialect::MySql(MySqlMode::default())), "{e:?}");
     }
 }
+
+/// The language the driver offers before a session said its sql mode is the first engine's of
+/// the family, as a profile with any of its driver names expects it.
+#[test]
+fn the_drivers_language_is_the_familys_first() {
+    assert_eq!(CAPABILITIES.language, ENGINES[0].spec().language);
+    for e in ENGINES {
+        assert_eq!(CAPABILITIES.language, datarig_core::engine::expected(e.spec().key).language(), "{e:?}");
+    }
+}

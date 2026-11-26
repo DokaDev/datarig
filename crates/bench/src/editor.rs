@@ -16,6 +16,7 @@
 use crate::apps;
 use crate::grid::wide;
 use crate::stats::{Summary, ms, rss_kb};
+use datarig_core::engine;
 use datarig_tui::app::App;
 use datarig_tui::widgets::editor::{HintKind, RunHint};
 use ratatui::Terminal;
@@ -382,13 +383,12 @@ pub fn run_mysql_in_own_process(scratch: &Path, bytes: usize, n: usize) -> Resul
 /// and the process's memory; and jumps to the end and back after an edit (`x`, `G`, `gg`,
 /// `u`), each jump lexing the line states of the whole text again.
 pub fn run_mysql(bytes: usize, n: usize) -> Result<Value, String> {
-    use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
     let text = generate_mysql(bytes);
     let lines = text.lines().count();
     let pid = std::process::id();
     let mut app = apps::offline(&text, None);
     drop(text);
-    app.tab_mut().editor.set_language(Language::Sql(Dialect::MySql(MySqlMode::default())));
+    app.tab_mut().editor.set_language(engine::expected("mysql").language());
     let mut term = apps::terminal();
     let t = Instant::now();
     apps::draw(&mut term, &mut app);

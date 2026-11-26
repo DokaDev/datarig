@@ -31,8 +31,8 @@ pub use rules::{Rules, UNBOUND_TAB_DIALECT, UNBOUND_TAB_PLAN};
 pub use session::{OpenVerdict, READ_ONLY_NOT_PROVEN, ReadOnlyProof};
 pub use spec::{
     ApplierName, CancelRules, CatalogueRules, ChannelWords, Charts, DdlOfIndex, DdlRules, DdlToConsole, EditRules,
-    EngineSpec, ExportRules, FilterCalls, FilterShape, FilterSql, FilterSyntax, GroupParts, InputRules, LagBytes,
-    LastMessage, Like, MonitorRules, MonitorTerms, NameMatch, NullSafe, PlanRules, ReceiverName, ReplicaWho,
+    EngineSpec, ExportRules, FilterCalls, FilterShape, FilterSql, FilterSyntax, FormFields, GroupParts, InputRules,
+    LagBytes, LastMessage, Like, MonitorRules, MonitorTerms, NameMatch, NullSafe, PlanRules, ReceiverName, ReplicaWho,
     ReplicationTerms, ResultTables, RiskRules, RoleWords, Routes, SessionIdName, SessionRules, SortRules, TextRules,
     Transport, TxRules, ValueRules, VersionLine, WaitsAsked,
 };
@@ -42,12 +42,17 @@ pub use why::{Feature, Why};
 use crate::driver::ExplainFormat;
 use crate::profile::dsn::Scheme;
 use crate::profile::session::Dbms;
+use crate::sql::dialect::Language;
 
 /// The engines a MySQL or MariaDB profile may reach.
 const MYSQL_FAMILY: &[EngineId] = &[EngineId::MySql, EngineId::MariaDb];
 
 /// The URL form, port and TLS names the profile form keeps for a driver name no engine serves.
 pub const LEGACY_FORM_SCHEME: Scheme = Scheme::Postgres;
+
+/// The engine-only fields the profile form shows for a driver name no engine serves: those of
+/// the URL form it keeps ([`LEGACY_FORM_SCHEME`]).
+pub const LEGACY_FORM_FIELDS: FormFields = FormFields { statement_cache: true, server_key: false };
 
 impl EngineId {
     /// Every engine, in registry order.
@@ -124,6 +129,19 @@ impl Expected {
     /// The database whose session presets apply (`None`: no preset is for it).
     pub fn preset(&self) -> Option<Dbms> {
         self.spec().and_then(|s| Dbms::parse(s.preset_key))
+    }
+
+    /// The language a session of the profile starts in before it says its mode: the engine's,
+    /// or the first of the family's; PostgreSQL's ([`Language::default`]) on a name no engine
+    /// serves.
+    pub fn language(&self) -> Language {
+        self.spec().map_or_else(Language::default, |s| s.language)
+    }
+
+    /// The engine-only fields of the profile form ([`LEGACY_FORM_FIELDS`] on a name no engine
+    /// serves).
+    pub fn form_fields(&self) -> FormFields {
+        self.spec().map_or(LEGACY_FORM_FIELDS, |s| s.form)
     }
 
     /// The driver row of the profile form and its icon (`None`: no engine serves the name).

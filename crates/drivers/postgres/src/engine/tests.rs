@@ -39,3 +39,13 @@ fn every_engines_language_is_its_drivers() {
         assert_eq!(CAPABILITIES.language, Language::Sql(Dialect::Postgres), "{e:?}");
     }
 }
+
+/// The language the driver offers before a session answered is that of each engine it serves,
+/// as a profile with its driver name expects it.
+#[test]
+fn the_drivers_language_is_each_engines() {
+    for e in ENGINES {
+        assert_eq!(CAPABILITIES.language, e.spec().language, "{e:?}");
+        assert_eq!(CAPABILITIES.language, datarig_core::engine::expected(e.spec().key).language(), "{e:?}");
+    }
+}

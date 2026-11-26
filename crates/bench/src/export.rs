@@ -33,7 +33,7 @@ pub async fn run(url: &str, scratch: &std::path::Path, keyset: bool, ext: &str) 
     let table = TableRef { schema: "analytics".into(), name: "events".into() };
     let sql = if keyset {
         app.tab_mut().doc.table = Some(table.clone());
-        table.query(datarig_core::sql::dialect::Dialect::Postgres)
+        table.query(datarig_core::engine::expected("postgres").language().dialect())
     } else {
         "SELECT * FROM analytics.events".to_string()
     };

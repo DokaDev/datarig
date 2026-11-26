@@ -11,7 +11,7 @@ use crate::monitor::action::{ActionKind, ActionRoute, ActionTarget, Ask, Denied,
 use crate::monitor::{Flavour, MonitorFormat, SessionRow};
 use crate::profile::dsn::Scheme;
 use crate::query::{CaseMode, ColumnFacts, ColumnKind, Compares, NoEquality, Nulls, RenderError, Target};
-use crate::sql::dialect::{Dialect, DollarQuotes};
+use crate::sql::dialect::{Dialect, DollarQuotes, Language};
 use crate::sql::risk::Classifier;
 use crate::sql::risk::mysql::Judged;
 use std::time::Duration;
@@ -44,6 +44,10 @@ pub struct EngineSpec {
     pub form_key: &'static str,
     /// How its namespaces nest.
     pub hierarchy: Hierarchy,
+    /// The language a session starts in before it says its mode.
+    pub language: Language,
+    /// Which engine-only fields the profile form shows.
+    pub form: FormFields,
     /// How its text is read.
     pub text: &'static dyn TextRules,
     /// How its statements are judged.
@@ -72,6 +76,15 @@ pub struct EngineSpec {
     pub plan: Fact<&'static dyn PlanRules>,
     /// What a monitor may do to the other sessions of its servers.
     pub monitor: Fact<&'static dyn MonitorRules>,
+}
+
+/// The fields of the profile form only some engines' profiles have.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FormFields {
+    /// The statement cache setting.
+    pub statement_cache: bool,
+    /// The server's public key file and key retrieval.
+    pub server_key: bool,
 }
 
 /// How an engine's text is read on a server.

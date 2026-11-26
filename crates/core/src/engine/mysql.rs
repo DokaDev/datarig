@@ -1,8 +1,8 @@
 //! MySQL's row of the registry.
 
 use super::mysql_family::{
-    FamilyCancel, FamilyCatalogue, FamilyDdl, FamilyExport, FamilyFilter, FamilySession, FamilySort, FamilyText,
-    FamilyTx, FamilyValues, family_classifier, family_filter_calls, family_read_only_calls,
+    DEFAULT_MODE, FAMILY_FORM, FamilyCancel, FamilyCatalogue, FamilyDdl, FamilyExport, FamilyFilter, FamilySession,
+    FamilySort, FamilyText, FamilyTx, FamilyValues, family_classifier, family_filter_calls, family_read_only_calls,
 };
 use super::{
     ApplierName, ChannelWords, Charts, LagBytes, LastMessage, ReceiverName, ReplicaWho, ReplicationTerms, RoleWords,
@@ -19,7 +19,7 @@ use crate::monitor::action::{
 };
 use crate::monitor::{MonitorFormat, SessionRow};
 use crate::profile::dsn::Scheme;
-use crate::sql::dialect::{Dialect, MySqlMode};
+use crate::sql::dialect::{Dialect, Language, MySqlMode};
 use crate::sql::risk::mysql::{Judge, Judged};
 use crate::sql::risk::{Class, Classifier, Explain};
 
@@ -33,6 +33,8 @@ pub static SPEC: EngineSpec = EngineSpec {
     preset_key: "mysql",
     form_key: "mysql",
     hierarchy: Hierarchy::SchemaOnly,
+    language: Language::Sql(Dialect::MySql(DEFAULT_MODE)),
+    form: FAMILY_FORM,
     text: &FamilyText,
     risk: &MysqlRisk,
     tx: &FamilyTx,

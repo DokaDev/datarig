@@ -44,6 +44,15 @@ impl Counts {
     }
 }
 
+/// How the client's side of a connection is read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Framing {
+    /// Split into PostgreSQL protocol messages, to count requests.
+    PgMessages,
+    /// Not split: flights only.
+    Raw,
+}
+
 pub struct Proxy {
     pub port: u16,
     pub counts: Arc<Counts>,
@@ -52,15 +61,15 @@ pub struct Proxy {
 /// Listen on a free local port and relay every connection to `host:port` (a PostgreSQL server:
 /// its requests are counted), each direction `one_way` late.
 pub async fn start(host: String, port: u16, one_way: Duration) -> std::io::Result<Proxy> {
-    start_for(host, port, one_way, true).await
+    start_for(host, port, one_way, Framing::PgMessages).await
 }
 
 /// [`start`] for a server of another protocol (MySQL): flights only, no requests counted.
 pub async fn start_raw(host: String, port: u16, one_way: Duration) -> std::io::Result<Proxy> {
-    start_for(host, port, one_way, false).await
+    start_for(host, port, one_way, Framing::Raw).await
 }
 
-async fn start_for(host: String, port: u16, one_way: Duration, pg: bool) -> std::io::Result<Proxy> {
+async fn start_for(host: String, port: u16, one_way: Duration, framing: Framing) -> std::io::Result<Proxy> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let local = listener.local_addr()?.port();
     let counts = Arc::new(Counts { server_spoke: AtomicBool::new(true), ..Counts::default() });
@@ -72,23 +81,23 @@ async fn start_for(host: String, port: u16, one_way: Duration, pg: bool) -> std:
             let _ = up.set_nodelay(true);
             let (dr, dw) = down.into_split();
             let (ur, uw) = up.into_split();
-            tokio::spawn(relay(dr, uw, c.clone(), true, pg, one_way));
-            tokio::spawn(relay(ur, dw, c.clone(), false, pg, one_way));
+            tokio::spawn(relay(dr, uw, c.clone(), true, framing, one_way));
+            tokio::spawn(relay(ur, dw, c.clone(), false, framing, one_way));
         }
     });
     Ok(Proxy { port: local, counts })
 }
 
 /// Relay one direction: each read is passed on `delay` after it arrived, without holding up
-/// the reads behind it. The client's side of a PostgreSQL connection (`pg`) is split into
-/// protocol messages to count requests (its first message, the startup message, has no type
-/// byte).
+/// the reads behind it. The client's side of a PostgreSQL connection ([`Framing::PgMessages`])
+/// is split into protocol messages to count requests (its first message, the startup message,
+/// has no type byte).
 async fn relay(
     mut from: OwnedReadHalf,
     mut to: OwnedWriteHalf,
     counts: Arc<Counts>,
     client: bool,
-    pg: bool,
+    framing: Framing,
     delay: Duration,
 ) {
     let (late_tx, mut late_rx) = unbounded_channel::<(tokio::time::Instant, Vec<u8>)>();
@@ -116,7 +125,7 @@ async fn relay(
             if counts.server_spoke.swap(false, SeqCst) {
                 counts.flights.fetch_add(1, SeqCst);
             }
-            if pg {
+            if framing == Framing::PgMessages {
                 buf.extend_from_slice(&chunk[..n]);
                 loop {
                     let head = usize::from(!untyped);

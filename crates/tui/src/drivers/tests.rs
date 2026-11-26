@@ -52,7 +52,7 @@ fn answers(driver: &str) -> Answers {
         glyph: icons::for_driver(driver),
         form_index: form.driver,
         form_label: DRIVERS[form.driver].1,
-        form_mysql: form.is_mysql(),
+        form_mysql: form.form_fields().server_key,
         form_dbms: form.profile_dbms(),
         form_scheme: form.scheme(),
         saved_driver: form.to_profile().driver,
