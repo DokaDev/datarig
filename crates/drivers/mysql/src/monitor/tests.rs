@@ -14,6 +14,7 @@ fn my(flavour: Flavour) -> MySqlMonitor {
         statements: Readable::Yes,
         threads: Readable::Yes,
         unconfirmed: false,
+        version_confirmed: true,
         flavour,
     }
 }

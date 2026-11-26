@@ -1,14 +1,19 @@
 //! How each engine's monitor sends an action on every provider (`monitor::action::route`): the
 //! provider's procedures that stop a session when the standard statement is refused, the codes
 //! that call for them, and the grants and service accounts a refusal names; and what the
-//! monitor's views call things on each engine (`MonitorRules::terms`). MariaDB has no monitor
+//! monitor's views call things on each engine (`MonitorRules::terms`); and where MySQL's row lock
+//! waits are read (`format::confirms_server`, `MySqlMonitor::lock_waits`). MariaDB has no monitor
 //! rules (its probe is refused at any version), so it has no route and no terms.
 
 use crate::Case;
 use crate::Engine::{self, MariaDb, MySql, Pg};
-use datarig_core::engine::{EngineId, Fact, MonitorTerms, ReplicationTerms};
+use datarig_core::engine::{
+    EngineFacts, EngineId, Fact, MonitorTerms, MyFacts, ReplicationTerms, ServerFacts, Topology, Version, Why,
+};
 use datarig_core::monitor::action::route;
-use datarig_core::monitor::{Flavour, MonitorFormat, MySqlMonitor, PgMonitor, Readable, Route};
+use datarig_core::monitor::decode::{self, Answer};
+use datarig_core::monitor::format::confirms_server;
+use datarig_core::monitor::{Flavour, MonitorFormat, MySqlMonitor, Part, PgMonitor, Readable, Route, Timestamp};
 
 /// A PostgreSQL server of `flavour`, as its probe reads it.
 fn pg(flavour: Flavour) -> MonitorFormat {
@@ -34,6 +39,7 @@ fn mysql(flavour: Flavour) -> MonitorFormat {
         statements: Readable::Yes,
         threads: Readable::Yes,
         unconfirmed: false,
+        version_confirmed: true,
         flavour,
     })
 }
@@ -293,5 +299,83 @@ pub fn term_cases() -> Vec<Case<&'static str>> {
             input: "replication replica",
             expect: &[(Pg, "NameClientStateSync"), (MySql, "ClientUserState"), (MariaDb, MARIADB)],
         },
+    ]
+}
+
+/// The facts of a monitor session of column `e` on a server whose probe reads `version`: the
+/// version known and the session direct where the column's reports agree.
+fn lock_wait_facts(e: Engine, version: u32) -> ServerFacts {
+    let v = Version::new((version / 10000) as u16, (version / 100 % 100) as u16, (version % 100) as u16);
+    let direct = Fact::Known(Topology::Direct);
+    let (version, topology, greeting) = match e {
+        MySql => (Fact::Known(v), direct, EngineId::MySql),
+        Engine::MySqlVersionUnknown => (Fact::Unknown(Why::VersionUnknown), direct, EngineId::MySql),
+        Engine::MySqlVersionsDisagree => (Fact::Unknown(Why::VersionsDisagree), direct, EngineId::MySql),
+        Engine::MySqlEnginesDisagree => {
+            (Fact::Unknown(Why::EnginesDisagree), Fact::Unknown(Why::EnginesDisagree), EngineId::MariaDb)
+        }
+        Engine::MySqlNotChecked => (Fact::Known(v), Fact::Unknown(Why::NotChecked), EngineId::MySql),
+        other => panic!("{other:?} is not a MySQL column of the row lock waits table"),
+    };
+    ServerFacts {
+        version,
+        version_text: None,
+        provider: Fact::Unknown(Why::NotChecked),
+        topology,
+        detail: EngineFacts::MySql(MyFacts::new(v, greeting)),
+    }
+}
+
+/// Whether a monitor session of column `e` whose probe reads `version` reads the row lock
+/// waits, or why not: on MySQL as the driver sets it up (`format::confirms_server`) and the
+/// decoder says it. PostgreSQL's lock read has no such gate; MariaDB has no monitor.
+pub fn row_lock_waits(e: Engine, version: &u32) -> String {
+    match e {
+        Pg | Engine::PgVersionUnknown => return "pg_locks, no gate".to_string(),
+        MariaDb | Engine::MariaDbVersionUnknown | Engine::MariaDbVersionsDisagree => return mariadb(),
+        _ => {}
+    }
+    let MonitorFormat::MySql(base) = mysql(Flavour::Standard) else { unreachable!("a MySQL format") };
+    let confirmed = confirms_server(&lock_wait_facts(e, *version), *version);
+    let my = MySqlMonitor { version: *version, version_confirmed: confirmed, ..base };
+    let answers: Vec<Answer> = (0..usize::from(my.lock_waits()) + 1).map(|_| Answer::Rows(Vec::new())).collect();
+    match decode::mysql::locks(&answers, &my, Timestamp(1)) {
+        Ok((_, hidden)) => match hidden.iter().find(|h| h.part == Part::RowLockWaits) {
+            Some(h) => format!("not read: {:?}", h.need),
+            None => "read".to_string(),
+        },
+        Err(e) => format!("Err({e:?})"),
+    }
+}
+
+const TOO_OLD: &str = "not read: Version(\"MySQL 8.0.38 or later in 8.0, or 8.4 or later\")";
+const UNCONFIRMED: &str = "not read: Unconfirmed";
+const PG_LOCKS: &str = "pg_locks, no gate";
+
+/// The probe's version on every session shape: read only where the fix is in and the facts
+/// confirm the server; the version is said first.
+pub fn row_lock_wait_cases() -> Vec<Case<u32>> {
+    let case = |name, input, mysql| Case {
+        name,
+        input,
+        expect: Vec::leak(vec![
+            (Pg, PG_LOCKS),
+            (Engine::PgVersionUnknown, PG_LOCKS),
+            (MySql, mysql),
+            (Engine::MySqlVersionUnknown, if mysql == "read" { UNCONFIRMED } else { mysql }),
+            (Engine::MySqlVersionsDisagree, if mysql == "read" { UNCONFIRMED } else { mysql }),
+            (Engine::MySqlEnginesDisagree, if mysql == "read" { UNCONFIRMED } else { mysql }),
+            (Engine::MySqlNotChecked, if mysql == "read" { UNCONFIRMED } else { mysql }),
+            (MariaDb, MARIADB),
+            (Engine::MariaDbVersionUnknown, MARIADB),
+            (Engine::MariaDbVersionsDisagree, MARIADB),
+        ]),
+    };
+    vec![
+        case("8.0.37", 80037, TOO_OLD),
+        case("8.0.38", 80038, "read"),
+        case("8.3.0", 80300, TOO_OLD),
+        case("8.4.0", 80400, "read"),
+        case("8.4.11", 80411, "read"),
     ]
 }

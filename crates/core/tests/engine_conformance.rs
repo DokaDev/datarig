@@ -381,6 +381,11 @@ fn monitor_terms_on_every_engine() {
 }
 
 #[test]
+fn row_lock_waits_on_every_engine() {
+    run_versioned("row lock waits", &monitor::row_lock_wait_cases(), monitor::row_lock_waits);
+}
+
+#[test]
 fn read_only_open_on_every_engine() {
     run("read-only open", &read_only::cases(), read_only::verdict);
 }
@@ -443,6 +448,7 @@ fn every_case_names_every_engine() {
         named_versioned("plan format", &plan::plan_format_cases()),
         named("monitor routes", &monitor::route_cases()),
         named("monitor terms", &monitor::term_cases()),
+        named_versioned("row lock waits", &monitor::row_lock_wait_cases()),
         named("catalogue rules", &catalogue::catalogue_cases()),
         named("ddl rules", &catalogue::ddl_cases()),
         named("hierarchy", &catalogue::hierarchy_cases()),

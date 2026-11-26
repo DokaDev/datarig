@@ -572,6 +572,9 @@ pub enum Need {
     Setting(&'static str),
     /// A later version of the server, the first that has it (`MySQL 8.0.38`).
     Version(&'static str),
+    /// The server's version or connection confirmed by the session's own facts: a read that
+    /// may stall an older server is not sent to one that may not be the version read.
+    Unconfirmed,
 }
 
 /// What a monitor tick reads ([`crate::driver::DbCommand::MonitorTick`]): the counters always,

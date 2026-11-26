@@ -30,6 +30,7 @@
 "monitor.need_grant" = "needs {grant}"
 "monitor.need_setting" = "depends on the server setting {setting}"
 "monitor.need_version" = "needs {version}"
+"monitor.need_unconfirmed" = "the server's version or connection could not be confirmed"
 "monitor.hidden_details" = "Other accounts' sessions are listed without their state, statement and times"
 "monitor.hidden_sessions" = "Only this account's sessions are listed"
 "monitor.hidden_tx" = "Whether an idle session holds a transaction open is not known"
