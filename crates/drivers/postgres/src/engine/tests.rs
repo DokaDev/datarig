@@ -31,3 +31,11 @@ fn the_drivers_hierarchy_is_each_engines() {
         assert_eq!(CAPABILITIES.hierarchy, e.spec().hierarchy, "{e:?}");
     }
 }
+
+/// The language a session of the driver starts in before it says otherwise: PostgreSQL's.
+#[test]
+fn every_engines_language_is_its_drivers() {
+    for e in ENGINES {
+        assert_eq!(CAPABILITIES.language, Language::Sql(Dialect::Postgres), "{e:?}");
+    }
+}

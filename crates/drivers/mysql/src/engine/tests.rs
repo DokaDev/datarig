@@ -727,3 +727,12 @@ fn the_drivers_hierarchy_is_each_engines() {
         assert_eq!(CAPABILITIES.hierarchy, e.spec().hierarchy, "{e:?}");
     }
 }
+
+/// The language a session of the driver starts in before it says its sql mode: MySQL's, in the
+/// default mode, whichever engine of the family answers (the first's).
+#[test]
+fn every_engines_language_is_its_drivers() {
+    for e in ENGINES {
+        assert_eq!(CAPABILITIES.language, Language::Sql(Dialect::MySql(MySqlMode::default())), "{e:?}");
+    }
+}

@@ -460,3 +460,17 @@ fn a_kept_line_comment_at_a_statements_end_keeps_its_line_break_before_the_next(
     // The last statement ends without one.
     assert_eq!(join_statements(Dbms::Postgres, &["SET a.b = 5--1".to_string()]), "SET a.b = 5--1");
 }
+
+/// The language a preset's statements are checked in: its family's first engine's.
+#[test]
+fn a_preset_family_reads_its_first_engines_language() {
+    use crate::sql::dialect::{Dialect, Language, MySqlMode};
+    let got: Vec<(Dbms, Language)> = Dbms::ALL.iter().map(|d| (*d, d.language())).collect();
+    assert_eq!(
+        got,
+        [
+            (Dbms::Postgres, Language::Sql(Dialect::Postgres)),
+            (Dbms::MySql, Language::Sql(Dialect::MySql(MySqlMode::default()))),
+        ]
+    );
+}
