@@ -382,6 +382,23 @@ fn mysql_versions_the_monitor_does_not_read() {
     for old in ["8.0.16", "5.7.44-log", "8.0.mysql_aurora.3.05.2", "eight"] {
         assert!(matches!(probe(old), Err(DecodeError::Unsupported(_))), "{old}");
     }
+    // A number the version cannot hold is refused, never wrapped: each part below 100, and
+    // `major * 10000 + minor * 100 + patch` at most `u32::MAX` (`429496.72.95`).
+    assert_eq!(probe("8.99.99"), Ok(89999));
+    assert_eq!(probe("429496.72.95"), Ok(u32::MAX));
+    for out in [
+        "429497.0.0",
+        "429505.0.0",
+        "8.42949673.0",
+        "429496.72.96",
+        "429496.99.99",
+        "4294967295.99.99",
+        "8.0.42949673",
+        "8.100.0",
+        "8.0.100",
+    ] {
+        assert_eq!(probe(out), Err(DecodeError::Unsupported(format!("MySQL {out}"))), "{out}");
+    }
     // MariaDB is no MySQL too old: the monitor does not read it at any version, and says so.
     for (line, server) in [("10.11.6-MariaDB", "MariaDB 10.11.6"), ("11.4.13-MariaDB-ubu2404", "MariaDB 11.4.13")] {
         assert_eq!(probe(line), Err(DecodeError::NotRead(server.into())), "{line}");

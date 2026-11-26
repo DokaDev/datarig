@@ -553,3 +553,24 @@ fn the_row_lock_wait_read_needs_a_confirmed_version_and_connection() {
     let m = my(80411, true, Readable::Yes);
     assert_eq!(sql, [row_lock_waits(&m), metadata_lock_waits()]);
 }
+
+/// A probe line whose major overflows the packed number never confirms the server. Unchecked
+/// in a release build, `429504.77.7` wraps to 80411, the number of the facts' 8.4.11 on a
+/// direct session, and would read `data_lock_waits` on whatever server answers: the probe
+/// refuses it instead.
+#[test]
+fn a_version_whose_number_overflows_never_reads_the_row_lock_waits() {
+    let line = "429504.77.7";
+    let facts = monitor_facts(Fact::Known(Version::new(8, 4, 11)), Fact::Known(Topology::Direct));
+    match datarig_core::monitor::decode::mysql::probe(&probe_answers(line)) {
+        Ok(probed) => {
+            let marker = crate::monitor::Marker { token: TOKEN.into(), handshake: 1 };
+            let sql = locks(&crate::monitor::set_up(probed, Some(&marker), &facts));
+            assert!(!sql.iter().any(|s| s.contains("data_lock_waits")), "{line} reads the row lock waits: {sql:?}");
+            panic!("{line} is read as a version");
+        }
+        Err(e) => {
+            assert_eq!(e, datarig_core::monitor::decode::DecodeError::Unsupported(format!("MySQL {line}")))
+        }
+    }
+}
