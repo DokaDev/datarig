@@ -3,6 +3,22 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.42.1 (2026-11-26)
+
+This release fixes MySQL and MariaDB filters and sorts on columns named like a function or a reserved word, and makes the MySQL monitor's row lock wait read safer.
+
+### Fixed
+
+- On MySQL and MariaDB, filters, filters by value, sorts and the column names completion
+  offers in the filter dialog always quote column names, so a column named like a function
+  (for example `current_role`) or a reserved word is read as the column. A condition typed
+  with such a function's name bare is kept as written.
+- The MySQL monitor reads row lock waits only when its connection confirms the server's version
+  and reaches the server directly. Behind a proxy that reports another version, or a pooler, the
+  Locks view says they are not read instead of risking a stalled server.
+- The MySQL monitor refuses a server version it cannot read instead of misreading a very large
+  one.
+
 ## 0.42.0 (2026-11-24)
 
 On MySQL and MariaDB, every session now reads the server's version line, and a session whose greeting and version line name different engines is checked by the rules of both; this release also changes how cancels and counts behave and fixes the table filter, MariaDB sequences and SQL export.
