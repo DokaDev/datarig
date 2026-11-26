@@ -1615,10 +1615,10 @@ fn locks_screens_80x24_and_120x40() {
 
 /// A session the list shows waiting for a lock, its blocker named by no read: PostgreSQL says
 /// who blocks it was not asked (it asks the longest waits only), MySQL that its holder was not
-/// found, as today.
+/// found, and a tab whose connection was lost (no format) says what PostgreSQL says, as today.
 #[test]
 fn a_wait_whose_blocker_no_read_named_is_worded_by_the_engine() {
-    const NOT_ASKED: &str = "who blocks it was not asked";
+    const NOT_ASKED: &str = "who blocks it was not asked: the 50 longest waits are";
     const NOT_FOUND: &str = "who holds it was not found";
     // The lock read lists no wait: alice's update (4211), waiting for a lock, has no blocker.
     let no_waits = |mut s: Snapshot| {
@@ -1640,7 +1640,13 @@ fn a_wait_whose_blocker_no_read_named_is_worded_by_the_engine() {
     let read = no_waits(mysql_snapshot(2.0, 1000, false));
     h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(read) });
     let screen = h.screen(160, 40);
-    assert!(screen.contains(NOT_FOUND) && !screen.contains(NOT_ASKED), "{screen}");
+    assert!(screen.contains(NOT_FOUND) && !screen.contains("who blocks it was not asked"), "{screen}");
+
+    // The connection lost: the last read stays shown, with no format.
+    h.monitor_db(DbEvent::Lost { error: DbError::Connection(datarig_core::fault::Fault::other("reset")) });
+    assert!(monitor(&h).format().is_none());
+    let screen = h.screen(160, 40);
+    assert!(screen.contains(NOT_ASKED) && !screen.contains(NOT_FOUND), "{screen}");
 }
 
 // The Replication view and the server's facts in full.
@@ -2216,6 +2222,20 @@ fn x_opens_a_dialog_where_enter_keeps_the_session_and_y_ends_it() {
     assert_eq!(sent.len(), 1, "{sent:?}");
     assert_eq!(sent[0].1, ActionKind::Terminate);
     assert_eq!(sent[0].2.key.id, 4211);
+}
+
+/// On MySQL the end's dialog says what an end keeps in its own warning, and not that the open
+/// transaction is rolled back, as today.
+#[test]
+fn a_mysql_end_says_what_it_keeps_not_that_it_rolls_back() {
+    let mut h = family_selected("mysql", "shop");
+    h.keys("X");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
+    let screen = h.screen(160, 40);
+    // The warning wraps in the dialog: "Transactional changes roll back; non-transactional ones stay".
+    assert!(screen.contains("Transactional changes roll back; non-transactional ones  │"), "{screen}");
+    assert!(screen.contains("│ stay "), "{screen}");
+    assert!(!screen.contains("Its open transaction is rolled back."), "{screen}");
 }
 
 #[test]

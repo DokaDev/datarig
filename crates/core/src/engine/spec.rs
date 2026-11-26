@@ -372,7 +372,8 @@ pub struct ReplicationTerms {
     /// When the last transaction was applied is said on the applier's line (else, as when it
     /// was last replayed, below the positions).
     pub applied_on_applier_line: bool,
-    /// An applier 0 behind with the receiver not running is said to measure nothing.
+    /// An applier 0 behind with the receiver not running is said to count only what the
+    /// receiver fetched: it does not show the server caught up with its source.
     pub zero_lag_note: bool,
     /// How a lag in bytes is said.
     pub lag_bytes: LagBytes,

@@ -2000,6 +2000,19 @@ mod tests {
                 let charts: Vec<String> = c.charts().into_iter().map(|d| d.title).collect();
                 got.push(format!("{name}: charts {charts:?}"));
             }
+            // A thread command and a session state read: each chart shows the series it draws.
+            for kind in [GaugeKind::CommandQuery, GaugeKind::StateRunning] {
+                let mut h = datarig_core::monitor::rate::History::new(4);
+                h.push(Timestamp(0), Some(3.0));
+                m.history.push((Metric::Gauge(kind), h));
+            }
+            {
+                let c = cx(&i18n, &m);
+                for d in c.charts() {
+                    let series: Vec<&str> = d.series.iter().map(|s| s.name.as_str()).collect();
+                    got.push(format!("{name}: chart {} {series:?}", d.title));
+                }
+            }
             for v in versions {
                 got.push(format!("{name}: strip {}", strip(&i18n, &mut m, v)));
             }
@@ -2008,6 +2021,8 @@ mod tests {
             "pg: column pid",
             "pg: role standby / primary",
             "pg: charts [\"rows/s by operation\", \"sessions by state\"]",
+            "pg: chart rows/s by operation []",
+            "pg: chart sessions by state [\"running\"]",
             "pg: strip 8.4.11 MySQL Community Server - GPL · primary",
             "pg: strip 8.0.36 · primary",
             "pg: strip 17.2 · primary",
@@ -2015,6 +2030,8 @@ mod tests {
             "mysql: column id",
             "mysql: role server read-only / server takes writes",
             "mysql: charts [\"statements/s by type\", \"sessions by state\"]",
+            "mysql: chart statements/s by type []",
+            "mysql: chart sessions by state [\"query\"]",
             "mysql: strip 8.4.11 (MySQL Community Server) · server takes writes",
             "mysql: strip MySQL 8.0.36 · server takes writes",
             "mysql: strip 17.2 ((Debian 17.2-1.pgdg120+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14) 12.2.0, 64-bit) · server t…",

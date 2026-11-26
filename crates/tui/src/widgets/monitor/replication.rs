@@ -803,4 +803,66 @@ mod tests {
         ];
         assert_eq!(got, want, "{got:#?}");
     }
+
+    /// Each of the three flags of the receiving and applying lines on by itself, from
+    /// PostgreSQL's terms: the line it moves follows that flag alone.
+    #[test]
+    fn each_replication_flag_moves_its_own_line() {
+        use datarig_core::engine::{EngineId, Fact, MonitorTerms};
+        use datarig_core::monitor::Lsn;
+        let i18n = datarig_i18n::I18n::new(datarig_i18n::Lang::En);
+        let Fact::Known(rules) = &EngineId::Postgres.spec().monitor else { panic!("PostgreSQL has monitor rules") };
+        let pg = *rules.terms();
+        let with = |f: fn(&mut ReplicationTerms)| -> &'static MonitorTerms {
+            let mut t = pg;
+            f(&mut t.replication);
+            Box::leak(Box::new(t))
+        };
+        let flags: [(&str, &'static MonitorTerms); 4] = [
+            ("none", with(|_| {})),
+            ("receiver line always", with(|r| r.receiver_line_always = true)),
+            ("applied on applier line", with(|r| r.applied_on_applier_line = true)),
+            ("zero lag note", with(|r| r.zero_lag_note = true)),
+        ];
+        // No receiver, 0 behind, received all it applied.
+        let u = Upstream {
+            receiver: Running::No,
+            applier_behind: Some(0),
+            received: Some(Lsn(4096)),
+            applied: Some(Lsn(4096)),
+            ..upstream()
+        };
+        let m = super::super::tests::tab(None);
+        let mut got = Vec::new();
+        for (flag, terms) in flags {
+            let c = Cx { terms: Some(terms), ..super::super::tests::cx(&i18n, &m) };
+            let mut out = Lines::new();
+            c.upstream(&u, Timestamp(0), 200, &mut out);
+            got.extend(out.into_iter().map(|(l, _)| format!("{flag}: {l}")));
+        }
+        let want = [
+            "none: No WAL receiver: the standby replays only what it has, or reads from an archive",
+            "none:   replay: running",
+            "none:   applied all it received",
+            "none:   received 0/1000 · replayed 0/1000",
+            "none:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "receiver line always: No WAL receiver: the standby replays only what it has, or reads from an archive",
+            "receiver line always:   WAL receiver: stopped · last heard from the source 2s ago",
+            "receiver line always:   replay: running",
+            "receiver line always:   applied all it received",
+            "receiver line always:   received 0/1000 · replayed 0/1000",
+            "receiver line always:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+            "applied on applier line: No WAL receiver: the standby replays only what it has, or reads from an archive",
+            "applied on applier line:   replay: running · last transaction applied 5s ago",
+            "applied on applier line:   applied all it received",
+            "applied on applier line:   received 0/1000 · replayed 0/1000",
+            "zero lag note: No WAL receiver: the standby replays only what it has, or reads from an archive",
+            "zero lag note:   replay: running",
+            "zero lag note:   applied all it received",
+            "zero lag note:   Seconds_Behind_Source counts only what the receiver fetched: with the receiver not running, 0 does not mean caught up with the source",
+            "zero lag note:   received 0/1000 · replayed 0/1000",
+            "zero lag note:   Last replayed transaction committed 5s ago on the primary's clock (this ages while nothing is written too)",
+        ];
+        assert_eq!(got, want, "{got:#?}");
+    }
 }
